@@ -1,0 +1,29 @@
+Global frequency set at 1000000000000 ticks per second
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (8192 Mbytes) does not match the address range assigned (64 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (8192 Mbytes) does not match the address range assigned (64 Mbytes)
+src/base/statistics.hh:279: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/statistics.hh:279: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/remote_gdb.cc:418: warn: Sockets disabled, not accepting gdb connections
+gem5 Simulator System.  https://www.gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 version 25.1.0.1
+gem5 compiled May 20 2026 09:46:50
+gem5 started May 20 2026 10:43:58
+gem5 executing on eefc7bed5f88, pid 90
+command line: ./build/ARM/gem5.opt configs/deprecated/example/se.py --ruby --cpu-type=ArmTimingSimpleCPU --num-cpus=4 --num-l3caches=2 --num-dirs=2 --chi-config=configs/ruby/CHI_multi_node_config.py --topology=Pt2Pt --network=simple --mem-size=128MB --cmd=/workspace/tests/ubcc/benchmarks/m2_concurrent '--options=0 0;0 1;1 0;1 1'
+
+info: Standard input is not a terminal, disabling listeners.
+**** REAL SIMULATION ****
+warn: The se.py script is deprecated. It will be removed in future releases of  gem5.
+warn: Base 10 memory/cache size 128MB will be cast to base 2 size 128MiB.
+warn: No dot file generated. Please install pydot to generate the dot file and pdf.
+src/mem/ruby/system/Sequencer.cc:707: warn: Replacement policy updates recently became the responsibility of SLICC state machines. Make sure to setMRU() near callbacks in .sm files!
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/arch/arm/insts/pseudo.cc:174: warn: 	instruction 'bti' unimplemented
+src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+Exiting @ tick 225682000 because exiting with last active thread context
+Simulated exit code not 0! Exit code is 242
