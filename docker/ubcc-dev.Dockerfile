@@ -1,0 +1,51 @@
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TZ=Etc/UTC
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
+ENV TZ=${TZ}
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV CCACHE_DIR=/ccache
+ENV PATH=/usr/lib/ccache:${PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    ccache \
+    file \
+    g++-aarch64-linux-gnu \
+    gcc-aarch64-linux-gnu \
+    gdb \
+    git \
+    libboost-all-dev \
+    libelf-dev \
+    libgoogle-perftools-dev \
+    libhdf5-serial-dev \
+    libpng-dev \
+    libprotobuf-dev \
+    libprotoc-dev \
+    libc6-dev-arm64-cross \
+    m4 \
+    pkg-config \
+    protobuf-compiler \
+    python3 \
+    python3-dev \
+    python3-pip \
+    scons \
+    swig \
+    xz-utils \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid ${HOST_GID} builder && \
+    useradd --uid ${HOST_UID} --gid ${HOST_GID} --create-home --shell /bin/bash builder && \
+    mkdir -p /workspace /ccache && \
+    chown -R builder:builder /workspace /ccache /home/builder
+
+USER builder
+WORKDIR /workspace
+
+CMD ["bash"]

@@ -5,6 +5,7 @@
 本版按以下新决策重写：
 
 - 将 `git@github.com:GCC314/gem5.git` 作为当前 repo 的 `gem5/` submodule 使用。
+- Docker 测试环境、宿主机 git 自动提交流程和实际使用命令见 `docs/ubcc_docker_git_workflow.md`。
 - 多节点原型中，不同逻辑 CPU/node 的 CHI domain 必须独立，或至少通过配置、路由和断言达到等价独立，普通 CHI message 不允许跨 domain。
 - Subtask 2 固定为 `2Core/Node`。链路打通阶段可以只在每个 node 的任意一个 core 上运行有效 payload，另一个 core 空闲或运行最小干扰程序。
 - Subtask 2 主路线改为 EP-RNF Sentinel 主导，EP-SNF 负责 DSM Remote miss/fill/writeback 等剩余 data-plane 场景，HN-F 只做最小必要修改。
@@ -36,6 +37,7 @@
 - Subtask 2 中的独立 CHI domain 粒度是 node，不是单个 core。同一 node 内两个 core 共享本 node CHI coherence；不同 node 之间必须独立或等价独立。
 - 链路打通和早期一致性验证阶段可以只在每个 node 的一个 core 上运行有效 payload，另一个 core 不参与共享数据访问。后续再加入同 node 双 core 并发访问测试。
 - 第一版优先在单个 gem5 进程中构造多个 logical CHI island；但必须通过 gating spike 证明它与独立 CHI domain 等价。若无法证明，切换到多个 RubySystem 或多个 gem5 进程。
+- 后续实现与测试默认在无网络 Docker 容器中完成；每阶段结束后由宿主机侧包装脚本执行非交互 `commit/push`。具体流程见 `docs/ubcc_docker_git_workflow.md` 和 `docs/ubcc_agent_execution_guide.md`。
 - 普通 CHI message 的 source/destination 必须属于同一 logical domain。跨 domain 交互只能通过 EP/UBCC outer protocol。
 - 第一版不支持 DVM、atomic、exclusive monitor、IO coherent DMA。workload 限制为 SE mode 下普通 cacheable load/store 和 cache line 粒度一致性。
 - 所有 logical node 使用相同 global PA 语义。Node `i` 的 DSM PA Local 为 `[dsm_base + dsm_size * i, dsm_base + dsm_size * (i + 1))`。整个 DSM PA 为 `[dsm_base, dsm_base + dsm_size * n)`。
@@ -528,6 +530,8 @@ struct DirEntry {
 - Atomic、DVM、DMA、I/O coherent 不是第一版目标，若 workload 依赖这些语义，需要单独阶段支持。
 
 ## 11. 建议的最小里程碑
+
+在 M1 之前，必须先通过 `docs/ubcc_docker_git_workflow.md` 定义的 Docker/gitt automation preflight，确认后续阶段可无人工干预地完成容器构建、离线测试和 push。
 
 1. M0：`gem5/` submodule 完成，确认 CHI.py、CHI_config.py、CHIGenericController 接口。
 2. M1：单节点 CHI C=2/M=2，cluster-shared L2，L3 HN-F，DRAM SN-F 可跑通。
