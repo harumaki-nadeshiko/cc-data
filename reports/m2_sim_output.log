@@ -9,21 +9,39 @@ gem5 is copyrighted software; use the --copyright option for details.
 
 gem5 version 25.1.0.1
 gem5 compiled May 20 2026 09:46:50
-gem5 started May 20 2026 10:43:58
-gem5 executing on eefc7bed5f88, pid 90
-command line: ./build/ARM/gem5.opt configs/deprecated/example/se.py --ruby --cpu-type=ArmTimingSimpleCPU --num-cpus=4 --num-l3caches=2 --num-dirs=2 --chi-config=configs/ruby/CHI_multi_node_config.py --topology=Pt2Pt --network=simple --mem-size=128MB --cmd=/workspace/tests/ubcc/benchmarks/m2_concurrent '--options=0 0;0 1;1 0;1 1'
+gem5 started May 20 2026 12:17:22
+gem5 executing on 17957e7415a5, pid 168
+command line: ./build/ARM/gem5.opt configs/deprecated/example/se.py --ruby --cpu-type=ArmTimingSimpleCPU --num-cpus=4 --num-l3caches=2 --num-dirs=2 --chi-config=configs/ruby/CHI_multi_node_config.py --topology=Pt2Pt --network=simple --mem-size=128MB '--cmd=/workspace/tests/ubcc/benchmarks/m2_concurrent;/workspace/tests/ubcc/benchmarks/m2_concurrent;/workspace/tests/ubcc/benchmarks/m2_concurrent;/workspace/tests/ubcc/benchmarks/m2_concurrent' '--options=0 0;0 1;1 0;1 1'
 
 info: Standard input is not a terminal, disabling listeners.
+M2: Downstream isolation check passed (2 RN-Fs)
 **** REAL SIMULATION ****
 warn: The se.py script is deprecated. It will be removed in future releases of  gem5.
 warn: Base 10 memory/cache size 128MB will be cast to base 2 size 128MiB.
 warn: No dot file generated. Please install pydot to generate the dot file and pdf.
 src/mem/ruby/system/Sequencer.cc:707: warn: Replacement policy updates recently became the responsibility of SLICC state machines. Make sure to setMRU() near callbacks in .sm files!
 src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
 src/arch/arm/insts/pseudo.cc:174: warn: 	instruction 'bti' unimplemented
+src/arch/arm/insts/pseudo.cc:174: warn: 	instruction 'bti' unimplemented
+src/arch/arm/insts/pseudo.cc:174: warn: 	instruction 'bti' unimplemented
+src/arch/arm/insts/pseudo.cc:174: warn: 	instruction 'bti' unimplemented
+src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
+src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
+src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
 src/sim/syscall_emul.cc:86: warn: ignoring syscall mprotect(...)
 src/sim/mem_state.cc:443: info: Increasing stack size by one page.
 src/sim/mem_state.cc:443: info: Increasing stack size by one page.
 src/sim/mem_state.cc:443: info: Increasing stack size by one page.
-Exiting @ tick 225682000 because exiting with last active thread context
-Simulated exit code not 0! Exit code is 242
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+src/sim/mem_state.cc:443: info: Increasing stack size by one page.
+Exiting @ tick 235517500 because exiting with last active thread context

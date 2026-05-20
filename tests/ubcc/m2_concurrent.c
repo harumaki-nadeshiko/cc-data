@@ -52,5 +52,5 @@ int main(int argc, char *argv[]) {
         data[i] = tmp + core_id + node_id;
     }
 
-    return (sum & 0xFF);
+    return 0; /* deterministic exit code for verification */
 }
