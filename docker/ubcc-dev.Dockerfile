@@ -4,12 +4,18 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG TZ=Etc/UTC
 ARG HOST_UID=1000
 ARG HOST_GID=1000
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
 
 ENV TZ=${TZ}
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV CCACHE_DIR=/ccache
 ENV PATH=/usr/lib/ccache:${PATH}
+ENV http_proxy=${http_proxy}
+ENV https_proxy=${https_proxy}
+ENV no_proxy=${no_proxy}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
