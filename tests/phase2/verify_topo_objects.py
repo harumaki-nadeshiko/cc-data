@@ -86,13 +86,20 @@ def check(name, cond):
 
 print("=" * 60)
 print("TC-TOPO-1: Full-scale object count")
-check("3 HN", len([1 for n in range(NUM)]) == 3)
-check("6 cluster RN-F", len([1 for n in range(NUM) for _ in range(DEFAULT_D)]) == 6)
-check("3 EP_RNF", NUM == 3)
-check("3 L_SNF", NUM == 3)
-check("3 DL_SNF", NUM == 3)
-check("3 EP_SNF", NUM == 3)
-check("12 total CPUs", CL == 12)
+hn_count = sum(1 for n in range(NUM) if hasattr(ruby, f"hnf_{n}"))
+cluster_count = sum(1 for n in range(NUM) for c in range(DEFAULT_D)
+                    if hasattr(ruby, f"cl_n{n}_c{c}"))
+ep_rnf_count = sum(1 for n in range(NUM) if hasattr(ruby, f"ep_rnf_{n}"))
+l_snf_count = sum(1 for n in range(NUM) if hasattr(ruby, f"l_snf_{n}"))
+dl_snf_count = sum(1 for n in range(NUM) if hasattr(ruby, f"dl_snf_{n}"))
+ep_snf_count = sum(1 for n in range(NUM) if hasattr(ruby, f"ep_snf_{n}"))
+check("3 HN", hn_count == 3)
+check("6 cluster RN-F", cluster_count == 6)
+check("3 EP_RNF", ep_rnf_count == 3)
+check("3 L_SNF", l_snf_count == 3)
+check("3 DL_SNF", dl_snf_count == 3)
+check("3 EP_SNF", ep_snf_count == 3)
+check("12 total CPUs", len(system.cpu) == 12)
 
 print(f"\nTC-TOPO-2: RN-F same-node downstream")
 for nid in range(NUM):
@@ -119,6 +126,9 @@ for nid in range(NUM):
     check(f"HN_{nid} -> L_SNF", any(d in dests for d in ls))
     check(f"HN_{nid} -> DL_SNF", any(d in dests for d in ds))
     check(f"HN_{nid} -> EP_SNF", nd['ep_snf_c'] in dests)
+    local_dests = list(ls) + list(ds) + [nd['ep_snf_c']]
+    check(f"HN_{nid} ONLY local downstream",
+          len(dests) == len(local_dests) and all(d in local_dests for d in dests))
 
 print(f"\nTC-EP-1: EP creation and node_id")
 for nid in range(NUM):

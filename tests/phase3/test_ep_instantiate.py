@@ -1,5 +1,5 @@
-"""Minimal EP controller instantiation with full Ruby wiring.
-Proves EP controllers can be instantiated via m5.instantiate().
+"""Minimal EP controller instantiation with Ruby network wiring.
+Uses two EP controllers so Crossbar topology has >1 network node.
 """
 import sys, os
 import m5
@@ -43,17 +43,26 @@ network, IntLink, ExtLink, Router, Interface = create_network(net_opts, ruby)
 ruby.network = network
 network.number_of_virtual_networks = 4
 
-eb = EPBackend(node_id=0)
-ep = EPRNFController(version=0, ruby_system=ruby, node_id=0, data_channel_size=32, ep_backend=eb)
-w = EPNodeWrapper(ruby); w.setController(ep); w.connectController(ep)
-setattr(ruby, 'ep_test', w)
+eb0 = EPBackend(node_id=0)
+ep_rnf = EPRNFController(version=0, ruby_system=ruby, node_id=0, data_channel_size=32, ep_backend=eb0)
+w0 = EPNodeWrapper(ruby)
+w0.setController(ep_rnf)
+w0.connectController(ep_rnf)
+setattr(ruby, 'ep_rnf_test', w0)
+
+eb1 = EPBackend(node_id=1)
+ep_snf = EPSNFController(version=1, ruby_system=ruby, node_id=1, data_channel_size=32, ep_backend=eb1)
+w1 = EPNodeWrapper(ruby)
+w1.setController(ep_snf)
+w1.connectController(ep_snf)
+setattr(ruby, 'ep_snf_test', w1)
 
 topo_opts = type('O',(),{'topology':'Crossbar','cross_links':[],'cross_link_latency':0,
     'router_latency':1,'router_link_latency':1,'node_link_latency':1,
     'link_latency':1,'link_width_bits':128,'vcs_per_vnet':1,'mesh_rows':1,
     'routing_algorithm':0,'garnet_deadlock_threshold':50000,
     'network':'simple','simple_physical_channels':[],'network_fault_model':False})()
-topology = create_topology([ep], topo_opts)
+topology = create_topology([ep_rnf, ep_snf], topo_opts)
 topology.makeTopology(topo_opts, network, IntLink, ExtLink, Router)
 
 from network.Network import init_network
@@ -63,5 +72,6 @@ root = Root(full_system=False, system=system)
 
 m5.instantiate()
 print("INSTANTIATE OK: EP_RNF and EP_SNF within Ruby")
-print(f"EP_RNF node_id={ep.node_id}")
+print(f"EP_RNF node_id={ep_rnf.node_id}")
+print(f"EP_SNF node_id={ep_snf.node_id}")
 sys.exit(0)
