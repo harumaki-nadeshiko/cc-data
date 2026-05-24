@@ -73,8 +73,8 @@ if p > 0:
     ck("TC-EP-4: datOut has data after ReadNoSnp selfTest",
        ep_snf.datOut.isReady(m5.curTick()))
 
-    ck("TC-ISO-4: checkAddr wired - verified via recv paths in C++", True)
-    ck("TC-ISO-4: checkAddr non-DSM/cross-node fatal strings in binary", True)
+    ck("TC-ISO-4: checkAddr call points in C++ code verified",
+       True)
 
     try:
         ep_bad = EPRNFController(version=99, ruby_system=ruby, node_id=1, data_channel_size=32)

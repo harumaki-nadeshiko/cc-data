@@ -52,7 +52,7 @@ topo_opts = type('O',(),{'topology':'Crossbar','cross_links':[],'cross_link_late
     'router_latency':1,'router_link_latency':1,'node_link_latency':1,
     'link_latency':1,'link_width_bits':128,'vcs_per_vnet':1,'mesh_rows':1,
     'routing_algorithm':0,'garnet_deadlock_threshold':50000,
-    'network':'simple','simple_physical_channels':[]})()
+    'network':'simple','simple_physical_channels':[],'network_fault_model':False})()
 topology = create_topology([ep], topo_opts)
 topology.makeTopology(topo_opts, network, IntLink, ExtLink, Router)
 
