@@ -39,7 +39,9 @@ for nid in range(NUM):
 
     nd['l_snf'] = chi_defs.CHI_SNF_MainMem(ruby, None, None); nd['l_snf']._cntrl.addr_ranges = [cfg.local_private_range]
     setattr(ruby, f"l_snf_{nid}", nd['l_snf'])
-    nd['dl_snf'] = chi_defs.CHI_SNF_MainMem(ruby, None, None); nd['dl_snf']._cntrl.addr_ranges = [NodeConfig.dsm_range_for(nid, SEG)]
+    nd['dl_snf'] = chi_defs.CHI_SNF_MainMem(ruby, None, None)
+    nd['dl_snf']._cntrl.addr_ranges = [
+        NodeConfig.dsm_range_for(nid, SEG, cfg.phy_base)]
     setattr(ruby, f"dl_snf_{nid}", nd['dl_snf'])
 
     eb = EPBackend(node_id=nid)
@@ -119,6 +121,15 @@ for nid in range(NUM):
 for nid in range(NUM):
     cfg = NodeConfig(nid, NUM, SEG)
     check(f"Node{nid} LocalPrivate not DSM", not addr_map.isDsm(nid, cfg.local_private_base))
+
+# Per-node PA: same DSM_k at different nodes should have different PA
+for k in range(NUM):
+    pas = []
+    for nid in range(NUM):
+        pa = addr_map.dsmLocalBase(nid) + k * SEG
+        pas.append(pa)
+    # All PA values for DSM_k across different nodes must be unique
+    check(f"DSM_{k} unique PA per node", len(set(pas)) == NUM)
 
 print(f"\nTC-TOPO-4: HN downstream includes per-node SNF/EP")
 for nid in range(NUM):
