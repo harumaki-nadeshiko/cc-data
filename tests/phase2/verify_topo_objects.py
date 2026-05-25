@@ -111,12 +111,14 @@ for nid in range(NUM):
             check(f"CL_{{{nid},{ci}}} downstream -> HN_{nid}", ok)
 
 print(f"\nTC-TOPO-3: Address classification")
-dsm_b = addr_map.dsm_base
+dsm_b = addr_map.dsmLocalBase(0)
 for nid in range(NUM):
-    check(f"DSM_{nid} homeNode={nid}", addr_map.homeNode(dsm_b + nid * SEG) == nid)
-    check(f"DSM_{nid} isDsm", addr_map.isDsm(dsm_b + nid * SEG))
+    pa = dsm_b + nid * SEG
+    check(f"DSM_{nid} homeNode={nid} (view=0)", addr_map.homeNode(0, pa) == nid)
+    check(f"DSM_{nid} isDsm (view=0)", addr_map.isDsm(0, pa))
 for nid in range(NUM):
-    check(f"Node{nid} LocalPrivate not DSM", not addr_map.isDsm(NodeConfig(nid,NUM,SEG).local_private_base))
+    cfg = NodeConfig(nid, NUM, SEG)
+    check(f"Node{nid} LocalPrivate not DSM", not addr_map.isDsm(nid, cfg.local_private_base))
 
 print(f"\nTC-TOPO-4: HN downstream includes per-node SNF/EP")
 for nid in range(NUM):
