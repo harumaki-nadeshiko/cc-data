@@ -1,0 +1,7 @@
+build/
+.opencode/
+opencode.json
+__pycache__/
+tests/sync_wait/tc_t0_*
+!tests/sync_wait/tc_t0_*.c
+!tests/sync_wait/test_sync_wait.py
