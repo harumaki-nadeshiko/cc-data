@@ -22,7 +22,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** `check("name", true)` used instead of semantic verification. Failure branches called `check("name", true)` — recorded as PASS.
 - **Root file:** `gem5/src/mem/ruby/protocol/chi/ep/M4SelfTest.cc`
-- **Fix commit (gem5):** `97220b31eb` (M4 R2), refined in `d013f0a3a8` (M4 R3), finalized in `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `97220b31eb` (M4 R2), refined in `d013f0a3a8` (M4 R3), finalized in `eb58a922a1` (M4 R4)
 - **Fix details:**
   - Introduced `M4_CHECK(_name, _cond, _detail)` macro with ternary PASS/FAIL/SKIP scoring
   - `_passed`, `_failed`, `_skipped` counters independently tracked
@@ -55,7 +55,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** `SentinelHelper.cc` used `#define private public` to access `Cache_Controller::m_directory_ptr`, causing ODR violations and undefined behavior.
 - **Root files:** `gem5/src/mem/ruby/protocol/chi/ep/SentinelHelper.cc`, `gem5/src/mem/ruby/slicc_interface/AbstractController.hh`, `gem5/src/mem/slicc/symbols/StateMachine.py`
-- **Fix commit (gem5):** `507ff32327` (M4 initial), `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `507ff32327` (M4 initial), `eb58a922a1` (M4 R4)
 - **Fix details:**
   - **AbstractController.hh** (+9 lines): Added virtual `getDirectoryPtr()` method returning `nullptr`
   - **StateMachine.py** (+19 lines): SLICC code generator emits `getDirectoryPtr()` override for Cache/HN controllers with `directory` config parameter
@@ -71,7 +71,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** `UBCCController::_sentinelStates` is a parallel state container not in the HN directory, potentially misleading about authoritative state.
 - **Root file:** `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.hh`
-- **Fix commit (gem5):** `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `eb58a922a1` (M4 R4)
 - **Fix details:**
   - Added explicit comment block marking the map as TEST-ONLY, NOT authoritative
   - Documents that authoritative state lives in HN native Cache_DirEntry (sharers/owner)
@@ -193,7 +193,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** SentinelHelper retained vestigial `#define private public` references and inconsistent access patterns.
 - **Root files:** `gem5/src/mem/ruby/protocol/chi/ep/SentinelHelper.hh`, `gem5/src/mem/ruby/protocol/chi/ep/SentinelHelper.cc`
-- **Fix commit (gem5):** `d013f0a3a8` (M4 R3), finalized in `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `d013f0a3a8` (M4 R3), finalized in `eb58a922a1` (M4 R4)
 - **Fix details:**
   - All `#define private public` references scrubbed from both `.cc` and `.hh`
   - All HN directory access unified through `getDirectoryPtr()` virtual accessor
@@ -223,7 +223,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** Remove test (M4-TC-Remove-1/2) ran without checking if shared install (M4-TC-Sharer-1) succeeded, potentially producing false PASS when remove succeeds as a no-op.
 - **Root file:** `gem5/src/mem/ruby/protocol/chi/ep/M4SelfTest.cc`
-- **Fix commit (gem5):** `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `eb58a922a1` (M4 R4)
 - **Fix details:**
   - Remove test (M4-TC-Remove-1, M4-TC-Remove-2) now gated on shared install (M4-TC-Sharer-1) success
   - If install failed/SKIP, remove checks also SKIP with clear message: `M4 NOTE: skipping remove test — shared install (3a) did not succeed`
@@ -255,7 +255,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 - **Issue:** Remove Sentinel tests (M4-TC-Remove-1/2) need install-success precondition guard.
 - **Root file:** `gem5/src/mem/ruby/protocol/chi/ep/M4SelfTest.cc`
-- **Fix commit (gem5):** `79f5fa74dd` (M4 R4)
+- **Fix commit (gem5):** `eb58a922a1` (M4 R4)
 - **Fix details:** (Same as R4-P0#2) Remove test gated on shared install success; SKIPs with clear reason when precondition fails.
 - **Verification:** Regression output confirms SKIP + clear rationale.
 - **Status:** ✅ RESOLVED
@@ -271,9 +271,9 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 | `tests/phase4/test_sentinel_registration.py` | R1→R5 | Ternary PASS/FAIL/SKIP parsing, fd capture, zero-tolerance gate, explicit fail check |
 | `tests/phase2/verify_topo_objects.py` | R4 | EPBackend ruby_system wiring for EP instantiate |
 | `tests/phase3/test_ep_instantiate.py` | R4 | EPBackend ruby_system wiring for EP instantiate |
-| `gem5` (submodule pointer) | R1→R4 | Updated to `79f5fa74dd` (M4 R4 FINAL) |
+| `gem5` (submodule pointer) | R1→R4 | Updated to `eb58a922a1` (M4 R4 FINAL) |
 
-### gem5 Submodule (ep-v2, commit `79f5fa74dd`)
+### gem5 Submodule (ep-v2, commit `eb58a922a1`)
 
 | File | Rounds | Change Summary |
 |------|--------|----------------|

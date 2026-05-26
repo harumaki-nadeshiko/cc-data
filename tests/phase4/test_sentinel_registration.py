@@ -41,6 +41,32 @@ CL  = NUM * DEFAULT_L * DEFAULT_D
 # gem5 run. The M4SelfTest C++ output may be buffered and appear
 # at any time during the simulation lifecycle.
 import os as _os
+import ctypes as _ctypes
+
+# Load libc to flush C stdio buffers from Python side.
+# fflush(NULL) flushes ALL C-level output streams — this ensures
+# any C++ printf output still in libc's stdout buffer is written
+# to fd 1 (our temp file) before we close the capture window.
+_libc = _ctypes.CDLL("libc.so.6", use_errno=True)
+# For glibc: fflush is actually __fflush or fflush depending on version.
+# Try the standard name first; fall back to the internal name.
+try:
+    _c_fflush = _libc.fflush
+except AttributeError:
+    _c_fflush = getattr(_libc, '__fflush', None)
+if _c_fflush is None:
+    # Last resort: search for fflush symbol
+    import ctypes.util as _ctu
+    _libc2 = _ctypes.CDLL(_ctu.find_library('c'), use_errno=True)
+    _c_fflush = getattr(_libc2, 'fflush', None)
+
+def _flush_c_stdio():
+    """Flush all C-level stdio buffers to ensure captured output is complete."""
+    if _c_fflush is not None:
+        try:
+            _c_fflush(_ctypes.c_void_p(0))  # fflush(NULL)
+        except Exception:
+            pass  # best-effort; if it fails we still have partial output
 
 # Create a temp file to capture C++ stdout
 tmp_fd, tmp_path = tempfile.mkstemp(suffix='.m4capture', text=True)
@@ -119,7 +145,12 @@ try:
 
     # ---- Run instantiation (triggers M4SelfTest) ---------------------------
     m5.instantiate()
-    sys.stdout.flush()  # flush Python stdout to the temp file
+
+    # Flush ALL output to the capture file before closing the window:
+    #   1. C++ libc stdout buffer — may contain printf data not yet written
+    #   2. Python sys.stdout buffer — may contain gem5 Python-side output
+    _flush_c_stdio()
+    sys.stdout.flush()
     _os.fsync(tmp_fd)   # ensure all data is written to disk
 
     # ---- Restore stdout ----------------------------------------------------
@@ -134,6 +165,8 @@ try:
 
 except Exception as e:
     # Restore stdout before re-raising
+    _flush_c_stdio()
+    sys.stdout.flush()
     _os.dup2(old_fd1, 1)
     _os.close(old_fd1)
     _os.close(tmp_fd)
