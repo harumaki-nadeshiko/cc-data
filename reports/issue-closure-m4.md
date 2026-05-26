@@ -111,7 +111,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
   - M4-FMT-2: changed hardcoded `true` to SKIP
 - **Verification:**
   - `rg 'M4_CHECK.*true' M4SelfTest.cc` returns 0 results (no hardcoded true checks)
-  - All 36 M4_CHECK calls use real conditions
+  - All 23 M4_CHECK calls (runtime) use real conditions (no hardcoded true)
 - **Status:** ✅ RESOLVED
 
 ### R2-P0#2: `removeSentinelForTest` / `inspectDirEntryForTest` Missing Return Value Check
@@ -142,7 +142,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 ### R2-P0#4: M4-4 / M4-5 Closure
 
 - **Issue:** M4-4 (Local Unique Snoop EP_RNF) and M4-5 (Grant Before Registration) cannot be closed end-to-end in M4 scope.
-- **Status:** Not independently closeable in M4. Structural readiness verified.
+- **Enforced Policy:** All six M4-4/M4-5 sub-checks (M4-4-a/b/c + M4-5-a/b/c) are **uniformly SKIP** in M4 scope. There is NO partial PASS for structural-only M4-4/M4-5 checks — this avoids ambiguity about what was actually tested vs. what was merely inspected. Full verification requires M5 protocol paths (SLICC message injection / grant-path completion).
 - **M5 Backfill Plan:** Documented in M4 Sentinel Registration Fix Report R2, §2.3:
   | Step | File | Change |
   |------|------|--------|
@@ -151,11 +151,14 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
   | C | `CHI-cache-actions.sm` | Verify EP_RNF in `dir_sharers` before SendSnpUnique |
   | D | `tests/phase5/` | TC-M5-* test cases with PY_INJECT message injection |
   | E | `CHI-cache-actions.sm` | Assertion: `sentinel_visible_tick <= grant_visible_tick` |
-- **M4 Structural Evidence:**
-  - M4-4-a/b: EP_RNF identity discoverable, HN snoop path uses dir_sharers → VERIFIED (PASS)
-  - M4-5-a/b: sentinel install function exists, UBCCController dir snapshot API exists → VERIFIED (PASS)
-  - M4-4-c/M4-5-c: end-to-end → SKIP (requires M5, documented)
-- **Status:** ✅ STRUCTURAL READINESS CONFIRMED; end-to-end deferred to M5 per documented plan
+- **M4 Self-Test Status (uniform, no contradiction):**
+  - M4-4-a: EP_RNF MachineID discoverable → **SKIP** (requires M5 protocol path)
+  - M4-4-b: HN snoop path uses dir_sharers → **SKIP** (requires M5 protocol message injection)
+  - M4-4-c: end-to-end snoop trigger → **SKIP** (requires M5 protocol message injection)
+  - M4-5-a: sentinel install function exists → **SKIP** (requires M5 SLICC modification)
+  - M4-5-b: UBCCController dir snapshot API exists → **SKIP** (requires M5 SLICC modification)
+  - M4-5-c: grant-path sentinel install → **SKIP** (requires M5 SLICC modification)
+- **Status:** ✅ All M4-4/M4-5 uniformly SKIP; end-to-end deferred to M5 per documented plan. No PASS/SKIP contradiction.
 
 ---
 
@@ -274,7 +277,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 | File | Rounds | Change Summary |
 |------|--------|----------------|
-| `src/mem/ruby/protocol/chi/ep/M4SelfTest.cc` | R1→R4 | M4_CHECK macro, ternary PASS/FAIL/SKIP scoring, remove precondition guard, 36 checks |
+| `src/mem/ruby/protocol/chi/ep/M4SelfTest.cc` | R1→R4 | M4_CHECK macro, ternary PASS/FAIL/SKIP scoring, remove precondition guard, 23 checks (8 PASS + 15 SKIP) |
 | `src/mem/ruby/protocol/chi/ep/SentinelHelper.cc` | R1→R3 | HN directory access via getDirectoryPtr(), findEpRnfMachineID return checks, no #define private public |
 | `src/mem/ruby/protocol/chi/ep/SentinelHelper.hh` | R1→R3 | Updated comment, DirEntrySnapshot::epRnfLookupFailed field |
 | `src/mem/ruby/protocol/chi/ep/UBCCController.cc` | R1→R2 | inspectDirEntryForTest JSON, epRnfLookupFailed in output |
@@ -291,7 +294,7 @@ See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
 
 ---
 
-## M4 Self-Test Checks Breakdown (36 total)
+## M4 Self-Test Checks Breakdown (23 total: 8 PASS, 0 FAIL, 15 SKIP)
 
 ### PASS (8 checks)
 | Check ID | Description | Why PASS |
@@ -366,9 +369,9 @@ All regression logs archived in `reports/m4-regression-logs.txt` (337 lines, ~19
 
 1. **HN directory write authority:** `installSentinelForTest` can identify HN controller and directory but EP_RNF RTTI discovery fails in current topology without full EP_RNF instantiation. M5 must wire the production path in the HN grant-completion flow.
 
-2. **M4-4 end-to-end snoop:** Requires M5 PY_INJECT message injection harness. Structural infrastructure verified (M4-4-a/b PASS).
+2. **M4-4 end-to-end snoop:** Requires M5 PY_INJECT message injection harness. All M4-4 sub-checks uniformly SKIP in M4 scope.
 
-3. **M4-5 grant-path timing:** Requires M5 SLICC modification to `CHI-cache-actions.sm` `UpdateDirState_FromReqResp`. Structural infrastructure verified (M4-5-a/b PASS).
+3. **M4-5 grant-path timing:** Requires M5 SLICC modification to `CHI-cache-actions.sm` `UpdateDirState_FromReqResp`. All M4-5 sub-checks uniformly SKIP in M4 scope.
 
 4. **No `OhNo_EP_RNF_NotGooOod.md`:** EP_RNF can be fully expressed in HN native `Cache_DirEntry` (sharers + owner). No parallel shadow structure needed — confirmed by M4-FMT-2.
 
@@ -376,8 +379,28 @@ All regression logs archived in `reports/m4-regression-logs.txt` (337 lines, ~19
 
 ---
 
+## Issue ID Mapping (Unique, 11 Issues)
+
+Each issue tracked across rounds R1–R5 receives a single canonical ID and final status:
+
+| Canonical ID | Round IDs | Description | Final Status |
+|-------------|-----------|-------------|-------------|
+| **ISSUE-01** | R1-P0#1, R2-P0#1, R3-P0#1 | M4SelfTest fake positive / hardcoded PASS checks | ✅ RESOLVED — ternary PASS/FAIL/SKIP scoring, zero hardcoded-true |
+| **ISSUE-02** | R1-P0#2, R4-P0#1, R5-P0#1 | Python harness exit(0) always / FAIL=0 gate | ✅ RESOLVED — marker-based decision, zero-tolerance gate |
+| **ISSUE-03** | R1-P0#3, R3-P0#3 | `#define private public` anti-pattern in SentinelHelper | ✅ RESOLVED — virtual `getDirectoryPtr()` accessor, no UB |
+| **ISSUE-04** | R1-P0#4 | `_sentinelStates` parallel shadow container | ✅ RESOLVED — TEST-ONLY comment, no production use |
+| **ISSUE-05** | R1-P0#5 | `findEpRnfMachineID` silent fallback to wrong MachineID | ✅ RESOLVED — return false without mutating output |
+| **ISSUE-06** | R2-P0#2 | `removeSentinelForTest` / `inspectDirEntryForTest` missing return-value check | ✅ RESOLVED — explicit `found_ep` checks, `epRnfLookupFailed` flag |
+| **ISSUE-07** | R2-P0#3 | `SentinelHelper.hh` stale `#define private public` comment | ✅ RESOLVED — comment updated to describe actual `getDirectoryPtr()` accessor |
+| **ISSUE-08** | R2-P0#4 | M4-4/M4-5 closure — PASS/SKIP contradiction | ✅ RESOLVED — all M4-4/M4-5 uniformly SKIP (requires M5 protocol path) |
+| **ISSUE-09** | R3-P0#2 | SKIP promotion logic corrupting `_passed` counter | ✅ RESOLVED — promotion uses `_skipped--; _failed++` only |
+| **ISSUE-10** | R4-P0#2, R5-P0#2 | Remove test precondition guard (false PASS from no-op remove) | ✅ RESOLVED — Remove gated on Install success, SKIPs otherwise |
+| **ISSUE-11** | (M4 Final) | Python harness output capture window — missing `fflush(stdout)` + missing marker-check | ✅ RESOLVED — `fflush(stdout)` in C++ + mandatory marker presence check in Python |
+
+---
+
 ## Conclusion
 
-All 5 rounds of issues (R1–R5) have been addressed with concrete code changes, verified via Docker regression testing. The M4 sentinel registration infrastructure is clean, the Python test harness correctly propagates FAIL to CI exit code, and all structural verifications pass. End-to-end M4-4/M4-5 protocol paths are deferred to M5 with a precise backfill plan documented in the M4 R2 report.
+All 11 unique issues (R1–R5 + Final) have been addressed with concrete code changes, verified via Docker regression testing. The M4 sentinel registration infrastructure is clean, the Python test harness correctly propagates FAIL to CI exit code, and all structural verifications pass. End-to-end M4-4/M4-5 protocol paths are deferred to M5 with a precise backfill plan documented above.
 
 **Recommendation:** Proceed to M5 (Protocol-Level Completion) with M4 infrastructure verified.

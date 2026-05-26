@@ -168,27 +168,49 @@ print(f"\nM4 Self-Test: {pass_count}/{total_count} PASS, "
 # infrastructure regression and must be treated as a hard failure.
 MAX_ALLOWED_M4_FAIL = 0
 
-# explicit_fail is checked in every branch — it does NOT depend on
-# total_count > 0. The C++ self-test prints M4_SELF_TEST_FAILED=1 as
-# an overall failure indicator; this must always trigger exit(1).
+# ── MANDATORY MARKER CHECK ───────────────────────────────────────────
+# The C++ self-test MUST emit exactly one of these marker lines.
+# If neither marker is found, the self-test output is incomplete
+# (e.g. truncated by stdio buffering, crashed mid-test, or stdout
+# capture window was too narrow) — treat as FAIL.
+# ──────────────────────────────────────────────────────────────────────
+if explicit_fail and explicit_pass:
+    print("M4_PYTHON: FATAL — BOTH PASSED=1 and FAILED=1 markers found (corrupt output)")
+    sys.exit(1)
+
+if not explicit_fail and not explicit_pass:
+    print("M4_PYTHON: FATAL — neither M4_SELF_TEST_PASSED=1 nor "
+          "M4_SELF_TEST_FAILED=1 marker found in captured output")
+    print("M4_PYTHON: The self-test may not have run, may have crashed, "
+          "or stdout may not have been flushed before capture.")
+    sys.exit(1)
+
+# ── DECISION ─────────────────────────────────────────────────────────
+# Deterministic rule set:
+#   FAILED=1 found              → exit(1), regardless of parsed counts
+#   PASSED=1 found + fail_count==0 → exit(0)
+#   PASSED=1 found + fail_count>0  → exit(1) (contradiction: treat as fail)
+# ──────────────────────────────────────────────────────────────────────
 if explicit_fail:
     print("M4_PYTHON: explicit FAIL marker found, treating as fail")
     sys.exit(1)
 
+# explicit_pass is true here (guaranteed by marker-check above;
+# explicit_fail false and not both missing)
 if fail_count > MAX_ALLOWED_M4_FAIL:
     print(f"M4_PYTHON: SELF-TEST DETECTED {fail_count} FAILURES "
-          f"(threshold={MAX_ALLOWED_M4_FAIL})")
+          f"(threshold={MAX_ALLOWED_M4_FAIL}) — contradiction with "
+          f"PASSED=1 marker, treating as fail")
     sys.exit(1)
-elif total_count == 0:
-    print("M4_PYTHON: WARNING — no PASS/FAIL/SKIP lines found in self-test output")
-    print("M4_PYTHON: This may indicate the self-test did not run.")
-    if explicit_pass:
-        print("M4_PYTHON: explicit PASS marker found, treating as pass")
-    else:
-        print("M4_PYTHON: treating as FAIL (no test results)")
-        sys.exit(1)
+
+if total_count == 0:
+    print("M4_PYTHON: WARNING — no PASS/FAIL/SKIP lines found in self-test "
+          "output despite PASSED=1 marker")
+    print("M4_PYTHON: treating as pass (marker-based decision)")
 else:
     if skip_count > 0:
         print(f"M4_PYTHON: {skip_count} checks SKIPPED (may require M5+ infrastructure)")
-    print("M4_PYTHON_TEST_HARNESS: DONE — all executed checks passed")
-    sys.exit(0)
+    print("M4_PYTHON: marker-based confirmation — PASSED=1 with 0 failures")
+
+print("M4_PYTHON_TEST_HARNESS: DONE — all executed checks passed")
+sys.exit(0)
