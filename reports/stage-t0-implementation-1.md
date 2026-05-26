@@ -131,7 +131,7 @@ This round addressed the previous validator review findings. All P0/P1/P2 issues
 | `src/sim/sync_wait.cc` | Added `#include <cerrno>`, 3 validation checks with `-EINVAL` |
 | `src/arch/arm/linux/se_workload.cc` | Added hi-32-bits check, propagate `barrierWait` return value |
 
-### Superproject (Round 3 commit: TBD; Round 2 commit: `aedd906`)
+### Superproject (Round 3 commit: `55dac63`; Round 2 commit: `aedd906`)
 
 | File | Change |
 |---|---|
@@ -241,7 +241,7 @@ docker run --rm -v $(pwd):/workspace -w /workspace \
 - gem5 submodule changed: yes (Round 2)
 - gem5 fix round commit: `9d714c6ea293d2add442b5d6ef86c9c36c659bef`
 - gem5 unchanged in Round 3 (test-only fix)
-- superproject Round 3 commit: TBD (will update after running tests)
+- superproject Round 3 commit: `55dac63910d5ce93a053ac4e1c9b32222f7f784c`
 - superproject Round 2 commit: `aedd906`
 - superproject Round 2 commit: `42589ad` (binary cleanup)
 - Original implementation:
