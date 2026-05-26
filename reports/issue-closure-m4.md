@@ -356,13 +356,14 @@ docker run --rm -v $(pwd):/workspace -w /workspace ubcc-dev:ubuntu20.04 \
 
 ### Results
 
-| Test | Exit Code | Key Output |
-|------|-----------|------------|
-| M4 Self-Test | 0 | `8/23 PASS, 0 FAIL, 15 SKIP` + `M4_SELF_TEST_PASSED=1` |
-| TC3 Topology | 0 | `101/101 tests passed` |
-| TC5 EP Instantiate | 0 | `INSTANTIATE OK: EP_RNF and EP_SNF within Ruby` |
+| Test | Exit Code | Key Output | Evidence File |
+|------|-----------|------------|---------------|
+| M4 Self-Test | 0 | `8/23 PASS, 0 FAIL, 15 SKIP` + `M4_SELF_TEST_PASSED=1` | [m4-regression-final.txt](m4-regression-final.txt) |
+| TC3 Topology | 0 | `101/101 tests passed` | [m4-regression-logs.txt](m4-regression-logs.txt) (Section 2) |
+| TC5 EP Instantiate | 0 | `INSTANTIATE OK` | [m4-regression-logs.txt](m4-regression-logs.txt) (Section 3) |
 
-All regression logs archived in `reports/m4-regression-final.txt` (104 lines, ~12KB).
+M4 Self-Test log: `reports/m4-regression-final.txt` (104 lines, ~12KB).
+TC3/TC5 regression logs: `reports/m4-regression-logs.txt` (historical archive from R3).
 
 ---
 
