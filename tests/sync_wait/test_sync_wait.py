@@ -662,10 +662,10 @@ def test_tc_t0_2(tmpdir, binary):
 
 def test_tc_t0_3(tmpdir, binary_caller, binary_noncaller):
     global tests_total
-    tests_total += 8
+    tests_total += 9
     print("\n--- TC-T0-3: Multi-Thread Count ---", flush=True)
 
-    rc, stdout, timeline, _ = _run_multi_cpu_test(
+    rc, stdout, timeline, outputs = _run_multi_cpu_test(
         "tc_t0_3", tmpdir, make_tc_t0_3_config, 4,
         (binary_caller, binary_noncaller))
 
@@ -684,10 +684,19 @@ def test_tc_t0_3(tmpdir, binary_caller, binary_noncaller):
         has_after = _has_marker(timeline, "AFTER_BARRIER CALLER node={}".format(nid))
         check("TC-T0-3 caller node{} passed".format(nid), has_after)
 
-    # Non-caller should not have AFTER_BARRIER
-    nc_has_after = _has_marker(timeline, "AFTER_BARRIER CALLER node=0")
-    check("TC-T0-3 non-caller no AFTER_BARRIER",
-          not nc_has_after or has_nc_done)
+    # ── P1: CPU-level precise non-caller assertion ─────────────
+    # CPU1 (non-caller, node=0) runs the non-caller workload.
+    # Its output file must NOT contain any AFTER_BARRIER line,
+    # regardless of what other CPUs emitted to the global timeline.
+    cpu1_lines = read_lines(outputs[1])
+    cpu1_has_after = any("AFTER_BARRIER" in l for l in cpu1_lines)
+    check("TC-T0-3 non-caller CPU1 no AFTER_BARRIER in file", not cpu1_has_after)
+
+    # CPU0 (caller, node=0) runs the caller workload.
+    # Its output file MUST contain AFTER_BARRIER.
+    cpu0_lines = read_lines(outputs[0])
+    cpu0_has_after = any("AFTER_BARRIER" in l for l in cpu0_lines)
+    check("TC-T0-3 caller CPU0 has AFTER_BARRIER in file", cpu0_has_after)
 
     for tick, cpu_id, line in timeline:
         print("    [t={}] cpu{}: {}".format(tick, cpu_id, line), flush=True)

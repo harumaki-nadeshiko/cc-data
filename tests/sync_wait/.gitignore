@@ -7,3 +7,6 @@ tc_t0_4
 tc_t0_5
 tc_t0_6
 tc_t0_7
+
+# Ignore generated test artifacts
+artifacts_round3/
