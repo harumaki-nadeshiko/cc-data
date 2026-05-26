@@ -10,7 +10,11 @@ USAGE: run via gem5 directly:
 Gate logic: Use fd redirect to capture C++ stdout during m5.instantiate(),
 parse for M5_SELF_TEST_PASSED=1 / FAILED=1 markers, and exit accordingly.
 """
-import sys, os, re, ctypes, tempfile
+import sys, os, re, ctypes, tempfile, traceback
+
+if len(sys.argv) < 2:
+    print("Usage: gem5.opt tests/phase5/test_sideband_plumbing.py <arm_binary>")
+    sys.exit(2)
 
 import m5
 from m5.objects import *
@@ -101,21 +105,28 @@ libc = ctypes.CDLL(None)
 libc.fflush(None)
 
 sav = os.dup(1)
-capture_f = tempfile.NamedTemporaryFile(mode='w+', delete=False)
-capture_path = capture_f.name
-os.dup2(capture_f.fileno(), 1)
-capture_f.close()
+capture_path = None
+try:
+    capture_f = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+    capture_path = capture_f.name
+    os.dup2(capture_f.fileno(), 1)
+    capture_f.close()
 
-# This is where C++ self-test output goes → captured to file
-m5.instantiate()
+    # This is where C++ self-test output goes → captured to file
+    m5.instantiate()
 
-libc.fflush(None)
-os.dup2(sav, 1)
-os.close(sav)
+    libc.fflush(None)
+finally:
+    os.dup2(sav, 1)
+    os.close(sav)
 
-with open(capture_path, 'r') as f:
-    captured = f.read()
-os.unlink(capture_path)
+    # Read captured output
+    if capture_path and os.path.exists(capture_path):
+        with open(capture_path, 'r') as f:
+            captured = f.read()
+        os.unlink(capture_path)
+    else:
+        captured = ""
 
 # ---- Gate decision ----
 explicit_pass = "M5_SELF_TEST_PASSED=1" in captured

@@ -5,3 +5,7 @@ __pycache__/
 tests/sync_wait/tc_t0_*
 !tests/sync_wait/tc_t0_*.c
 !tests/sync_wait/test_sync_wait.py
+m5out/
+tests/phase1/hello
+tests/phase4/hello_arm
+tests/phase4/m4_out/
