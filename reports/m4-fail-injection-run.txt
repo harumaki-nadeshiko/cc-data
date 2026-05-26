@@ -1,14 +1,18 @@
 # M4 FAIL Injection Real-Run Evidence
 # Date: 2026-05-26
-# This file contains two consecutive Docker test runs:
-#   1) FAIL-injected run (M4_SELF_TEST_FAILED=1, exit code 1)
-#   2) Clean PASS run (M4_SELF_TEST_PASSED=1, exit code 0)
+# This file contains two consecutive test runs:
+#   1) FAIL-injected run (Host, Python 3.13 conda): M4_SELF_TEST_FAILED=1, exit 1
+#   2) Clean PASS run (Docker, Python 3.8): M4_SELF_TEST_PASSED=1, exit 0
 #
-# Note: Due to conda Python 3.13 library constraints, the binary was
-# run on the host with LD_LIBRARY_PATH set. The Docker image uses
-# Python 3.8 and the test produces identical results in Docker when
-# the binary is built against system Python (verified earlier with
-# the clean Docker run).
+# Environment split:
+#   - FAIL injection requires rebuilding gem5.opt. Due to conda Python 3.13
+#     vs Docker Python 3.8 ABI mismatch, the injected binary was run on the
+#     host (LD_LIBRARY_PATH set to conda lib). This does NOT affect the C++
+#     self-test logic — only Python harness invocation differs.
+#   - The clean PASS run was performed in Docker (standard CI environment),
+#     producing identical C++ self-test results (8/23 PASS, 0 FAIL, 15 SKIP).
+#   - The C++ self-test logic (M4_CHECK, fflush, marker output) is identical
+#     in both environments.
 
 ###############################################################################
 # SECTION 1: FAIL-INJECTED RUN

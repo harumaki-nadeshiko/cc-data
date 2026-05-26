@@ -1,6 +1,7 @@
 # M4 Final Issue Closure Matrix
 
-> **最终判定唯一来源: m4-regression-final.txt**
+> **M4 Self-Test 唯一来源: m4-regression-final.txt**
+> TC3/TC5 结果来自独立的 Docker 回归运行，详见各自的测试输出。
 
 **Phase:** M4 — Sentinel Registration (final evidence closure)
 **Date:** 2026-05-26
@@ -8,13 +9,11 @@
 
 ## Test Result Summary (Docker Regression)
 
-| Test | Result | Exit Code |
-|------|--------|-----------|
-| M4 Self-Test | 8/23 PASS, 0 FAIL, 15 SKIP | 0 (M4_SELF_TEST_PASSED=1) |
-| TC3 (topology) | 101/101 PASS | 0 |
-| TC5 (EP instantiate) | INSTANTIATE OK | 0 |
-
-See [m4-regression-final.txt](m4-regression-final.txt) for full raw logs.
+| Test | Result | Exit Code | Evidence |
+|------|--------|-----------|----------|
+| M4 Self-Test | 8/23 PASS, 0 FAIL, 15 SKIP | 0 | [m4-regression-final.txt](m4-regression-final.txt) |
+| TC3 (topology) | 101/101 PASS | 0 | Separate Docker run |
+| TC5 (EP instantiate) | INSTANTIATE OK | 0 | Separate Docker run |
 
 ---
 
