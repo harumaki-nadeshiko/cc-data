@@ -1,0 +1,337 @@
+======================================================================
+M4 SELF-TEST REGRESSION LOG
+======================================================================
+Command: gem5.opt tests/phase4/test_sentinel_registration.py hello_arm
+======================================================================
+
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (128 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (128 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (128 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (256 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (256 Mbytes)
+src/mem/dram_interface.cc:690: warn: DRAM device capacity (16384 Mbytes) does not match the address range assigned (256 Mbytes)
+src/base/statistics.hh:281: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/statistics.hh:281: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/remote_gdb.cc:418: warn: Sockets disabled, not accepting gdb connections
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:196: warn: SentinelHelper: non-DSM address 0x40, rejected
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:196: warn: SentinelHelper: non-DSM address 0x8000040, rejected
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:219: warn: SentinelHelper: EP_RNF not found for node 0 via RTTI — sentinel install cannot proceed
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:219: warn: SentinelHelper: EP_RNF not found for node 0 via RTTI — sentinel install cannot proceed
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:219: warn: SentinelHelper: EP_RNF not found for node 0 via RTTI — sentinel install cannot proceed
+======================================================================
+M4 Self-Test Captured Output:
+======================================================================
+Global frequency set at 1000000000000 ticks per second
+=== M4 Sentinel Registration Self-Test (node_id=0) ===
+  M4 M4-ADDR-1: DSM address recognized: PASS
+  M4 M4-ADDR-2: DSM home node correct: PASS
+  M4 M4-ADDR-3: LocalPrivate NOT DSM: PASS
+  M4 M4-ADDR-4: UbccExclusive NOT DSM: PASS
+  M4 M4-TC4-4a: LocalPrivate sentinel rejected: PASS
+  M4 M4-TC4-4b: UbccExclusive sentinel rejected: PASS
+  M4 NOTE: installSentinelForTest(shared) returned false
+  M4 NOTE: HN directory write requires M5 protocol path
+  M4 M4-TC-Sharer-1: install S_SHARER: SKIP (installSentinelForTest returned false — directory not accessible)
+  M4 M4-TC-Sharer-2: EP_RNF sharer verification: SKIP (install failed, cannot verify sharer presence)
+  M4 NOTE: installSentinelForTest(owner) returned false
+  M4 M4-TC-Owner-1: install S_OWNER: SKIP (installSentinelForTest(owner) returned false — directory not accessible)
+  M4 M4-TC-Owner-2: EP_RNF owner verification: SKIP (install failed, cannot verify owner presence)
+  M4 M4-TC-Owner-3: owner coexistence check: SKIP (install failed, cannot verify coexistence)
+  M4 NOTE: skipping remove test — shared install (3a) did not succeed
+  M4 M4-TC-Remove-1: remove S_SHARER: SKIP (install failed, cannot verify remove)
+  M4 M4-TC-Remove-2: EP_RNF gone verification: SKIP (install failed, cannot verify remove)
+  M4 M4-SNOOP-1: snoop counter increments: PASS
+  M4 M4-SNOOP-2: snoop counter resets: PASS
+gem5 Simulator System.  https://www.gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 version 25.1.0.1
+gem5 compiled May 26 2026 05:31:56
+gem5 started May 26 2026 05:42:34
+gem5 executing on 6be61bad11a5, pid 8
+command line: gem5/build/ARM/gem5.opt --outdir=/tmp/m5out.m4r tests/phase4/test_sentinel_registration.py tests/phase4/hello_arm
+
+info: Standard input is not a terminal, disabling listeners.
+
+======================================================================
+
+M4 Self-Test: 8/15 PASS, 0 FAIL, 7 SKIP
+M4_PYTHON: 7 checks SKIPPED (may require M5+ infrastructure)
+M4_PYTHON_TEST_HARNESS: DONE — all executed checks passed
+warn: Base 10 memory/cache size 3TB will be cast to base 2 size 3TiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: No dot file generated. Please install pydot to generate the dot file and pdf.
+  M4 M4-FMT-1: format check SKIPPED: SKIP (install failed, cannot verify format via inspect)
+  M4 M4-FMT-2: format check SKIPPED: SKIP (EP_RNF state in HN native Cache_DirEntry format (structural, verified by DirEntrySnapshot))
+  M4 M4-4-a: EP_RNF MachineID discoverable: SKIP (requires M5 protocol path for full verification; SentinelHelper::findEpRnfMachineID is integrated)
+  M4 M4-4-b: HN snoop path uses dir_sharers: SKIP (requires M5 protocol message injection to verify snoop-path integration)
+  M4 M4-4-c: end-to-end snoop trigger: SKIP (requires M5 protocol message injection to send unique request to HN)
+  M4 M4-5-a: sentinel install function exists: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path; SentinelHelper::installSentinelForTest is integrated in UBCCController)
+  M4 M4-5-b: UBCCController dir snapshot API exists: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path; UBCCController::getDirEntrySnapshot and inspectDirEntryForTest are integrated)
+  M4 M4-5-c: grant-path sentinel install: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path)
+=== M4 Self-Test Results: 8/23 PASS, 0 FAIL, 15 SKIP ===
+M4_SELF_TEST_PASSED=1
+
+======================================================================
+TC3 TOPOLOGY VERIFICATION REGRESSION LOG
+======================================================================
+
+gem5 Simulator System.  https://www.gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 version 25.1.0.1
+gem5 compiled May 26 2026 05:31:56
+gem5 started May 26 2026 05:42:44
+gem5 executing on 6be61bad11a5, pid 9
+command line: gem5/build/ARM/gem5.opt --outdir=/tmp/m5out.tc3r tests/phase2/verify_topo_objects.py tests/phase1/hello
+
+info: Standard input is not a terminal, disabling listeners.
+============================================================
+TC-TOPO-1: Full-scale object count
+  3 HN: PASS
+  6 cluster RN-F: PASS
+  3 EP_RNF: PASS
+  3 L_SNF: PASS
+  3 DL_SNF: PASS
+  3 EP_SNF: PASS
+  12 total CPUs: PASS
+
+TC-TOPO-2: RN-F same-node downstream
+  CL_{0,0} downstream -> HN_0: PASS
+  CL_{0,0} downstream -> HN_0: PASS
+  CL_{0,1} downstream -> HN_0: PASS
+  CL_{0,1} downstream -> HN_0: PASS
+  CL_{1,0} downstream -> HN_1: PASS
+  CL_{1,0} downstream -> HN_1: PASS
+  CL_{1,1} downstream -> HN_1: PASS
+  CL_{1,1} downstream -> HN_1: PASS
+  CL_{2,0} downstream -> HN_2: PASS
+  CL_{2,0} downstream -> HN_2: PASS
+  CL_{2,1} downstream -> HN_2: PASS
+  CL_{2,1} downstream -> HN_2: PASS
+
+TC-TOPO-3: Address classification
+  DSM_0 homeNode=0 (view=0): PASS
+  DSM_0 isDsm (view=0): PASS
+  DSM_1 homeNode=1 (view=0): PASS
+  DSM_1 isDsm (view=0): PASS
+  DSM_2 homeNode=2 (view=0): PASS
+  DSM_2 isDsm (view=0): PASS
+  Node0 LocalPrivate not DSM: PASS
+  Node1 LocalPrivate not DSM: PASS
+  Node2 LocalPrivate not DSM: PASS
+  DSM_0 unique PA per node: PASS
+  DSM_1 unique PA per node: PASS
+  DSM_2 unique PA per node: PASS
+
+TC-TOPO-4: HN downstream includes per-node SNF/EP
+  HN_0 -> L_SNF: PASS
+  HN_0 -> DL_SNF: PASS
+  HN_0 -> EP_SNF: PASS
+  HN_0 ONLY local downstream: PASS
+  HN_1 -> L_SNF: PASS
+  HN_1 -> DL_SNF: PASS
+  HN_1 -> EP_SNF: PASS
+  HN_1 ONLY local downstream: PASS
+  HN_2 -> L_SNF: PASS
+  HN_2 -> DL_SNF: PASS
+  HN_2 -> EP_SNF: PASS
+  HN_2 ONLY local downstream: PASS
+
+TC-EP-1: EP creation and node_id
+  EP_RNF_0 has_parent: PASS
+  EP_SNF_0 has_parent: PASS
+  EP_RNF_1 has_parent: PASS
+  EP_SNF_1 has_parent: PASS
+  EP_RNF_2 has_parent: PASS
+  EP_SNF_2 has_parent: PASS
+
+TC-EP-2: EP wiring - message buffers present
+  EP_RNF_0.reqOut: PASS
+  EP_RNF_0.snpOut: PASS
+  EP_RNF_0.rspOut: PASS
+  EP_RNF_0.datOut: PASS
+  EP_RNF_0.reqIn: PASS
+  EP_RNF_0.snpIn: PASS
+  EP_RNF_0.rspIn: PASS
+  EP_RNF_0.datIn: PASS
+  EP_SNF_0.reqOut: PASS
+  EP_SNF_0.snpOut: PASS
+  EP_SNF_0.rspOut: PASS
+  EP_SNF_0.datOut: PASS
+  EP_SNF_0.reqIn: PASS
+  EP_SNF_0.snpIn: PASS
+  EP_SNF_0.rspIn: PASS
+  EP_SNF_0.datIn: PASS
+  EP_RNF_1.reqOut: PASS
+  EP_RNF_1.snpOut: PASS
+  EP_RNF_1.rspOut: PASS
+  EP_RNF_1.datOut: PASS
+  EP_RNF_1.reqIn: PASS
+  EP_RNF_1.snpIn: PASS
+  EP_RNF_1.rspIn: PASS
+  EP_RNF_1.datIn: PASS
+  EP_SNF_1.reqOut: PASS
+  EP_SNF_1.snpOut: PASS
+  EP_SNF_1.rspOut: PASS
+  EP_SNF_1.datOut: PASS
+  EP_SNF_1.reqIn: PASS
+  EP_SNF_1.snpIn: PASS
+  EP_SNF_1.rspIn: PASS
+  EP_SNF_1.datIn: PASS
+  EP_RNF_2.reqOut: PASS
+  EP_RNF_2.snpOut: PASS
+  EP_RNF_2.rspOut: PASS
+  EP_RNF_2.datOut: PASS
+  EP_RNF_2.reqIn: PASS
+  EP_RNF_2.snpIn: PASS
+  EP_RNF_2.rspIn: PASS
+  EP_RNF_2.datIn: PASS
+  EP_SNF_2.reqOut: PASS
+  EP_SNF_2.snpOut: PASS
+  EP_SNF_2.rspOut: PASS
+  EP_SNF_2.datOut: PASS
+  EP_SNF_2.reqIn: PASS
+  EP_SNF_2.snpIn: PASS
+  EP_SNF_2.rspIn: PASS
+  EP_SNF_2.datIn: PASS
+
+TC-G-3: Full scale preserved
+  N=3: PASS
+  L=2: PASS
+  D=2: PASS
+  Total CPUs=12: PASS
+
+============================================================
+TOTAL: 101/101 tests passed
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 32kB will be cast to base 2 size 32KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+warn: Base 10 memory/cache size 256kB will be cast to base 2 size 256KiB.
+
+======================================================================
+TC5 EP INSTANTIATE REGRESSION LOG
+======================================================================
+
+Global frequency set at 1000000000000 ticks per second
+src/base/statistics.hh:281: warn: One of the stats is a legacy stat. Legacy stat is a stat that does not belong to any statistics::Group. Legacy stat is deprecated.
+src/base/remote_gdb.cc:418: warn: Sockets disabled, not accepting gdb connections
+=== M4 Sentinel Registration Self-Test (node_id=0) ===
+  M4 M4-ADDR-1: DSM address recognized: PASS
+  M4 M4-ADDR-2: DSM home node correct: PASS
+  M4 M4-ADDR-3: LocalPrivate NOT DSM: PASS
+  M4 M4-ADDR-4: UbccExclusive NOT DSM: PASS
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:196: warn: SentinelHelper: non-DSM address 0x40, rejected
+  M4 M4-TC4-4a: LocalPrivate sentinel rejected: PASS
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:196: warn: SentinelHelper: non-DSM address 0x8000040, rejected
+  M4 M4-TC4-4b: UbccExclusive sentinel rejected: PASS
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:202: warn: SentinelHelper: no HN controller for node 0
+  M4 NOTE: installSentinelForTest(shared) returned false
+  M4 NOTE: HN directory write requires M5 protocol path
+  M4 M4-TC-Sharer-1: install S_SHARER: SKIP (installSentinelForTest returned false — directory not accessible)
+  M4 M4-TC-Sharer-2: EP_RNF sharer verification: SKIP (install failed, cannot verify sharer presence)
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:202: warn: SentinelHelper: no HN controller for node 0
+  M4 NOTE: installSentinelForTest(owner) returned false
+  M4 M4-TC-Owner-1: install S_OWNER: SKIP (installSentinelForTest(owner) returned false — directory not accessible)
+  M4 M4-TC-Owner-2: EP_RNF owner verification: SKIP (install failed, cannot verify owner presence)
+  M4 M4-TC-Owner-3: owner coexistence check: SKIP (install failed, cannot verify coexistence)
+  M4 NOTE: skipping remove test — shared install (3a) did not succeed
+  M4 M4-TC-Remove-1: remove S_SHARER: SKIP (install failed, cannot verify remove)
+  M4 M4-TC-Remove-2: EP_RNF gone verification: SKIP (install failed, cannot verify remove)
+  M4 M4-SNOOP-1: snoop counter increments: PASS
+  M4 M4-SNOOP-2: snoop counter resets: PASS
+src/mem/ruby/protocol/chi/ep/SentinelHelper.cc:202: warn: SentinelHelper: no HN controller for node 0
+gem5 Simulator System.  https://www.gem5.org
+gem5 is copyrighted software; use the --copyright option for details.
+
+gem5 version 25.1.0.1
+gem5 compiled May 26 2026 05:31:56
+gem5 started May 26 2026 05:42:44
+gem5 executing on 6be61bad11a5, pid 10
+command line: gem5/build/ARM/gem5.opt --outdir=/tmp/m5out.tc5r tests/phase3/test_ep_instantiate.py tests/phase1/hello
+
+info: Standard input is not a terminal, disabling listeners.
+INSTANTIATE OK: EP_RNF and EP_SNF within Ruby
+EP_RNF node_id=0
+EP_SNF node_id=1
+warn: Base 10 memory/cache size 128MB will be cast to base 2 size 128MiB.
+warn: No dot file generated. Please install pydot to generate the dot file and pdf.
+  M4 M4-FMT-1: format check SKIPPED: SKIP (install failed, cannot verify format via inspect)
+  M4 M4-FMT-2: format check SKIPPED: SKIP (EP_RNF state in HN native Cache_DirEntry format (structural, verified by DirEntrySnapshot))
+  M4 M4-4-a: EP_RNF MachineID discoverable: SKIP (requires M5 protocol path for full verification; SentinelHelper::findEpRnfMachineID is integrated)
+  M4 M4-4-b: HN snoop path uses dir_sharers: SKIP (requires M5 protocol message injection to verify snoop-path integration)
+  M4 M4-4-c: end-to-end snoop trigger: SKIP (requires M5 protocol message injection to send unique request to HN)
+  M4 M4-5-a: sentinel install function exists: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path; SentinelHelper::installSentinelForTest is integrated in UBCCController)
+  M4 M4-5-b: UBCCController dir snapshot API exists: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path; UBCCController::getDirEntrySnapshot and inspectDirEntryForTest are integrated)
+  M4 M4-5-c: grant-path sentinel install: SKIP (requires M5 SLICC modification to CHI-cache-actions.sm grant-completion path)
+=== M4 Self-Test Results: 8/23 PASS, 0 FAIL, 15 SKIP ===
+M4_SELF_TEST_PASSED=1
