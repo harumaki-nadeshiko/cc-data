@@ -43,14 +43,14 @@ network, IntLink, ExtLink, Router, Interface = create_network(net_opts, ruby)
 ruby.network = network
 network.number_of_virtual_networks = 4
 
-eb0 = EPBackend(node_id=0)
+eb0 = EPBackend(node_id=0, ruby_system=ruby)
 ep_rnf = EPRNFController(version=0, ruby_system=ruby, node_id=0, data_channel_size=32, ep_backend=eb0)
 w0 = EPNodeWrapper(ruby)
 w0.setController(ep_rnf)
 w0.connectController(ep_rnf)
 setattr(ruby, 'ep_rnf_test', w0)
 
-eb1 = EPBackend(node_id=1)
+eb1 = EPBackend(node_id=1, ruby_system=ruby)
 ep_snf = EPSNFController(version=1, ruby_system=ruby, node_id=1, data_channel_size=32, ep_backend=eb1)
 w1 = EPNodeWrapper(ruby)
 w1.setController(ep_snf)

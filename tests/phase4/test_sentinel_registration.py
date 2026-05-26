@@ -164,17 +164,26 @@ print("=" * 70)
 print(f"\nM4 Self-Test: {pass_count}/{total_count} PASS, "
       f"{fail_count} FAIL, {skip_count} SKIP")
 
-if fail_count > 0 or explicit_fail:
-    print("M4_PYTHON: SELF-TEST DETECTED FAILURES")
+# M4 gate: zero-tolerance for FAIL. Every FAIL is a genuine
+# infrastructure regression and must be treated as a hard failure.
+MAX_ALLOWED_M4_FAIL = 0
+
+# explicit_fail is checked in every branch — it does NOT depend on
+# total_count > 0. The C++ self-test prints M4_SELF_TEST_FAILED=1 as
+# an overall failure indicator; this must always trigger exit(1).
+if explicit_fail:
+    print("M4_PYTHON: explicit FAIL marker found, treating as fail")
+    sys.exit(1)
+
+if fail_count > MAX_ALLOWED_M4_FAIL:
+    print(f"M4_PYTHON: SELF-TEST DETECTED {fail_count} FAILURES "
+          f"(threshold={MAX_ALLOWED_M4_FAIL})")
     sys.exit(1)
 elif total_count == 0:
     print("M4_PYTHON: WARNING — no PASS/FAIL/SKIP lines found in self-test output")
     print("M4_PYTHON: This may indicate the self-test did not run.")
     if explicit_pass:
         print("M4_PYTHON: explicit PASS marker found, treating as pass")
-    elif explicit_fail:
-        print("M4_PYTHON: explicit FAIL marker found, treating as fail")
-        sys.exit(1)
     else:
         print("M4_PYTHON: treating as FAIL (no test results)")
         sys.exit(1)

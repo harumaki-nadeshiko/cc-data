@@ -44,7 +44,7 @@ for nid in range(NUM):
         NodeConfig.dsm_range_for(nid, SEG, cfg.phy_base)]
     setattr(ruby, f"dl_snf_{nid}", nd['dl_snf'])
 
-    eb = EPBackend(node_id=nid)
+    eb = EPBackend(node_id=nid, ruby_system=ruby)
     nd['ep_rnf_c'] = EPRNFController(ruby_system=ruby, node_id=nid, data_channel_size=32, ep_backend=eb)
     nd['ep_rnf_w'] = EPNodeWrapper(ruby); nd['ep_rnf_w'].setController(nd['ep_rnf_c']); nd['ep_rnf_w'].connectController(nd['ep_rnf_c'])
     setattr(ruby, f"ep_rnf_{nid}", nd['ep_rnf_w'])
