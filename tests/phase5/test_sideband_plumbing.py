@@ -4,20 +4,14 @@ The structural tests run as a C++ self-test during EPBackend::init()
 (implemented in M5SelfTest.cc). This Python script creates the full
 CHI+UBCC topology, triggers instantiation, and parses the self-test output.
 
-Gate logic: Check the M5_SELF_TEST_PASSED/FAILED markers by examining
-the gem5 stats file after simulation, since fd redirect within gem5
-is unreliable across all Python/C binding layers.
+USAGE: run via gem5 directly:
+  gem5.opt tests/phase5/test_sideband_plumbing.py <arm_binary>
+
+Gate logic: Use fd redirect to capture C++ stdout during m5.instantiate(),
+parse for M5_SELF_TEST_PASSED=1 / FAILED=1 markers, and exit accordingly.
 """
-import sys, os, re, glob
+import sys, os, re, ctypes, tempfile
 
-# If run as a standalone script (not inside gem5), tell user
-if not any('gem5' in a for a in sys.argv[0].lower().split('/')):
-    print("Usage: run via gem5: gem5.opt tests/phase5/test_sideband_plumbing.py <binary>")
-    print("       The C++ self-test markers appear on gem5's stdout.")
-    print("       Gate: check stdout for M5_SELF_TEST_PASSED=1 (pass) or FAILED=1 (fail).")
-    sys.exit(0)
-
-# === Below: runs INSIDE gem5 ===
 import m5
 from m5.objects import *
 
@@ -100,54 +94,51 @@ for i, cpu in enumerate(cpus):
 
 root = Root(full_system=False, system=system)
 
-# Capture C++ stdout during m5.instantiate() using fd redirect
-# The C++ self-test runs during init() and outputs to stdout.
-# We redirect stdout to a temp file BEFORE instantiate,
-# restore AFTER, and then check the file.
-import ctypes, tempfile
-
+# ---- Capture C++ self-test output ----
+# The self-test runs during m5.instantiate(). We redirect stdout to
+# a temp file before calling it, then restore and read the file.
 libc = ctypes.CDLL(None)
-libc.fflush(None)  # flush Python's buffered output first
+libc.fflush(None)
 
-# Save original stdout fd
-orig_stdout = os.dup(1)
+sav = os.dup(1)
+capture_f = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+capture_path = capture_f.name
+os.dup2(capture_f.fileno(), 1)
+capture_f.close()
 
-# Create a temp file and redirect stdout to it
-tmpf = tempfile.NamedTemporaryFile(mode='w+', delete=False)
-capture_path = tmpf.name
-os.dup2(tmpf.fileno(), 1)
-tmpf.close()
-
-# m5.instantiate() triggers C++ self-test → output goes to temp file
+# This is where C++ self-test output goes → captured to file
 m5.instantiate()
 
-libc.fflush(None)  # flush C stdio buffers
+libc.fflush(None)
+os.dup2(sav, 1)
+os.close(sav)
 
-# Restore original stdout
-os.dup2(orig_stdout, 1)
-os.close(orig_stdout)
-
-# Read captured output
 with open(capture_path, 'r') as f:
     captured = f.read()
 os.unlink(capture_path)
 
-# Parse markers
+# ---- Gate decision ----
 explicit_pass = "M5_SELF_TEST_PASSED=1" in captured
 explicit_fail = "M5_SELF_TEST_FAILED=1" in captured
+pass_count = len(re.findall(r': PASS\b', captured))
+fail_count = len(re.findall(r': FAIL\b', captured))
 
-# Print summary to restored stdout
-print("")
-print("=== M5 Phase 1 Gate ===")
+print("\n=== M5 Phase 1 Gate ===")
+print("C++ checks: PASS=%d FAIL=%d" % (pass_count, fail_count))
+print("explicit_pass=%s explicit_fail=%s" % (explicit_pass, explicit_fail))
+
 if explicit_fail:
-    print("GATE: FAIL (explicit FAIL marker)")
+    print("GATE: FAIL (FAIL marker)")
+    sys.exit(1)
 elif not explicit_pass and not explicit_fail:
-    print("GATE: FAIL (no marker found)")
-elif explicit_pass and "FAIL" in captured:
-    print("GATE: FAIL (PASS marker but FAIL count > 0)")
+    print("GATE: FAIL (no marker)")
+    sys.exit(1)
+elif explicit_pass and fail_count > 0:
+    print("GATE: FAIL (PASS marker + FAIL count)")
+    sys.exit(1)
 else:
     print("GATE: PASS")
 
-# Run simulation
-exit_event = m5.simulate()
-print("SIM_CAUSE=" + exit_event.getCause(), flush=True)
+# Simulate briefly to complete simulation
+exit_event = m5.simulate(100000)
+print("EXIT_CAUSE=" + exit_event.getCause())
