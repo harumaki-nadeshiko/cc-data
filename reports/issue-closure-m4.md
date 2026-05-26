@@ -12,8 +12,8 @@
 | Test | Result | Exit Code | Evidence |
 |------|--------|-----------|----------|
 | M4 Self-Test | 8/23 PASS, 0 FAIL, 15 SKIP | 0 | [m4-regression-final.txt](m4-regression-final.txt) |
-| TC3 (topology) | 101/101 PASS | 0 | Separate Docker run |
-| TC5 (EP instantiate) | INSTANTIATE OK | 0 | Separate Docker run |
+| TC3 (topology) | 101/101 PASS | 0 | [m4-regression-logs.txt](m4-regression-logs.txt) |
+| TC5 (EP instantiate) | INSTANTIATE OK | 0 | [m4-regression-logs.txt](m4-regression-logs.txt) |
 
 ---
 
