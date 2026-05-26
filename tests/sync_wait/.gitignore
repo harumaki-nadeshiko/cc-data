@@ -1,0 +1,9 @@
+# Ignore compiled test binaries
+tc_t0_1
+tc_t0_2
+tc_t0_3_caller
+tc_t0_3_noncaller
+tc_t0_4
+tc_t0_5
+tc_t0_6
+tc_t0_7

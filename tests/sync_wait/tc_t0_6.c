@@ -1,8 +1,15 @@
-/* TC-T0-6: mask with high 32 bits set → syscall returns negative (error)
+/* TC-T0-6: mask with high 32 bits set -> syscall returns negative (error)
  *
  * The current Sync_Wait implementation only supports 32-bit node_mask.
  * Passing a mask with any of the upper 32 bits set must return -EINVAL
  * without blocking.
+ *
+ * Outputs:
+ *   TC_T0_6_START
+ *   TC_T0_6_MASK_HI32=1
+ *   SYNC_WAIT_RET=<val>      (machine-parseable return value)
+ *   TC_T0_6_RET=<val>        (human-readable log)
+ *   TC_T0_6_PASS_ERROR_RETURNED  or  TC_T0_6_FAIL_NO_ERROR
  *
  * Compile:
  *   aarch64-linux-gnu-gcc -static -o tc_t0_6 tests/sync_wait/tc_t0_6.c
@@ -33,41 +40,49 @@ static long syscall1(long num, long arg0) {
     return x0;
 }
 
-static void print_str(int fd, const char *s) {
+static void emit_line(const char *s) {
     int len = 0; while (s[len]) len++;
-    syscall3(SYS_WRITE, fd, (long)s, (long)len);
+    syscall3(SYS_WRITE, 1, (long)s, (long)len);
 }
 
-static void print_int(int fd, int val) {
-    char buf[16]; int pos = 0;
-    if (val == 0) { buf[pos++] = '0'; }
-    else {
+static void emit_tag_int(const char *prefix, int val) {
+    char buf[256];
+    int p = 0;
+    while (*prefix && p < 240) buf[p++] = *prefix++;
+    buf[p++] = '=';
+    if (val == 0) {
+        buf[p++] = '0';
+    } else {
         char tmp[16]; int tp = 0;
         unsigned u = (unsigned)(val < 0 ? -val : val);
+        if (val < 0) buf[p++] = '-';
         while (u) { tmp[tp++] = '0' + (u % 10); u /= 10; }
-        if (val < 0) buf[pos++] = '-';
-        while (tp) buf[pos++] = tmp[--tp];
+        while (tp) buf[p++] = tmp[--tp];
     }
-    buf[pos++] = '\n';
-    syscall3(SYS_WRITE, fd, (long)buf, (long)pos);
+    buf[p++] = '\n';
+    syscall3(SYS_WRITE, 1, (long)buf, (long)p);
 }
 
 int main(int argc, char **argv) {
-    print_str(1, "TC_T0_6_START\n");
+    emit_line("TC_T0_6_START\n");
 
     /* mask with bit 33 set (0x1_0000_0001).
      * The high 32 bits (0x1) should trigger -EINVAL. */
     long mask = 0x100000001LL;
     long ret = syscall1(SYS_SYNC_WAIT, mask);
 
-    print_str(1, "TC_T0_6_MASK_HI32=1\n");
-    print_str(1, "TC_T0_6_RET=");
-    print_int(1, (int)ret);
+    emit_line("TC_T0_6_MASK_HI32=1\n");
+
+    /* Machine-parseable return value (for test script) */
+    emit_tag_int("SYNC_WAIT_RET", (int)ret);
+
+    /* Human-readable log */
+    emit_tag_int("TC_T0_6_RET", (int)ret);
 
     if (ret < 0) {
-        print_str(1, "TC_T0_6_PASS_ERROR_RETURNED\n");
+        emit_line("TC_T0_6_PASS_ERROR_RETURNED\n");
     } else {
-        print_str(1, "TC_T0_6_FAIL_NO_ERROR\n");
+        emit_line("TC_T0_6_FAIL_NO_ERROR\n");
     }
 
     syscall1(SYS_EXIT, 0);

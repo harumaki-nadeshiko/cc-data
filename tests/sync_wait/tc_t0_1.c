@@ -3,6 +3,9 @@
  * Three threads each call Sync_Wait(0b111) which has popcount=3.
  * All threads must arrive before any are released.
  *
+ * All output lines are single write() calls to ensure atomicity
+ * in a shared output file for global ordering assertions.
+ *
  * Compile:
  *   aarch64-linux-gnu-gcc -static -o tc_t0_1 tests/sync_wait/tc_t0_1.c
  *
@@ -42,31 +45,66 @@ static long syscall1(long num, long arg0) {
     return x0;
 }
 
-static void write_stdout(const char *buf, int len) {
-    syscall3(SYS_WRITE, 1 /* stdout */, (long)buf, (long)len);
-}
-
-static void print_int(int fd, int val) {
-    char buf[16];
-    int pos = 0;
+/* Write an integer into buf at position p; return new position.
+ * Handles negative values. Does NOT add newline. */
+static int fmt_int(char *buf, int p, int val) {
     if (val == 0) {
-        buf[pos++] = '0';
+        buf[p++] = '0';
     } else {
         char tmp[16];
-        int tmp_pos = 0;
+        int tp = 0;
         unsigned int u = (unsigned int)(val < 0 ? -val : val);
-        while (u > 0) { tmp[tmp_pos++] = '0' + (u % 10); u /= 10; }
-        if (val < 0) buf[pos++] = '-';
-        while (tmp_pos > 0) buf[pos++] = tmp[--tmp_pos];
+        if (val < 0) buf[p++] = '-';
+        while (u > 0) { tmp[tp++] = '0' + (u % 10); u /= 10; }
+        while (tp > 0) buf[p++] = tmp[--tp];
     }
-    buf[pos++] = '\n';
-    syscall3(SYS_WRITE, fd, (long)buf, (long)pos);
+    return p;
 }
 
-static void print_str(int fd, const char *s) {
+/* Write a complete tagged line "marker node=<nid>\n" in a single write() */
+static void emit_event(const char *marker, int node_id) {
+    char buf[256];
+    int p = 0;
+
+    /* copy marker */
+    while (*marker && p < 250) buf[p++] = *marker++;
+
+    /* append " node=" */
+    buf[p++] = ' '; buf[p++] = 'n'; buf[p++] = 'o'; buf[p++] = 'd';
+    buf[p++] = 'e'; buf[p++] = '=';
+
+    /* append node_id */
+    p = fmt_int(buf, p, node_id);
+
+    /* newline */
+    buf[p++] = '\n';
+
+    syscall3(SYS_WRITE, 1, (long)buf, (long)p);
+}
+
+/* Write a line with two integer fields: "marker node=<nid> mask=<mask>\n" */
+static void emit_event_mask(const char *marker, int node_id, int mask) {
+    char buf[256];
+    int p = 0;
+
+    while (*marker && p < 240) buf[p++] = *marker++;
+    buf[p++] = ' '; buf[p++] = 'n'; buf[p++] = 'o'; buf[p++] = 'd';
+    buf[p++] = 'e'; buf[p++] = '=';
+    p = fmt_int(buf, p, node_id);
+    buf[p++] = ' '; buf[p++] = 'm'; buf[p++] = 'a'; buf[p++] = 's';
+    buf[p++] = 'k'; buf[p++] = '=';
+    p = fmt_int(buf, p, mask);
+    buf[p++] = '\n';
+
+    syscall3(SYS_WRITE, 1, (long)buf, (long)p);
+}
+
+/* Write a plain string followed by newline in a single write() */
+static void emit_str(const char *s) {
     int len = 0;
     while (s[len]) len++;
-    syscall3(SYS_WRITE, fd, (long)s, (long)len);
+    syscall3(SYS_WRITE, 1, (long)s, (long)len);
+    /* no newline added - caller should include \n if needed */
 }
 
 static void exit_program(int code) {
@@ -83,9 +121,6 @@ static int parse_int(const char *s) {
     return val;
 }
 
-/* Use int main for CRT-based startup.
- * gcc -static links against glibc which provides _start.
- */
 int main(int argc, char **argv) {
     int node_id = 0;
     int mask = 0b111;  /* all 3 nodes participate */
@@ -94,14 +129,12 @@ int main(int argc, char **argv) {
         node_id = parse_int(argv[1]);
     }
 
-    print_str(1, "BEFORE_BARRIER node=");
-    print_int(1, node_id);
+    emit_event("BEFORE_BARRIER", node_id);
 
     /* Call Sync_Wait(mask) */
     syscall1(SYS_SYNC_WAIT, mask);
 
-    print_str(1, "AFTER_BARRIER node=");
-    print_int(1, node_id);
+    emit_event("AFTER_BARRIER", node_id);
 
     exit_program(0);
     return 0;

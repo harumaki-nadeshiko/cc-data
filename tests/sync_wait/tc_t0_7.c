@@ -1,7 +1,14 @@
-/* TC-T0-7: mask with bits beyond N=3 → syscall returns negative (error)
+/* TC-T0-7: mask with bits beyond N=3 -> syscall returns negative (error)
  *
  * The current topology has N=3 nodes (bits 0, 1, 2 valid).
  * Setting bit 3 or any higher bit must return -EINVAL without blocking.
+ *
+ * Outputs:
+ *   TC_T0_7_START
+ *   TC_T0_7_MASK_BIT3=1
+ *   SYNC_WAIT_RET=<val>      (machine-parseable return value)
+ *   TC_T0_7_RET=<val>        (human-readable log)
+ *   TC_T0_7_PASS_ERROR_RETURNED  or  TC_T0_7_FAIL_NO_ERROR
  *
  * Compile:
  *   aarch64-linux-gnu-gcc -static -o tc_t0_7 tests/sync_wait/tc_t0_7.c
@@ -32,39 +39,47 @@ static long syscall1(long num, long arg0) {
     return x0;
 }
 
-static void print_str(int fd, const char *s) {
+static void emit_line(const char *s) {
     int len = 0; while (s[len]) len++;
-    syscall3(SYS_WRITE, fd, (long)s, (long)len);
+    syscall3(SYS_WRITE, 1, (long)s, (long)len);
 }
 
-static void print_int(int fd, int val) {
-    char buf[16]; int pos = 0;
-    if (val == 0) { buf[pos++] = '0'; }
-    else {
+static void emit_tag_int(const char *prefix, int val) {
+    char buf[256];
+    int p = 0;
+    while (*prefix && p < 240) buf[p++] = *prefix++;
+    buf[p++] = '=';
+    if (val == 0) {
+        buf[p++] = '0';
+    } else {
         char tmp[16]; int tp = 0;
         unsigned u = (unsigned)(val < 0 ? -val : val);
+        if (val < 0) buf[p++] = '-';
         while (u) { tmp[tp++] = '0' + (u % 10); u /= 10; }
-        if (val < 0) buf[pos++] = '-';
-        while (tp) buf[pos++] = tmp[--tp];
+        while (tp) buf[p++] = tmp[--tp];
     }
-    buf[pos++] = '\n';
-    syscall3(SYS_WRITE, fd, (long)buf, (long)pos);
+    buf[p++] = '\n';
+    syscall3(SYS_WRITE, 1, (long)buf, (long)p);
 }
 
 int main(int argc, char **argv) {
-    print_str(1, "TC_T0_7_START\n");
+    emit_line("TC_T0_7_START\n");
 
     /* mask = 0b1000 = bit 3 set, which is beyond N=3 (bits 0-2) */
     long ret = syscall1(SYS_SYNC_WAIT, 8 /* bit 3 */);
 
-    print_str(1, "TC_T0_7_MASK_BIT3=1\n");
-    print_str(1, "TC_T0_7_RET=");
-    print_int(1, (int)ret);
+    emit_line("TC_T0_7_MASK_BIT3=1\n");
+
+    /* Machine-parseable return value (for test script) */
+    emit_tag_int("SYNC_WAIT_RET", (int)ret);
+
+    /* Human-readable log */
+    emit_tag_int("TC_T0_7_RET", (int)ret);
 
     if (ret < 0) {
-        print_str(1, "TC_T0_7_PASS_ERROR_RETURNED\n");
+        emit_line("TC_T0_7_PASS_ERROR_RETURNED\n");
     } else {
-        print_str(1, "TC_T0_7_FAIL_NO_ERROR\n");
+        emit_line("TC_T0_7_FAIL_NO_ERROR\n");
     }
 
     syscall1(SYS_EXIT, 0);

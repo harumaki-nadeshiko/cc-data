@@ -7,6 +7,9 @@
  * instances. Node2 completes immediately (1 of 1), Node0/1 wait for
  * each other (2 of 2).
  *
+ * All output lines are single write() calls for shared-output
+ * global ordering assertions.
+ *
  * Compile:
  *   aarch64-linux-gnu-gcc -static -o tc_t0_2 tests/sync_wait/tc_t0_2.c
  *
@@ -36,31 +39,30 @@ static long syscall1(long num, long arg0) {
     return x0;
 }
 
-static void print_str(int fd, const char *s) {
-    int len = 0;
-    while (s[len]) len++;
-    syscall3(SYS_WRITE, fd, (long)s, (long)len);
+static int fmt_int(char *buf, int p, int val) {
+    if (val == 0) { buf[p++] = '0'; return p; }
+    char tmp[16]; int tp = 0;
+    unsigned u = (unsigned)(val < 0 ? -val : val);
+    if (val < 0) buf[p++] = '-';
+    while (u) { tmp[tp++] = '0' + (u % 10); u /= 10; }
+    while (tp) buf[p++] = tmp[--tp];
+    return p;
 }
 
-static void print_int(int fd, int val) {
-    char buf[16];
-    int pos = 0;
-    if (val == 0) { buf[pos++] = '0'; }
-    else {
-        char tmp[16]; int tp = 0;
-        unsigned u = (unsigned)(val < 0 ? -val : val);
-        while (u) { tmp[tp++] = '0'+(u%10); u/=10; }
-        if (val < 0) buf[pos++]='-';
-        while (tp) buf[pos++]=tmp[--tp];
-    }
-    buf[pos++]='\n';
-    syscall3(SYS_WRITE, fd, (long)buf, (long)pos);
+static void emit_event_mask(const char *marker, int node_id, int mask) {
+    char buf[256];
+    int p = 0;
+    while (*marker && p < 240) buf[p++] = *marker++;
+    buf[p++]=' '; buf[p++]='n'; buf[p++]='o'; buf[p++]='d'; buf[p++]='e'; buf[p++]='=';
+    p = fmt_int(buf, p, node_id);
+    buf[p++]=' '; buf[p++]='m'; buf[p++]='a'; buf[p++]='s'; buf[p++]='k'; buf[p++]='=';
+    p = fmt_int(buf, p, mask);
+    buf[p++]='\n';
+    syscall3(SYS_WRITE, 1, (long)buf, (long)p);
 }
 
 static int parse_int(const char *s) {
-    int v = 0;
-    while (*s >= '0' && *s <= '9') { v = v*10 + (*s-'0'); s++; }
-    return v;
+    int v = 0; while (*s >= '0' && *s <= '9') { v = v*10 + (*s-'0'); s++; } return v;
 }
 
 int main(int argc, char **argv) {
@@ -71,17 +73,11 @@ int main(int argc, char **argv) {
      * Node2 uses barrier B (mask 0b100, popcount=1). */
     int mask = (node_id <= 1) ? 0b011 : 0b100;
 
-    print_str(1, "BEFORE_BARRIER node=");
-    print_int(1, node_id);
-    print_str(1, " mask=");
-    print_int(1, mask);
+    emit_event_mask("BEFORE_BARRIER", node_id, mask);
 
     syscall1(SYS_SYNC_WAIT, mask);
 
-    print_str(1, "AFTER_BARRIER node=");
-    print_int(1, node_id);
-    print_str(1, " mask=");
-    print_int(1, mask);
+    emit_event_mask("AFTER_BARRIER", node_id, mask);
 
     syscall1(SYS_EXIT, 0);
     return 0;
