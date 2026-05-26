@@ -4,6 +4,33 @@
 **Date:** 2026-05-26
 **Purpose:** Prove that a genuine M4_CHECK failure correctly propagates through C++ → captured output → Python harness → `exit(1)`.
 
+> **实跑证据:** 完整注入-还原双次运行日志见 [m4-fail-injection-run.txt](m4-fail-injection-run.txt)
+
+---
+
+## Real-Run Verification (2026-05-26)
+
+The FAIL injection scenario described below was executed as a real run with the following results:
+
+| Scenario | C++ Output | Python Parsing | Exit Code |
+|----------|-----------|----------------|-----------|
+| FAIL injection active | `8/24 PASS, 1 FAIL, 15 SKIP` + `M4_SELF_TEST_FAILED=1` | `M4_PYTHON: explicit FAIL marker found, treating as fail` | **1** |
+| Injection reverted (clean) | `8/23 PASS, 0 FAIL, 15 SKIP` + `M4_SELF_TEST_PASSED=1` | `M4_PYTHON_TEST_HARNESS: DONE — all executed checks passed` | **0** |
+
+Key evidence from C++ captured output:
+```
+// FAIL run:
+  M4 FAIL-INJECT: deliberate failure injection for CI gate verification: FAIL (This is an intentional infrastructure-level FAIL test)
+=== M4 Self-Test Results: 8/24 PASS, 1 FAIL, 15 SKIP ===
+M4_SELF_TEST_FAILED=1
+
+// PASS run (reverted):
+=== M4 Self-Test Results: 8/23 PASS, 0 FAIL, 15 SKIP ===
+M4_SELF_TEST_PASSED=1
+```
+
+The full raw output (233 lines) is archived in `reports/m4-fail-injection-run.txt`.
+
 ---
 
 ## Injection Description

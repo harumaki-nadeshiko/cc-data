@@ -1,5 +1,7 @@
 # M4 Final Issue Closure Matrix
 
+> **最终判定唯一来源: m4-regression-final.txt**
+
 **Phase:** M4 — Sentinel Registration (final evidence closure)
 **Date:** 2026-05-26
 **Status:** CLOSED — all issues from R1–R5 resolved and regression-verified
@@ -12,7 +14,7 @@
 | TC3 (topology) | 101/101 PASS | 0 |
 | TC5 (EP instantiate) | INSTANTIATE OK | 0 |
 
-See [m4-regression-logs.txt](m4-regression-logs.txt) for full raw logs.
+See [m4-regression-final.txt](m4-regression-final.txt) for full raw logs.
 
 ---
 
@@ -361,7 +363,7 @@ docker run --rm -v $(pwd):/workspace -w /workspace ubcc-dev:ubuntu20.04 \
 | TC3 Topology | 0 | `101/101 tests passed` |
 | TC5 EP Instantiate | 0 | `INSTANTIATE OK: EP_RNF and EP_SNF within Ruby` |
 
-All regression logs archived in `reports/m4-regression-logs.txt` (337 lines, ~19KB).
+All regression logs archived in `reports/m4-regression-final.txt` (104 lines, ~12KB).
 
 ---
 
