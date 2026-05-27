@@ -1,281 +1,281 @@
-# M8 Stage Delivery Report
+# M8 阶段交付报告
 
-- **Stage:** M8 — Shared-Read Hardening And Upgrade/Invalidate Closure
-- **Status:** PASS
-- **Completion Date:** 2026-05-27
-- **Review Rounds:** 3 (initial + Fix Round + Final fix)
-- **Orchestrator Verdict:** PASS
+- **阶段：** M8 — 共享读取加固与升级/失效闭环
+- **状态：** PASS
+- **完成日期：** 2026-05-27
+- **审查轮次：** 3（初次 + 修复轮 + 最终修复）
+- **编排器判定：** PASS
 
 ---
 
-## 1. Stage Summary
+## 1. 阶段摘要
 
-### 1.1 Stage Goal
+### 1.1 阶段目标
 
-Harden the shared-read path from "it works" to "verifiably correct across all edge cases": multi-sharer mask maintenance, local upgrade triggering `GlobalInvalidate` to remote sharers, ack collection before grant, shared path enabled by default (no `force_grant_m` dependency).
+将共享读取路径从"能工作"加固到"在所有边界情况下可验证正确"：多 sharer mask 维护、本地升级触发对远程 sharer 的 `GlobalInvalidate`、grant 前的 ack 收集、默认启用共享路径（不依赖 `force_grant_m`）。
 
-### 1.2 Completion Status
+### 1.2 完成状态
 
-| Criterion | Result |
+| 标准 | 结果 |
 |---|---|
-| Multi-sharer mask correctly maintained | PASS |
-| Local upgrade hits external sharer → `GlobalInvalidate` | PASS |
-| Remote sharer acks collected → local unique completes | PASS |
-| Shared path enabled by default | PASS |
-| `force_grant_m` debug switch only | PASS |
-| Two requesters can simultaneously hold shared | PASS |
-| SharerMask correctness verified | PASS |
+| 多 sharer mask 正确维护 | PASS |
+| 本地升级遇到外部 sharer → `GlobalInvalidate` | PASS |
+| 远程 sharer ack 已收集 → 本地 unique 完成 | PASS |
+| 默认启用共享路径 | PASS |
+| `force_grant_m` 仅作为调试开关 | PASS |
+| 两个请求者可同时持有共享 | PASS |
+| SharerMask 正确性已验证 | PASS |
 
-### 1.3 Review Rounds
+### 1.3 审查轮次
 
-| Round | Date | Key Findings | Resolution |
+| 轮次 | 日期 | 关键发现 | 解决方案 |
 |---|---|---|---|
-| R1 (initial) | 2026-05-27 | Full M8 implementation submitted | Pending validator review |
-| Fix Round | 2026-05-27 | P0-1: home epoch for invalidation; P0-2: no-op reentry return (idempotent invalidation ack); P1-4: ackNode boundary check (protection against out-of-range node IDs) | All P0/P1 resolved |
-| Final fix | 2026-05-27 | ackNode boundary check relocated to entry in `processInvalidationAck` before all early-returns | Final commit |
+| R1（初次） | 2026-05-27 | 完整 M8 实现已提交 | 等待 validator 审查 |
+| 修复轮 | 2026-05-27 | P0-1：用于失效的 home epoch；P0-2：无操作重新进入返回（幂等失效 ack）；P1-4：ackNode 边界检查（防止越界节点 ID） | 所有 P0/P1 已解决 |
+| 最终修复 | 2026-05-27 | ackNode 边界检查重新定位到 `processInvalidationAck` 中所有提前返回之前的入口处 | 最终 commit |
 
 ---
 
-## 2. Code Changes
+## 2. 代码变更
 
-### 2.1 gem5 Submodule
+### 2.1 gem5 子模块
 
-| File | Change | Description |
+| 文件 | 变更 | 描述 |
 |---|---|---|
-| `src/mem/ruby/protocol/chi/ep/UBCCController.hh` | Extended | `processOuterRequest()` extended for invalidation-triggered paths; `processInvalidationAck()` for collecting per-sharer acks; `GlobalInvalidate` message type; `pendingInvalidations` set for tracking outstanding acks; `ackNode` boundary validation |
-| `src/mem/ruby/protocol/chi/ep/UBCCController.cc` | Extended | **GlobalInvalidate flow**: when upgrade request (`GlobalReadUnique`) hits `G_S` state, home UBCC sends `GlobalInvalidate` to each sharer (except requester) → each sharer's EP_RNF invalidates local copy → sends ack back to home → `processInvalidationAck()` collects acks → when all acks received, home proceeds with grant to requester. **Home epoch**: invalidation is associated with home epoch for stale ack filtering. **Reentry protection**: duplicate/retried ack for same sharer is accepted as no-op (idempotent). **SharerMask management**: mask correctly updated on grant (add requester), evict (remove sharer), invalidate (remove sharer), downgrade (owner → sharer). **Shared default path**: `GlobalReadShared` + `writeIntent=false` → `GlobalGrantShared` (default); no unconditional `GrantM` fallback |
-| `src/mem/ruby/protocol/chi/ep/EPBackend.hh` | Extended | `handleInvalidate()`: receives invalidation from home, triggers local invalidation via EP_RNF; `handleInvalidationAck()`: sends ack back to home; invalidation counter; `inspectSharerMaskForTest()` |
-| `src/mem/ruby/protocol/chi/ep/EPBackend.cc` | Extended | Invalidation handling: home triggers `GlobalInvalidate` → sharer EPBackend invalidates local line → sends ack → home `processInvalidationAck` |
-| `src/mem/ruby/protocol/chi/ep/M8SelfTest.cc` | New | 61 ternary checks: TC-M8-1 two requesters hold shared (9 checks: both added to sharers mask, both can read, concurrent shared access), TC-M8-2 local upgrade invalidates sharers (24 checks across 3 sub-scenarios: shared→upgrade invalidation flow, all sharers invalidated, ack collection, G_S→G_E/M transition), TC-M8-3 shared default path (7 checks: Shared request → GrantShared not GrantModified, no force_grant_m by default), TC-M8-4 sharerMask correctness (10 checks: add/remove sharers, concurrent add, max mask, empty→remove entry), plus busy-line checks, ackNode bounds, pending invalidation lifecycle tests |
+| `src/mem/ruby/protocol/chi/ep/UBCCController.hh` | 扩展 | `processOuterRequest()` 扩展用于失效触发路径；`processInvalidationAck()` 用于收集每个 sharer 的 ack；`GlobalInvalidate` 消息类型；`pendingInvalidations` 集合用于跟踪未完成的 ack；`ackNode` 边界验证 |
+| `src/mem/ruby/protocol/chi/ep/UBCCController.cc` | 扩展 | **GlobalInvalidate 流程**：当升级请求（`GlobalReadUnique`）遇到 `G_S` 状态时，home UBCC 向每个 sharer（请求者除外）发送 `GlobalInvalidate` → 每个 sharer 的 EP_RNF 失效本地副本 → 向 home 发回 ack → `processInvalidationAck()` 收集 ack → 当所有 ack 收到后，home 继续向请求者进行 grant。**Home epoch**：失效与 home epoch 关联，用于过期 ack 过滤。**重新进入保护**：对同一 sharer 的重复/重试 ack 被接受为无操作（幂等）。**SharerMask 管理**：mask 在 grant（添加请求者）、驱逐（移除 sharer）、失效（移除 sharer）、降级（owner → sharer）时正确更新。**共享默认路径**：`GlobalReadShared` + `writeIntent=false` → `GlobalGrantShared`（默认）；无无条件 `GrantM` 回退 |
+| `src/mem/ruby/protocol/chi/ep/EPBackend.hh` | 扩展 | `handleInvalidate()`：接收来自 home 的失效，通过 EP_RNF 触发本地失效；`handleInvalidationAck()`：向 home 发回 ack；失效计数器；`inspectSharerMaskForTest()` |
+| `src/mem/ruby/protocol/chi/ep/EPBackend.cc` | 扩展 | 失效处理：home 触发 `GlobalInvalidate` → sharer EPBackend 失效本地行 → 发送 ack → home `processInvalidationAck` |
+| `src/mem/ruby/protocol/chi/ep/M8SelfTest.cc` | 新增 | 61 个三元检查：TC-M8-1 两个请求者持有共享（9 个检查：两者均添加到 sharers mask、两者均可读取、并发共享访问）、TC-M8-2 本地升级失效 sharers（跨 3 个子场景的 24 个检查：共享→升级失效流程、所有 sharer 被失效、ack 收集、G_S→G_E/M 转换）、TC-M8-3 共享默认路径（7 个检查：Shared 请求 → GrantShared 而非 GrantModified、默认无 force_grant_m）、TC-M8-4 sharerMask 正确性（10 个检查：添加/移除 sharers、并发添加、最大 mask、空 mask→移除条目）、加 busy-line 检查、ackNode 边界、挂起失效生命周期测试 |
 
-**gem5 commit history (M8-related):**
+**gem5 commit 历史（M8 相关）：**
 
-| Commit | Description |
+| Commit | 描述 |
 |---|---|
-| `4a9a672335` | M8 Fix Round: P0-1 home epoch for invalidation, P0-2 no-op reentry return, P1-4 ackNode bounds check, add M8SelfTest.cc |
-| `ad782435d6` | M8: move ackNode boundary check to entry in processInvalidationAck before all early-returns (P1-4) |
-| `d1f6ec4947` | M8 fix: move ackNode boundary check before directory lookup |
+| `4a9a672335` | M8 修复轮：P0-1 用于失效的 home epoch、P0-2 无操作重新进入返回、P1-4 ackNode 边界检查、添加 M8SelfTest.cc |
+| `ad782435d6` | M8：在 `processInvalidationAck` 中所有提前返回之前将 ackNode 边界检查移至入口处（P1-4） |
+| `d1f6ec4947` | M8 修复：在目录查找之前移动 ackNode 边界检查 |
 
-### 2.2 Superproject
+### 2.2 超项目
 
-| File | Change | Description |
+| 文件 | 变更 | 描述 |
 |---|---|---|
-| `tests/phase8/test_shared_hardening.py` | New | PY_INJECT harness: full CHI+UBCC topology, runs M4/M5/M6/M7/M8 all self-tests at instantiation, captures C++ stdout, parses PASS/FAIL from all five stages, regression gate (M4/M5/M6/M7 failures block M8), test case coverage for all 4 M8 test cases |
+| `tests/phase8/test_shared_hardening.py` | 新增 | PY_INJECT harness：完整 CHI+UBCC 拓扑，在实例化时运行 M4/M5/M6/M7/M8 所有自检，捕获 C++ stdout，解析所有五个阶段的 PASS/FAIL，回归门控（M4/M5/M6/M7 失败阻止 M8），所有 4 个 M8 测试用例的测试用例覆盖 |
 
-**Superproject commit history:**
+**超项目 commit 历史：**
 
-| Commit | Description |
+| Commit | 描述 |
 |---|---|
-| `16c1780` | M8 Fix Round: P0-1/P0-2/P1-4 fixes; add tests/phase8/test_shared_hardening.py; bump gem5 submodule |
-| `1ae8c4a` | M8: bump gem5 submodule (ackNode boundary check relocation) |
-| `6e966e6` | M8 fix: bump gem5 submodule for ackNode bounds |
+| `16c1780` | M8 修复轮：P0-1/P0-2/P1-4 修复；添加 tests/phase8/test_shared_hardening.py；更新 gem5 子模块 |
+| `1ae8c4a` | M8：更新 gem5 子模块（ackNode 边界检查重新定位） |
+| `6e966e6` | M8 修复：更新 gem5 子模块（ackNode 边界） |
 
 ---
 
-## 3. Deviations from Original Plan
+## 3. 与原计划差异
 
-### 3.1 Alignment with `plan/03-phase-plan.md`
+### 3.1 与 `plan/03-phase-plan.md` 的对齐
 
-| Planned | Actual | Notes |
+| 计划 | 实际 | 备注 |
 |---|---|---|
-| Multi-sharer mask correctly maintained | Done | `sharersMask` (64-bit) updated atomically on grant/add/remove/invalidate |
-| Local upgrade hits external sharer → `GlobalInvalidate` | Done | Home UBCC detects `G_S` + `GlobalReadUnique` → sends `GlobalInvalidate` to each sharer |
-| Remote sharer ack collected → local unique completes | Done | `pendingInvalidations` set; `processInvalidationAck()` decrements; grant only after all acks |
-| Shared path default enabled | Done | `GlobalReadShared` → `GlobalGrantShared`; no unconditional `GrantM` reroute |
-| `force_grant_m` debug only | Done | Retained but not the default; MESI-correct path is primary |
-| Two requesters simultaneous shared | Done | Both in sharers mask; both receive `GrantShared` |
-| Upgrade properly invalidates other sharers | Done | Invalidation flow proven in M8SelfTest subscenarios |
+| 多 sharer mask 正确维护 | 已完成 | `sharersMask`（64 位）在 grant/添加/移除/失效时原子更新 |
+| 本地升级遇到外部 sharer → `GlobalInvalidate` | 已完成 | Home UBCC 检测 `G_S` + `GlobalReadUnique` → 向每个 sharer 发送 `GlobalInvalidate` |
+| 远程 sharer ack 已收集 → 本地 unique 完成 | 已完成 | `pendingInvalidations` 集合；`processInvalidationAck()` 递减；仅在所有 ack 后 grant |
+| 默认启用共享路径 | 已完成 | `GlobalReadShared` → `GlobalGrantShared`；无无条件 `GrantM` 重新路由 |
+| `force_grant_m` 仅调试 | 已完成 | 保留但非默认；MESI 正确路径是主要的 |
+| 两个请求者同时共享 | 已完成 | 两者均在 sharers mask 中；两者均收到 `GrantShared` |
+| 升级正确失效其他 sharers | 已完成 | 失效流程在 M8SelfTest 子场景中证明 |
 
-### 3.2 Key Design Decisions
+### 3.2 关键设计决策
 
-| Decision | Rationale |
+| 决策 | 理由 |
 |---|---|
-| Home epoch for invalidation | Prevents stale invalidation acks from contaminating a new transaction on the same line |
-| Idempotent invalidation ack (no-op reentry) | If a retried/duplicate ack arrives for an already-counted sharer, it's accepted as no-op — prevents deadlock from message replay |
-| `ackNode` boundary check at entry | Protects against out-of-range node IDs in `sharersMask`; checked before all early-returns to catch bugs early |
-| `G_S` + `GlobalReadUnique` → invalidation before grant | Serializes the upgrade: first invalidate all sharers, then grant exclusive/modified to the requester |
-| SharerMask auto-cleanup on empty | When last sharer is removed (via evict or invalidate), the directory entry is cleaned up |
+| 用于失效的 Home epoch | 防止过期失效 ack 污染同一行上的新事务 |
+| 幂等失效 ack（无操作重新进入） | 如果对已计数的 sharer 到达重试/重复 ack，它被接受为无操作 — 防止消息重放导致的死锁 |
+| 入口处的 `ackNode` 边界检查 | 保护 `sharersMask` 中越界节点 ID；在所有提前返回之前检查以尽早捕获错误 |
+| `G_S` + `GlobalReadUnique` → grant 前失效 | 序列化升级：首先失效所有 sharers，然后向请求者 grant exclusive/modified |
+| SharerMask 空时自动清理 | 当最后一个 sharer 被移除时（通过驱逐或失效），目录条目被清理 |
 
-### 3.3 GlobalInvalidate Flow
+### 3.3 GlobalInvalidate 流程
 
 ```
-Requester sends GlobalReadUnique → home UBCC (in G_S state)
-  → home marks line G_BUSY, sets pendingOp=INVALIDATE
-  → home computes targets = sharersMask & ~(1 << requester)
-  → for each target: send GlobalInvalidate
-    → target EPBackend.handleInvalidate()
-      → EP_RNF invalidates local copy
-      → sends ack with home epoch
-    → home processInvalidationAck(requester, epoch)
-      → validate epoch matches current transaction
-      → remove sharer from pendingInvalidations set
-      → if pendingInvalidations empty: complete grant
-  → grant GlobalGrantExclusive/Modified to requester
-  → update directory: state = G_E or G_M, sharersMask = 0
+请求者发送 GlobalReadUnique → home UBCC（处于 G_S 状态）
+  → home 将行标记为 G_BUSY，设置 pendingOp=INVALIDATE
+  → home 计算目标 = sharersMask & ~(1 << 请求者)
+  → 对每个目标：发送 GlobalInvalidate
+    → 目标 EPBackend.handleInvalidate()
+      → EP_RNF 失效本地副本
+      → 发送带 home epoch 的 ack
+    → home processInvalidationAck(请求者, epoch)
+      → 验证 epoch 匹配当前事务
+      → 从 pendingInvalidations 集合中移除 sharer
+      → 如果 pendingInvalidations 为空：完成 grant
+  → 向请求者 grant GlobalGrantExclusive/Modified
+  → 更新目录：state = G_E 或 G_M，sharersMask = 0
 ```
 
-### 3.4 Scope Boundaries
+### 3.4 范围边界
 
-| In Scope (Implemented) | Not Yet Implemented |
+| 范围内（已实现） | 尚未实现 |
 |---|---|
-| Multi-sharer shared access | — |
-| Upgrade → Invalidate → Grant | — |
-| Shared path default | — |
-| SharerMask full lifecycle | — |
-| AckNode bounds protection | — |
+| 多 sharer 共享访问 | — |
+| 升级 → 失效 → Grant | — |
+| 共享路径默认 | — |
+| SharerMask 完整生命周期 | — |
+| AckNode 边界保护 | — |
 
-### 3.5 Consistency with `plan/02-external-proxy-spec.md`
+### 3.5 与 `plan/02-external-proxy-spec.md` 的一致性
 
-| Spec Requirement | Implementation | Status |
+| 规格要求 | 实现 | 状态 |
 |---|---|---|
-| Local upgrade invalidates external sharers (§7.3) | Home detects `G_S` + `GlobalReadUnique` → `GlobalInvalidate` → wait for acks → grant | PASS |
-| Remote sharer ack collection before unique (§7.3) | `pendingInvalidations` set; grant gated on all acks received | PASS |
-| Shared path default enabled (§9.1) | `GlobalReadShared` → `GlobalGrantShared` | PASS |
-| Multi-sharer mask maintenance (§9.1) | 64-bit `sharersMask` with bit-add/remove operations | PASS |
+| 本地升级失效外部 sharers（§7.3） | Home 检测 `G_S` + `GlobalReadUnique` → `GlobalInvalidate` → 等待 acks → grant | PASS |
+| 远程 sharer ack 收集后在 unique 之前（§7.3） | `pendingInvalidations` 集合；grant 被所有 acks 收到的条件门控 | PASS |
+| 默认启用共享路径（§9.1） | `GlobalReadShared` → `GlobalGrantShared` | PASS |
+| 多 sharer mask 维护（§9.1） | 64 位 `sharersMask` 含位添加/移除操作 | PASS |
 
 ---
 
-## 4. Test Cases
+## 4. 测试用例
 
-### 4.1 TC-M8-1: Two Requesters Hold Shared
+### 4.1 TC-M8-1：两个请求者持有共享
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
-| **ID** | TC-M8-1 (M8-1-1 through M8-1-9) |
-| **Name** | Two Requesters Hold Shared |
-| **Type** | PY_INJECT (C++ self-test) |
-| **Assertions** | 9 |
-| **Expected** | First requester added to sharers mask, receives Shared grant; Second requester also added, receives Shared grant; both in mask simultaneously; directory state stays `G_S`; no owner; dirty=false |
-| **Actual** | PASS |
-| **Negative** | Not in exclusive/modified state; no owner field set |
+| **ID** | TC-M8-1（M8-1-1 到 M8-1-9） |
+| **名称** | 两个请求者持有共享 |
+| **类型** | PY_INJECT（C++ 自检） |
+| **断言数** | 9 |
+| **预期** | 第一个请求者添加到 sharers mask，收到 Shared grant；第二个请求者也添加，收到 Shared grant；两者同时在 mask 中；目录状态保持 `G_S`；无 owner；dirty=false |
+| **实际** | PASS |
+| **负面测试** | 不在 exclusive/modified 状态；未设置 owner 字段 |
 
-### 4.2 TC-M8-2: Local Upgrade Invalidates Other Sharers
+### 4.2 TC-M8-2：本地升级失效其他 Sharers
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
-| **ID** | TC-M8-2 (M8-2a-1..2, M8-2b-1..14, M8-2c-1..8) |
-| **Name** | Local Upgrade Invalidates Other Sharers |
-| **Type** | PY_INJECT (C++ self-test) |
-| **Assertions** | 24 |
-| **Expected** | Sub-scenario 2a: structural invalidation path exists. Sub-scenario 2b: full upgrade flow — shared→Unique triggers `GlobalInvalidate` to other sharers, acks collected, line transitions to `G_E`/`G_M`, old sharers removed from mask. Sub-scenario 2c: post-upgrade state verification — new owner has exclusive access, old sharers invalidated, sharer mask empty after invalidation |
-| **Actual** | PASS |
-| **Negative** | Old sharers do not retain access; no premature grant before acks |
+| **ID** | TC-M8-2（M8-2a-1..2、M8-2b-1..14、M8-2c-1..8） |
+| **名称** | 本地升级失效其他 Sharers |
+| **类型** | PY_INJECT（C++ 自检） |
+| **断言数** | 24 |
+| **预期** | 子场景 2a：结构失效路径存在。子场景 2b：完整升级流程 — shared→Unique 触发对其他 sharers 的 `GlobalInvalidate`，ack 已收集，行转换到 `G_E`/`G_M`，旧 sharers 从 mask 中移除。子场景 2c：升级后状态验证 — 新 owner 具有独占访问，旧 sharers 已失效，失效后 sharer mask 为空 |
+| **实际** | PASS |
+| **负面测试** | 旧 sharers 不保留访问；在 acks 之前无过早 grant |
 
-### 4.3 TC-M8-3: Shared Default Path
+### 4.3 TC-M8-3：共享默认路径
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
-| **ID** | TC-M8-3 (M8-3-1 through M8-3-7) |
-| **Name** | Shared Default Path |
-| **Type** | PY_INJECT (C++ self-test) |
-| **Assertions** | 7 |
-| **Expected** | `GlobalReadShared` request produces `GrantShared`; line goes to `G_S`; no `force_grant_m` bypass; default configuration uses MESI-correct path; `GlobalReadShared` ≠ `GrantModified`; `GrantShared` is distinct from `GrantExclusive` and `GrantModified` |
-| **Actual** | PASS |
-| **Negative** | Shared request does NOT produce Modified grant under default config |
+| **ID** | TC-M8-3（M8-3-1 到 M8-3-7） |
+| **名称** | 共享默认路径 |
+| **类型** | PY_INJECT（C++ 自检） |
+| **断言数** | 7 |
+| **预期** | `GlobalReadShared` 请求产生 `GrantShared`；行变为 `G_S`；无 `force_grant_m` 旁路；默认配置使用 MESI 正确路径；`GlobalReadShared` ≠ `GrantModified`；`GrantShared` 与 `GrantExclusive` 和 `GrantModified` 不同 |
+| **实际** | PASS |
+| **负面测试** | 在默认配置下 Shared 请求不产生 Modified grant |
 
-### 4.4 TC-M8-4: SharerMask Correctness
+### 4.4 TC-M8-4：SharerMask 正确性
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
-| **ID** | TC-M8-4 (M8-4a, 4b, 4c, 4d series) |
-| **Name** | SharerMask Correctness |
-| **Type** | PY_INJECT (C++ self-test) |
-| **Assertions** | 10 |
-| **Expected** | Sub-scenario 4a: add single sharer, mask has correct bit; 4b: add multiple sharers, all bits set; 4c: evict sharer, bit cleared, mask shrinks; 4d: all sharers evicted, mask empty → entry removed |
-| **Actual** | PASS |
-| **Negative** | No stale bits remain after eviction; empty mask triggers cleanup |
+| **ID** | TC-M8-4（M8-4a、4b、4c、4d 系列） |
+| **名称** | SharerMask 正确性 |
+| **类型** | PY_INJECT（C++ 自检） |
+| **断言数** | 10 |
+| **预期** | 子场景 4a：添加单个 sharer，mask 具有正确位；4b：添加多个 sharers，所有位已设置；4c：驱逐 sharer，位已清除，mask 缩小；4d：所有 sharers 已驱逐，mask 为空 → 条目已移除 |
+| **实际** | PASS |
+| **负面测试** | 驱逐后无过期位残留；空 mask 触发清理 |
 
-### 4.5 Additional Self-Test Checks
+### 4.5 附加自检
 
-| Test Group | Checks | Purpose |
+| 测试组 | 检查数 | 目的 |
 |---|---|---|
-| M8-5 (busy line during invalidation) | 3 | `G_BUSY` is set during invalidation, cleared after |
-| M8-6 (invalidation ack sent counter) | 1 | Counter initialized and incremented |
-| M8-7 (pending invalidation lifecycle) | 4 | Pending invalidations tracked, active during transaction, cleared after completion, new request can proceed on freed line |
-| M8-REENTRY | 3 | Duplicate ack accepted (no-op); idempotent reentry working |
+| M8-5（失效期间的 busy 行） | 3 | `G_BUSY` 在失效期间设置，之后清除 |
+| M8-6（失效 ack 发送计数器） | 1 | 计数器已初始化并递增 |
+| M8-7（挂起失效生命周期） | 4 | 挂起失效已跟踪，事务期间活动，完成后清除，新请求可在已释放的行上进行 |
+| M8-REENTRY | 3 | 重复 ack 被接受（无操作）；幂等重新进入有效 |
 
-### 4.6 Summary
+### 4.6 汇总
 
-| Test Group | Checks | PASS | FAIL | SKIP |
+| 测试组 | 检查数 | PASS | FAIL | SKIP |
 |---|---|---|---|---|
-| TC-M8-1 (Two requesters shared) | 9 | 9 | 0 | 0 |
-| TC-M8-2 (Upgrade invalidates) | 24 | 24 | 0 | 0 |
-| TC-M8-3 (Shared default path) | 7 | 7 | 0 | 0 |
-| TC-M8-4 (SharerMask correctness) | 10 | 10 | 0 | 0 |
-| M8-5 (Busy line) | 3 | 3 | 0 | 0 |
-| M8-6 (Ack counter) | 1 | 1 | 0 | 0 |
-| M8-7 (Pending invalidation) | 4 | 4 | 0 | 0 |
-| M8-REENTRY (Idempotent ack) | 3 | 3 | 0 | 0 |
-| **Total** | **61** | **61** | **0** | **0** |
+| TC-M8-1（两个请求者共享） | 9 | 9 | 0 | 0 |
+| TC-M8-2（升级失效） | 24 | 24 | 0 | 0 |
+| TC-M8-3（共享默认路径） | 7 | 7 | 0 | 0 |
+| TC-M8-4（SharerMask 正确性） | 10 | 10 | 0 | 0 |
+| M8-5（Busy 行） | 3 | 3 | 0 | 0 |
+| M8-6（Ack 计数器） | 1 | 1 | 0 | 0 |
+| M8-7（挂起失效） | 4 | 4 | 0 | 0 |
+| M8-REENTRY（幂等 ack） | 3 | 3 | 0 | 0 |
+| **合计** | **61** | **61** | **0** | **0** |
 
 ---
 
-## 5. Regression Results
+## 5. 回归结果
 
-| Test | Status | Notes |
+| 测试 | 状态 | 备注 |
 |---|---|---|
-| TC1–TC5 | Pre-existing PASS | Unaffected |
-| M4 Self-Test (within M8) | 0 FAIL | No regression |
-| M5 Self-Test (within M8) | 0 FAIL | No regression |
-| M6 Self-Test (within M8) | 0 FAIL | No regression |
-| M7 Self-Test (within M8) | 0 FAIL | No regression |
-| M8 Self-Test | 0 FAIL | All 61 checks pass |
+| TC1–TC5 | 预先存在的 PASS | 不受影响 |
+| M4 自检（M8 内） | 0 FAIL | 无回归 |
+| M5 自检（M8 内） | 0 FAIL | 无回归 |
+| M6 自检（M8 内） | 0 FAIL | 无回归 |
+| M7 自检（M8 内） | 0 FAIL | 无回归 |
+| M8 自检 | 0 FAIL | 所有 61 个检查通过 |
 
-> M8 test harness (`test_shared_hardening.py`) includes cumulative regression detection for M4/M5/M6/M7. Any FAIL in any prior stage blocks the M8 gate. All stages consistently pass.
+> M8 测试 harness（`test_shared_hardening.py`）包括 M4/M5/M6/M7 的累积回归检测。任何先前阶段的任何 FAIL 都会阻止 M8 门控。所有阶段一致通过。
 
 ---
 
-## 6. Incomplete / TODO
+## 6. 未完成 / 待办
 
-| Item | Status | Notes |
+| 事项 | 状态 | 备注 |
 |---|---|---|
-| ARM_SYNC end-to-end workload for multi-sharer | Not yet | M8 uses PY_INJECT (C++ self-test); ARM workload would validate timing under real CHI protocol paths |
-| Metadata model (M9) | Deferred to M9 | Capacity model, outer protocol ABI abstraction |
-| Multi-gem5 preparation (M9) | Deferred to M9 | Multi-instance deployment assumptions |
+| 多 sharer 的 ARM_SYNC 端到端工作负载 | 尚未 | M8 使用 PY_INJECT（C++ 自检）；ARM 工作负载将在真实 CHI 协议路径下验证时序 |
+| 元数据模型（M9） | 推迟到 M9 | 容量模型、外部协议 ABI 抽象 |
+| 多 gem5 准备（M9） | 推迟到 M9 | 多实例部署假设 |
 
-### 6.1 Known Limitations
+### 6.1 已知限制
 
-1. **GlobalInvalidate** sends invalidations sequentially to each sharer in the single-gem5 prototype. In a real multi-gem5 deployment, invalidation would be broadcast across the outer network.
-2. **Ack collection** uses an in-process `pendingInvalidations` set. For real hardware, a timeout or retransmission mechanism would be needed.
-3. **`force_grant_m`** debug flag is still present; it is not the default but could be accidentally enabled.
-4. **SharerMask** is 64-bit — adequate for N=3 but may need extension for very large node counts.
+1. **GlobalInvalidate** 在单 gem5 原型中按顺序向每个 sharer 发送失效。在真正的多 gem5 部署中，失效将跨外部网络广播。
+2. **Ack 收集**使用进程内 `pendingInvalidations` 集合。对于真实硬件，需要超时或重传机制。
+3. **`force_grant_m`** 调试标志仍然存在；它不是默认的，但可能被意外启用。
+4. **SharerMask** 是 64 位的 — 对 N=3 足够，但可能需要对非常大的节点数进行扩展。
 
-### 6.2 Later Stage Backfill
+### 6.2 后续阶段回填
 
-| Item | Target Stage | Priority |
+| 事项 | 目标阶段 | 优先级 |
 |---|---|---|
-| ARM_SYNC workload E2E for multi-sharer scenarios | Post-M8 | P1 |
-| Outer protocol ABI abstraction | M9 | P2 |
-| Metadata capacity model | M9 | P2 |
-| Multi-gem5 / ns-3 time assumptions | M9 | P3 |
-| Invalidation broadcast optimization | Post-M9 | P3 |
+| 多 sharer 场景的 ARM_SYNC 工作负载端到端 | M8 后 | P1 |
+| 外部协议 ABI 抽象 | M9 | P2 |
+| 元数据容量模型 | M9 | P2 |
+| 多 gem5 / ns-3 时间假设 | M9 | P3 |
+| 失效广播优化 | M9 后 | P3 |
 
 ---
 
-## 7. Submodule State
+## 7. 子模块状态
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
-| gem5 submodule changed | Yes |
-| gem5 Fix Round commit | `4a9a672335` (P0-1/P0-2/P1-4 + M8SelfTest) |
-| gem5 ackNode relocation commit | `ad782435d6` (move boundary check to entry) |
-| gem5 final commit | `d1f6ec4947` (move boundary check before directory lookup) |
-| superproject final commit | `6e966e6` (M8 fix: bump gem5 submodule) |
+| gem5 子模块已变更 | 是 |
+| gem5 修复轮 commit | `4a9a672335`（P0-1/P0-2/P1-4 + M8SelfTest） |
+| gem5 ackNode 重新定位 commit | `ad782435d6`（将边界检查移至入口） |
+| gem5 最终 commit | `d1f6ec4947`（在目录查找之前移动边界检查） |
+| 超项目最终 commit | `6e966e6`（M8 修复：更新 gem5 子模块） |
 
 ---
 
-## 8. Build & Test Command Chain
+## 8. 构建与测试命令链
 
 ```bash
-# Build gem5
+# 构建 gem5
 docker run --rm -v $(pwd):/workspace -w /workspace/gem5 \
     ubcc-dev:ubuntu20.04 bash -c "scons build/ARM/gem5.opt -j20 PROTOCOL=CHI"
 
-# Run M8 tests (includes M4/M5/M6/M7 regression)
+# 运行 M8 测试（包括 M4/M5/M6/M7 回归）
 docker run --rm -v $(pwd):/workspace -w /workspace \
     ubcc-dev:ubuntu20.04 bash -c \
     "./gem5/build/ARM/gem5.opt tests/phase8/test_shared_hardening.py <arm_binary>"
 
-# Expected: EXIT CODE 0, M8_SELF_TEST_PASSED=1,
+# 预期：EXIT CODE 0, M8_SELF_TEST_PASSED=1,
 #           M4:0 FAIL, M5:0 FAIL, M6:0 FAIL, M7:0 FAIL, M8:0 FAIL
 ```

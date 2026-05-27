@@ -1,146 +1,146 @@
-# M3.5 Stage Delivery Report
+# M3.5 阶段交付报告
 
-- **Stage:** M3.5 — Multi-Agent Collaboration Smoke Check
-- **Status:** PASS
-- **Completion Date:** 2026-05-25
-- **Review Rounds:** 1 (initial)
-- **Orchestrator Verdict:** PASS (suspended per rules, user confirmed continuation)
-
----
-
-## 1. Stage Summary
-
-### 1.1 Stage Goal
-
-Verify the orchestrator → implementer → validator collaboration chain works as intended before committing to the full protocol development pipeline. The stage exercise is minimal by design: it only touches `readme.md` and requires explicit user confirmation before advancing.
-
-### 1.2 Completion Status
-
-| Criterion | Result |
-|---|---|
-| `readme.md` modified by implementer | PASS |
-| Validator confirmed target line presence | PASS |
-| Orchestrator suspended after PASS | PASS |
-| User confirmed continuation to T0 | Confirmed |
-
-### 1.3 Review Rounds
-
-1 round — the validator confirmed the target line `Agent test 666!` was present in `readme.md` after the implementer's modification. No fixes were required.
+- **阶段：** M3.5 — 多智能体协作冒烟检查
+- **状态：** PASS
+- **完成日期：** 2026-05-25
+- **审查轮次：** 1（初次）
+- **编排器判定：** PASS（按规则暂停，用户确认继续）
 
 ---
 
-## 2. Code Changes
+## 1. 阶段摘要
 
-### 2.1 Superproject
+### 1.1 阶段目标
 
-| File | Change |
+在投入完整协议开发流水线之前，验证 orchestrator → implementer → validator 协作链按预期工作。该阶段练习设计上是最小的：仅触及 `readme.md`，并且在推进前需要明确的用户确认。
+
+### 1.2 完成状态
+
+| 标准 | 结果 |
 |---|---|
-| `readme.md` | Added line `Agent test 666!` |
+| `readme.md` 被 implementer 修改 | PASS |
+| Validator 确认目标行存在 | PASS |
+| Orchestrator 在 PASS 后暂停 | PASS |
+| 用户确认继续到 T0 | 已确认 |
 
-### 2.2 gem5 Submodule
+### 1.3 审查轮次
 
-No gem5 changes.
-
-### 2.3 Git History
-
-| Commit | Description |
-|---|---|
-| `3497b74` | M0: update gem5 submodule ref (README test) |
-
-> **Note:** The `Agent test 666!` line was cleaned up after M3.5 verification. The current `readme.md` contains `M0 test line added from container.` as the final marker.
+1 轮 — validator 在 implementer 修改后确认 `readme.md` 中存在目标行 `Agent test 666!`。无需修复。
 
 ---
 
-## 3. Deviations from Original Plan
+## 2. 代码变更
 
-### 3.1 Alignment with `plan/03-phase-plan.md`
+### 2.1 超项目
 
-| Planned | Actual | Notes |
+| 文件 | 变更 |
+|---|---|
+| `readme.md` | 添加行 `Agent test 666!` |
+
+### 2.2 gem5 子模块
+
+无 gem5 变更。
+
+### 2.3 Git 历史
+
+| Commit | 描述 |
+|---|---|
+| `3497b74` | M0: 更新 gem5 子模块引用（README 测试） |
+
+> **注意：** M3.5 验证后，`Agent test 666!` 行已被清理。当前 `readme.md` 包含 `M0 test line added from container.` 作为最终标记。
+
+---
+
+## 3. 与原计划差异
+
+### 3.1 与 `plan/03-phase-plan.md` 的对齐
+
+| 计划 | 实际 | 备注 |
 |---|---|---|
-| Implementer appends `Agent test 666!` to `readme.md` | Done | Line was added and verified |
-| Validator checks for line presence | Done | PASS verdict given |
-| Orchestrator pauses after PASS | Done | User confirmed before T0 |
-| Only `readme.md` modified | Yes | No unintended changes |
+| Implementer 追加 `Agent test 666!` 到 `readme.md` | 已完成 | 行已添加并验证 |
+| Validator 检查行存在性 | 已完成 | 给出 PASS 判定 |
+| Orchestrator 在 PASS 后暂停 | 已完成 | 用户在 T0 之前确认 |
+| 仅修改 `readme.md` | 是 | 无意外变更 |
 
-### 3.2 Plan Defects (None)
+### 3.2 计划缺陷（无）
 
-No plan defects were identified during M3.5 execution. The stage served its purpose exactly as designed.
+M3.5 执行期间未发现计划缺陷。该阶段完全按设计目的运行。
 
-### 3.3 Consistency with `plan/02-external-proxy-spec.md`
+### 3.3 与 `plan/02-external-proxy-spec.md` 的一致性
 
-Not applicable — M3.5 does not touch any coherence protocol components.
+不适用 — M3.5 不触及任何一致性协议组件。
 
-### 3.4 Implementation Simplifications
+### 3.4 实现简化
 
-None — the stage is intentionally minimal. No shortcuts were taken.
+无 — 该阶段是有意最小化的。未采取任何捷径。
 
 ---
 
-## 4. Test Cases
+## 4. 测试用例
 
-### 4.1 TC-M3.5-1: Multi-Agent Readme Smoke Check
+### 4.1 TC-M3.5-1：多智能体 Readme 冒烟检查
 
-| Attribute | Value |
+| 属性 | 值 |
 |---|---|
 | **ID** | TC-M3.5-1 |
-| **Name** | Multi-Agent Readme Smoke Check |
-| **Type** | ORCH_FLOW |
-| **Assertions** | 1 (line presence check by validator) |
-| **Preconditions** | `readme.md` exists at repo root |
-| **Execution** | 1. orchestrator → implementer (add line), 2. orchestrator → validator (check line) |
-| **Observed** | `readme.md` contains `Agent test 666!` |
-| **Expected** | Validator PASS; orchestrator pauses |
-| **Actual** | PASS — validator confirmed line presence |
-| **Negative** | No skip of implementer or validator detected |
+| **名称** | 多智能体 Readme 冒烟检查 |
+| **类型** | ORCH_FLOW |
+| **断言数** | 1（validator 检查行存在性） |
+| **前置条件** | `readme.md` 存在于仓库根目录 |
+| **执行** | 1. orchestrator → implementer（添加行），2. orchestrator → validator（检查行） |
+| **观察到** | `readme.md` 包含 `Agent test 666!` |
+| **预期** | Validator PASS；orchestrator 暂停 |
+| **实际** | PASS — validator 确认行存在 |
+| **负面测试** | 未检测到跳过 implementer 或 validator |
 
 ---
 
-## 5. Regression Results
+## 5. 回归结果
 
-| Test | Status | Notes |
+| 测试 | 状态 | 备注 |
 |---|---|---|
-| TC1 (`test_pa_layout_mode.py`) | Pre-existing baseline | Unaffected by M3.5 |
-| TC2 (`run_phase1_test.py`) | Pre-existing baseline | Unaffected |
-| TC2E (`run_phase1_test_enhanced.py`) | Pre-existing baseline | Unaffected |
-| TC3 (`verify_topo_objects.py`) | Pre-existing baseline | Unaffected |
-| TC4 (`test_ruby_create_system_n3l2d2.py`) | Pre-existing baseline | Unaffected |
-| TC5 (`test_ep_instantiate.py`) | Pre-existing baseline | Unaffected |
+| TC1 (`test_pa_layout_mode.py`) | 预先存在的基线 | 不受 M3.5 影响 |
+| TC2 (`run_phase1_test.py`) | 预先存在的基线 | 不受影响 |
+| TC2E (`run_phase1_test_enhanced.py`) | 预先存在的基线 | 不受影响 |
+| TC3 (`verify_topo_objects.py`) | 预先存在的基线 | 不受影响 |
+| TC4 (`test_ruby_create_system_n3l2d2.py`) | 预先存在的基线 | 不受影响 |
+| TC5 (`test_ep_instantiate.py`) | 预先存在的基线 | 不受影响 |
 
-> M3.5 only modifies `readme.md`. No regression risk to any CHI/UBCC component.
+> M3.5 仅修改 `readme.md`。对任何 CHI/UBCC 组件无回归风险。
 
 ---
 
-## 6. Incomplete / TODO
+## 6. 未完成 / 待办
 
-| Item | Status | Notes |
+| 事项 | 状态 | 备注 |
 |---|---|---|
-| `Agent test 666!` line preserved | Cleaned up post-verification | Replaced with `M0 test line added from container.` |
-| Orchestrator auto-continue guard | Enforced | Did not proceed to T0 without user confirmation |
+| `Agent test 666!` 行保留 | 验证后清理 | 替换为 `M0 test line added from container.` |
+| Orchestrator 自动继续守卫 | 已强制执行 | 未经用户确认不会进入 T0 |
 
-### 6.1 Known Limitations
+### 6.1 已知限制
 
-None — M3.5 is a process validation stage with no protocol deliverables.
+无 — M3.5 是过程验证阶段，无协议交付物。
 
-### 6.2 Later Stage Backfill
+### 6.2 后续阶段回填
 
-Not applicable. M3.5 has no protocol artifacts that need backfilling.
+不适用。M3.5 没有需要回填的协议产物。
 
 ---
 
-## 7. Orchestrator Decision Log
+## 7. 编排器决策日志
 
-| Step | Action | Outcome |
+| 步骤 | 动作 | 结果 |
 |---|---|---|
-| 1 | Orchestrator dispatched implementer | `readme.md` modified |
-| 2 | Implementer returned result | Line `Agent test 666!` added |
-| 3 | Orchestrator dispatched validator | Validator inspected `readme.md` |
-| 4 | Validator returned PASS | Line confirmed present |
-| 5 | Orchestrator paused for user confirmation | User confirmed, T0 started |
+| 1 | Orchestrator 派遣 implementer | `readme.md` 已修改 |
+| 2 | Implementer 返回结果 | 添加行 `Agent test 666!` |
+| 3 | Orchestrator 派遣 validator | Validator 检查 `readme.md` |
+| 4 | Validator 返回 PASS | 行确认存在 |
+| 5 | Orchestrator 暂停等待用户确认 | 用户已确认，T0 已启动 |
 
 ---
 
-## 8. Submodule State
+## 8. 子模块状态
 
-- gem5 submodule changed: no
-- gem5 commit hash: (unchanged, Phase1-3 baseline)
-- superproject pointer updated: yes (`3497b74`)
+- gem5 子模块已变更：否
+- gem5 commit hash：（未变更，Phase1-3 基线）
+- 超项目指针已更新：是（`3497b74`）
