@@ -64,8 +64,6 @@ if __name__ == "__m5_main__":
         proc.cmd = [binary]
         cpu.workload = [proc]
 
-    system.memories = []
-
     # Early proxy resolution (MUST do this for Process parenting)
     stack = [(root, 0)]
     while stack:

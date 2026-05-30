@@ -378,14 +378,6 @@ def gem5_config_main():
         proc.cmd = [binary, str(node_id)]
         cpu.workload = [proc]
 
-    # ── Q2 FIX: Pre-seed system.memories with empty list ────────
-    # _early_unproxy_all resolves Self.all for system.memories to []
-    # since no DRAM objects exist yet.  Pre-set to empty list so
-    # Self.all proxy is not consumed.  The real list is rebuilt after
-    # Ruby.create_system().
-    system.memories = []
-    print(f"[E2E-Q2] Pre-seeded system.memories = [] (bypass Self.all)", flush=True)
-
     # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
     # Previous _early_unproxy_all(root) resolved all proxies on all
     # SimObjects, including CPU port refs.  This caused the port
