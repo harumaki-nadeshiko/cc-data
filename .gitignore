@@ -9,3 +9,4 @@ m5out/
 tests/phase1/hello
 tests/phase4/hello_arm
 tests/phase4/m4_out/
+tmp/

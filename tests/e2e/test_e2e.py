@@ -368,13 +368,23 @@ def gem5_config_main():
 
     for i, cpu in enumerate(cpus):
         node_id = i // (DEFAULT_L * DEFAULT_D)
-        proc = Process(pid=100 + i)
+        # Q2: phys_pool_id selects which MemPool to allocate from.
+        # Pool 0,1,2 cover [0,1,2]TiB + 256MiB (node LP+UE ranges).
+        # Each process allocates stack/heap from its own node's pool,
+        # ensuring the PA is within the node's address space.
+        proc = Process(pid=100 + i, phys_pool_id=node_id)
         proc.executable = binary
         proc.cwd = os.getcwd()
         proc.cmd = [binary, str(node_id)]
-        # phys_pool_id: unset for E2E; Ruby routing handles PA->node
-        # dispatch without pool-based interleaving.
         cpu.workload = [proc]
+
+    # ── Q2 FIX: Pre-seed system.memories with empty list ────────
+    # _early_unproxy_all resolves Self.all for system.memories to []
+    # since no DRAM objects exist yet.  Pre-set to empty list so
+    # Self.all proxy is not consumed.  The real list is rebuilt after
+    # Ruby.create_system().
+    system.memories = []
+    print(f"[E2E-Q2] Pre-seeded system.memories = [] (bypass Self.all)", flush=True)
 
     # ── Early proxy resolution (v25.1 workaround) ───────────────
     _early_unproxy_all(root)
@@ -454,24 +464,95 @@ def gem5_config_main():
             all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
     system.mem_ranges = all_ranges
 
-    # ── Build system.memories for SE mode binary loading ─────────
-    # Process::allocateMem() → SEWorkload::allocPhysPages() → MemPools,
-    # populated from PhysicalMemory::getConfAddrRanges().  That method
-    # walks addrMap which only contains AbstractMemory objects with
-    # in_addr_map=True.  Ruby.py's phys_mem has in_addr_map=False, so
-    # it does NOT contribute to getConfAddrRanges().  We must collect
-    # all DDR4 dram objects (subclasses of AbstractMemory; default
-    # in_addr_map=True) created by _make_dram_memctrl() so MemPools has
-    # enough free pages to map the ARM binary.
+    # ── Q2 FIX: Pre-map binary + stack pages per-node ──────────────
+    # Process::initState() calls allocateMem() → MemPool::allocate(),
+    # which fails because MemPools are not properly populated from
+    # DDR4 controllers at the time SE workload is set up (the DDR4
+    # controllers are created later during Ruby.create_system()).
+    # Work around by pre-mapping all binary and initial stack virtual
+    # pages to per-node physical pages, so pTable->translate() finds
+    # the mapping and skips allocateMem() entirely.
+    #
+    # CRITICAL: Each node has its own PA space (node i base = i << 40).
+    # Physical pages must be allocated in the CPU's own node space,
+    # otherwise the EP_RNF controller rejects them as non-DSM.
+    import struct as _struct
+    _page_size = 4096  # ARM64 page size
+    _NODE_ADDR_SHIFT = 40
+    _CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
+
+    # Per-node physical page counters (start at 1 MiB offset)
+    _node_pa = {}
+    for _nid in range(NODES):
+        _node_pa[_nid] = (_nid << _NODE_ADDR_SHIFT) + 0x100000
+
+    # Parse ELF program headers to find PT_LOAD segments
+    _elf_segments = []
+    with open(binary, 'rb') as _f:
+        # Read ELF header (64-bit)
+        _e_hdr = _f.read(64)
+        _e_phoff = _struct.unpack_from('<Q', _e_hdr, 32)[0]  # e_phoff
+        _e_phentsize = _struct.unpack_from('<H', _e_hdr, 54)[0]  # e_phentsize
+        _e_phnum = _struct.unpack_from('<H', _e_hdr, 56)[0]  # e_phnum
+
+        for _i in range(_e_phnum):
+            _f.seek(_e_phoff + _i * _e_phentsize)
+            _phdr = _f.read(_e_phentsize)
+            _p_type = _struct.unpack_from('<I', _phdr, 0)[0]
+            if _p_type == 1:  # PT_LOAD
+                _p_offset = _struct.unpack_from('<Q', _phdr, 8)[0]
+                _p_vaddr = _struct.unpack_from('<Q', _phdr, 16)[0]
+                _p_filesz = _struct.unpack_from('<Q', _phdr, 32)[0]
+                _p_memsz = _struct.unpack_from('<Q', _phdr, 40)[0]
+                if _p_memsz > 0:
+                    _elf_segments.append({
+                        'va': _p_vaddr,
+                        'memsz': _p_memsz,
+                    })
+
+    _total_pages = 0
+
+    # Map binary segments: each CPU gets its own copy in its node's PA space
+    for _cpu_idx, _cpu in enumerate(cpus):
+        _node_id = _cpu_idx // _CPUS_PER_NODE
+        for _proc in _cpu.workload:
+            if _proc is None:
+                continue
+            for _seg in _elf_segments:
+                _va_start = _seg['va'] & ~(_page_size - 1)
+                _va_end = (_seg['va'] + _seg['memsz'] + _page_size - 1) & ~(_page_size - 1)
+                for _va in range(_va_start, _va_end, _page_size):
+                    _pa = _node_pa[_node_id]
+                    _node_pa[_node_id] += _page_size
+                    _proc.map(_va, _pa, _page_size, cacheable=True)
+                    _total_pages += 1
+
+    print(f"[E2E-Q2] Pre-mapped {_total_pages} pages ({_total_pages * _page_size} bytes)"
+           f" for {len(cpus)} CPUs (per-node PA ranges)",
+           flush=True)
+
+    # ── Ensure system.memories includes DDR4 DRAMs ──────────────
+    # _early_unproxy_all resolved Self.all → [] before DDR4 objects
+    # existed.  We explicitly rebuild system.memories here AND
+    # directly manipulate _values to ensure the C++ parameter
+    # transfer picks it up (bypassing any SimObject caching).
     from m5.objects import AbstractMemory
     _all_memories = [obj for obj in system.descendants()
                      if isinstance(obj, AbstractMemory)]
-    # Include phys_mem for functional-access backing store (in_addr_map=False)
     if hasattr(ruby_system, 'phys_mem') and ruby_system.phys_mem:
         if ruby_system.phys_mem not in _all_memories:
             _all_memories.append(ruby_system.phys_mem)
     system.memories = _all_memories
-    print(f"[E2E] system.memories: {len(system.memories)} AbstractMemory objects",
+    # Also directly set in _values to bypass any getattr caching
+    system._values['memories'] = _all_memories
+    print(f"[E2E] system.memories: {len(system.memories)} objects "
+          f"(DDR4 DRAMs + phys_mem)", flush=True)
+
+    # Debug: print Ruby phys_mem info
+    if hasattr(ruby_system, 'phys_mem') and ruby_system.phys_mem:
+        pm = ruby_system.phys_mem
+        print(f"[E2E] Ruby phys_mem: {pm} range={pm.range}", flush=True)
+    print(f"[E2E] Ruby access_backing_store={ruby_system.access_backing_store}",
           flush=True)
 
     m5.instantiate()
