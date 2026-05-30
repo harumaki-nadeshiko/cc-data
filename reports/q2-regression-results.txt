@@ -1,0 +1,25 @@
+=== test_minimal ===
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+[MINIMAL] Instantiate done!
+SIM_CAUSE=simulate() limit reached
+EXIT=0
+
+=== test_e2e ===
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+SIM_CAUSE=simulate() limit reached
+EXIT=0
+
+=== test_connect_direct ===
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+SIM_CAUSE=simulate() limit reached
+EXIT=0
+
+=== test_port_diag ===
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+SIM_CAUSE=simulate() limit reached
+EXIT=0
+
+=== test_port_final ===
+fatal: system.cpu.data_sequencer.dcache without default or user set value
+EXIT=0
+

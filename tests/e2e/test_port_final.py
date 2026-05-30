@@ -91,8 +91,15 @@ if __name__ == "__m5_main__":
     ruby.access_backing_store = True
     ruby.phys_mem = __import__('m5.objects', fromlist=['SimpleMemory']).SimpleMemory(
         range=AddrRange(0, size="4GiB"), in_addr_map=False)
-    system.memories = [ruby.phys_mem]
-    system._values['memories'] = system.memories
+
+    from m5.objects import AbstractMemory
+    _all_memories = [obj for obj in system.descendants()
+                      if isinstance(obj, AbstractMemory)]
+    if hasattr(ruby, 'phys_mem') and ruby.phys_mem:
+        if ruby.phys_mem not in _all_memories:
+            _all_memories.append(ruby.phys_mem)
+    system.memories = _all_memories
+    system._values['memories'] = _all_memories
 
     # Connect CPU ports to sequencer using connectAllPorts
     cpu.connectAllPorts(seq.in_ports, seq.in_ports, seq.interrupt_out_port)
