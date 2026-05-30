@@ -74,9 +74,11 @@ if __name__ == "__m5_main__":
         proc.cmd = [binary]
         cpu.workload = [proc]
 
-    # Pre-seed system.memories
-    system.memories = []
-    print(f"[MINIMAL] Pre-seeded system.memories = []", flush=True)
+    # NOTE: Do NOT pre-seed system.memories = [] before Ruby.create_system().
+    # The default Self.all proxy auto-collects AbstractMemory objects at
+    # instantiation time.  Pre-seeding with [] breaks _system pointer
+    # assignment in C++ System::System() for memories created later
+    # (e.g., Ruby's phys_mem).
 
     # Early proxy resolution
     from m5.SimObject import SimObject
