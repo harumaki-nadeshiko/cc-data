@@ -386,8 +386,37 @@ def gem5_config_main():
     system.memories = []
     print(f"[E2E-Q2] Pre-seeded system.memories = [] (bypass Self.all)", flush=True)
 
-    # ── Early proxy resolution (v25.1 workaround) ───────────────
-    _early_unproxy_all(root)
+    # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
+    # Previous _early_unproxy_all(root) resolved all proxies on all
+    # SimObjects, including CPU port refs.  This caused the port
+    # bindings established later by connectCpuPorts to malfunction:
+    # the CPU's sendTimingReq returned success but the RubyPort's
+    # recvTimingReq was never called. Root cause: PortRef.unproxy()
+    # on unconnected CPU ports sets internal state that prevents
+    # ccConnect() from establishing a proper C++ binding.
+    #
+    # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
+    # Previous _early_unproxy_all(root) resolved all proxies on all
+    # SimObjects, including CPU port refs.  This caused the port
+    # bindings established later by connectCpuPorts to malfunction:
+    # the CPU's sendTimingReq returned success but the RubyPort's
+    # recvTimingReq was never called. Root cause: PortRef.unproxy()
+    # on unconnected CPU ports sets internal state that prevents
+    # ccConnect() from establishing a proper C++ binding.
+    #
+    # Fix: iterate ALL SimObjects but SKIP CPU objects to avoid
+    # touching their port refs.  CPUs get their port bindings
+    # after Ruby.create_system(), so their port refs must remain
+    # fresh for proper ccConnect() during m5.instantiate().
+    from m5.objects import BaseCPU
+    for _obj in root.descendants():
+        if isinstance(_obj, BaseCPU):
+            continue  # Skip CPUs: preserve fresh port refs
+        try:
+            _obj.unproxyParams()
+        except Exception:
+            pass
+    print(f"[E2E-Q2] Targeted proxy resolution: all non-CPU objects", flush=True)
 
     # ── Options ────────────────────────────────────────────────────
     class O: pass
@@ -453,6 +482,19 @@ def gem5_config_main():
 
     for i, seq in enumerate(cpu_sequencers):
         seq.connectCpuPorts(cpus[i])
+
+    # ── Q2 DEBUG: Verify port peer references are set ────────────
+    for i, seq in enumerate(cpu_sequencers):
+        cpu_ref = cpus[i]._get_port_ref("icache_port")
+        dcache_ref = cpus[i]._get_port_ref("dcache_port")
+        ip = cpu_ref.peer
+        dp = dcache_ref.peer
+        iok = ip is not None
+        dok = dp is not None
+        if not iok or not dok:
+            print(f"[E2E-Q2] WARN: CPU{i} port peer missing: icache_peer={iok} dcache_peer={dok}",
+                  flush=True)
+    print(f"[E2E-Q2] Port peer references verified", flush=True)
 
     # Build proper per-node mem_ranges
     all_ranges = []
