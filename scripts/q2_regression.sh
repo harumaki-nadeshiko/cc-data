@@ -1,53 +1,39 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
-
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RESULTS="$ROOT_DIR/reports/q2-regression-results.txt"
-OUTDIR_BASE="$ROOT_DIR/tmp"
-
-rm -f "$RESULTS"
-mkdir -p "$OUTDIR_BASE"
+mkdir -p "$ROOT_DIR/tmp"
 
 echo "# Q2 Regression Results" > "$RESULTS"
 echo "# Date: $(date)" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
-for test_name in test_minimal test_e2e test_connect_direct test_port_diag; do
-  echo "=== $test_name ===" >> "$RESULTS"
-
-  TEST_SCRIPT="$ROOT_DIR/tests/e2e/${test_name}.py"
-  OUTDIR="$OUTDIR_BASE/${test_name}"
-  mkdir -p "$OUTDIR"
-
-  # --tc 1 only for test_e2e
-  extra=""
-  if [ "$test_name" = "test_e2e" ]; then
-    extra="--tc 1"
-  fi
-
-  # Save full output to temp file to avoid pipe swallowing exit codes
-  tmpf=$(mktemp)
+for test in test_minimal test_e2e test_connect_direct test_port_diag; do
+  echo "=== $test ===" >> "$RESULTS"
+  tmpf="$ROOT_DIR/tmp/regression_${test}.tmp"
   set +e
-  taskset -c 0-31 "$ROOT_DIR/gem5/build/ARM/gem5.opt" \
-    --outdir="$OUTDIR" \
-    "$TEST_SCRIPT" \
-    $extra > "$tmpf" 2>&1
-  EXIT_VAL=$?
+  if [ "$test" = "test_e2e" ]; then
+    "$ROOT_DIR/gem5/build/ARM/gem5.opt" --outdir="$ROOT_DIR/tmp/$test" \
+      "$ROOT_DIR/tests/e2e/${test}.py" --tc 1 > "$tmpf" 2>&1
+  else
+    "$ROOT_DIR/gem5/build/ARM/gem5.opt" --outdir="$ROOT_DIR/tmp/$test" \
+      "$ROOT_DIR/tests/e2e/${test}.py" > "$tmpf" 2>&1
+  fi
+  EXIT=$?
   set -e
-
   grep -E "SIM_CAUSE|Instantiate done|SENTINEL|Segmentation|fatal|Error:|exiting" "$tmpf" >> "$RESULTS" || true
-  echo "EXIT=$EXIT_VAL" >> "$RESULTS"
+  echo "EXIT=$EXIT" >> "$RESULTS"
   echo "" >> "$RESULTS"
-  rm "$tmpf"
+  rm -f "$tmpf"
 done
 
-# test_port_final: known issue — TimingSimpleCPU dcache not set without Ruby.create_system
+# test_port_final: 已知问题，标记 XFAIL
 echo "=== test_port_final (XFAIL - known issue) ===" >> "$RESULTS"
 echo "Pre-existing: TimingSimpleCPU dcache not set without Ruby.create_system" >> "$RESULTS"
 echo "STATUS=XFAIL" >> "$RESULTS"
 echo "" >> "$RESULTS"
 
-echo "STATUS SUMMARY:" >> "$RESULTS"
-grep -E "EXIT=|STATUS=" "$RESULTS" > "$RESULTS.tmp" && cat "$RESULTS.tmp" >> "$RESULTS" && rm "$RESULTS.tmp"
-
-echo "Regression run complete. Results in $RESULTS"
+echo "=== STATUS SUMMARY ===" >> "$RESULTS"
+grep -E "^(EXIT|STATUS)=" "$RESULTS" > "$ROOT_DIR/tmp/regression_summary.tmp" || true
+cat "$ROOT_DIR/tmp/regression_summary.tmp" >> "$RESULTS" || true
+rm -f "$ROOT_DIR/tmp/regression_summary.tmp"

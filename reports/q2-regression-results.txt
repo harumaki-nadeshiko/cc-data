@@ -1,5 +1,5 @@
 # Q2 Regression Results
-# Date: Sat May 30 14:38:09 UTC 2026
+# Date: Sat May 30 14:46:57 UTC 2026
 
 === test_minimal ===
   M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
@@ -26,5 +26,9 @@ EXIT=0
 Pre-existing: TimingSimpleCPU dcache not set without Ruby.create_system
 STATUS=XFAIL
 
-STATUS SUMMARY:
-STATUS SUMMARY:
+=== STATUS SUMMARY ===
+EXIT=0
+EXIT=1
+EXIT=0
+EXIT=0
+STATUS=XFAIL
