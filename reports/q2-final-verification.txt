@@ -1,0 +1,19 @@
+=== M4 Self-Test Results: 26/26 PASS, 0 FAIL, 0 SKIP ===
+=== M5 Self-Test Results: 71/75 PASS, 0 FAIL, 4 SKIP ===
+=== M6 Self-Test Results: 46/46 PASS, 0 FAIL, 0 SKIP ===
+=== M7 Self-Test Results: 50/50 PASS, 0 FAIL, 0 SKIP ===
+=== M8 Self-Test Results: 59/59 PASS, 0 FAIL, 0 SKIP ===
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+SIM_CAUSE=exiting with last active thread context
+EXIT=0
