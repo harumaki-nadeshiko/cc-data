@@ -1,0 +1,80 @@
+=== TC1 ===
+EXIT=0
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
+  TC1 PASSED: single read 0xCAFE
+>>> TC1 PASSED <<<
+
+=== TC2 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC3 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC4 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC5 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC6 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC7 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC8 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC9 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+
+=== TC10 ===
+EXIT=0
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+

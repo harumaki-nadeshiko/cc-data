@@ -80,7 +80,7 @@ if __name__ == "__m5_main__":
     # assignment in C++ System::System() for memories created later
     # (e.g., Ruby's phys_mem).
 
-    # Early proxy resolution
+    # Early proxy resolution — required for gem5 v25.1 param propagation
     from m5.SimObject import SimObject
     from m5.proxy import isproxy
 
@@ -213,16 +213,24 @@ if __name__ == "__m5_main__":
 
     print(f"[MINIMAL] Pre-mapped {_total_pages} pages", flush=True)
 
-    # Collect memories
+    # Collect memories — must explicitly populate system.memories
+    # BEFORE m5.instantiate() so that C++ System::physmem receives
+    # the correct AbstractMemory list at construction time.
     from m5.objects import AbstractMemory
     _all_memories = [obj for obj in system.descendants()
                       if isinstance(obj, AbstractMemory)]
-    if hasattr(ruby_system, 'phys_mem') and ruby_system.phys_mem:
+    if hasattr(ruby_system, 'phys_mem') and ruby_system.phys_mem is not None:
         if ruby_system.phys_mem not in _all_memories:
             _all_memories.append(ruby_system.phys_mem)
     system.memories = _all_memories
-    system._values['memories'] = _all_memories
     print(f"[MINIMAL] system.memories: {len(system.memories)} objects", flush=True)
+    for m in system.memories:
+        try:
+            mr = m.range
+        except Exception:
+            mr = "<error>"
+        print(f"  MEM: {m} range={mr} in_addr_map={m.in_addr_map}", flush=True)
+    print(f"[MINIMAL] system.mem_ranges={system.mem_ranges}", flush=True)
 
     if hasattr(ruby_system, 'phys_mem') and ruby_system.phys_mem:
         pm = ruby_system.phys_mem

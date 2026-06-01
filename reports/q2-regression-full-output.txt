@@ -1,0 +1,1 @@
+/workspace/scripts/q2_regression.sh: line 14:    41 Aborted                 (core dumped) "$ROOT_DIR/gem5/build/ARM/gem5.opt" --outdir="$ROOT_DIR/tmp/${test}_tc${tc}" "$ROOT_DIR/tests/e2e/${test}.py" --tc "$tc" > "$tmpf" 2>&1
