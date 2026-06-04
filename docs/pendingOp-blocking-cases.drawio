@@ -1,206 +1,169 @@
 <mxfile host="drawio" version="24.2.5">
-  <diagram id="q3-pendingOp-cases" name="Q3 pendingOp blocking cases">
-    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1200" math="0" shadow="0">
+  <diagram id="q3-cases" name="Timing">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="20" guides="1" tooltips="1" connect="1" arrows="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
 
         <!-- Title -->
-        <mxCell id="title" value="Q3 pendingOp=3 Blocking Cases" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=18;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="350" y="10" width="700" height="30"/>
+        <mxCell id="t0" value="&lt;b&gt;Q3: pendingOp=3 Blocking Root Cause&lt;/b&gt;" style="text;html=1;fontSize=16;align=center;verticalAlign=middle;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="400" y="10" width="600" height="30"/>
         </mxCell>
 
-        <!-- ==================== TC3 ==================== -->
-        <mxCell id="tc3title" value="TC3: Ping-Pong (Node0↔Node1 DSM_1)" style="text;html=1;strokeColor=none;fillColor=#FFF3E0;align=center;verticalAlign=top;fontSize=14;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="50" width="1360" height="25"/>
+        <!-- Legend -->
+        <mxCell id="l1" value="Grant sets pendingOp=3, pendingRequester=N0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="40" y="50" width="220" height="30"/>
         </mxCell>
-        <mxCell id="tc3bg" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="20" y="75" width="1360" height="125"/>
+        <mxCell id="l2" value="Different-requester blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="280" y="50" width="180" height="30"/>
         </mxCell>
-
-        <!-- TC3 actors -->
-        <mxCell id="tc3p0" value="Node0 CPU02" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="80" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc3ubcc" value="UBCC@Node1" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="110" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc3n1" value="Node1 CPU04" style="rect;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="140" width="110" height="25"/>
+        <mxCell id="l3" value="Timer releases (5M ticks later)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="480" y="50" width="200" height="30"/>
         </mxCell>
 
-        <!-- Timeline -->
-        <mxCell id="tc3line" value="" style="line;strokeWidth=2;fillColor=none;align=left;verticalAlign=middle;strokeColor=#BDBDBD;fontFamily=monospace;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="155" y="92.5" width="1200" height="0"/>
+        <!-- ====== TC3 ====== -->
+        <mxCell id="tc3h" value="&lt;b&gt;TC3: Ping-Pong deadlock&lt;/b&gt;" style="text;html=1;fontSize=14;align=left;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="40" y="110" width="300" height="25"/>
+        </mxCell>
+        <mxCell id="tc3b" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" parent="1" vertex="1">
+          <mxGeometry x="40" y="135" width="1100" height="120"/>
         </mxCell>
 
-        <!-- TC3 Step 1: Write -->
-        <mxCell id="tc3s1" value="T0: Node0 writes 0xA" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="170" y="82" width="85" height="80"/>
+        <!-- TC3: Node0 writes -->
+        <mxCell id="tc3w" value="Node0 write 0xA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="145" width="120" height="30"/>
         </mxCell>
-        <mxCell id="tc3s1a" value="grant(set pendingOp=3, pendingReq=N0)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#E65100;" vertex="1" parent="1">
-          <mxGeometry x="170" y="117" width="85" height="20"/>
-        </mxCell>
-
-        <!-- TC3 Step 2: Read blocked -->
-        <mxCell id="tc3s2" value="T1: Node1 reads" style="rect;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="310" y="112" width="70" height="25"/>
-        </mxCell>
-        <mxCell id="tc3s2a" value="BLOCKED! pendingReq=N0≠N1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="330" y="140" width="100" height="20"/>
-        </mxCell>
-        <mxCell id="tc3s2b" value="→ dummy Shared grant" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=8;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="330" y="155" width="100" height="15"/>
+        <mxCell id="tc3g" value="grant pendingOp=3,req=N0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="180" width="140" height="25"/>
         </mxCell>
 
-        <!-- TC3 Step 3: Node1 write blocked -->
-        <mxCell id="tc3s3" value="T2: Node1 writes 0xB" style="rect;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="310" y="142" width="100" height="25"/>
-        </mxCell>
-        <mxCell id="tc3s3a" value="BLOCKED (pendingOp≠0)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="420" y="145" width="110" height="20"/>
-        </mxCell>
-
-        <!-- Deadlock -->
-        <mxCell id="tc3dead" value="DEADLOCK: CPU write never completes → Sequencer timeout" style="rect;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="560" y="140" width="250" height="25"/>
+        <!-- Arrow -->
+        <mxCell id="a1" value="" style="endArrow=classic;html=1;strokeColor=#1565C0;" parent="1" edge="1">
+          <mxGeometry x="200" y="160" as="geometry">
+            <mxPoint x="200" y="160"/>
+            <mxPoint x="340" y="160"/>
+          </mxGeometry>
         </mxCell>
 
-        <!-- ==================== TC6 ==================== -->
-        <mxCell id="tc6title" value="TC6: Multi-Sharer (Node0 write DSM_2, Node1&amp;Node2 read)" style="text;html=1;strokeColor=none;fillColor=#FFF3E0;align=center;verticalAlign=top;fontSize=14;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="220" width="1360" height="25"/>
+        <!-- TC3: Node1 read blocked -->
+        <mxCell id="tc3r" value="Node1 read blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="350" y="145" width="120" height="30"/>
         </mxCell>
-        <mxCell id="tc6bg" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="20" y="245" width="1360" height="125"/>
-        </mxCell>
-
-        <!-- TC6 actors -->
-        <mxCell id="tc6p0" value="Node0 CPU" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="250" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc6ubcc" value="UBCC@Node2" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="280" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc6n1" value="Node1 CPU / Node2 CPU" style="rect;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="30" y="310" width="130" height="25"/>
+        <mxCell id="tc3d" value="dummy Shared grant" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="350" y="180" width="120" height="25"/>
         </mxCell>
 
-        <!-- TC6 Step 1 -->
-        <mxCell id="tc6s1" value="Node0 writes 0xDEADBEEF" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="170" y="252" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc6s1a" value="grant pendingOp=3,pendingReq=N0" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#E65100;" vertex="1" parent="1">
-          <mxGeometry x="170" y="282" width="110" height="20"/>
-        </mxCell>
-
-        <!-- TC6 Step 2: Node1 read blocked -->
-        <mxCell id="tc6s2" value="Node1 reads" style="rect;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="350" y="282" width="60" height="25"/>
-        </mxCell>
-        <mxCell id="tc6s2a" value="BLOCKED (pendingReq=N0≠N1)→ dummy Shared→gets 0x0" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="420" y="285" width="200" height="20"/>
+        <!-- Arrow 2 -->
+        <mxCell id="a2" value="" style="endArrow=classic;html=1;strokeColor=#C62828;" parent="1" edge="1">
+          <mxGeometry x="490" y="160" as="geometry">
+            <mxPoint x="490" y="160"/>
+            <mxPoint x="620" y="160"/>
+          </mxGeometry>
         </mxCell>
 
-        <!-- TC6 Step 3: Node2 read blocked -->
-        <mxCell id="tc6s3" value="Node2 reads" style="rect;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="350" y="310" width="60" height="25"/>
+        <!-- TC3: Node1 write deadlock -->
+        <mxCell id="tc3w2" value="Node1 write 0xB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="630" y="145" width="120" height="30"/>
         </mxCell>
-        <mxCell id="tc6s3a" value="BLOCKED→dummy Shared→gets 0x0" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="420" y="313" width="180" height="20"/>
-        </mxCell>
-
-        <mxCell id="tc6result" value="Node1 reads 0x0, Node2 reads 0x0 → FAIL (expected 0xDEADBEEF)" style="rect;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="660" y="295" width="350" height="25"/>
+        <mxCell id="tc3d2" value="DEADLOCK: CPU write&apos;s Modified grant never returns" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D32F2F;fontColor=#FFFFFF;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="630" y="180" width="300" height="25"/>
         </mxCell>
 
-        <!-- ==================== TC8 ==================== -->
-        <mxCell id="tc8title" value="TC8: Upgrade Invalidate (Node0 write DSM_2→share→write again)" style="text;html=1;strokeColor=none;fillColor=#FFF3E0;align=center;verticalAlign=top;fontSize=14;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="390" width="1360" height="25"/>
-        </mxCell>
-        <mxCell id="tc8bg" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="20" y="415" width="1360" height="200"/>
+        <mxCell id="tc3n" value="After 5M timer expires: pendingOp=0. But Node1 CPU already timed out → Sequencer Deadlock" style="text;html=1;fontSize=10;fontFamily=monospace;fontColor=#C62828;" parent="1" vertex="1">
+          <mxGeometry x="350" y="220" width="500" height="20"/>
         </mxCell>
 
-        <!-- TC8 actors -->
-        <mxCell id="tc8p0" value="Node0 CPU" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="420" width="90" height="25"/>
+        <!-- ====== TC6 ====== -->
+        <mxCell id="tc6h" value="&lt;b&gt;TC6: Multi-Sharer stale data&lt;/b&gt;" style="text;html=1;fontSize=14;align=left;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="40" y="280" width="400" height="25"/>
         </mxCell>
-        <mxCell id="tc8hnf" value="HN-F@Node0" style="rect;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="450" width="90" height="25"/>
-        </mxCell>
-        <mxCell id="tc8l2" value="L2 cpu00" style="rect;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="480" width="90" height="25"/>
-        </mxCell>
-        <mxCell id="tc8ubcc" value="UBCC@Node2" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="510" width="90" height="25"/>
-        </mxCell>
-        <mxCell id="tc8n1" value="Node1/Node2 CPU" style="rect;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="540" width="110" height="25"/>
-        </mxCell>
-        <mxCell id="tc8epr" value="EP_RNF@N0" style="rect;whiteSpace=wrap;html=1;fillColor=#FFCC80;strokeColor=#E65100;fontSize=10;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="20" y="570" width="90" height="25"/>
+        <mxCell id="tc6b" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" parent="1" vertex="1">
+          <mxGeometry x="40" y="305" width="1100" height="120"/>
         </mxCell>
 
-        <!-- Phase 1 -->
-        <mxCell id="p1" value="P1: Node0 write 0xAAA" style="rect;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="130" y="422" width="100" height="100"/>
+        <mxCell id="tc6w" value="Node0 write 0xDEADBEEF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="315" width="150" height="30"/>
         </mxCell>
-        <mxCell id="p1a" value="grant pendingOp=3,pendingReq=N0" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#E65100;" vertex="1" parent="1">
-          <mxGeometry x="130" y="512" width="100" height="20"/>
-        </mxCell>
-
-        <!-- Phase 2 -->
-        <mxCell id="p2" value="P2: Node1 reads" style="rect;whiteSpace=wrap;html=1;fillColor=#FCE4EC;strokeColor=#C62828;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="310" y="490" width="70" height="25"/>
-        </mxCell>
-        <mxCell id="p2a" value="BLOCKED pendingReq=N0" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="390" y="493" width="120" height="20"/>
-        </mxCell>
-        <mxCell id="p2b" value="→ dummy Shared → 0xAAA" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="390" y="513" width="120" height="20"/>
-        </mxCell>
-        <mxCell id="p2c" value="Node2 reads also blocked" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="390" y="533" width="120" height="20"/>
+        <mxCell id="tc6g" value="grant pendingOp=3,req=N0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="350" width="140" height="25"/>
         </mxCell>
 
-        <!-- Phase 3: timer expired → recall allowed -->
-        <mxCell id="p3" value="P3: timer expired (5M ticks)" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="560" y="460" width="130" height="25"/>
+        <mxCell id="tc6r1" value="Node1 read blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="300" y="315" width="120" height="30"/>
         </mxCell>
-        <mxCell id="p3a" value="pendingOp=0 released" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#F9A825;" vertex="1" parent="1">
-          <mxGeometry x="560" y="485" width="130" height="20"/>
-        </mxCell>
-
-        <!-- Phase 4: Recall works but too late -->
-        <mxCell id="p4" value="P4: Node1 read→recall→0xAAA(old)" style="rect;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontSize=9;fontFamily=monospace;rounded=1;" vertex="1" parent="1">
-          <mxGeometry x="740" y="480" width="150" height="25"/>
-        </mxCell>
-        <mxCell id="p4a" value="Recall data = Node0 L2 = 0xAAA(旧值)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="740" y="510" width="180" height="20"/>
-        </mxCell>
-        <mxCell id="p4b" value="Node0的0xBBB被 L1D缓存没刷回" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=9;fontFamily=monospace;fontColor=#C62828;" vertex="1" parent="1">
-          <mxGeometry x="740" y="530" width="180" height="20"/>
+        <mxCell id="tc6d1" value="dummy Shared → reads 0x0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="300" y="350" width="140" height="25"/>
         </mxCell>
 
-        <!-- Issue summary -->
-        <mxCell id="summary" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="20" y="640" width="1360" height="120"/>
+        <mxCell id="tc6r2" value="Node2 read blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="530" y="315" width="120" height="30"/>
         </mxCell>
-        <mxCell id="sumtitle" value="Root Cause" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;fontSize=14;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="500" y="645" width="400" height="25"/>
+        <mxCell id="tc6d2" value="dummy Shared → reads 0x0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="530" y="350" width="140" height="25"/>
         </mxCell>
 
-        <mxCell id="sum1" value="1. Grant sets pendingOp=3, pendingRequester=Requestor" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="40" y="675" width="700" height="20"/>
+        <mxCell id="tc6f" value="FAIL: expected 0xDEADBEEF, both read 0x0" style="text;html=1;fontSize=10;fontFamily=monospace;fontColor=#C62828;" parent="1" vertex="1">
+          <mxGeometry x="300" y="390" width="300" height="20"/>
         </mxCell>
-        <mxCell id="sum2" value="2. Different-requester access → blocked → dummy grant → stale data or deadlock" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="40" y="700" width="700" height="20"/>
+
+        <!-- ====== TC8 ====== -->
+        <mxCell id="tc8h" value="&lt;b&gt;TC8: Upgrade Invalidate stale data&lt;/b&gt;" style="text;html=1;fontSize=14;align=left;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="40" y="460" width="400" height="25"/>
         </mxCell>
-        <mxCell id="sum3" value="3. Timer expiration (5M ticks) doesn't know true L2 TBE release time" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="40" y="725" width="700" height="20"/>
+        <mxCell id="tc8b" value="" style="rect;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;dashed=1;" parent="1" vertex="1">
+          <mxGeometry x="40" y="485" width="1100" height="160"/>
         </mxCell>
-        <mxCell id="sum4" value="Fix needed: release pendingOp when L2 TBE actually freed — requires SLICC→C++ signal" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=11;fontStyle=1;fontFamily=monospace;" vertex="1" parent="1">
-          <mxGeometry x="40" y="750" width="700" height="20"/>
+
+        <mxCell id="tc8p1" value="P1: Node0 write 0xAAA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="495" width="140" height="30"/>
+        </mxCell>
+        <mxCell id="tc8g1" value="grant pendingOp=3,req=N0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="530" width="140" height="25"/>
+        </mxCell>
+
+        <mxCell id="tc8p2" value="P2: Node1/2 reads blocked" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="290" y="495" width="150" height="30"/>
+        </mxCell>
+        <mxCell id="tc8d2" value="dummy Shared → gets 0xAAA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFCDD2;strokeColor=#C62828;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="290" y="530" width="150" height="25"/>
+        </mxCell>
+
+        <mxCell id="tc8p3" value="P3: 5M timer expires" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="540" y="495" width="140" height="30"/>
+        </mxCell>
+        <mxCell id="tc8d3" value="pendingOp=0 released" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="540" y="530" width="140" height="25"/>
+        </mxCell>
+
+        <mxCell id="tc8p4" value="P4: Node1 read → recall" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontSize=10;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="770" y="495" width="140" height="30"/>
+        </mxCell>
+        <mxCell id="tc8d4" value="recall captures Node0 L2=0xAAA (old!)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#2E7D32;fontSize=9;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="770" y="530" width="200" height="25"/>
+        </mxCell>
+
+        <mxCell id="tc8f" value="Root cause: Node0&apos;s 0xBBB write happened after P1 (via L2 UD local hit), not reaching phys_mem. Recall funcRead gets 0xAAA from L2." style="text;html=1;fontSize=10;fontFamily=monospace;fontColor=#C62828;" parent="1" vertex="1">
+          <mxGeometry x="130" y="580" width="700" height="20"/>
+        </mxCell>
+        <mxCell id="tc8f2" value="Add: ReadOnce recall → data=0xAAA (phys_mem never updated by Node0&apos;s 0xBBB write because L2 had UD, wrote locally without CHI)" style="text;html=1;fontSize=10;fontFamily=monospace;fontColor=#C62828;" parent="1" vertex="1">
+          <mxGeometry x="130" y="600" width="750" height="20"/>
+        </mxCell>
+
+        <!-- Bottom summary -->
+        <mxCell id="bg" value="" style="rect;whiteSpace=wrap;html=1;fillColor#ECEFF1;strokeColor=#78909C;" parent="1" vertex="1">
+          <mxGeometry x="40" y="680" width="1100" height="100"/>
+        </mxCell>
+        <mxCell id="s0" value="&lt;b&gt;Summary&lt;/b&gt;" style="text;html=1;fontSize=14;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="685" width="200" height="25"/>
+        </mxCell>
+        <mxCell id="s1" value="All three failing cases share the same root cause:" style="text;html=1;fontSize=11;fontFamily=monospace;" parent="1" vertex="1">
+          <mxGeometry x="60" y="710" width="500" height="20"/>
+        </mxCell>
+        <mxCell id="s2" value="pendingOp=3 with pendingRequester=N0 blocks ALL different-requester access for 5M ticks" style="text;html=1;fontSize=11;fontFamily=monospace;fontColor=#C62828;" parent="1" vertex="1">
+          <mxGeometry x="60" y="730" width="600" height="20"/>
+        </mxCell>
+        <mxCell id="s3" value="Fix needed: release pendingOp when L2 TBE actually freed (event-driven, not timer)" style="text;html=1;fontSize=11;fontFamily=monospace;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="60" y="750" width="600" height="20"/>
         </mxCell>
       </root>
     </mxGraphModel>
