@@ -1,134 +1,197 @@
 # Q2 Regression Results
-# Date: Mon Jun  1 12:40:00 UTC 2026 (updated)
-#
-# Summary:
-#   PASS:      test_minimal, test_e2e TC1/TC2/TC6/TC10, test_connect_direct, test_port_diag
-#   XFAIL:     test_e2e TC3/TC4/TC5/TC7/TC8 (cross-node cache coherence not implemented),
-#              test_e2e TC9 (fatal guard triggers SIGABRT), test_port_final
-#   Overall:   6/12 tests PASS, 6/12 tests XFAIL (protocol limitations)
+# Date: Mon Jun  1 07:41:51 UTC 2026
 
 === test_minimal ===
-  SENTINEL count: 12 (all CPUs started)
-  CPU numInsts: 28 per CPU (12/12 executed workload)
-  CPU numCycles: 997-1024 (all within normal range)
-  SIM_CAUSE=exiting with last active thread context
-  EXIT=0
-  STATUS=PASS
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+[MINIMAL] Instantiate done!
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+SIM_CAUSE=exiting with last active thread context
+EXIT=0
 
-=== test_e2e --tc 1 (dsm_local) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: Node0 write 0xCAFE → Node0 read 0xCAFE MATCH
-  TC1 PASSED: single read 0xCAFE
-  EXIT=0
-  STATUS=PASS
+=== test_e2e --tc 1 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+EXIT=0
 
-=== test_e2e --tc 2 (remote_read) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: Node0 write 0x11223344 → Node1 read 0x11223344 MATCH
+=== test_e2e --tc 2 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
   TC2 PASSED: Node1 read 0x11223344
-  EXIT=0
-  STATUS=PASS
+>>> TC2 PASSED <<<
+EXIT=0
 
-=== test_e2e --tc 3 (pingpong) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: 3 READ_VAL (expected 6), cross-node reads MISMATCH
-  TC3 FAILED: expected 6 READ_VAL, got 3
-  Root cause: Cross-node cache coherence not implemented.
-    Node0 writes 'a', Node1 reads 'a' ✓ (same-home, data in memory)
-    Node1 writes 'b', Node0 reads 'b' but gets 'a' ✗ (Node1's write cached, not visible to Node0)
-  EXIT=1
-  STATUS=XFAIL (protocol: cross-node cache coherence)
+=== test_e2e --tc 3 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+EXIT=0
 
-=== test_e2e --tc 4 (three_node_ring) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: final read expected Node0, got Node2; Node0 read returns 1 (stale)
-  Root cause: Cross-node write visibility not guaranteed without cache coherence.
-  EXIT=1
-  STATUS=XFAIL (protocol: cross-node cache coherence)
+=== test_e2e --tc 4 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
+  TC4 FAILED: final read expected Node0, got Node2
+>>> TC4 FAILED <<<
+EXIT=0
 
-=== test_e2e --tc 5 (single_writer) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: nodes disagree on final value (each sees its own write only)
-    Node0: 0xAA000001, Node1: 0xBB000002, Node2: 0xCC000003
-  Root cause: Concurrent writes to same DSM address not serialized by protocol.
-  EXIT=1
-  STATUS=XFAIL (protocol: concurrent write serialization)
+=== test_e2e --tc 5 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
+  TC5 FAILED: nodes disagree on final value: {0: 2852126721, 1: 3137339394, 2: 3422552067}
+>>> TC5 FAILED <<<
+EXIT=0
 
-=== test_e2e --tc 6 (multi_sharer) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: Node1 and Node2 both read 0xDEADBEEF MATCH
+=== test_e2e --tc 6 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
   TC6 PASSED: Node1 and Node2 both read 0xDEADBEEF
-  EXIT=0
-  STATUS=PASS
+>>> TC6 PASSED <<<
+EXIT=0
 
-=== test_e2e --tc 7 (writeback_evict) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: expected 0x55667788, got 0x0
-  Root cause: Node0 writes to DSM_1, but eviction does not push data
-    back to memory/HN-F. Node1 reads get 0 (uninitialized memory).
-    The Ruby functional write propagation path works (test_minimal
-    verified 12 CPUs all executed), but the timing-model writeback
-    from L1/L2 to HN-F to DDR is not triggered by cache eviction.
-  EXIT=1
-  STATUS=XFAIL (protocol: timing writeback on eviction)
+=== test_e2e --tc 7 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+EXIT=0
 
-=== test_e2e --tc 8 (upgrade_invalidate) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: Node1 final read 0xAAA, expected 0xBBB
-  Root cause: Node0 writes 0xBBB to DSM but other nodes' cached
-    copies are not invalidated. The CHI protocol's SNF/HN-F
-    invalidation path is not triggered for stores to shared lines.
-  EXIT=1
-  STATUS=XFAIL (protocol: invalidation on upgrade)
+=== test_e2e --tc 8 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
+  TC8 FAILED: Node1 final read 0xAAA, expected 0xBBB
+>>> TC8 FAILED <<<
+EXIT=0
 
-=== test_e2e --tc 9 (non_dsm_negative) ===
-  Self-tests: M4-M8 all PASS
-  Verification: [FATAL] node=0 reason=non-DSM address access attempt detected
-  Exit: SIGABRT (134) — the fatal guard in C++ triggers process abort
-  Root cause: The non-DSM access guard correctly detects the violation
-    and prints [FATAL], then exits via gem5 fatal() which aborts the
-    process (SIGABRT/134). The Python verification logic (verify_tc9)
-    reads the simout files and correctly identifies the [FATAL] marker,
-    but the process exit code is 134 (not 0) because the C++ fatal()
-    path calls abort().
-  EXIT=134
-  STATUS=XFAIL (expected: fatal guard works, but process exits via abort)
+=== test_e2e --tc 9 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+EXIT=0
 
-=== test_e2e --tc 10 (concurrent_atomic) ===
-  SIM_CAUSE=exiting with last active thread context
-  Verification: 100 reads, all in legal range {0xA0000000..0xA0000000+ROUNDS}
+=== test_e2e --tc 10 ===
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+SIM_CAUSE=exiting with last active thread context
   TC10 PASSED: 100 reads, all in legal range, no 0s
-  EXIT=0
-  STATUS=PASS
+>>> TC10 PASSED <<<
+EXIT=0
 
 === test_connect_direct ===
-  SENTINEL count: 12 (all CPUs started)
-  SIM_CAUSE=exiting with last active thread context
-  EXIT=0
-  STATUS=PASS
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+SIM_CAUSE=exiting with last active thread context
+EXIT=0
 
 === test_port_diag ===
-  SENTINEL count: 12 (all CPUs started)
-  SIM_CAUSE=exiting with last active thread context
-  EXIT=0
-  STATUS=PASS
+M4_SELF_TEST_PASSED=1
+  M5 M5-8-r: Shared+true is validated as illegal combination: SKIP (fatal path requires subprocess isolation -- guard exists at EPBackend::handleRemoteMiss and EPSNFController::recvRequestMsg)
+M5_SELF_TEST_PASSED=1
+M6_SELF_TEST_PASSED=1
+M7_SELF_TEST_PASSED=1
+M8_SELF_TEST_PASSED=1
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+[SENTINEL] CPU started successfully
+SIM_CAUSE=exiting with last active thread context
+EXIT=0
 
-=== test_port_final ===
-  Pre-existing: TimingSimpleCPU dcache not set without Ruby.create_system
-  STATUS=XFAIL
+=== test_port_final (XFAIL - known issue) ===
+Pre-existing: TimingSimpleCPU dcache not set without Ruby.create_system
+STATUS=XFAIL
 
 === STATUS SUMMARY ===
-test_minimal:            PASS
-test_e2e --tc 1:         PASS
-test_e2e --tc 2:         PASS
-test_e2e --tc 3:         XFAIL (protocol: cross-node cache coherence)
-test_e2e --tc 4:         XFAIL (protocol: cross-node cache coherence)
-test_e2e --tc 5:         XFAIL (protocol: concurrent write serialization)
-test_e2e --tc 6:         PASS
-test_e2e --tc 7:         XFAIL (protocol: timing writeback on eviction)
-test_e2e --tc 8:         XFAIL (protocol: invalidation on upgrade)
-test_e2e --tc 9:         XFAIL (fatal guard triggers SIGABRT)
-test_e2e --tc 10:        PASS
-test_connect_direct:     PASS
-test_port_diag:          PASS
-test_port_final:         XFAIL (pre-existing)
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+EXIT=0
+STATUS=XFAIL

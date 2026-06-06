@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 750" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#333"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#cc0000"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#006600"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="25" text-anchor="middle" font-size="16" font-weight="bold">pendingOp=3 释放方案对比: Timer vs 事件驱动</text>
+
+  <!-- ====== Common Timeline ====== -->
+  <text x="20" y="55" font-weight="bold">公共时间轴:</text>
+
+  <!-- Timeline line -->
+  <line x1="50" y1="65" x2="1150" y2="65" stroke="#999" stroke-width="1"/>
+  
+  <!-- Tick markers -->
+  <text x="50" y="80" font-size="9" text-anchor="middle" fill="#666">T0</text>
+  <text x="200" y="80" font-size="9" text-anchor="middle" fill="#666">T0+δ</text>
+  <text x="450" y="80" font-size="9" text-anchor="middle" fill="#666">T0+δ+ε</text>
+  <text x="700" y="80" font-size="9" text-anchor="middle" fill="#666">T0+δ+ε+γ</text>
+  <text x="1000" y="80" font-size="9" text-anchor="middle" fill="#666">T0+δ+ε+γ+ζ</text>
+
+  <line x1="50" y1="70" x2="50" y2="75" stroke="#666" stroke-width="1"/>
+  <line x1="200" y1="70" x2="200" y2="75" stroke="#666" stroke-width="1"/>
+  <line x1="450" y1="70" x2="450" y2="75" stroke="#666" stroke-width="1"/>
+  <line x1="700" y1="70" x2="700" y2="75" stroke="#666" stroke-width="1"/>
+  <line x1="1000" y1="70" x2="1000" y2="75" stroke="#666" stroke-width="1"/>
+
+  <!-- Event boxes on timeline -->
+  <rect x="40" y="88" width="20" height="12" rx="2" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="50" y="97" font-size="7" text-anchor="middle" fill="#1565c0">G</text>
+
+  <rect x="190" y="88" width="20" height="12" rx="2" fill="#fff3e0" stroke="#e65100"/>
+  <text x="200" y="97" font-size="7" text-anchor="middle" fill="#e65100">D</text>
+
+  <rect x="440" y="88" width="20" height="12" rx="2" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="450" y="97" font-size="7" text-anchor="middle" fill="#2e7d32">A</text>
+
+  <rect x="690" y="88" width="20" height="12" rx="2" fill="#fce4ec" stroke="#c62828"/>
+  <text x="700" y="97" font-size="7" text-anchor="middle" fill="#c62828">C</text>
+
+  <rect x="990" y="88" width="20" height="12" rx="2" fill="#f3e5f5" stroke="#6a1b9a"/>
+  <text x="1000" y="97" font-size="7" text-anchor="middle" fill="#6a1b9a">X</text>
+
+  <!-- Timeline labels -->
+  <text x="50" y="118" font-size="9" text-anchor="middle">Grant</text>
+  <text x="200" y="118" font-size="9" text-anchor="middle">CompData</text>
+  <text x="450" y="118" font-size="9" text-anchor="middle">L1D Ack</text>
+  <text x="700" y="118" font-size="9" text-anchor="middle">Recv Ck</text>
+  <text x="1000" y="118" font-size="9" text-anchor="middle">X Crash</text>
+
+  <!-- Annotations -->
+  <text x="130" y="133" font-size="8" fill="#666">δ ≈ 2000 ticks</text>
+  <text x="320" y="133" font-size="8" fill="#666">ε ≈ 1500 ticks</text>
+  <text x="570" y="133" font-size="8" fill="#666">γ ≈ 2500 ticks</text>
+  <text x="850" y="133" font-size="8" fill="#666">ζ ≈ 200 ticks</text>
+
+  <!-- ====== OLD: Timer-Based ====== -->
+  <rect x="20" y="155" width="1160" height="170" rx="5" fill="#fff" stroke="#ccc"/>
+  <text x="40" y="178" font-size="14" font-weight="bold" fill="#c62828">现有方案: Timer 过期释放 pendingOp=3</text>
+
+  <!-- UBCC box -->
+  <rect x="40" y="195" width="140" height="110" rx="3" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="110" y="215" text-anchor="middle" font-size="11" font-weight="bold">UBCC</text>
+  <text x="110" y="235" text-anchor="middle" font-size="9">pendingOp=3</text>
+  <text x="110" y="250" text-anchor="middle" font-size="9">grantTick=T0</text>
+  <text x="110" y="270" text-anchor="middle" font-size="9" fill="#e65100">timer: 1500 ticks</text>
+  <text x="110" y="285" text-anchor="middle" font-size="9" fill="#c62828">T0+1500 到期</text>
+
+  <!-- Arrow: UBCC timer expires → pendingOp cleared -->
+  <line x1="180" y1="240" x2="1000" y2="240" stroke="#e65100" stroke-width="2" stroke-dasharray="8,4" marker-end="url(#arrow)"/>
+  <text x="590" y="235" text-anchor="middle" font-size="9" fill="#e65100">timer 到期自动清除 pendingOp (跑得太快)</text>
+
+  <!-- EP_RNF box -->
+  <rect x="40" y="315" width="140" height="50" rx="3" fill="#fff3e0" stroke="#e65100"/>
+  <text x="110" y="335" text-anchor="middle" font-size="11" font-weight="bold">EP_RNF</text>
+  <text x="110" y="350" text-anchor="middle" font-size="9">ReadShared→HN-F</text>
+
+  <!-- ReadShared arrow -->
+  <line x1="180" y1="340" x2="1150" y2="340" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <text x="660" y="355" text-anchor="middle" font-size="9" fill="#c62828">ReadShared 到达 L2 时 CompAck 与其时序竞争 → crash</text>
+
+  <!-- ====== NEW: Event-Driven ====== -->
+  <rect x="20" y="400" width="1160" height="200" rx="5" fill="#fff" stroke="#ccc"/>
+  <text x="40" y="423" font-size="14" font-weight="bold" fill="#2e7d32">提议方案: CompAck 事件驱动释放 pendingOp=3</text>
+
+  <!-- EP_SNF box -->
+  <rect x="40" y="440" width="140" height="50" rx="3" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="110" y="460" text-anchor="middle" font-size="11" font-weight="bold">EP_SNF</text>
+  <text x="110" y="475" text-anchor="middle" font-size="9">CompData→HN-F</text>
+
+  <!-- HN-F box -->
+  <rect x="40" y="500" width="140" height="50" rx="3" fill="#fce4ec" stroke="#c62828"/>
+  <text x="110" y="520" text-anchor="middle" font-size="11" font-weight="bold">HN-F</text>
+  <text x="110" y="535" text-anchor="middle" font-size="9">SnpUniqueFwd→L2</text>
+
+  <!-- L2 box -->
+  <rect x="40" y="560" width="140" height="50" rx="3" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="110" y="580" text-anchor="middle" font-size="11" font-weight="bold">L2</text>
+  <text x="110" y="595" text-anchor="middle" font-size="9">L1D CompAck→L2</text>
+
+  <!-- Sequence arrows -->
+  <!-- 1. Grant -->
+  <line x1="180" y1="465" x2="250" y2="465" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="205" y="458" font-size="8" fill="#2e7d32">grant</text>
+
+  <!-- 2. CompData to HN-F -->
+  <line x1="250" y1="465" x2="250" y2="525" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="258" y="500" font-size="8" fill="#2e7d32">CompData</text>
+
+  <!-- 3. SnpUniqueFwd to L2 -->
+  <line x1="250" y1="525" x2="250" y2="585" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="258" y="560" font-size="8" fill="#2e7d32">SnpUFwd</text>
+
+  <!-- 4. L1D CompAck consumed by L2 (TBE alive) -->
+  <rect x="270" y="575" width="160" height="30" rx="3" fill="#c8e6c9" stroke="#2e7d32"/>
+  <text x="350" y="590" text-anchor="middle" font-size="9" font-weight="bold" fill="#2e7d32">L1D CompAck consumed (has_tbe=1)</text>
+
+  <!-- 5. CompAck sent by EP-RNF after recall's ReadOnce -->
+  <rect x="270" y="630" width="200" height="30" rx="3" fill="#f3e5f5" stroke="#6a1b9a"/>
+  <text x="370" y="648" text-anchor="middle" font-size="9" font-weight="bold" fill="#6a1b9a">CompAck sent → callback fire → handshake done</text>
+
+  <!-- Callback arrow to UBCC -->
+  <line x1="470" y1="645" x2="550" y2="645" stroke="#6a1b9a" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="550" y="630" width="140" height="30" rx="3" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="620" y="648" text-anchor="middle" font-size="9" fill="#1565c0">UBCC: grantDone()</text>
+
+  <!-- ====== Comparison ====== -->
+  <text x="20" y="710" font-weight="bold">核心差异:</text>
+  <text x="40" y="728" font-size="11">现有: pendingOp=3 在 T0 + 1500 ticks 自动释放（时间窗），与实际握手完成时刻无关</text>
+  <text x="40" y="746" font-size="11">提议: pendingOp=3 只在 CompAck 成功发送后由 callback 释放（事件驱动，握手完成时刻精确）</text>
+
+</svg>

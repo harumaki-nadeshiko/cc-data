@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#333"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#cc0000"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#006600"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="25" text-anchor="middle" font-size="16" font-weight="bold">TC8 CompAck vs SnpSharedFwd Timing Conflict</text>
+
+  <!-- ====== ACT 1: Write Phase (tick 50767000-50787500) ====== -->
+  <text x="20" y="55" font-weight="bold" fill="#006600">ACT 1: Write Phase — Node0(cpu00) stores 0xAAA to DSM_2 (tick 50767000)</text>
+
+  <!-- Participants -->
+  <rect x="20" y="70" width="100" height="30" rx="5" fill="#e8f5e9" stroke="#006600"/>
+  <text x="70" y="90" text-anchor="middle" font-size="11">cpu00.L1D</text>
+
+  <rect x="160" y="70" width="100" height="30" rx="5" fill="#e8f5e9" stroke="#006600"/>
+  <text x="210" y="90" text-anchor="middle" font-size="11">cpu00.L2</text>
+
+  <rect x="300" y="70" width="100" height="30" rx="5" fill="#e8f5e9" stroke="#006600"/>
+  <text x="350" y="90" text-anchor="middle" font-size="11">HN-F0</text>
+
+  <rect x="440" y="70" width="100" height="30" rx="5" fill="#e8f5e9" stroke="#006600"/>
+  <text x="490" y="90" text-anchor="middle" font-size="11">EP_SNF0</text>
+
+  <rect x="580" y="70" width="100" height="30" rx="5" fill="#e8f5e9" stroke="#006600"/>
+  <text x="630" y="90" text-anchor="middle" font-size="11">UBCC@N2</text>
+
+  <!-- Step 1: L1D → L2 ReadUnique -->
+  <line x1="120" y1="105" x2="155" y2="105" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="125" y="120" font-size="9" fill="#006600">ReadUnique</text>
+
+  <!-- Step 2: L2 → HN-F ReadUnique -->
+  <line x1="260" y1="105" x2="295" y2="105" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="265" y="120" font-size="9" fill="#006600">ReadUnique</text>
+
+  <!-- Step 3: HN-F → EP_SNF ReadNoSnpDMT -->
+  <line x1="400" y1="105" x2="435" y2="105" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="405" y="120" font-size="9" fill="#006600">ReadNoSnpDMT</text>
+
+  <!-- Step 4: EP_SNF → UBCC grant -->
+  <line x1="540" y1="105" x2="575" y2="105" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="545" y="120" font-size="9" fill="#006600">grant</text>
+
+  <!-- Step 5: Response chain back -->
+  <line x1="570" y1="130" x2="445" y2="130" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="450" y="145" font-size="9" fill="#006600">CompData_UC</text>
+
+  <line x1="440" y1="155" x2="305" y2="155" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="310" y="170" font-size="9" fill="#006600">CompData_UC</text>
+
+  <line x1="300" y1="180" x2="165" y2="180" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="170" y="195" font-size="9" fill="#006600">CompData_UC</text>
+
+  <!-- L2 stores data → UD stable -->
+  <rect x="155" y="205" width="110" height="25" rx="3" fill="#c8e6c9" stroke="#006600"/>
+  <text x="210" y="222" text-anchor="middle" font-size="10" font-weight="bold">L2 = UD (50784000)</text>
+
+  <!-- Step 6: L2 → L1D CompData -->
+  <line x1="210" y1="240" x2="120" y2="240" stroke="#006600" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="125" y="255" font-size="9" fill="#006600">CompData</text>
+
+  <!-- Step 7: L1D → L2 CompAck (50787500) -->
+  <line x1="70" y1="270" x2="165" y2="270" stroke="#cc0000" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="80" y="285" font-size="10" fill="#cc0000" font-weight="bold">CompAck (50787500)</text>
+
+  <!-- L2 rspIn buffer - CompAck sits here -->
+  <rect x="155" y="295" width="110" height="55" rx="5" fill="#ffebee" stroke="#cc0000" stroke-dasharray="4,2"/>
+  <text x="210" y="313" text-anchor="middle" font-size="10" fill="#cc0000" font-weight="bold">L2.rspIn BUF</text>
+  <text x="210" y="328" text-anchor="middle" font-size="9" fill="#cc0000">CompAck 在此等待</text>
+  <text x="210" y="343" text-anchor="middle" font-size="9" fill="#cc0000">但 L2 已 UD stable</text>
+
+  <!-- L1D state -->
+  <rect x="15" y="295" width="110" height="25" rx="3" fill="#e8f5e9" stroke="#006600"/>
+  <text x="70" y="312" text-anchor="middle" font-size="10">L1D (done)</text>
+
+  <!-- ====== GAP ====== -->
+  <rect x="15" y="365" width="700" height="35" rx="3" fill="#fff3e0" stroke="#e65100"/>
+  <text x="365" y="388" text-anchor="middle" font-size="12" fill="#e65100" font-weight="bold">
+    ⬇  2,145,000 tick gap — barrier, UBCC recall, ReadShared → HN-F ...
+  </text>
+
+  <!-- ====== ACT 2: Recall Phase (tick 52911500) ====== -->
+  <text x="20" y="425" font-weight="bold" fill="#cc0000">ACT 2: Recall Phase — SnpSharedFwdToOwner reaches L2 (tick 52911500)</text>
+
+  <!-- Step 8: ReadShared from EP-RNF → HN-F -->
+  <rect x="300" y="440" width="120" height="25" rx="3" fill="#ffebee" stroke="#cc0000"/>
+  <text x="360" y="457" text-anchor="middle" font-size="10" fill="#cc0000">HN-F: ReadShared</text>
+
+  <!-- Step 9: HN-F → L2 SnpSharedFwdToOwner (DCT) -->
+  <line x1="350" y1="475" x2="210" y2="475" stroke="#cc0000" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <text x="220" y="490" font-size="10" fill="#cc0000" font-weight="bold">SnpSharedFwdToOwner (52911500)</text>
+
+  <!-- L2 receives SnpSharedFwdToOwner → allocates TBE → SC_RSC -->
+  <rect x="155" y="500" width="110" height="40" rx="3" fill="#ffcdd2" stroke="#cc0000"/>
+  <text x="210" y="518" text-anchor="middle" font-size="11" fill="#cc0000" font-weight="bold">L2 = SC_RSC</text>
+  <text x="210" y="533" text-anchor="middle" font-size="9" fill="#cc0000">(新 TBE 分配)</text>
+
+  <!-- ====== ACT 3: Crash (tick 52932500) ====== -->
+  <text x="20" y="565" font-weight="bold" fill="#cc0000">ACT 3: CRASH — wakeup processes rspIn CompAck while L2 is SC_RSC</text>
+
+  <!-- wakeup processing order -->
+  <rect x="20" y="580" width="720" height="65" rx="5" fill="#fff" stroke="#cc0000" stroke-width="2"/>
+  <text x="380" y="598" text-anchor="middle" font-size="11" font-weight="bold">L2 wakeup() 处理顺序:</text>
+  
+  <text x="40" y="618" font-size="10">1. snpIn: SnpSharedFwdToOwner → alloc new TBE → state = SC_RSC</text>
+  <text x="40" y="638" font-size="10" fill="#cc0000" font-weight="bold">2. rspIn: CompAck(50787500) → doTransition(CompAck, SC_RSC) → ❌</text>
+
+  <!-- No valid transition annotation -->
+  <rect x="155" y="660" width="500" height="30" rx="5" fill="#ffcdd2" stroke="#cc0000" stroke-width="2"/>
+  <text x="405" y="680" text-anchor="middle" font-size="12" fill="#cc0000" font-weight="bold">
+    transition(SC_RSC, CompAck) 不存在 → Invalid transition PANIC
+  </text>
+
+  <!-- ====== Root Cause ====== -->
+  <text x="20" y="720" font-weight="bold">根因:</text>
+  <text x="40" y="740" font-size="11">L1D CompAck (50787500) 到达时 L2 TBE 已 freed (50784000)</text>
+  <text x="40" y="760" font-size="11">CompAck message 留在 L2.rspIn buffer 中, 无 TBE 可匹配, 未被消费</text>
+  <text x="40" y="780" font-size="11">2.1M ticks 后 SnpSharedFwdToOwner 到达, wakeup 先处理 snpIn (进入 SC_RSC)</text>
+  <text x="40" y="800" font-size="11">然后处理 rspIn 时发现积压的 CompAck, doTransition(CompAck, SC_RSC) → crash</text>
+
+  <text x="20" y="835" font-weight="bold">修复:</text>
+  <text x="40" y="855" font-size="11">pendingOp timer 覆盖到 L2 Final (50784000+) 之后, 阻止 Recall 在 CompAck 消费前到达</text>
+  <text x="40" y="875" font-size="11">或者: 让 L2 在 UD 稳定态继续处理 rspIn, 消费掉积压的 CompAck 后再允许 Recall</text>
+
+</svg>

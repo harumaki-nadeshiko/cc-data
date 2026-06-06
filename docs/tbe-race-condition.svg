@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1400" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#c00"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#060"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="1400" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="600" y="30" text-anchor="middle" font-size="18" font-weight="bold">TBE Reservation Race Condition in HN-F SLICC Processing</text>
+  <text x="600" y="50" text-anchor="middle" font-size="13" fill="#666">Cross-node DSM: Node1 reads 0x10018000000 (home=Node1, owner=Node0)</text>
+
+  <!-- ============================================ -->
+  <!-- Part 1: Architecture Overview -->
+  <!-- ============================================ -->
+  <rect x="20" y="70" width="1160" height="160" rx="8" fill="#e8f0fe" stroke="#4a86e8"/>
+  <text x="40" y="95" font-size="14" font-weight="bold" fill="#1a3a7a">1. Architecture: Two Sources of CHI Requests to HN-F Node1</text>
+
+  <!-- HN-F -->
+  <ellipse cx="500" cy="200" rx="80" ry="30" fill="#4338ca" opacity="0.9"/>
+  <text x="500" y="196" text-anchor="middle" fill="white" font-size="11" font-weight="bold">HN-F Node1</text>
+  <text x="500" y="210" text-anchor="middle" fill="white" font-size="9">Cache Controller</text>
+
+  <!-- Source A: L2 through standard path -->
+  <rect x="100" y="150" width="220" height="55" rx="6" fill="#a5d6a7" stroke="#2e7d32"/>
+  <text x="210" y="170" text-anchor="middle" font-size="11" font-weight="bold">Source A: Standard L2 CHI</text>
+  <text x="210" y="185" text-anchor="middle" font-size="9">CPU7.L2 ReadShared → reqInPort</text>
+  <text x="210" y="197" text-anchor="middle" font-size="8" fill="#555">AllocateTBE_Request → incrementReserved</text>
+  <line x1="320" y1="177" x2="420" y2="190" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Source B: EP-SNF data response -->
+  <rect x="730" y="150" width="220" height="55" rx="6" fill="#a5d6a7" stroke="#2e7d32"/>
+  <text x="840" y="170" text-anchor="middle" font-size="11" font-weight="bold">Source B: EP-SNF Data</text>
+  <text x="840" y="185" text-anchor="middle" font-size="9">CompData response → datInPort</text>
+  <text x="840" y="197" text-anchor="middle" font-size="8" fill="#555">No TBE reservation (not a request)</text>
+  <line x1="730" y1="177" x2="580" y2="190" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <text x="600" y="145" text-anchor="middle" font-size="10" fill="#888">Same Event Cycle (Tick 43281000)</text>
+
+  <!-- ============================================ -->
+  <!-- Part 2: TBE State Machine and Nondeterminism -->
+  <!-- ============================================ -->
+  <rect x="20" y="250" width="1160" height="120" rx="8" fill="#fff3e0" stroke="#e65100"/>
+  <text x="40" y="275" font-size="14" font-weight="bold" fill="#bf360c">2. TBE Reservation Count Model</text>
+
+  <rect x="50" y="290" width="240" height="65" rx="4" fill="white" stroke="#999"/>
+  <text x="170" y="310" text-anchor="middle" font-size="11" font-weight="bold">Normal Path (Source A)</text>
+  <text x="60" y="328" font-size="9">AllocateTBE_Request → incrementReserved()  +1</text>
+  <text x="60" y="344" font-size="9">Initiate_Request → allocateRequestTBE → decrementReserved() -1</text>
+  <text x="170" y="356" text-anchor="middle" font-size="8" fill="#888">Balanced: +1 then -1 = net 0</text>
+
+  <rect x="480" y="290" width="310" height="65" rx="4" fill="white" stroke="#999"/>
+  <text x="635" y="310" text-anchor="middle" font-size="11" font-weight="bold">Self-Loop Transition (Source B → A in same tick)</text>
+  <text x="490" y="328" font-size="9">data response → doTransition → State X → State X (self-loop)</text>
+  <text x="490" y="344" font-size="9">self-loop calls Initiate_Request → allocateRequestTBE → decrementReserved() -1</text>
+  <text x="635" y="356" text-anchor="middle" font-size="8" fill="#888">NO matching incrementReserved! Net = -1</text>
+
+  <rect x="900" y="290" width="260" height="65" rx="4" fill="#ffebee" stroke="#d50000"/>
+  <text x="1030" y="310" text-anchor="middle" font-size="11" font-weight="bold">Race Window</text>
+  <text x="910" y="328" font-size="9">Both paths served in same tick</text>
+  <text x="910" y="344" font-size="9">Only Path A reserves, both call allocateRequestTBE</text>
+  <text x="1030" y="356" text-anchor="middle" font-size="8" fill="#c00">Result: +1, -1, -1 = -1 → ASSERT!</text>
+
+  <!-- ============================================ -->
+  <!-- Part 3: Scenario A (PASS) -->
+  <!-- ============================================ -->
+  <rect x="20" y="390" width="1160" height="30" rx="6" fill="#e8f5e9"/>
+  <text x="600" y="410" text-anchor="middle" font-size="14" font-weight="bold" fill="#2e7d32">Scenario A: TC2 PASSES (order: request first, data second)</text>
+
+  <!-- Timeline -->
+  <rect x="40" y="435" width="1120" height="280" rx="6" fill="white" stroke="#ccc"/>
+
+  <!-- Tick labels -->
+  <line x1="80" y1="440" x2="80" y2="715" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="380" y1="440" x2="380" y2="715" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="680" y1="440" x2="680" y2="715" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="1020" y1="440" x2="1020" y2="715" stroke="#ddd" stroke-dasharray="4"/>
+
+  <text x="80" y="720" text-anchor="middle" font-size="9" fill="#888">tick=43281000</text>
+  <text x="380" y="720" text-anchor="middle" font-size="9" fill="#888">process A</text>
+  <text x="680" y="720" text-anchor="middle" font-size="9" fill="#888">process B</text>
+  <text x="1020" y="720" text-anchor="middle" font-size="9" fill="#888">done</text>
+
+  <!-- Flow A: L2 Request first -->
+  <rect x="90" y="455" width="270" height="50" rx="4" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="225" y="473" text-anchor="middle" font-size="9" font-weight="bold">Source A: L2 ReadShared</text>
+  <text x="225" y="487" text-anchor="middle" font-size="8">arrives at reqInPort</text>
+  <text x="225" y="499" text-anchor="middle" font-size="8" fill="#666">m_reserved = 0</text>
+
+  <line x1="360" y1="480" x2="380" y2="460" stroke="#999" stroke-width="1"/>
+
+  <!-- Allocate TBE -->
+  <rect x="390" y="455" width="270" height="50" rx="4" fill="#c8e6c9" stroke="#2e7d32"/>
+  <text x="525" y="473" text-anchor="middle" font-size="9" font-weight="bold">AllocateTBE_Request</text>
+  <text x="525" y="487" text-anchor="middle" font-size="8">incrementReserved() → m_reserved = 1</text>
+  <text x="525" y="499" text-anchor="middle" font-size="8" fill="#666">→ reqRdyOutPort</text>
+
+  <line x1="660" y1="480" x2="680" y2="490" stroke="#999" stroke-width="1"/>
+
+  <!-- Initiate Request for A -->
+  <rect x="90" y="520" width="570" height="70" rx="4" fill="#eeeeee" stroke="#999"/>
+  <text x="375" y="538" text-anchor="middle" font-size="9" font-weight="bold">doTransition → Initiate_Request(A) → allocateRequestTBE</text>
+  <text x="375" y="553" text-anchor="middle" font-size="8">decrementReserved() → m_reserved = 0</text>
+  <text x="375" y="567" text-anchor="middle" font-size="8" fill="#888">addEntryToNewSlot() → used = 2</text>
+  <text x="375" y="581" text-anchor="middle" font-size="8" fill="#666">HN-F sends SnpShared to owner L2</text>
+
+  <line x1="660" y1="555" x2="1020" y2="555" stroke="#999" stroke-width="1"/>
+
+  <!-- Flow B: Data response second -->
+  <rect x="90" y="605" width="300" height="35" rx="4" fill="#fff9c4" stroke="#f9a825"/>
+  <text x="240" y="620" text-anchor="middle" font-size="9" font-weight="bold">Source B: CompData response</text>
+  <text x="240" y="633" text-anchor="middle" font-size="8">arrives at datInPort</text>
+
+  <line x1="390" y1="622" x2="410" y2="622" stroke="#999" stroke-width="1"/>
+
+  <rect x="415" y="605" width="340" height="35" rx="4" fill="#c8e6c9" stroke="#2e7d32"/>
+  <text x="585" y="620" text-anchor="middle" font-size="9" font-weight="bold">doTransition processes data</text>
+  <text x="585" y="633" text-anchor="middle" font-size="8">completes existing txn, frees TBE. NO TBE allocation needed</text>
+
+  <line x1="755" y1="622" x2="1020" y2="622" stroke="#999" stroke-width="1"/>
+
+  <!-- Result -->
+  <rect x="380" y="655" width="400" height="30" rx="4" fill="#c8e6c9" stroke="#2e7d32"/>
+  <text x="580" y="675" text-anchor="middle" font-size="11" font-weight="bold" fill="#2e7d32">✅ m_reserved = 0 (balanced), no assertion</text>
+
+  <!-- ============================================ -->
+  <!-- Part 4: Scenario B (CRASH) -->
+  <!-- ============================================ -->
+  <rect x="20" y="740" width="1160" height="30" rx="6" fill="#ffebee"/>
+  <text x="600" y="760" text-anchor="middle" font-size="14" font-weight="bold" fill="#c62828">Scenario B: TC2 CRASHES (order: data response first, request second)</text>
+
+  <rect x="40" y="785" width="1120" height="500" rx="6" fill="white" stroke="#ccc"/>
+
+  <line x1="80" y1="790" x2="80" y2="1285" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="380" y1="790" x2="380" y2="1285" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="680" y1="790" x2="680" y2="1285" stroke="#ddd" stroke-dasharray="4"/>
+  <line x1="1020" y1="790" x2="1020" y2="1285" stroke="#ddd" stroke-dasharray="4"/>
+
+  <text x="80" y="1290" text-anchor="middle" font-size="9" fill="#888">tick=43281000</text>
+  <text x="380" y="1290" text-anchor="middle" font-size="9" fill="#888">process B</text>
+  <text x="680" y="1290" text-anchor="middle" font-size="9" fill="#888">process A</text>
+  <text x="1020" y="1290" text-anchor="middle" font-size="9" fill="#888">crash</text>
+
+  <!-- Initial state -->
+  <rect x="90" y="800" width="340" height="30" rx="4" fill="#e0e0e0" stroke="#999"/>
+  <text x="260" y="820" text-anchor="middle" font-size="9" font-weight="bold">Initial: m_reserved = 1, used = 1 (prior transaction pending)</text>
+
+  <!-- Flow A: Data response FIRST -->
+  <rect x="90" y="845" width="300" height="35" rx="4" fill="#fff9c4" stroke="#f9a825"/>
+  <text x="240" y="860" text-anchor="middle" font-size="9" font-weight="bold">Step 1: Source B - CompData response</text>
+  <text x="240" y="873" text-anchor="middle" font-size="8">arrives at datInPort first</text>
+
+  <line x1="390" y1="862" x2="680" y2="850" stroke="#333" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <!-- Self-loop transition -->
+  <rect x="390" y="845" width="270" height="35" rx="4" fill="#ffcdd2" stroke="#c62828"/>
+  <text x="525" y="860" text-anchor="middle" font-size="9" font-weight="bold">doTransition: self-loop</text>
+  <text x="525" y="873" text-anchor="middle" font-size="8">State X → State X, calls Initiate_Request</text>
+
+  <line x1="660" y1="862" x2="680" y2="900" stroke="#333" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <!-- allocateRequestTBE #1 -->
+  <rect x="90" y="895" width="570" height="55" rx="4" fill="#ffebee" stroke="#c62828"/>
+  <text x="375" y="913" text-anchor="middle" font-size="9" font-weight="bold">Step 2: allocateRequestTBE #1 (from self-loop transition)</text>
+  <text x="375" y="928" text-anchor="middle" font-size="8">decrementReserved() → m_reserved = 1 → <tspan fill="#c00" font-weight="bold">0</tspan></text>
+  <text x="375" y="942" text-anchor="middle" font-size="8" fill="#c00">⚠ consumed the reservation WITHOUT incrementReserved!</text>
+
+  <line x1="660" y1="922" x2="1020" y2="922" stroke="#999" stroke-width="1"/>
+
+  <!-- Now Flow B: Request SECOND -->
+  <rect x="90" y="965" width="320" height="50" rx="4" fill="#e3f2fd" stroke="#1565c0"/>
+  <text x="250" y="983" text-anchor="middle" font-size="9" font-weight="bold">Step 3: Source A - L2 ReadShared</text>
+  <text x="250" y="997" text-anchor="middle" font-size="8">arrives at reqInPort (processed second)</text>
+  <text x="250" y="1009" text-anchor="middle" font-size="8" fill="#666">current m_reserved = 0</text>
+
+  <line x1="410" y1="990" x2="680" y2="975" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Allocate -->
+  <rect x="390" y="965" width="270" height="50" rx="4" fill="#c8e6c9" stroke="#2e7d32"/>
+  <text x="525" y="983" text-anchor="middle" font-size="9" font-weight="bold">AllocateTBE_Request</text>
+  <text x="525" y="997" text-anchor="middle" font-size="8">incrementReserved() → m_reserved = <tspan font-weight="bold">1</tspan></text>
+  <text x="525" y="1009" text-anchor="middle" font-size="8" fill="#666">→ reqRdyOutPort</text>
+
+  <line x1="660" y1="990" x2="680" y2="1040" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Initiate #2 -->
+  <rect x="90" y="1050" width="570" height="55" rx="4" fill="#eeeeee" stroke="#999"/>
+  <text x="375" y="1068" text-anchor="middle" font-size="9" font-weight="bold">Step 4: allocateRequestTBE #2 (from AllocateTBE_Request)</text>
+  <text x="375" y="1083" text-anchor="middle" font-size="8">decrementReserved() → m_reserved = 1 → <tspan fill="#2e7d32">0</tspan></text>
+  <text x="375" y="1097" text-anchor="middle" font-size="8" fill="#666">normal — reserve consumed properly ✓</text>
+
+  <line x1="660" y1="1077" x2="1020" y2="1077" stroke="#999" stroke-width="1"/>
+
+  <!-- BUT... Step 5: MORE requests -->
+  <rect x="90" y="1120" width="570" height="70" rx="4" fill="#b71c1c" opacity="0.15" stroke="#c62828" stroke-width="2"/>
+  <text x="375" y="1140" text-anchor="middle" font-size="10" font-weight="bold" fill="#b71c1c">Step 5: allocateRequestTBE #3 (another self-loop or queue entry)</text>
+  <text x="375" y="1158" text-anchor="middle" font-size="9" fill="#b71c1c">decrementReserved() → m_reserved = 0 → ASSERT FAILS!</text>
+  <text x="375" y="1175" text-anchor="middle" font-size="9" fill="#b71c1c" font-weight="bold">TBEStorage::decrementReserved(): Assertion 'm_reserved > 0' failed</text>
+
+  <line x1="660" y1="1155" x2="1020" y2="1155" stroke="#c00" stroke-width="2.5"/>
+
+  <rect x="700" y="1135" width="300" height="55" rx="4" fill="#c62828" opacity="0.9"/>
+  <text x="850" y="1158" text-anchor="middle" fill="white" font-size="12" font-weight="bold">💥 ABORT!</text>
+  <text x="850" y="1175" text-anchor="middle" fill="white" font-size="10">Program aborted at tick 43281000</text>
+
+  <!-- ============================================ -->
+  <!-- Part 5: Why Nondeterministic -->
+  <!-- ============================================ -->
+  <rect x="20" y="1310" width="1160" height="80" rx="8" fill="#fce4ec" stroke="#e91e63"/>
+  <text x="40" y="1335" font-size="14" font-weight="bold" fill="#880e4f">3. Why Nondeterministic</text>
+  <text x="40" y="1355" font-size="10" fill="#555">SLICC wakeup() processes ALL ready messages in a single event cycle. The order depends on:</text>
+  <text x="60" y="1372" font-size="9" fill="#777">• Message enqueue order (which depends on micro-timing of EP-SNF / L2 message generation)</text>
+  <text x="60" y="1386" font-size="9" fill="#777">• SLICC transition ordering (self-loop ordering within a single wakeup cycle)</text>
+</svg>
