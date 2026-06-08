@@ -18,7 +18,7 @@ echo "=== Compiling E2E workloads ==="
 CC="aarch64-linux-gnu-gcc"
 CFLAGS="-static -O0 -g -I${WORKLOAD_DIR}"
 
-for src in "${WORKLOAD_DIR}"/e2e_tc[1-9]*_*.c e2e_tc10_*.c; do
+for src in "${WORKLOAD_DIR}"/e2e_tc[1-9]*_*.c e2e_tc10_*.c e2e_tc_local_upgrade.c; do
     if [ ! -f "$src" ]; then continue; fi
     base=$(basename "$src" .c)
     elf="${WORKLOAD_DIR}/${base}.elf"
@@ -36,20 +36,20 @@ echo "=== Running E2E Tests ==="
 TC="${1:---all}"
 
 if [ "$TC" == "--all" ]; then
-    # Run all TC1-TC10
-    for tc in 1 2 3 4 5 6 7 8 9 10; do
+    # Run all TC1-TC11
+    for tc in 1 2 3 4 5 6 7 8 9 10 11; do
         echo ""
         echo "--- TC${tc} ---"
         "${GEM5_BIN}" --outdir="m5out/e2e/tc${tc}" \
             "${SCRIPT_DIR}/test_e2e.py" --tc=${tc}
     done
-elif [[ "$TC" =~ ^[1-9]$|^10$ ]]; then
+elif [[ "$TC" =~ ^([1-9]|1[01])$ ]]; then
     echo ""
     echo "--- TC${TC} ---"
     "${GEM5_BIN}" --outdir="m5out/e2e/tc${TC}" \
         "${SCRIPT_DIR}/test_e2e.py" --tc=${TC}
 else
-    echo "Usage: $0 [--all | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10]"
+    echo "Usage: $0 [--all | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11]"
     echo "  Default: --all"
     exit 1
 fi

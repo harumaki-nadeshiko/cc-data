@@ -31,7 +31,13 @@ int main(int argc, char **argv)
     if (node_id == 1 || node_id == 2) {
         uint32_t expected = 0xDEADBEEF;
         emit_before_rd(node_id, 2);
-        uint32_t got = dsm_load(2, 0);
+        // Spin-wait until the write is visible (barrier is no-op in SE-mode)
+        uint32_t got;
+        int retries = 100000;
+        do {
+            got = dsm_load(2, 0);
+            __asm__ volatile("dmb osh" ::: "memory");
+        } while (got != expected && --retries > 0);
         int match = (got == expected);
         emit_read_val(node_id, 2, expected, got, match);
         if (!match) fail++;

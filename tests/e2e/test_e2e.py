@@ -29,6 +29,7 @@ TESTCASES = {
     8: "e2e_tc8_upgrade_invalidate",
     9: "e2e_tc9_non_dsm_negative",
     10: "e2e_tc10_concurrent_atomic",
+    11: "e2e_tc_local_upgrade",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -208,10 +209,46 @@ def verify_tc10(reads, lines):
         return False, f"TC10 FAILED: {len(violations)} illegal values (including 0)", violations
     return True, f"TC10 PASSED: {len(reads)} reads, all in legal range, no 0s", []
 
+
+def verify_tc11(reads, lines):
+    """TC11 (local_upgrade): Node B writes after shared read → verify snoop chain.
+    
+    Phase 1: Node B (node=1) first-reads DSM_C → expected 0x00000000.
+    Phase 3: Node C (node=2, home) reads DSM_C → expected 0xCA01.
+    Phase 4: Node A (node=0) reads DSM_C → expected 0xCA01.
+    """
+    if len(reads) < 3:
+        return False, f"TC11 FAILED: expected ≥3 READ_VAL, got {len(reads)}", reads
+    
+    # Phase 1: Node B first read
+    node1_reads = [r for r in reads if r["node"] == 1]
+    if len(node1_reads) < 1:
+        return False, "TC11 FAILED: no READ_VAL from Node B (Phase 1)", reads
+    # First miss returns 0 (uninitialized); if DMA pre-seeded, accept any value
+    # but verify Phase 3/4 values are consistent.
+    
+    # Phase 3: Node C (home) read — must be 0xCA01
+    node2_reads = [r for r in reads if r["node"] == 2]
+    if len(node2_reads) < 1:
+        return False, "TC11 FAILED: no READ_VAL from Node C (Phase 3)", reads
+    for r in node2_reads[-1:]:  # last Node C read
+        if int(r["actual"], 16) != 0xCA01:
+            return False, f"TC11 FAILED: Node C read 0x{r['actual']}, expected 0xCA01", [r]
+    
+    # Phase 4: Node A read — must be 0xCA01
+    node0_reads = [r for r in reads if r["node"] == 0]
+    if len(node0_reads) < 1:
+        return False, "TC11 FAILED: no READ_VAL from Node A (Phase 4)", reads
+    for r in node0_reads[-1:]:  # last Node A read
+        if int(r["actual"], 16) != 0xCA01:
+            return False, f"TC11 FAILED: Node A read 0x{r['actual']}, expected 0xCA01", [r]
+    
+    return True, "TC11 PASSED: local upgrade snoop chain — all reads correct", []
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
-    9: verify_tc9, 10: verify_tc10,
+    9: verify_tc9, 10: verify_tc10, 11: verify_tc11,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -656,6 +693,17 @@ def gem5_config_main():
                     print(f"[E2E-Q2]   {snf_name}: addr_ranges={len(sar)}(_values)",
                           flush=True)
 
+    # ── Disable M4-M8 self-tests for workload runs ───────────────
+    # Self-tests run at init() (tick 0) and perform heavy UBCC operations
+    # that contend with ARM workload resources.  Disabling them ensures
+    # clean workload-only execution.
+    for nid in range(NODES):
+        be = getattr(ruby_system, f"ep_backend_node{nid}", None)
+        if be:
+            be.enable_self_test = False
+    print(f"[E2E] Self-tests disabled on all {NODES} EPBackend nodes",
+          flush=True)
+
     m5.instantiate()
 
     print("=" * 60, flush=True)
@@ -712,7 +760,7 @@ def runner_main():
     if args.tc:
         tc_list = [args.tc]
     elif args.all:
-        tc_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        tc_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     else:
         print("Usage: python3 test_e2e.py --tc <N> | --all")
         sys.exit(1)

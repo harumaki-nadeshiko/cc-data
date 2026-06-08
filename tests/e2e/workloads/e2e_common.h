@@ -36,10 +36,21 @@ static inline long _syscall1(long num, long a0)
     return x0;
 }
 
-/* ── sync_wait barrier ─────────────────────────────────────────────── */
+/* ── sync_wait barrier ─────────────────────────────────────────────── *
+ * Syscall 436 is NOT implemented in gem5 SE-mode.
+ * sync_wait drains the CPU store buffer and then spins on a DSM load
+ * for enough iterations to advance simulation time, giving EP-RNF
+ * asynchronous chains (SnpCleanInvalid → updateOwner) time to complete.
+ **********************************************************************/
 static inline void sync_wait(unsigned int node_mask)
 {
-    _syscall1(SYS_SYNC_WAIT, (long)node_mask);
+    __asm__ volatile("dmb sy" ::: "memory");
+    // Spin on DSM reads to let other CPUs run and advance simulation time
+    for (int i = 0; i < 10000; i++) {
+        volatile uint32_t dv = dsm_load(0, 0x500000);
+        __asm__ volatile("yield" ::: "memory");
+    }
+    __asm__ volatile("dmb sy" ::: "memory");
 }
 
 /* ── Integer formatting (no libc dependency) ───────────────────────── */
