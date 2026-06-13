@@ -111,6 +111,20 @@
 
 ---
 
+## D-10: EP_SNF addr_ranges 包含了本地 DSM 窗口 → TC1 死锁根因
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Layer 3e (Integration, failure-analyst 深度诊断) |
+| **位置** | `gem5/configs/ruby/CHI_ubcc_framework.py:234` |
+| **scheme_v4 原文** | TC1 应走 DL_SNF→DDR4 本地路径，不应触发 outer/UBCC |
+| **实际实现** | `addr_ranges=[NodeConfig.dsm_range_for(nid, ...) for nid in range(num_nodes)]` — 包含了 node_id 自己的本地 DSM 窗口 |
+| **偏离原因** | EP_SNF 的 addr_ranges 包含本地 DSM 窗口，导致本地 DSM 访问被 mapAddressToDownstreamMachine 路由到 EP_SNF→EPBackend→UBCC。EP_SNF 设置 shared_hint=true → HN-F 注册 EP-RNF → SnpShared→EP-RNF → 死锁。 |
+| **修复** | 改为 `for nid in range(num_nodes) if nid != node_id` — 排除本地 DSM 窗口 |
+| **状态** | ✅ 已修复。alloc_on_readshared/unique 还原为 True，deadlock_threshold 还原为 20000000。 |
+
+---
+
 ## D-8: 主 Agent 自主决策修改 SnpShared fatal → defensive（未问用户）
 
 | 字段 | 内容 |
