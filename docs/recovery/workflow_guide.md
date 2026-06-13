@@ -6,6 +6,26 @@
 
 ---
 
+## 设计偏离记录规则（强制）
+
+**任何与 `docs/recovery/scheme_v4.md` 不符的自行修改与决定，必须在执行后立即追加记录到 `docs/recovery/drift_in_progress.md`。**
+
+包括但不限于：
+- 修改 scheme_v4.md 中标记为 `fatal/unreachable` 的路径（如改为 defensive/warning）
+- 禁用/跳过/绕过任何测试或 self-test
+- 改变数据结构的位置或可见性（如将类内 enum 移到类外）
+- 修改 API 签名而未更新 scheme_v4.md
+- 因编译/运行限制而采用的 workaround
+- 任何未经过用户明确确认的设计决策
+
+每条记录包含：**时间、位置、偏离内容、偏离原因、状态（✅/⚠️）**。
+
+> 违反此规则会导致用户无法追踪代码变更与设计的对应关系。
+
+---
+
+---
+
 ## 架构规则
 
 **主 Agent 拥有 `task` 工具**，可以分派 subagent。Subagent **没有** `task` 工具，不能再分派。
