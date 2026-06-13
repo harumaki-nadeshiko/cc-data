@@ -1,0 +1,238 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1800" font-family="monospace" font-size="11">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+    <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c00"/>
+    </marker>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#080"/>
+    </marker>
+  </defs>
+
+  <!-- ==================== LEGEND ==================== -->
+  <rect x="20" y="10" width="1360" height="70" rx="5" fill="#fafafa" stroke="#ccc"/>
+  <text x="40" y="30" font-weight="bold">TC8: Node0写的 0xBBB 为什么没被 Node1 看到 — 完整请求链</text>
+  <text x="40" y="48" fill="#666">黑色=UBCC/EPBackend 路径 | 绿色=EP-RNF/ReadShared 路径 | 红色=CleanUnique (失败的 Phase 3)</text>
+  <text x="40" y="64" fill="#666">方框=状态 | 箭头=请求/响应 | 蓝色=关键状态变化</text>
+
+  <!-- ==================== PHASE 1: Node0 Writes 0xAAA ==================== -->
+  <text x="20" y="110" font-weight="bold" font-size="13">Phase 1: Node0 写 0xAAA (T=48M)</text>
+
+  <!-- CPU0 -->
+  <rect x="40" y="125" width="120" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="50" y="145">Node0 CPU</text>
+
+  <!-- HN-F0 -->
+  <rect x="220" y="125" width="140" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="230" y="145">HN-F_0 (Cache.1)</text>
+
+  <!-- EP-SNF0 -->
+  <rect x="420" y="125" width="120" height="30" rx="3" fill="#fff2cc"/>
+  <text x="428" y="145">EP-SNF_0</text>
+
+  <!-- EPBackend0 -->
+  <rect x="600" y="125" width="120" height="30" rx="3" fill="#fff2cc"/>
+  <text x="608" y="145">EPBackend_0</text>
+
+  <!-- UBCC2 -->
+  <rect x="800" y="125" width="120" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="810" y="145">UBCC_2 (home)</text>
+
+  <!-- Node0 L2 -->
+  <rect x="220" y="170" width="140" height="25" rx="3" fill="#e0e0e0"/>
+  <text x="230" y="187">L2_0: → UD (0xAAA)</text>
+
+  <!-- State boxes -->
+  <rect x="800" y="170" width="200" height="40" rx="3" fill="#d4edda"/>
+  <text x="810" y="186" font-size="9">UBCC_2 目录:</text>
+  <text x="810" y="200" font-size="9">state=G_M, owner=0, dirty=true</text>
+
+  <!-- Arrows -->
+  <line x1="160" y1="140" x2="218" y2="140" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="168" y="136" font-size="9">ReadUnique</text>
+  <line x1="360" y1="140" x2="418" y2="140" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="370" y="136" font-size="9">ReadNoSnp</text>
+  <line x1="540" y1="140" x2="598" y2="140" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="550" y="136" font-size="9">handleRmtMiss</text>
+  <line x1="720" y1="140" x2="798" y2="140" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="730" y="136" font-size="9">processOuter</text>
+
+  <text x="42" y="225" font-size="9" fill="#666">EP-RNF_0: NOT registered in HN-F_0 dir_sharers (shared_hint=false, grant=G_M)</text>
+
+  <!-- ==================== PHASE 2a: Recall & ReadShared ==================== -->
+  <text x="20" y="265" font-weight="bold" font-size="13">Phase 2a: Node2 读 0xAAA — Recall + EP-RNF ReadShared (T=235M)</text>
+
+  <!-- Node2 -->
+  <rect x="40" y="285" width="120" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="50" y="305">Node2 CPU (home)</text>
+
+  <!-- EPBackend2 -->
+  <rect x="220" y="285" width="120" height="30" rx="3" fill="#fff2cc"/>
+  <text x="228" y="305">EPBackend_2</text>
+
+  <!-- UBCC2 recall -->
+  <rect x="400" y="285" width="120" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="410" y="305">UBCC_2</text>
+
+  <!-- State: UBCC sees G_M -->
+  <rect x="400" y="325" width="200" height="30" rx="3" fill="#ffe0e0"/>
+  <text x="410" y="342" font-size="9">G_M, owner=0, requester=2</text>
+  <text x="410" y="354" font-size="9">owner≠req → RECALL needed</text>
+
+  <line x1="160" y1="300" x2="218" y2="300" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="168" y="296" font-size="9">ReadShared</text>
+  <line x1="340" y1="300" x2="398" y2="300" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="348" y="296" font-size="9">processOuter</text>
+
+  <!-- Recall routing to EPBackend0 -->
+  <rect x="600" y="285" width="140" height="30" rx="3" fill="#fff2cc"/>
+  <text x="610" y="305">EPBackend_0 (owner)</text>
+  <line x1="400" y1="300" x2="400" y2="365" stroke="#080" marker-end="url(#arrow)"/>
+  <text x="408" y="360" font-size="9" fill="#080">route recall →</text>
+
+  <!-- EP-RNF0 -->
+  <rect x="600" y="370" width="140" height="30" rx="3" fill="#d4edda"/>
+  <text x="610" y="390">EP-RNF_0 (Cache.2)</text>
+
+  <!-- HN-F0 -->
+  <rect x="800" y="370" width="140" height="30" rx="3" fill="#e8f0fe"/>
+  <text x="810" y="390">HN-F_0 (Cache.1)</text>
+
+  <!-- L2_0 -->
+  <rect x="800" y="410" width="140" height="30" rx="3" fill="#e0e0e0"/>
+  <text x="810" y="430">L2_0: UD (0xAAA)</text>
+
+  <!-- Recall flow -->
+  <text x="610" y="350" font-size="9" fill="#080">① setRegistrationDone → REG_DONE</text>
+  <line x1="600" y1="385" x2="600" y2="385" stroke="#080" stroke-width="0"/>
+  <text x="610" y="365" font-size="9" fill="#080">② startReadShared(localPA=0x20000000)</text>
+  <line x1="740" y1="385" x2="798" y2="385" stroke="#080" marker-end="url(#arrowG)"/>
+  <text x="750" y="380" font-size="9" fill="#080">ReadShared</text>
+  
+  <!-- HN-F0 processes ReadShared -->
+  <line x1="940" y1="385" x2="940" y2="408" stroke="#080" marker-end="url(#arrowG)"/>
+  <text x="948" y="402" font-size="9" fill="#080">SnpShared</text>
+  
+  <text x="800" y="455" font-size="9" fill="#666">L2_0: UD→SC (downgrade)</text>
+  <text x="800" y="468" font-size="9" fill="#06c">HN-F_0: dir_sharers += EP-RNF_0 (Cache.2) ← ReadShared 自动注册!</text>
+  <text x="800" y="481" font-size="9" fill="#06c">HN-F_0: dir_state → RSC, cache_state → SC</text>
+
+  <!-- CompData response -->
+  <line x1="900" y1="470" x2="740" y2="470" stroke="#080" marker-end="url(#arrowG)"/>
+  <text x="750" y="465" font-size="9" fill="#080">CompData_SD_PD</text>
+
+  <text x="600" y="470" font-size="9" fill="#080">③ callback: data=0xAAA → sendRecallResponse</text>
+  <line x1="600" y1="485" x2="600" y2="520" stroke="#080" marker-end="url(#arrowG)"/>
+
+  <!-- sync_wait -->
+  <rect x="380" y="525" width="500" height="25" rx="3" fill="#fff3cd"/>
+  <text x="400" y="542" font-size="9">sync_wait: 10000 DSM loads 转 194M ticks → Phase 3 starts at T=430M</text>
+
+  <!-- ==================== Phase 3: Node0 writes 0xBBB ==================== -->
+  <text x="20" y="590" font-weight="bold" font-size="13">Phase 3: Node0 写 0xBBB — CleanUnique Blocked (T=430M)</text>
+
+  <!-- L2_0 state -->
+  <rect x="40" y="610" width="200" height="25" rx="3" fill="#e0e0e0"/>
+  <text x="50" y="626">L2_0: SC (0xAAA) → 想升级</text>
+
+  <!-- CleanUnique -->
+  <line x1="240" y1="622" x2="360" y2="622" stroke="#c00" marker-end="url(#arrowR)"/>
+  <text x="250" y="618" font-size="9" fill="#c00">CleanUnique</text>
+
+  <!-- HN-F0 state -->
+  <rect x="360" y="595" width="300" height="70" rx="3" fill="#ffe0e0"/>
+  <text x="370" y="612" font-size="9">HN-F_0: SC→UD transition</text>
+  <text x="370" y="626" font-size="9">dir_sharers = {L2_0, EP-RNF_0}</text>
+  <text x="370" y="640" font-size="9">→ 需要 SnpCleanInvalid → EP-RNF_0</text>
+  <text x="370" y="654" font-size="9" fill="#c00">→ ??? ReadShared TBE 残留? TBE 冲突?</text>
+
+  <!-- EP-RNF0 -->
+  <rect x="700" y="610" width="160" height="50" rx="3" fill="#d4edda"/>
+  <text x="710" y="628" font-size="9">EP-RNF_0: regContext=REG_DONE</text>
+  <text x="710" y="644" font-size="9">等待 SnpCleanInvalid...</text>
+  <text x="710" y="658" font-size="9" fill="#c00">但永远等不到!</text>
+
+  <line x1="420" y1="622" x2="698" y2="622" stroke="#ccc" stroke-dasharray="4" marker-end="url(#arrowR)"/>
+  <text x="460" y="618" font-size="9" fill="#c00">SnpCleanInvalid (应该发，但没发)</text>
+
+  <!-- Deadlock -->
+  <rect x="700" y="675" width="400" height="25" rx="3" fill="#ffd0d0"/>
+  <text x="710" y="692" font-size="9" fill="#c00">→ CleanUnique never completes → L2_0 stuck → 确认读(0x20000000) stuck → DEADLOCK</text>
+
+  <!-- ==================== ROOT CAUSE ==================== -->
+  <text x="20" y="740" font-weight="bold" font-size="13">根因: HN-F_0 在 ReadShared 之后的 TBE/state 问题</text>
+
+  <rect x="40" y="755" width="1320" height="130" rx="5" fill="#fff8e1" stroke="#e65100"/>
+  <text x="60" y="778">1. ReadShared 从 EP-RNF_0(Cache.2) 发到 HN-F_0(Cache.1) — 这个 CHI 事务需要 HN-F_0 分配 TBE</text>
+  <text x="60" y="798">2. HN-F_0 处理 ReadShared: UD→SC, 发 SnpShared 到 L2_0, 收 CompData, 发 CompData_SD_PD×2 到 EP-RNF_0</text>
+  <text x="60" y="818">3. EP-RNF_0: 收齐 2 beat, 发 CompAck 到 HN-F_0 — 但 CompAck 是从 Cache 类型 controller 发出的</text>
+  <text x="60" y="838">4. HN-F_0 收到 CompAck: SLICC 状态机可能因为某种原因没有正确释放 TBE</text>
+  <text x="60" y="858">5. CleanUnique 在 T=430M 到达 HN-F_0 — HN-F_0 的 TBE 已被占用(或 state 非 SC) → 无法处理</text>
+  <text x="60" y="878">6. 没有 SnpCleanInvalid 发到 EP-RNF_0 → EP-RNF 链断 → 确认读死锁</text>
+
+  <!-- ==================== THE QUESTION ==================== -->
+  <text x="20" y="920" font-weight="bold" font-size="13">核心问题</text>
+  <rect x="40" y="935" width="1320" height="80" rx="5" fill="#e3f2fd"/>
+  <text x="60" y="958">ReadShared 是一个完整合法的 CHI 事务: Cache.2→HN-F ReadShared → CompData×2 → CompAck</text>
+  <text x="60" y="978">为什么 HN-F_0 在收到 CompAck 后没有正确释放 TBE?</text>
+  <text x="60" y="998">可能原因: (a) CompAck 没有到达 HN-F_0 的 rspIn (b) HN-F SLICC 的 CompAck transition 与 ReadShared 的 expected response 不匹配</text>
+
+  <!-- ==================== DIAGRAM: Object relationships ==================== -->
+  <text x="20" y="1050" font-weight="bold" font-size="13">对象/状态总图</text>
+  
+  <!-- Objects -->
+  <rect x="40" y="1070" width="100" height="50" rx="3" fill="#e8f0fe"/>
+  <text x="50" y="1088">HN-F_0</text>
+  <text x="50" y="1104" font-size="9">Cache.1</text>
+
+  <rect x="180" y="1070" width="100" height="50" rx="3" fill="#d4edda"/>
+  <text x="190" y="1088">EP-RNF_0</text>
+  <text x="190" y="1104" font-size="9">Cache.2</text>
+
+  <rect x="320" y="1070" width="100" height="50" rx="3" fill="#fff2cc"/>
+  <text x="330" y="1088">EPBackend_0</text>
+  <text x="330" y="1104" font-size="9">Node0</text>
+
+  <rect x="460" y="1070" width="100" height="50" rx="3" fill="#e8f0fe"/>
+  <text x="470" y="1088">UBCC_2</text>
+  <text x="470" y="1104" font-size="9">home</text>
+
+  <rect x="600" y="1070" width="100" height="50" rx="3" fill="#e0e0e0"/>
+  <text x="610" y="1088">L2_0</text>
+  <text x="610" y="1104" font-size="9">UD/SC/UD</text>
+
+  <!-- State transitions for HN-F0 -->
+  <rect x="40" y="1140" width="660" height="100" rx="3" fill="#f5f5f5" stroke="#ccc"/>
+  <text x="50" y="1158" font-size="9">HN-F_0 状态变化:</text>
+  <text x="50" y="1176" font-size="9">Phase 1 ReadUnique: I → UD, dir_sharers={L2_0}, dir_owner=L2_0</text>
+  <text x="50" y="1192" font-size="9">Phase 2a ReadShared: UD → SC, dir_sharers={L2_0, EP-RNF_0}, dir_owner=-1  ← EP-RNF ADDED!</text>
+  <text x="50" y="1208" font-size="9">Phase 3 CleanUnique: SC → ??? (stuck)  dir_sharers={L2_0, EP-RNF_0}</text>
+  <text x="50" y="1224" font-size="9">应发: SnpCleanInvalid→L2_0, SnpCleanInvalid→EP-RNF_0. 应等: SnpResp from both</text>
+
+  <!-- EP-RNF state -->
+  <rect x="720" y="1140" width="640" height="100" rx="3" fill="#f5f5f5" stroke="#ccc"/>
+  <text x="730" y="1158" font-size="9">EP-RNF_0 状态:</text>
+  <text x="730" y="1176" font-size="9">Phase 2a: regContext=REG_DONE (setRegistrationDone)</text>
+  <text x="730" y="1192" font-size="9">Phase 2a: startReadShared → PendingChiTxn(TXN_READSHARED) → 2 beats → callback → erased</text>
+  <text x="730" y="1208" font-size="9">Phase 3: regContext=REG_DONE → 如果能收到 SnpCleanInvalid</text>
+  <text x="730" y="1224" font-size="9">→ notifyLocalWriteUpgrade → EPBackend_0 → UBCC_2 → updateOwner(UD, owner=0)</text>
+
+  <!-- Key gap -->
+  <rect x="40" y="1260" width="1320" height="100" rx="5" fill="#ffe0e0" stroke="#c00"/>
+  <text x="60" y="1282" font-size="13" font-weight="bold" fill="#c00">Gap: SnpCleanInvalid 从未到达 EP-RNF_0</text>
+  <text x="60" y="1305" font-size="9">CleanUnique 到达 HN-F_0 后，HN-F_0 应该 snoop EP-RNF_0 (dir_sharers member)。但 HN-F_0 的 TBE 可能仍被 ReadShared 占用。</text>
+  <text x="60" y="1322" font-size="9">ReadShared 的 CompAck 已由 EP-RNF_0 发送 → rspOut → network → HN-F_0 rspIn。问题可能在: CompAck 没有正确到达/被处理</text>
+  <text x="60" y="1339" font-size="9">或者 HN-F SLICC 的 CompAck transition 对于从 Cache.2 发出的 CompAck 没有正确匹配 expected_snp_resp/snpRespSet</text>
+  <text x="60" y="1356" font-size="9">需要: 通过 SLICC debug 确认 HN-F_0 在 ReadShared 后的 TBE 状态和 CompAck 处理</text>
+
+  <!-- Alternative path -->
+  <text x="20" y="1395" font-weight="bold" font-size="13">替代方案 (绕过 ReadShared)</text>
+  <rect x="40" y="1410" width="1320" height="80" rx="5" fill="#e8f5e9"/>
+  <text x="60" y="1433">不通过 ReadShared 注册 EP-RNF。recall 完成后，由 EPBackend_2 (home node) 直接操作 UBCC_2 设置 owner</text>
+  <text x="60" y="1453">或由 EPBackend_0 (owner) 在 recall 响应中附带一个 "register owner EP-RNF" 的信号</text>
+  <text x="60" y="1473">这样 CleanUnique 在 HN-F_0 不会 snoop EP-RNF (dir_sharers 没有它)，但 UBCC 已经被 recall 后的 updateOwner 正确更新</text>
+  <text x="60" y="1493">后续跨节点读会看到正确的 UBCC 状态 → recall 正确数据</text>
+
+</svg>

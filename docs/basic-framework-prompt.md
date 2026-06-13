@@ -15,7 +15,7 @@ Coding Agent 必须按以下工作方式执行：
 1. 开发、构建、测试都在无网络 Docker 容器中完成。
 2. git 预检、commit、push 都在宿主机完成，不在容器内完成。
 3. 容器与宿主机工作流必须使用仓库内已有脚本，不要自行发明平替流程。
-4. 编译和执行阶段允许使用的并行核心数上限为 `20`。不要使用超过 `20` 的 `-j` 参数，也不要在测试脚本中默认使用更高并行度。
+4. 编译和执行阶段允许使用的并行核心数上限为 `32`。不要使用超过 `32` 的 `-j` 参数，也不要在测试脚本中默认使用更高并行度。
 
 ### 0.1 Docker Usage
 
@@ -36,7 +36,7 @@ scripts/ubcc_docker_run.sh
 3. 在容器中直接执行命令：
 
 ```bash
-scripts/ubcc_docker_run.sh bash -lc 'scons build/ARM/gem5.opt -j20'
+scripts/ubcc_docker_run.sh bash -lc 'scons build/ARM/gem5.opt -j32'
 ```
 
 容器约束：
@@ -97,7 +97,7 @@ export UBCC_SSH_KEY="/mnt/data2/$USER/.ssh/id_rsa_np"
 
 具体要求：
 
-1. `scons` 最多使用 `-j20`。
+1. `scons` 最多使用 `-j32`。
 2. 任何编译脚本、测试脚本、benchmark build 脚本都不得默认使用大于 `20` 的并行度。
 3. 若脚本支持可配置并行度，默认值应不超过 `20`，并在文档或脚本中明确注明。
 

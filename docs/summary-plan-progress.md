@@ -297,7 +297,7 @@ for each stage in [SyncWait, M4, M5, M6, M7, M8, M9]:
 
 **每个阶段的交付物必须包含**：
 1. 代码修改（增量 diff）
-2. 构建通过（`scons build/ARM/gem5.opt -j20 PROTOCOL=CHI`）
+2. 构建通过（`scons build/ARM/gem5.opt -j32 PROTOCOL=CHI`）
 3. 该阶段新增测试全部通过
 4. 已有回归测试不降级
 5. 审查报告（含验收对照表）
