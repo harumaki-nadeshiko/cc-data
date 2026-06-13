@@ -97,6 +97,20 @@
 
 ---
 
+## D-9: alloc_on_readshared/unique 从 baseline 的 False 改为 True
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Layer 3a (Infrastructure), 诊断于 Layer 3e |
+| **位置** | `gem5/configs/ruby/CHI_ubcc_framework.py:119-121` |
+| **baseline 原文** | `alloc_on_readshared=False, alloc_on_readunique=False, alloc_on_readonce=False` (注释: "No L3 caching for DSM") |
+| **v4 实现** | `alloc_on_readshared=True, alloc_on_readunique=True, alloc_on_readonce=False` (注释: "enable shared/unique DSM caching") |
+| **偏离原因** | scheme_v4.md 和 entry doc §6.1 要求 `alloc_on_readunique=true` 以保证 EP-RNF 在 dir_sharers 后 HN-F L3 缓存不绕过 UBCC 路径。code-implementer 同时将 `alloc_on_readshared` 也改为 True。 |
+| **影响** | 开启了 HN-F L3 对 DSM 地址的缓存。可能触发了本地 DSM 填充路径中的 EP-RNF 注册（通过 shared_hint 或其他机制），导致 TC1（纯本地测试）在本地读时死锁。 |
+| **状态** | ⚠️ 待诊断确认。若确认是死锁根因，需重新评估 `alloc_on_readshared` 的取值。 |
+
+---
+
 ## D-8: 主 Agent 自主决策修改 SnpShared fatal → defensive（未问用户）
 
 | 字段 | 内容 |
