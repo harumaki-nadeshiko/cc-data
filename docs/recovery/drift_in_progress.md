@@ -125,6 +125,31 @@
 
 ---
 
+## D-11: Recall→Handshake 闭环修复
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 TC2 调试 |
+| **位置** | `UBCCController.cc:312-325` |
+| **scheme_v4 原文** | Recall 完成后应转入 GRANT_HANDSHAKE，requester 重试时获得 grant |
+| **实际实现** | 添加 `recallAlreadyDone` 检测：若已有 DONE 的 RECALL outstanding（同 PA+同 requester），跳过新建 RECALL，直接走 grant 路径 |
+| **偏离原因** | processRecallResponse() 设 RECALL→DONE，但 DirEntry 未变（reserve-then-commit）。requester retry 时 processOuterRequest 看到旧 owner，重新发起 RECALL 而非 grant。 |
+| **状态** | ⚠️ 测试中（TC2 仍 FAIL，需进一步调试） |
+
+---
+
+## D-12: TC2 workload 添加 dc civac cache flush
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 TC2 调试 |
+| **位置** | `tests/e2e/workloads/dsm_access.h`, `tests/e2e/workloads/e2e_tc2_remote_read.c` |
+| **问题** | `sync_wait` (syscall 436) 只做线程同步，不做 cache maintenance。Node 0 写 DSM_1 后脏数据在 cache 中，Node 1 读 DDR4 得到 0 |
+| **修复** | 在 `dsm_access.h` 添加 `dsm_flush()` (dc civac)；TC2 workload write 后 sync 前调用 |
+| **状态** | ⚠️ 需重新编译 ELF 测试 |
+
+---
+
 ## D-8: 主 Agent 自主决策修改 SnpShared fatal → defensive（未问用户）
 
 | 字段 | 内容 |
@@ -134,3 +159,50 @@
 | **偏离内容** | 主 Agent 在用户未回复 A/B 选项时，自行决定将 `fatal` 改为 `defensive SnpResp_I`，未留档记录。 |
 | **影响** | SnpShared 到达 EP-RNF 的真正根因（DCT fallback 不工作 / EP-RNF 在本地 DSM 路径中被注册）尚未定位。workaround 掩盖了问题。 |
 | **状态** | ⚠️ 已通过 D-1 记录。后续必须修复根因。 |
+
+---
+
+## D-13: Phase 4 跨节点测试全量阻塞 — Recall→Handshake 未闭环
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 (TC2-TC11) |
+| **问题** | TC2/3/4/5/6/7/8/11 全部因 Recall→Handshake 未闭环失败（deadlock 或 HN-F panic） |
+| **根因** | `processRecallResponse()` 设 RECALL→DONE 后不转入 GRANT_HANDSHAKE。Requester retry 无已完成 RECALL 检测。 |
+| **状态** | ⚠️ OPEN_QUESTION。需修复 Recall→Handshake→Clear 闭环。 |
+
+## D-14: M4-M8 Self-tests 实际未禁用
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 全量测试 |
+| **问题** | M4-M8 self-tests 在 EPBackend::init() 运行，全部 FAILED。D-2 声称已 `#if 0` 但实际未包裹。 |
+| **状态** | ⚠️ 需与 D-2 保持一致。 |
+
+## D-15: Self-tests nulled for TC2 isolation
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 TC2 调试 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/M[4-8]SelfTest.cc` |
+| **问题** | M4-M8 self-tests 在 EPBackend::init() 运行，与 TC2 测试消息交织，干扰 HN-F 消息诊断 |
+| **修复** | 临时替换为空的 stub 函数以隔离 TC2 HN-F 意外消息问题 |
+| **状态** | ⚠️ 临时 diagnostic。解决 TC2 后需恢复。 |
+
+## D-16: Phase 4 深度诊断发现 — epoch 不匹配阻断 Clear 提交流程
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | Phase 4 深度调试 |
+| **发现** | `processClear PA=0x10018000000 epoch mismatch: ost=1 clear=2 — dropped` |
+| **根因** | RECALL→GRANT_HANDSHAKE 就地转换后，reservedEpoch 保留旧值，但 EPBackend 发送的 Clear 携带不同 epoch |
+| **影响** | Clear 被丢弃，GRANT_HANDSHAKE 永不退休，目录永不 commit，后续请求永久 BUSY |
+| **状态** | ⚠️ 需修复 epoch 传递链：RECALL 创建 → GRANT_HANDSHAKE 转换 → Clear 匹配 |
+
+## D-17: SnpShared→EP-RNF 仍触发（SharedHint 修复不完整）
+
+| 字段 | 内容 |
+|------|------|
+| **发现** | `EP_RNF node_id=0/1/2: SnpShared/SnpSharedFwd at PA=0x10000000` — 三节点均触发 |
+| **根因** | sharedHint 条件化仅作用于 EPSNFController，但 EP-SNF 所有节点都覆盖所有 DSM 窗口。远程节点的 Shared grant 仍设 sharedHint=true，注册 EP-RNF。后续本地 Hit 触发 SnpShared |
+| **状态** | ⚠️ defensive SnpResp_I 覆盖，未阻断测试但掩盖问题。 |
