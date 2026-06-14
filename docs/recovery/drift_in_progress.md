@@ -231,3 +231,27 @@
 | **问题** | recall 数据保存在 home UBCC 的 outstanding `dataBuf`，但 requester `EPBackend::populateGrantData(RecallBuffer)` 只看本地 `_recallCaptureDataBlock`，导致 TC2 在 recall 成功后仍发 0 数据。 |
 | **修复** | 新增 `UBCCController::copyOutstandingGrantData()`；requester 端在 `dataSource==RecallBuffer` 时先从 home UBCC outstanding 拉取数据，再进入 `populateGrantData()`。 |
 | **状态** | ⚠️ 已修改，待编译验证。 |
+
+---
+
+## D-20: 本地升级链路补齐（SnpCleanInvalid → UpgradeReq/Ack/Done）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 Phase 4 TC11/TC3 调试 |
+| **位置** | `EPRNFController.hh/.cc`, `EPBackend.cc` |
+| **问题** | `SnpCleanInvalid → notifyLocalWriteUpgrade → receiveUpgradeAck → sendUpgradeDone` 全链路无人触发，导致 TC11 本地升级后 home 目录不提交。 |
+| **修复** | 在 `EPRNFController::handleSnpCleanInvalid()` 首次收到 DSM 线 snoop 时直接建立 `UpgradePending`，同步调用 `EPBackend::notifyLocalWriteUpgrade()`；Ack 成功后发延迟 `SnpResp_I`，紧接着调用 `sendUpgradeDone()` 提交 `UPGRADE_PENDING`。 |
+| **状态** | ✅ 已验证：TC11 PASS。 |
+
+---
+
+## D-21: Read recall 数据落地到 home memory
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 Phase 4 TC11 继续调试 |
+| **位置** | `EPBackend.cc:sendRecallResponse()` |
+| **问题** | read recall 虽能把数据送给当前 requester，但未安装到 home DDR4 / HomeMemoryService；后续新的 shared reader 仍从旧内存读到 0。 |
+| **修复** | 在 owner 侧 `sendRecallResponse()` 中，当 response 带 data payload 时，通过 home 节点 `EPBackend` 的 `RubySystem::getPhysMem()` 调 `HomeMemoryService::write()`，先把 recall 数据写回 home memory，再交给 home UBCC 标记 recall DONE。 |
+| **状态** | ✅ 已验证：TC11 PASS。 |
