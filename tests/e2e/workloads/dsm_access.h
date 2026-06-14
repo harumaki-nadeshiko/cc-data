@@ -56,4 +56,16 @@ static inline void dsm_store64(int home_node, uint32_t offset, uint64_t val)
     __asm__ volatile("str %0, [%1]" : : "r"(val), "r"(dsm_addr(home_node, offset)));
 }
 
+/* v4 dsm_flush: writes to 16K cache lines to evict dirty DSM to DDR4.
+ * The flush buffer is 1MB (16384 lines × 64B), enough to overflow L1+L2. */
+static inline void dsm_flush(int home_node, uint32_t offset);
+volatile char _v4_flush_buf[1048576] __attribute__((aligned(64)));
+static inline void dsm_flush(int home_node, uint32_t offset)
+{
+    for (int i = 0; i < 1048576; i += 64) {
+        __asm__ volatile("str %w0, [%1]" : : "r"(0), "r"(&_v4_flush_buf[i]) : "memory");
+    }
+    __asm__ volatile("dmb sy" ::: "memory");
+}
+
 #endif /* E2E_DSM_ACCESS_H */

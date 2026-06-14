@@ -331,7 +331,7 @@ model: opencode-go/deepseek-v4-pro
 - 编译: docker run --rm -v /mnt/data2/cgc/cc-ep:/workspace ubcc-dev:ubuntu20.04 \
     bash -c 'cd /workspace/gem5 && scons build/ARM/gem5.opt -j32 2>&1 | tail -30'
 - 测试: docker run --rm -v /mnt/data2/cgc/cc-ep:/workspace ubcc-dev:ubuntu20.04 \
-    bash -c 'timeout 60 /workspace/gem5/build/ARM/gem5.opt \
+    bash -c 'timeout 600 /workspace/gem5/build/ARM/gem5.opt \
     --outdir=/workspace/m5out/e2e/tcN /workspace/tests/e2e/test_e2e.py --tc=N 2>&1'
 - 测试输出: cat /workspace/m5out/e2e/tcN/simout_n*
 

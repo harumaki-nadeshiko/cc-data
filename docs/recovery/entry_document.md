@@ -280,7 +280,7 @@ EP-SNF reads these fields to determine whether to request Shared, Exclusive, or 
 ```bash
 # Single TC (60s timeout)
 docker run --rm -v $(pwd):/workspace ubcc-dev:ubuntu20.04 bash -c '
-  timeout 60 /workspace/gem5/build/ARM/gem5.opt \
+  timeout 600 /workspace/gem5/build/ARM/gem5.opt \
     --outdir=/workspace/m5out/e2e/tcN \
     /workspace/tests/e2e/test_e2e.py --tc=N 2>&1'
 ```

@@ -207,10 +207,10 @@ docker run --rm -v $(pwd):/workspace ubcc-dev:ubuntu20.04 \
   bash -c 'cd /workspace/gem5 && scons build/ARM/gem5.opt -j32 2>&1 | grep -E "error:|LINK|done building" | head -20'
 ```
 
-### 测试（单个 TC，timeout 60 秒）
+### 测试（单个 TC，timeout 600 秒）
 ```bash
 docker run --rm -v $(pwd):/workspace ubcc-dev:ubuntu20.04 \
-  bash -c 'timeout 60 /workspace/gem5/build/ARM/gem5.opt \
+  bash -c 'timeout 600 /workspace/gem5/build/ARM/gem5.opt \
     --outdir=/workspace/m5out/e2e/tcN \
     /workspace/tests/e2e/test_e2e.py --tc=N 2>&1 | \
     grep -E "PASSED|FAILED|panic|deadlock|READ_VAL|BEFORE|AFTER"'
