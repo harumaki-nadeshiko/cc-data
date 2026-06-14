@@ -206,3 +206,28 @@
 | **发现** | `EP_RNF node_id=0/1/2: SnpShared/SnpSharedFwd at PA=0x10000000` — 三节点均触发 |
 | **根因** | sharedHint 条件化仅作用于 EPSNFController，但 EP-SNF 所有节点都覆盖所有 DSM 窗口。远程节点的 Shared grant 仍设 sharedHint=true，注册 EP-RNF。后续本地 Hit 触发 SnpShared |
 | **状态** | ⚠️ defensive SnpResp_I 覆盖，未阻断测试但掩盖问题。 |
+
+---
+
+## D-18: 半区间 epoch 比较把“相等 epoch”误判为 stale
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 Phase 4 TC2/TC6 复测 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.cc:isNewerEpoch()` |
+| **问题** | `isNewerEpoch(a, b)` 用 `((a-b)&mask) < 2^63` 判断“a 是否更新”，导致 `a == b` 时也返回 true。 |
+| **影响** | `checkEpochForLine()` 把 `responseEpoch == committedEpoch` 的 RecallResponse / InvalidationAck / Writeback / Evict 全部当作 stale 拒绝，直接造成 TC2/3/6/8/10 的 recall 死锁。 |
+| **修复** | 改为 `delta != 0 && delta < 2^63`，仅在严格更新时返回 true。 |
+| **状态** | ⚠️ 已修改，待编译验证。 |
+
+---
+
+## D-19: Requester 侧 RecallBuffer 改为从 home UBCC outstanding 拉取
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 Phase 4 TC2 继续调试 |
+| **位置** | `UBCCController.hh/.cc`, `EPBackend.cc` |
+| **问题** | recall 数据保存在 home UBCC 的 outstanding `dataBuf`，但 requester `EPBackend::populateGrantData(RecallBuffer)` 只看本地 `_recallCaptureDataBlock`，导致 TC2 在 recall 成功后仍发 0 数据。 |
+| **修复** | 新增 `UBCCController::copyOutstandingGrantData()`；requester 端在 `dataSource==RecallBuffer` 时先从 home UBCC outstanding 拉取数据，再进入 `populateGrantData()`。 |
+| **状态** | ⚠️ 已修改，待编译验证。 |
