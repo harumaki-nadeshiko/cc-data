@@ -255,3 +255,15 @@
 | **问题** | read recall 虽能把数据送给当前 requester，但未安装到 home DDR4 / HomeMemoryService；后续新的 shared reader 仍从旧内存读到 0。 |
 | **修复** | 在 owner 侧 `sendRecallResponse()` 中，当 response 带 data payload 时，通过 home 节点 `EPBackend` 的 `RubySystem::getPhysMem()` 调 `HomeMemoryService::write()`，先把 recall 数据写回 home memory，再交给 home UBCC 标记 recall DONE。 |
 | **状态** | ✅ 已验证：TC11 PASS。 |
+
+---
+
+## D-22: 编译修复 — `receiveUpgradeAck()` 对 EPBackend 公开
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 upgrade_invalidate_fix 首次编译 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.hh` |
+| **问题** | `EPBackend::notifyUpgradeAckReady()` 调用 `EPRNFController::receiveUpgradeAck()`，但后者仍声明在 private 区域，导致编译失败。 |
+| **修复** | 将 `receiveUpgradeAck(uint64_t)` 移到 `EPRNFController` public 接口，保持实现不变。 |
+| **状态** | ✅ 已验证：编译通过。 |
