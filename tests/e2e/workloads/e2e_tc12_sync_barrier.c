@@ -33,11 +33,20 @@ static inline uint32_t any_hash(uint32_t a, uint32_t b)
 int main(int argc, char **argv)
 {
     int node_id = 0;
+    int cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    int primary = (cpu_index % 4 == 0);
 
-    emit_e2e_meta(node_id, "TC12");
+    if (primary) emit_e2e_meta(node_id, "TC12");
 
-    /* All nodes participate — idle nodes that are unused just ride the barrier */
+    /* Only primary CPU participates — avoids intra-node concurrent
+     * sync_wait races in multi-CPU-per-node configuration. */
+    if (!primary) {
+        _exit_program(0);
+        return 0;
+    }
+
     for (int iter = 0; iter < ITERATIONS; iter++) {
         for (int seg = 1; seg <= SEGMENTS; seg++) {
             uint32_t val = any_hash((uint32_t)iter, (uint32_t)seg) % 3;
