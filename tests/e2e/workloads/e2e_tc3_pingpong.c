@@ -4,7 +4,7 @@
  * Round 2: Node1 writes 0xB → Node0 reads, expects 0xB
  * Round 3: Node0 writes 0xC → Node1 reads, expects 0xC
  *
- * Total expected output: 6 [READ_VAL] markers, all MATCH.
+ * Total expected output: 3 [READ_VAL] markers, all MATCH.
  *
  * Q2: Primary CPU filter + confirmation read loops (TC2 pattern).
  */

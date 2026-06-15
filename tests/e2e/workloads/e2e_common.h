@@ -37,19 +37,71 @@ static inline long _syscall1(long num, long a0)
 }
 
 /* ── sync_wait barrier ─────────────────────────────────────────────── *
- * Syscall 436 is NOT implemented in gem5 SE-mode.
- * sync_wait drains the CPU store buffer and then spins on a DSM load
- * for enough iterations to advance simulation time, giving EP-RNF
- * asynchronous chains (SnpCleanInvalid → updateOwner) time to complete.
+ * DSM-based sense-reversing centralized barrier.
+ * Barrier state lives in DSM home=0 at offset 0x700000:
+ *   +0: arrival_count (u32) — atomically incremented via LDAXR/STLXR
+ *   +4: global_sense   (u32) — released by last arriver
+ *
+ * Algorithm:
+ *   1. Each thread flips its local sense bit
+ *   2. Atomically increments arrival_count
+ *   3. Last arriver: resets count to 0, sets global_sense to its sense
+ *   4. Others:     spin until global_sense == local_sense
+ *
+ * Uses ARMv8 exclusive load/store (LDAXR/STLXR) for atomic fetch-and-add
+ * on the arrival counter.  The barrier address is within DSM_0 range
+ * and goes through the Ruby cache hierarchy.
  **********************************************************************/
+#define BARRIER_HOME   0
+#define BARRIER_OFFSET 0x700000
+
 static inline void sync_wait(unsigned int node_mask)
 {
+    /* Count participants from the lower 4 bits of node_mask */
+    unsigned int m = node_mask & 0xF;
+    int n = (m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1) + ((m >> 3) & 1);
+    if (n <= 1) return;
+
     __asm__ volatile("dmb sy" ::: "memory");
-    // Spin on DSM reads to let other CPUs run and advance simulation time
-    for (int i = 0; i < 10000; i++) {
-        volatile uint32_t dv = dsm_load(0, 0x500000);
-        __asm__ volatile("yield" ::: "memory");
+
+    /* Per-node local sense bit — flips every barrier call.
+     * static is correct here because each node (gem5 instance)
+     * runs in its own process with separate static storage. */
+    static int _sense = 0;
+    _sense ^= 1;
+
+    volatile uint32_t *arrival = dsm_addr(BARRIER_HOME, BARRIER_OFFSET);
+    volatile uint32_t *gsense  = dsm_addr(BARRIER_HOME, BARRIER_OFFSET + 4);
+
+    /* Atomic fetch-and-increment arrival_count */
+    unsigned int my_count;
+    int ex_result;
+    __asm__ volatile(
+        "1: ldaxr %w0, [%2]\n"
+        "add %w0, %w0, #1\n"
+        "stlxr %w1, %w0, [%2]\n"
+        "cbnz %w1, 1b\n"
+        : "=&r"(my_count), "=&r"(ex_result)
+        : "r"(arrival)
+        : "memory");
+
+    if (my_count == (unsigned)n) {
+        /* Last arriver: reset counter, then release global sense */
+        __asm__ volatile("stlr wzr, [%0]" : : "r"(arrival) : "memory");
+        __asm__ volatile("dmb sy" ::: "memory");
+        __asm__ volatile("stlr %w0, [%1]"
+                         : : "r"((unsigned)_sense), "r"(gsense) : "memory");
+    } else {
+        /* Spin until global sense flips to match my local sense */
+        while (1) {
+            unsigned int cur;
+            __asm__ volatile("ldar %w0, [%1]" : "=r"(cur) : "r"(gsense) : "memory");
+            if (cur == (unsigned)_sense) break;
+            __asm__ volatile("yield" ::: "memory");
+        }
     }
+    __asm__ volatile("dmb sy" ::: "memory");
+}
     __asm__ volatile("dmb sy" ::: "memory");
 }
 
@@ -166,6 +218,23 @@ static inline void emit_phase_done(int node_id, const char *phase_name)
     s = (char *)" phase="; while (*s) buf[p++] = *s++;
     while (*phase_name) buf[p++] = *phase_name++;
     s = (char *)" status=done\n"; while (*s) buf[p++] = *s++;
+    _raw_write(buf, p);
+}
+
+static inline void emit_sync_marker(int node_id, int iter, int seg,
+                                    uint32_t val)
+{
+    char buf[200]; int p = 0;
+    char *s = (char *)"[SYNC]       node=";
+    while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, node_id);
+    s = (char *)" iter="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, iter);
+    s = (char *)" seg="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, seg);
+    s = (char *)" val="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, (int)val);
+    buf[p++] = '\n';
     _raw_write(buf, p);
 }
 
