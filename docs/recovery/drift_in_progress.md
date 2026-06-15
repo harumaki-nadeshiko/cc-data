@@ -267,3 +267,33 @@
 | **问题** | `EPBackend::notifyUpgradeAckReady()` 调用 `EPRNFController::receiveUpgradeAck()`，但后者仍声明在 private 区域，导致编译失败。 |
 | **修复** | 将 `receiveUpgradeAck(uint64_t)` 移到 `EPRNFController` public 接口，保持实现不变。 |
 | **状态** | ✅ 已验证：编译通过。 |
+
+---
+
+## D-23: 本地升级提交错误保留 sharersMask
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 TC3/TC6/TC8 死锁分析第 1 轮 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.cc:1350` |
+| **问题** | `processOuterUpgradeReq()` 在本地升级 accepted 时把 `intendedSharersMask` 设成 `entry.sharersMask & ~reqBit`。升级 commit 后目录变成“owner + 旧 sharers 并存”的非法状态。 |
+| **证据** | TC3 中 Node1 写 `b` 后，Node0 读仍见旧值 `a`；TC8 中 Node0 第二次写 `bbb` 后，Node1 读仍见 `aaa`。两者都说明升级后的其他 sharer 未被从 committed 目录中清空。 |
+| **修复** | 本地升级 commit 为 owner-only 状态：`intendedSharersMask = 0`，保留 `targetMask` 仅用于 ack barrier，不进入最终目录。 |
+| **状态** | ⚠️ 已修改；单独复测后仍有死锁，需继续修复升级回调/ReadShared 收尾。 |
+
+---
+
+## D-24: ReadShared 提前完成 + UpgradeAck PA 视图不一致
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 TC3/TC6/TC8 死锁分析第 2 轮 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.cc`, `EPBackend.cc` |
+| **问题 1** | `EPRNFController::recvDataMsg()` 对 `ReadShared` 在第一个 `CompData` beat 到达时就 `finishChiTxn()`，剩余 beat 没有发 `CompAck`。 |
+| **证据 1** | `m5out/tc3_dbg1/debug.txt:340-362` 显示 Node0 在 recall `ReadShared` 的第一个 `CompData_SD_PD` 后立即 complete，随后又收到第二个 `CompData_SD_PD`，但此时已 “no pending txn”。 |
+| **影响 1** | HN-F 侧上一笔 `ReadShared` 没有完整收尾，后续同线 `CleanUnique`/upgrade invalidate 被卡住，导致 TC3/TC6/TC8 写升级死锁。 |
+| **修复 1** | `ReadShared` 改为逐 beat 发 `CompAck`，只有 `beatsReceived == beatsExpected` 后才 `finishChiTxn()`。 |
+| **问题 2** | home UBCC 通过 `notifyUpgradeAckReady()` 回调的是 home-view PA，而 `EPRNFController::_upgradePending` 以 requester-local PA 建索引。 |
+| **影响 2** | 跨节点升级（尤其 TC8）在 all-ack 完成后可能找不到本地 `UpgradePending`，丢失 deferred `SnpResp_I/UpgradeDone`。 |
+| **修复 2** | `EPBackend::notifyUpgradeAckReady()` 在回调前把 home PA 翻译回 requester-local PA，再调用 `receiveUpgradeAck()`。 |
+| **状态** | ⚠️ 已验证：ReadShared 双 beat 日志消失，但 TC3/TC6/TC8 仍死锁，需继续查本地 HN-F CleanUnique/upgrade 收尾。 |
