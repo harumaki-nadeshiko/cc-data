@@ -15,9 +15,17 @@
 int main(int argc, char **argv)
 {
     int node_id = 0;
+    int cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    int primary = (cpu_index % 4 == 0);
 
-    emit_e2e_meta(node_id, "TC8");
+    if (primary) emit_e2e_meta(node_id, "TC8");
+
+    if (!primary) {
+        _exit_program(0);
+        return 0;
+    }
 
     /* ── Phase 1: Node0 writes 0xAAA ── */
     if (node_id == 0) {
