@@ -253,7 +253,11 @@ _re_sync = re.compile(r"\[SYNC\]\s+node=(\d+)\s+iter=(\d+)\s+seg=(\d+)\s+val=(\d
 
 
 def verify_tc12(reads, lines):
-    """TC12: Barrier correctness — check segment ordering across 10 iter × 3 seg."""
+    """TC12: Barrier correctness — all nodes must produce markers for each (iter,seg).
+    
+    Per-node files are read separately so interleaving is not preserved.
+    Instead verify that every (iter,seg) has markers from all participating nodes.
+    """
     syncs = []
     for line in lines:
         m = _re_sync.search(line)
@@ -262,37 +266,34 @@ def verify_tc12(reads, lines):
                           int(m.group(3)), int(m.group(4))))
 
     n_nodes = len(set(s[0] for s in syncs))
-    expected_per_seg = n_nodes  # each segment: one marker per node
     expected_total = n_nodes * 10 * 3
     if len(syncs) < expected_total:
         return False, f"TC12 FAILED: got {len(syncs)} SYNC markers, expected {expected_total}", []
 
-    prev_iter, prev_seg = -1, -1
-    nodes_seen = set()
+    # Group by (iter, seg)
+    from collections import defaultdict
+    groups = defaultdict(set)
     for (node, iter_v, seg_v, val) in syncs:
-        if iter_v < prev_iter or (iter_v == prev_iter and seg_v < prev_seg):
-            return False, (
-                f"TC12 FAILED: order violation — saw iter={iter_v} seg={seg_v} "
-                f"after iter={prev_iter} seg={prev_seg}"), []
+        groups[(iter_v, seg_v)].add(node)
 
-        if iter_v > prev_iter or seg_v > prev_seg:
-            # new segment: all nodes should have been seen in previous
-            if prev_iter >= 0:
-                if len(nodes_seen) != n_nodes:
-                    return False, (
-                        f"TC12 FAILED: iter={prev_iter} seg={prev_seg} "
-                        f"only saw {len(nodes_seen)}/{n_nodes} nodes"), []
-            nodes_seen = set()
+    # Every (iter, seg) must have all n_nodes present
+    missing = []
+    for (iter_v, seg_v), nodes in sorted(groups.items()):
+        if len(nodes) != n_nodes:
+            missing.append((iter_v, seg_v, nodes))
 
-        nodes_seen.add(node)
-        prev_iter, prev_seg = iter_v, seg_v
+    if missing:
+        return False, f"TC12 FAILED: {len(missing)} groups missing nodes: {missing[:5]}", []
 
-    # Final segment check
-    if len(nodes_seen) != n_nodes:
-        return False, (
-            f"TC12 FAILED: final segment only saw {len(nodes_seen)}/{n_nodes} nodes"), []
+    # Per-node monotonicity: within each node's markers, (iter,seg) must be strictly increasing
+    node_last = {}
+    for (node, iter_v, seg_v, val) in syncs:
+        key = (iter_v, seg_v)
+        if node in node_last and key <= node_last[node]:
+            return False, f"TC12 FAILED: node={node} non-monotonic at iter={iter_v} seg={seg_v}", []
+        node_last[node] = key
 
-    return True, f"TC12 PASSED: {len(syncs)} SYNC markers in strict segment order", []
+    return True, f"TC12 PASSED: all {n_nodes} nodes × 30 segments synced correctly", []
 
 
 VERIFIERS = {

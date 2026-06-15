@@ -218,6 +218,45 @@
 | **问题** | `isNewerEpoch(a, b)` 用 `((a-b)&mask) < 2^63` 判断“a 是否更新”，导致 `a == b` 时也返回 true。 |
 | **影响** | `checkEpochForLine()` 把 `responseEpoch == committedEpoch` 的 RecallResponse / InvalidationAck / Writeback / Evict 全部当作 stale 拒绝，直接造成 TC2/3/6/8/10 的 recall 死锁。 |
 | **修复** | 改为 `delta != 0 && delta < 2^63`，仅在严格更新时返回 true。 |
+
+---
+
+## D-19: EP-RNF CompData_SC 仅强制线协议，不再误改 HN-F 本地最终态
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 TC2/TC6/TC11 联调 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/CHI-cache-actions.sm:2936-2968` |
+| **问题** | `Send_CompData` 对所有 `requestor==EP-RNF` 请求都同时清除了 `dataDirty/dataUnique/dataMaybeDirtyUpstream`。这会把“给 EP-RNF 发 SC”错误扩大成“把 HN-F 自己的本地 TBE 最终态也改成 SC/I”。 |
+| **影响** | 正常跨节点 `ReadShared` 在 owner 仍存在时，会把 HN-F 带到 `dir_ownerExists=1` 但本地缓存态被误降级的非法组合，直接触发 TC2/TC11 的 Final assert；同类状态漂移也会放大 TC6 的后续队列/升级异常。 |
+| **修复** | 仅对 `epProxyOp != NoProxyOp` 的 proxy special completion 保留本地 TBE scrub；普通 EP-RNF 请求仍强制发送 `CompData_SC`，但不再篡改 HN-F 的本地 `dataDirty/dataUnique/dataMaybeDirtyUpstream`。 |
+| **状态** | ⚠️ 验证中 |
+
+---
+
+## D-20: UBCC BUSY 早退时补清 outerTxnPending
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 TC6 死锁诊断 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc:565-572` |
+| **问题** | `processOuterRequest()` 返回 BUSY 后，EPBackend 直接 `return -1`，但没有撤销先前设置的 `EP_RNF::outerTxnPending=true`。 |
+| **影响** | 请求实际未获 grant，却长期保留“外层事务进行中”标记；若该 PA 上存在延迟 snoop response / retry，可能形成自阻塞，表现为 TC6 类重复 `dup_retry`。 |
+| **修复** | BUSY 早退前显式 `setOuterTxnPending(false)`，并触发 `signalOuterTxnComplete()` 释放可能悬挂的 delayed HN response。 |
+| **状态** | ⚠️ 验证中 |
+
+---
+
+## D-21: 同节点重复 ReadShared 不再重建 outer miss
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-15 TC6/TC11 死锁复盘 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc:320-339` |
+| **问题** | 同一节点的另一个 CPU 在兄弟 CPU 已拿到 `R_S/R_E/R_M` 后，又对同一远程行走了一次 `handleRemoteMiss()`；旧实现会把稳定的 requester-line 状态重新覆盖成 `R_WAIT_GRANT`，并向 home UBCC 发起新的 outer request。 |
+| **影响** | 当此重复 miss 恰好碰到别的 requester 正活跃时，会被 home UBCC 排队成 `enqueue requester=<same node>`，随后主线程只看到无限 `dup_retry`，典型表现就是 TC6 node2 / TC11 node2 主 CPU 卡死而兄弟 CPU 已先完成。 |
+| **修复** | 对 `neededPerm==Shared` 且本节点 requester-line 已处于 `R_S/R_E/R_M` 的情形，直接返回 BUSY，让 HN-F 走本地 retry，等待已有 fill 在本地层级可见；不再重建新的 outer miss。 |
+| **状态** | ⚠️ 验证中 |
 | **状态** | ⚠️ 已修改，待编译验证。 |
 
 ---

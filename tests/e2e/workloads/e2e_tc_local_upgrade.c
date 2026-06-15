@@ -36,6 +36,14 @@ int main(int argc, char **argv)
 
     if (primary) emit_e2e_meta(node_id, "TC_LOCAL_UPGRADE");
 
+    /* Only one CPU per node participates.
+     * This isolates same-node sibling concurrency from the protocol path
+     * under test and keeps sync_wait aligned with node-level arrivals. */
+    if (!primary) {
+        _exit_program(0);
+        return 0;
+    }
+
     int fail = 0;
 
     /* ── Phase 1: Node B reads DSM_C (First Miss with shared_hint) ── */
