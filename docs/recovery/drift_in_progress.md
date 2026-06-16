@@ -221,6 +221,30 @@
 
 ---
 
+## D-19: TC5 Clear 路径临时诊断日志
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 TC5 调试 iteration 1 |
+| **位置** | `EPBackend.cc`, `UBCCController.cc` |
+| **偏离内容** | 添加 `[TC5-CLEAR-TRACE]` printf，跟踪 `handleRemoteMiss → savePendingGrantTxn → sendClear → processClear` 的 epoch/reqId/PA/outstanding 细节。 |
+| **偏离原因** | TC5 中 node0/node2 出现 grant data 生成但未见对应 `ClearGrantHandshake`，需先证明 Clear 是否发送、是否命中 home UBCC、以及被哪条校验丢弃。 |
+| **状态** | ⚠️ 临时 diagnostic，定位后应移除或收敛。 |
+
+---
+
+## D-20: TC5 replay tombstone / reqId 冲突修复
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 TC5 调试 iteration 2 |
+| **位置** | `UBCCController.cc`, `EPBackend.cc` |
+| **问题** | TC5 中 node1 首个 grant 完成后，node0/node2 的 replay 请求与 Clear 误命中旧 tombstone：`reqId` 只按 requester 本地递增，三节点都会产生 `reqId=1`；同时 tombstone 用的是 `reservedEpoch`，而 `Clear`/replay 使用的是 `baseEpoch`。结果后续请求被误当成旧事务重放，只看到一次真实 `ClearGrantHandshake`。 |
+| **修复** | 1) requester 侧 `reqId` 加入 node-id 命名空间，避免跨节点碰撞；2) tombstone 改为记录/匹配 `baseEpoch`；3) `processOuterRequest()` 的 tombstone 检查改用来包中的 `baseEpoch`；4) grant 路径补齐 `outAuthEpoch` 回传；5) `PendingGrantTxn` 统一以 `homePa` 为 key。 |
+| **状态** | ✅ 已实现，待 TC5 验证。 |
+
+---
+
 ## D-19: EP-RNF CompData_SC 仅强制线协议，不再误改 HN-F 本地最终态
 
 | 字段 | 内容 |

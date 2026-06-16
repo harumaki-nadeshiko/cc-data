@@ -11,3 +11,5 @@ tests/phase4/hello_arm
 tests/phase4/m4_out/
 tmp/
 tmp_logs/
+gem5_1/
+gem5_2/

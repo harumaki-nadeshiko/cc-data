@@ -189,8 +189,20 @@ def verify_tc8(reads, lines):
 
 
 def verify_tc9(reads, lines):
-    """TC9: Negative test — intentionally skipped (expected page-fault panic)."""
-    return True, "TC9 SKIPPED: negative test (expected page-fault)", []
+    """TC9: Negative test — must reject non-DSM access.
+    Success means: [FATAL] marker emitted AND no READ_VAL produced,
+    OR simulation aborted with page-fault panic."""
+    for line in lines:
+        if "[FATAL]" in line:
+            if len(reads) == 0:
+                return True, "TC9 PASSED: [FATAL] detected, no READ_VAL", []
+    # Also accept gem5 panic as success signal
+    for line in lines:
+        if "Page table fault" in line or "panic:" in line:
+            return True, "TC9 PASSED: page-fault detected (expected)", []
+    if len(reads) > 0:
+        return False, "TC9 FAILED: unexpected [READ_VAL] in negative test", reads
+    return False, "TC9 FAILED: no [FATAL] or rejection signal detected", []
 
 
 def verify_tc10(reads, lines):
