@@ -31,6 +31,11 @@ TESTCASES = {
     10: "e2e_tc10_concurrent_atomic",
     11: "e2e_tc_local_upgrade",
     12: "e2e_tc12_sync_barrier",
+    13: "e2e_tc13_remote_release_acquire",
+    14: "e2e_tc14_multi_sharer_wave",
+    15: "e2e_tc15_credit_storm",
+    16: "e2e_tc16_dual_upgrade_race",
+    17: "e2e_tc17_writeback_dma",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -306,11 +311,139 @@ def verify_tc12(reads, lines):
     return True, f"TC12 PASSED: all {n_nodes} nodes × 30 segments synced correctly", []
 
 
+def verify_tc13(reads, lines):
+    """TC13: Cross-node release/acquire ordering across DATA and FLAG lines.
+    Node1 must see FLAG=1 then DATA=0x2222 (not stale 0x1111)."""
+    _re_flag = re.compile(r'\[FLAG_SEEN\]\s+node=1\s+val=1')
+    flag_seen = any(_re_flag.search(l) for l in lines)
+    if not flag_seen:
+        return False, 'TC13 FAILED: Node1 never observed FLAG=1', []
+    data_reads_n1 = [r for r in reads if r['node'] == 1 and r['home'] == 2]
+    if not data_reads_n1:
+        return False, 'TC13 FAILED: no final DATA read from Node1', []
+    # Last Node1 DATA read must be 0x2222
+    final_data = int(data_reads_n1[-1]['actual'], 16)
+    if final_data != 0x2222:
+        return False, f'TC13 FAILED: final DATA=0x{final_data:X}, expected 0x2222', [data_reads_n1[-1]]
+    return True, 'TC13 PASSED: release/acquire ordering preserved', []
+
+
+def verify_tc14(reads, lines):
+    """TC14: Three-node mixed read/write waves.
+    Each wave: writer writes Vx, then two readers must see Vx.
+    Uses [PHASE_RD] markers: step=1→0x1001, step=2→0x2002, step=3→0x3003."""
+    _re_phase_rd = re.compile(r'\[PHASE_RD\]\s+node=(\d+)\s+step=(\d+)\s+val=(\w+)')
+    phase_reads = {}  # (step, node) -> value
+    for line in lines:
+        m = _re_phase_rd.search(line)
+        if m:
+            step = int(m.group(2))
+            node = int(m.group(1))
+            val = int(m.group(3), 16)
+            phase_reads[(step, node)] = val
+    expect = {
+        (1, 1): 0x1001, (1, 2): 0x1001,
+        (2, 0): 0x2002, (2, 2): 0x2002,
+        (3, 0): 0x3003, (3, 1): 0x3003,
+    }
+    missing = [k for k in expect if k not in phase_reads]
+    if missing:
+        return False, f'TC14 FAILED: missing phase reads {missing}', []
+    bad = [(k, phase_reads[k], expect[k]) for k in expect if phase_reads[k] != expect[k]]
+    if bad:
+        return False, f'TC14 FAILED: stale/mismatched wave reads {bad}', []
+    return True, 'TC14 PASSED: mixed multi-sharer waves serialized correctly', []
+
+
+def verify_tc15(reads, lines):
+    """TC15: Credit/recovery storm — stresses RetryAck/PCrdGrant paths.
+    All 8 DSM lines must converge across all 3 nodes, no deadlock.
+    RetryAck/PCrdGrant evidence is advisory (requires protocol debug enabled)."""
+    retry_cnt = sum(1 for l in lines if 'RetryAck' in l)
+    pcrd_cnt = sum(1 for l in lines if 'PCrdGrant' in l)
+    if any('deadlock' in l.lower() or 'panic:' in l.lower() for l in lines):
+        return False, 'TC15 FAILED: deadlock/panic under credit pressure', []
+    # Convergence: all 3 nodes must agree on each of the 8 DSM lines
+    node2_reads = [r for r in reads if r['home'] == 2]
+    if len(node2_reads) < 3 * 8:  # 3 nodes × 8 lines
+        return False, f'TC15 FAILED: expected ≥24 convergence reads, got {len(node2_reads)}', []
+    # Group by node: collect each node's 8-line value tuple
+    node_vals = {}
+    for r in node2_reads:
+        n = r['node']
+        if n not in node_vals:
+            node_vals[n] = []
+        node_vals[n].append(int(r['actual'], 16))
+    if len(node_vals) < 3:
+        return False, f'TC15 FAILED: only {len(node_vals)} nodes produced convergence reads', []
+    # Check: each position index should have same value across nodes
+    for idx in range(8):
+        idx_vals = {node_vals[n][idx] for n in node_vals if idx < len(node_vals[n])}
+        if len(idx_vals) != 1:
+            return False, f'TC15 FAILED: line {idx} diverged across nodes: {idx_vals}', []
+    msg = f'TC15 PASSED: forward progress preserved (RetryAck={retry_cnt}, PCrdGrant={pcrd_cnt})'
+    return True, msg, []
+
+
+def verify_tc16(reads, lines):
+    """TC16: Dual shared-upgrade race.
+    Final value must be in {0xA0A0, 0xB0B0} with all 3 nodes agreeing."""
+    legal = {0xA0A0, 0xB0B0}
+    # Collect last read per node (from home=2)
+    node_last = {}
+    for r in reads:
+        if r['home'] == 2:
+            node_last[r['node']] = int(r['actual'], 16)
+    if len(node_last) < 3:
+        return False, f'TC16 FAILED: missing final reads from nodes (got {len(node_last)})', []
+    vals = set(node_last.values())
+    if len(vals) != 1:
+        return False, f'TC16 FAILED: nodes disagree on final value {node_last}', []
+    val = next(iter(vals))
+    if val not in legal:
+        return False, f'TC16 FAILED: illegal final value 0x{val:X}', []
+    # Protocol upgrade-path evidence is optional in default verbosity;
+    # if present it confirms the path was exercised.
+    has_upgrade_evidence = any('UPGRADE_PENDING' in l or 'OuterUpgrade' in l for l in lines)
+    suffix = ' (upgrade-path confirmed in log)' if has_upgrade_evidence else ''
+    return True, f'TC16 PASSED: concurrent upgrades serialized to 0x{val:X}{suffix}', []
+
+
+def verify_tc17(reads, lines):
+    """TC17: Writeback + DMA + remote-read overlap.
+    Pre-DMA read must be 0x12345678; all post-DMA reads must be 0x87654321."""
+    _re_read_phase = re.compile(r'\[READ_PHASE\]\s+node=(\d+)\s+tag=(\S+)\s+val=(\w+)')
+    tagged = {}
+    for line in lines:
+        m = _re_read_phase.search(line)
+        if m:
+            node = int(m.group(1))
+            tag = m.group(2)
+            val = int(m.group(3), 16)
+            tagged[(tag, node)] = val
+    # Collect all pre_dma reads (any node)
+    pre_reads = {k: v for k, v in tagged.items() if k[0] == 'pre_dma'}
+    post_reads = {k: v for k, v in tagged.items() if k[0] == 'post_dma'}
+    if not pre_reads:
+        return False, 'TC17 FAILED: no pre_dma reads', []
+    if not post_reads:
+        return False, 'TC17 FAILED: no post_dma reads', []
+    for (tag, node), val in pre_reads.items():
+        if val != 0x12345678:
+            return False, f'TC17 FAILED: pre-DMA node={node} got 0x{val:X}, expected 0x12345678', []
+    for (tag, node), val in post_reads.items():
+        if val != 0x87654321:
+            return False, f'TC17 FAILED: post-DMA node={node} got 0x{val:X}, expected 0x87654321', []
+    return True, 'TC17 PASSED: writeback + DMA + remote-read interaction correct', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
     9: verify_tc9, 10: verify_tc10, 11: verify_tc11,
     12: verify_tc12,
+    13: verify_tc13, 14: verify_tc14, 15: verify_tc15,
+    16: verify_tc16, 17: verify_tc17,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -822,7 +955,7 @@ def runner_main():
     if args.tc:
         tc_list = [args.tc]
     elif args.all:
-        tc_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        tc_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     else:
         print("Usage: python3 test_e2e.py --tc <N> | --all")
         sys.exit(1)
