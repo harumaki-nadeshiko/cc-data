@@ -5,6 +5,66 @@
 
 ---
 
+## D-30: UBCC directory offload 第一轮一次性落地（resident+BF+backstore stub）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `ResidentDir.{hh,cc}`, `UBCCController.{hh,cc}`, `EPBackend.{hh,cc,py}`, `MetaRNFController.{hh,cc,py}`, `SConscript`, `CHI_ubcc_framework.py`, `tests/e2e/test_e2e.py`, `tests/e2e/workloads/e2e_tc{18,19,20,21}_*.c`, `tests/ubcc/directory_offload/*.py` |
+| **偏离内容** | 本轮在不改 CHI SLICC 的前提下，新增 resident counting BF(64KB,3-hash,4-bit counter)、control byte(fillPending/wbPending/pinned/lru)、resident waiter 队列、UBCC 软件 backstore 哈希表、MetaRNF 异步 stub、fill/evict/delete ack 回调、tombstone delete 调度、offload inspect/debug 接口；同时把 e2e 注册扩展到 TC18~TC21。 |
+| **偏离原因** | 用户要求执行 `ubcc_implementation_plan.md` 的目录 offload 全量实现，并在最多 4 轮 compile+test 内验证。 |
+| **状态** | 🔄 进行中（待本轮编译与 TC 回归结果确认）。 |
+
+---
+
+## D-29: UBCC 目录后端从 `std::map` 切换为 ResidentDir（512KB SRAM 抽象）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/ResidentDir.{hh,cc}`, `UBCCController.{hh,cc}`, `SConscript` |
+| **偏离内容** | 引入 `ResidentDir` 作为 UBCC resident directory 存储后端，默认 Bloom 切片 64KB（`bfOffset=448KB`），directory 容量按 `448KB / 7B = 65536` 计算；`UBCCController::_directory` 从 `std::map<uint64_t, DirEntry>` 替换为 `ResidentDir`，原有协议逻辑保持不变，仅把 map 的 `find/[]/erase/clear` 访问改为 `lookup/insert/update/remove/clear`。 |
+| **偏离原因** | 用户要求按 `ubcc_directory_offload_design.md` 落地 Resident Directory Cache，并保持协议语义不变。 |
+| **状态** | 🔄 进行中（待本轮 build + 16 个 TC 全量验证）。 |
+
+---
+
+## D-28: UBCC epoch width 改为可配置并支持按位宽回绕
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.{hh,cc}`, `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.{py,cc}`, `gem5/configs/ruby/CHI_ubcc_framework.py` |
+| **偏离内容** | 在现有 v4 设计默认 64-bit epoch 的基础上，新增 `ubcc_epoch_bits`/`UBCC_EPOCH_BITS` 运行时配置；`allocateReservedEpoch()/commitIntendedResult()/processClear()/isNewerEpoch()` 改为按配置位宽做 mask 与 half-range wrap-around 比较。 |
+| **偏离原因** | 用户要求验证 UBCC epoch 是否可从 64-bit 压缩到 24/28/32 bit，且不能破坏现有 16 个 E2E TC。 |
+| **状态** | ✅ 已验证：`epoch_bits=24/28/32` 下，TC1/2/3/4/5/6/7/8/10/11/12/13/14/15/16/17 全部 PASS；默认 64-bit 额外 smoke 复测 TC1/16 也 PASS。 |
+
+---
+
+## D-27: 补充 UBCC directory offload 设计问答（文档澄清，无代码改动）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 |
+| **位置** | `docs/recovery/ubcc_directory_offload_design.md` |
+| **偏离内容** | 基于当前 `UBCCController` / `EPBackend` / `CHI_ubcc_framework.py`，补充了 3 类设计问答：① TD$/bucket/entry 的固定宽度打包与轻量压缩策略；② `ResidentDirCache` / `DirBucketCodec` / `DirPresenceFilter` / `DirEvictionPolicy` / `DirectoryStorageService` 的抽象分层；③ `2GHz + HN-F(tag=2,data=10) + DDR4_2400_8x8` 下的目录 read/modify/write ticks 建模。 |
+| **偏离原因** | 用户要求把设计文档从“方向性方案”补全为“可直接落地的格式/抽象/时延回答”；本次仅更新文档，不修改代码。 |
+| **状态** | ✅ 已完成；无代码行为变化。 |
+
+---
+
+## D-26: 移除 EPBackend 同步 UBCC fallback，改由 UBAdapter 返回附加元数据
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc`, `UBAdapter.{hh,cc}`, `UBRouter.cc`, `UBMsg.hh`, `UBCCController.cc` |
+| **偏离内容** | 将 `handleRemoteMiss()/notifyLocalWriteUpgrade()/sendRecallResponse()/handleWriteback()/handleEvict()/sendInvalidationAck()/sendUpgradeDone()/sendClear()` 中原先的 `if (_ubAdapter) ... else direct UBCC` 同步 fallback 全部删除；同时把 `ReadResp/UpgradeResp` 扩展为携带 committedEpoch、pendingInvMask、upgradeTargetMask、可选 recall grant data。 |
+| **偏离原因** | 用户要求“只保留 UBAdapter message passing path”。EPBackend 仍通过 `UBCCController::getInstance()` 读取 epoch / invalidation mask / grant data，实质上仍保留同步旁路，需一并收口到 UBRouter 返回消息。 |
+| **状态** | ✅ 已验证：Build 通过，TC1/2/3/4/5/6/7/8/10/11/12/13/14/15/16/17 全部 PASS。 |
+
+---
+
 ## D-1: SnpShared/SnpSharedFwd fatal → defensive SnpResp_I
 
 | 字段 | 内容 |
@@ -360,3 +420,17 @@
 | **影响 2** | 跨节点升级（尤其 TC8）在 all-ack 完成后可能找不到本地 `UpgradePending`，丢失 deferred `SnpResp_I/UpgradeDone`。 |
 | **修复 2** | `EPBackend::notifyUpgradeAckReady()` 在回调前把 home PA 翻译回 requester-local PA，再调用 `receiveUpgradeAck()`。 |
 | **状态** | ⚠️ 已验证：ReadShared 双 beat 日志消失，但 TC3/TC6/TC8 仍死锁，需继续查本地 HN-F CleanUnique/upgrade 收尾。 |
+
+---
+
+## D-25: 新增 UBCC 目录 offload 设计研究文档
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-17 |
+| **位置** | `docs/recovery/ubcc_directory_offload_design.md` |
+| **变更** | 新增目录 onload/offload 设计研究文档；仅形成方案与问题清单，不涉及代码实现。 |
+| **原因** | 按用户要求，基于当前框架调研 UBCC committed directory、现有 L3 启用条件，并输出目录 backstore + L3 缓存化的实施方案。 |
+| **状态** | ✅ 文档已生成，待用户确认 3 个设计选项。 |
+
+---

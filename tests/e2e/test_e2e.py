@@ -36,6 +36,10 @@ TESTCASES = {
     15: "e2e_tc15_credit_storm",
     16: "e2e_tc16_dual_upgrade_race",
     17: "e2e_tc17_writeback_dma",
+    18: "e2e_tc18_directory_fill_replay",
+    19: "e2e_tc19_directory_dirty_persist",
+    20: "e2e_tc20_offload_smoke_a",
+    21: "e2e_tc21_offload_smoke_b",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -437,6 +441,45 @@ def verify_tc17(reads, lines):
     return True, 'TC17 PASSED: writeback + DMA + remote-read interaction correct', []
 
 
+def verify_tc18(reads, lines):
+    node1 = [r for r in reads if r['node'] == 1]
+    node2 = [r for r in reads if r['node'] == 2]
+    if not node1 or not node2:
+        return False, 'TC18 FAILED: missing reader output from node1/node2', reads
+    if int(node1[-1]['actual'], 16) != 0x18181818:
+        return False, f"TC18 FAILED: node1 got 0x{node1[-1]['actual']}, expected 0x18181818", [node1[-1]]
+    if int(node2[-1]['actual'], 16) != 0x18181818:
+        return False, f"TC18 FAILED: node2 got 0x{node2[-1]['actual']}, expected 0x18181818", [node2[-1]]
+    return True, 'TC18 PASSED: fill/replay workload value correct', []
+
+
+def verify_tc19(reads, lines):
+    node2 = [r for r in reads if r['node'] == 2]
+    if not node2:
+        return False, 'TC19 FAILED: missing node2 read', reads
+    if int(node2[-1]['actual'], 16) != 0xABCD1234:
+        return False, f"TC19 FAILED: node2 got 0x{node2[-1]['actual']}, expected 0xABCD1234", [node2[-1]]
+    return True, 'TC19 PASSED: dirty persist workload value correct', []
+
+
+def verify_tc20(reads, lines):
+    if not reads:
+        return False, 'TC20 FAILED: no READ_VAL', []
+    bad = [r for r in reads if int(r['actual'], 16) != 0x20202020]
+    if bad:
+        return False, 'TC20 FAILED: unexpected read value', bad
+    return True, 'TC20 PASSED', []
+
+
+def verify_tc21(reads, lines):
+    if not reads:
+        return False, 'TC21 FAILED: no READ_VAL', []
+    bad = [r for r in reads if int(r['actual'], 16) != 0x21212121]
+    if bad:
+        return False, 'TC21 FAILED: unexpected read value', bad
+    return True, 'TC21 PASSED', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -444,6 +487,8 @@ VERIFIERS = {
     12: verify_tc12,
     13: verify_tc13, 14: verify_tc14, 15: verify_tc15,
     16: verify_tc16, 17: verify_tc17,
+    18: verify_tc18, 19: verify_tc19,
+    20: verify_tc20, 21: verify_tc21,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -568,7 +613,7 @@ def gem5_config_main():
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-10.", flush=True)
+        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-21.", flush=True)
         sys.exit(1)
 
     binary = compile_workload(tc_name)
