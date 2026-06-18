@@ -27,13 +27,25 @@
 int main(int argc, char **argv)
 {
     int node_id = 0;
+    int cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    int primary = (cpu_index % 4 == 0);
 
-    emit_e2e_meta(node_id, "TC7");
+    if (primary) emit_e2e_meta(node_id, "TC7");
 
     /* Only nodes 0 and 1 participate */
     if (node_id > 1) {
-        emit_phase_done(node_id, "idle");
+        if (primary) emit_phase_done(node_id, "idle");
+        _exit_program(0);
+        return 0;
+    }
+
+    /* sync_wait() counts threads, not nodes. With 4 CPUs/node, allowing all
+     * CPUs to execute lets Node1's read run before Node0's writer/evictor has
+     * completed, which invalidates TC7's intended ordering. Restrict TC7 to the
+     * primary CPU of each participating node. */
+    if (!primary) {
         _exit_program(0);
         return 0;
     }
@@ -41,9 +53,9 @@ int main(int argc, char **argv)
     /* ── Phase 1: Node0 writes to DSM_1 ── */
     if (node_id == 0) {
         uint32_t val = 0x55667788;
-        emit_before_wr(node_id, 1, val);
+        if (primary) emit_before_wr(node_id, 1, val);
         dsm_store(1, 0, val);
-        emit_after_wr(node_id, 1, val);
+        if (primary) emit_after_wr(node_id, 1, val);
 
         /* ── Phase 2: Flood cache to trigger eviction ── */
         /* Write to LocalPrivate addresses within Node0's PA space.
@@ -65,16 +77,16 @@ int main(int argc, char **argv)
     int fail = 0;
     if (node_id == 1) {
         uint32_t expected = 0x55667788;
-        emit_before_rd(node_id, 1);
+        if (primary) emit_before_rd(node_id, 1);
         uint32_t got = dsm_load(1, 0);
         int match = (got == expected);
-        emit_read_val(node_id, 1, expected, got, match);
+        if (primary) emit_read_val(node_id, 1, expected, got, match);
         if (!match) fail++;
     }
 
     sync_wait(0b011);
 
-    emit_phase_done(node_id, fail ? "fail" : "done");
+    if (primary) emit_phase_done(node_id, fail ? "fail" : "done");
     _exit_program(fail ? 1 : 0);
     return 0;
 }

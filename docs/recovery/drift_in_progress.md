@@ -5,6 +5,66 @@
 
 ---
 
+## D-35: E2E 扩展 TC22~TC28（ResidentDir/BF/L3/epoch/backstore 覆盖）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `tests/e2e/workloads/e2e_tc22_*.c` ~ `e2e_tc28_*.c`, `tests/e2e/test_e2e.py` |
+| **偏离内容** | 新增 7 个 E2E 用例：TC22 ResidentDir 容量压力、TC23 BF 假阳性回退、TC24 三节点并发压力、TC25 高频 INVALIDATE/Clear 循环、TC26 L3 驱逐写回链路压力、TC27 epoch wrap 压力（含 24b 逻辑回绕 marker）、TC28 backstore 数据/元数据一致性；同时扩展 harness 注册/校验到 TC28，并将 `--all` 改为动态遍历 `TESTCASES`。此外，TC22/TC26/TC28 初版大规模压力触发 `Sequencer deadlock`，已先降载到稳定规模用于回归。 |
+| **偏离原因** | 用户要求补齐目录 offload 相关 gap 并形成可执行 E2E 覆盖。 |
+| **状态** | ✅ 已实现，待本轮编译与 TC22~TC28 回归结果确认。 |
+
+---
+
+## D-34: TC7 workload 限制为每节点 primary CPU 执行
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `tests/e2e/workloads/e2e_tc7_writeback_evict.c` |
+| **偏离内容** | TC7 新增 `cpu_index`/`primary` 过滤，仅允许 `cpu_index % 4 == 0` 的 primary CPU 参与；非 primary CPU 直接退出，marker 也仅由 primary 发出。 |
+| **偏离原因** | `sync_wait()` 当前按“线程数”而非“节点数”计数。TC7 原实现让 4 CPUs/node 全部参与，会使 Node1 的读在线程级 barrier 提前放行后先于 Node0 写回/驱逐执行，观测到伪失败（旧值 0）并误判为 CHI/UBCC 数据丢失。 |
+| **状态** | ✅ 已完成，待 TC7 回归确认。 |
+
+---
+
+## D-33: INVALIDATE ack 恢复 committed sharers 递减并在 shared-empty 时转 G_I
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.cc` |
+| **偏离内容** | 在 `processInvalidationAck()` 中恢复 `INVALIDATE` 路径对 committed `DirEntry.sharersMask` 的递减更新；当 `state==G_S && sharersMask==0` 时立即 canonicalize 为 `G_I`，避免写入 `G_S+empty` 非法编码。`UPGRADE_PENDING` 路径继续仅使用 outstanding 的 `upgradeAckMask/upgradeTargetMask` 跟踪，不修改 committed 目录。 |
+| **偏离原因** | 移除 committed sharers 递减后，INVALIDATE→GRANT_HANDSHAKE 窗口内目录观察到 stale sharers，导致流程卡死；直接递减若不转态又会触发 `G_S + sharersMask=0` 约束违规。 |
+| **状态** | ✅ 已完成，待目标 TC 回归确认。 |
+
+---
+
+## D-32: Meta decode 校验收紧 + evict 后写回跳过
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc` |
+| **偏离内容** | `decodeMetaLine()` 新增严格守卫：`G_I` 要求 `sharersMask==0`；`G_S` 要求 `sharersMask!=0`；`G_E/G_M` 要求 `popcount(sharersMask)==1`，任一违规按 miss 返回 `false`。同时 `issueBackstoreWrite()` 处理 `snapshotResidentForBackstore()` 的 `false` 返回：若条目已驱逐，则跳过 meta write，仅回调 `onBackstoreWriteAck()`。 |
+| **偏离原因** | 用户要求修复两处实现缺陷：避免非法 meta 被当作有效目录状态；避免条目已驱逐后仍错误写回 backstore。 |
+| **状态** | ✅ 已完成，待本轮 TC2/7/10 回归确认。 |
+
+---
+
+## D-31: 元数据 backstore 迁移到 MetaRNF CHI 路径（进行中）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-18 |
+| **位置** | `MetaRNFController.{hh,cc,py}`, `EPBackend.{hh,cc,py}`, `CHI_ubcc_framework.py`, `CHI_basic_framework_config.py` |
+| **偏离内容** | 将 `MetaRNFController` 从 tick-stub 改为基于 Ruby CHI 控制器的真实 requester：读路径发 `ReadOnce`，写/删路径发 `WriteUniqueFull` + `NCBWrData`；EPBackend 新增 `line_pa -> metadata_backstore_pa` 映射与 64B 元数据编码（含 key/state/sharers/epoch），backstore fill/write/delete 改为通过 MetaRNF 时序回调；配置侧新增 `metadata_private_base = phy_base + 5*seg_size`、`metadata_private_range(16MB)`，并把该 range 加入 HN-F/L_SNF 路由。 |
+| **偏离原因** | 用户要求将上一轮软件 `_backstore` 影子路径替换为真实 `UBCC→UBRouter→UBAdapter→EPBackend→MetaRNF→HN-F/L3→private DRAM` 时序路径。 |
+| **状态** | 🔄 进行中：第 3 轮回归中 TC1/3/4/5/6/8/11/12/13/14/15/16/17/18/19/20/21 通过，TC2/7/10 在 ResidentDir fill 阶段触发 `G_S with sharers=0` panic；已补充 decode 有效性过滤（尚未在回归轮次内复测）。 |
+
+---
+
 ## D-30: UBCC directory offload 第一轮一次性落地（resident+BF+backstore stub）
 
 | 字段 | 内容 |

@@ -40,6 +40,13 @@ TESTCASES = {
     19: "e2e_tc19_directory_dirty_persist",
     20: "e2e_tc20_offload_smoke_a",
     21: "e2e_tc21_offload_smoke_b",
+    22: "e2e_tc22_resident_capacity_pressure",
+    23: "e2e_tc23_bloom_false_positive_fallback",
+    24: "e2e_tc24_multinode_pressure_stress",
+    25: "e2e_tc25_invalidate_clear_cycle",
+    26: "e2e_tc26_l3_eviction_writeback_chain",
+    27: "e2e_tc27_epoch_wrap_stress",
+    28: "e2e_tc28_backstore_metadata_consistency",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -480,6 +487,110 @@ def verify_tc21(reads, lines):
     return True, 'TC21 PASSED', []
 
 
+def verify_tc22(reads, lines):
+    """TC22: ResidentDir 容量压力后抽检值应全部 MATCH。"""
+    if len(reads) < 9:
+        return False, f'TC22 FAILED: expected >=9 probe reads, got {len(reads)}', []
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC22 FAILED: {len(mismatches)} mismatches under capacity pressure', mismatches
+    return True, 'TC22 PASSED: resident pressure with probe values intact', []
+
+
+def verify_tc23(reads, lines):
+    """TC23: BF 假阳性容忍（miss=0，随后回填后命中 MAGIC）。"""
+    node0 = [r for r in reads if r['node'] == 0 and r['home'] == 2]
+    if len(node0) < 2:
+        return False, f'TC23 FAILED: expected 2 node0 reads, got {len(node0)}', node0
+    first = int(node0[0]['actual'], 16)
+    last = int(node0[-1]['actual'], 16)
+    if first != 0:
+        return False, f'TC23 FAILED: first miss-read expected 0x0, got 0x{first:X}', [node0[0]]
+    if last != 0x23ABCDEF:
+        return False, f'TC23 FAILED: refill-read expected 0x23ABCDEF, got 0x{last:X}', [node0[-1]]
+    return True, 'TC23 PASSED: false-positive path fallback/refill behavior correct', []
+
+
+def verify_tc24(reads, lines):
+    """TC24: 三节点并发压力后，各 anchor 值全局一致。"""
+    if len(reads) < 9:
+        return False, f'TC24 FAILED: expected >=9 anchor reads, got {len(reads)}', reads
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC24 FAILED: {len(mismatches)} anchor mismatches', mismatches
+    exp_vals = {0x24A00001, 0x24B00002, 0x24C00003}
+    seen = {int(r['actual'], 16) for r in reads}
+    if not exp_vals.issubset(seen):
+        return False, f'TC24 FAILED: anchor set incomplete, seen={sorted(hex(v) for v in seen)}', []
+    return True, 'TC24 PASSED: concurrent multi-node stress converged on all anchors', []
+
+
+def verify_tc25(reads, lines):
+    """TC25: 高频 ownership 切换后应无漂移，最终值一致。"""
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC25 FAILED: {len(mismatches)} mismatch during invalidate/clear cycling', mismatches[:20]
+    final_exp = 0x25000000 | (512 - 1)
+    node_last = {}
+    for r in reads:
+        if r['home'] == 2:
+            node_last[r['node']] = int(r['actual'], 16)
+    if len(node_last) < 3:
+        return False, f'TC25 FAILED: missing final reads from all nodes ({node_last})', []
+    bad = {n: v for n, v in node_last.items() if v != final_exp}
+    if bad:
+        return False, f'TC25 FAILED: final value drift {bad}, expected 0x{final_exp:X}', []
+    return True, 'TC25 PASSED: rapid invalidate/clear cycling stable', []
+
+
+def verify_tc26(reads, lines):
+    """TC26: L3 eviction 压力后目标 line 应保持。"""
+    target = [r for r in reads if r['home'] == 1 and r['node'] in (1, 2)]
+    if len(target) < 2:
+        return False, f'TC26 FAILED: expected node1/node2 target reads, got {len(target)}', target
+    bad = [r for r in target if int(r['actual'], 16) != 0x26ABCDEF]
+    if bad:
+        return False, 'TC26 FAILED: target line corrupted after L3 pressure', bad
+    return True, 'TC26 PASSED: eviction-triggered path preserved target line', []
+
+
+def verify_tc27(reads, lines):
+    """TC27: wrap marker 必须出现且最终值一致。"""
+    re_wrap = re.compile(r'\[EPOCH_WRAP\]\s+node=(\d+)\s+start=(\w+)\s+end=(\w+)\s+wraps=(\d+)')
+    wraps = 0
+    for l in lines:
+        m = re_wrap.search(l)
+        if m:
+            wraps = max(wraps, int(m.group(4)))
+    if wraps < 1:
+        return False, 'TC27 FAILED: no wrap evidence marker (wraps<1)', []
+    final_exp = 0x27000000 | (1024 - 1)
+    node_last = {}
+    for r in reads:
+        if r['home'] == 0:
+            node_last[r['node']] = int(r['actual'], 16)
+    if len(node_last) < 3:
+        return False, f'TC27 FAILED: missing final reads from all nodes ({node_last})', []
+    bad = {n: v for n, v in node_last.items() if v != final_exp}
+    if bad:
+        return False, f'TC27 FAILED: final value mismatch after churn: {bad}', []
+    return True, f'TC27 PASSED: wrap marker seen (wraps={wraps}) and final value converged', []
+
+
+def verify_tc28(reads, lines):
+    """TC28: resident 驱逐到 backstore 后，数据+元数据镜像一致。"""
+    node2 = [r for r in reads if r['node'] == 2 and r['home'] == 0]
+    if len(node2) < 2:
+        return False, f'TC28 FAILED: expected 2 node2 reads (data/meta), got {len(node2)}', node2
+    vals = {int(r['actual'], 16) for r in node2}
+    if 0x28AA55AA not in vals or 0x2855AA55 not in vals:
+        return False, f'TC28 FAILED: missing data/meta value, got {sorted(hex(v) for v in vals)}', node2
+    rel_ok = any('[META_REL] node=2 ok=1' in l for l in lines)
+    if not rel_ok:
+        return False, 'TC28 FAILED: metadata relation marker not satisfied', []
+    return True, 'TC28 PASSED: backstore data/metadata consistency preserved', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -489,6 +600,8 @@ VERIFIERS = {
     16: verify_tc16, 17: verify_tc17,
     18: verify_tc18, 19: verify_tc19,
     20: verify_tc20, 21: verify_tc21,
+    22: verify_tc22, 23: verify_tc23, 24: verify_tc24,
+    25: verify_tc25, 26: verify_tc26, 27: verify_tc27, 28: verify_tc28,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -613,7 +726,7 @@ def gem5_config_main():
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-21.", flush=True)
+        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-28.", flush=True)
         sys.exit(1)
 
     binary = compile_workload(tc_name)
@@ -1000,7 +1113,7 @@ def runner_main():
     if args.tc:
         tc_list = [args.tc]
     elif args.all:
-        tc_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        tc_list = sorted(TESTCASES.keys())
     else:
         print("Usage: python3 test_e2e.py --tc <N> | --all")
         sys.exit(1)

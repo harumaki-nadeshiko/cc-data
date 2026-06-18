@@ -18,7 +18,15 @@
 int main(int argc, char **argv)
 {
     int node_id = 0;
+    int cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    int primary = (cpu_index % 4 == 0);
+
+    if (!primary) {
+        _exit_program(0);
+        return 0;
+    }
 
     emit_e2e_meta(node_id, "TC10");
 
@@ -29,11 +37,17 @@ int main(int argc, char **argv)
     }
 
     if (node_id == 0) {
+        /* ── Phase 1: Seed first value, then sync ── */
+        uint32_t first_val = (uint32_t)(0xA0000000);
+        dsm_store(1, 0, first_val);
+    }
+
+    sync_wait(0b011);
+
+    if (node_id == 0) {
         /* ── Writer: loop writing incrementing values ── */
-        for (int i = 0; i < ROUNDS; i++) {
+        for (int i = 1; i < ROUNDS; i++) {
             uint32_t val = (uint32_t)(0xA0000000 + i);
-            /* Thin barrier between iterations to prevent
-             * compiler from merging writes */
             __asm__ volatile("" : : : "memory");
             dsm_store(1, 0, val);
         }
@@ -42,8 +56,6 @@ int main(int argc, char **argv)
         for (int i = 0; i < ROUNDS; i++) {
             uint32_t got = dsm_load(1, 0);
             emit_read_val(node_id, 1, 0xA0000000, got, 1);
-            /* Use MATCH=1 in output; Python harness does its own
-             * validation against the legal value set. */
             __asm__ volatile("" : : : "memory");
         }
     }
