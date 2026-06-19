@@ -926,8 +926,8 @@ def gem5_config_main():
     all_ranges = []
     for nid in range(NODES):
         cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE)
-        all_ranges.append(cfg.local_private_range)
-        all_ranges.append(cfg.ubcc_exclusive_range)
+        all_ranges.append(cfg.local_private_range(0))
+        all_ranges.append(cfg.metadata_private_range(0))
         for hn in range(NODES):
             all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
     system.mem_ranges = all_ranges

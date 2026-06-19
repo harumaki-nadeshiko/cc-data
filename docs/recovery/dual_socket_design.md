@@ -1,1056 +1,734 @@
-# Dual-Socket Design Plan v1.0
+# Dual-Socket HN-F / EP-SNF Implementation Checklist v4.0
 
-**状态**：已合成，可直接作为实施基线  
-**适用范围**：gem5 Ruby CHI / CC-EP / 单节点单 L3、双 socket UBCC 扩展  
-**约束前提**：
-
-- `sharersMask` 保持 **16-bit、node 粒度**，不扩为 `(node,socket)` 粒度。
-- `ResidentDir` 改为 **per-socket**；每节点目录总容量翻倍。
-- `L3/HN-F` 仍然 **每节点单实例**，本次不拆分为 per-socket L3。
-- `EPBackend` 保持 **per-node 单实例**。
-- `UBRouter / UBAdapter / UBCC / MetaRNF` 改为 **per-(node,socket)**。
-- `homeSocket` 由 **PA 编码**直接决定；`ingressSocket` 由 **CHI sideband**携带，仅用于 NUMA latency hint / 路由源 socket。
-- `WritebackReq` 采用 **optimistic epoch validation**：只校验 `expectedEpoch`，不携带 `expectedOwnerNode`。
-- `HomeWritebackNotify` 为新 `UBMsgType`。
-- `QueryLineMetaReq/Resp` 为新 `UBMsgType`，用于写回前查询 `{epoch, ownerNode}`。
-- `num_sockets=1` 时必须走同一套数组化代码，`socketId=0`，现有 E2E 全通过。
+**状态**：最终版（Q1-Q5 已确认）  
+**目标**：将当前“每节点单 HN-F / 单 EP-SNF”实现，收敛为“每节点双 HN-F / 双 EP-SNF / 单 EP-RNF / 单 EPBackend”的可执行改造清单。  
+**约束**：`num_sockets=1` 必须完全退化为当前行为，28 个单 socket TC 全通过。
 
 ---
 
-## 1. Architecture Diagrams（Before / After）
+## 0. 最终确认结论（冻结）
 
-### 1.1 当前单 socket 基线
+1. `local_private_range`、`metadata_private_range` 均按 socket 切分。  
+2. `ubcc_exclusive_range` 删除；其所有“路由占位/CPU 可见私有元数据窗口”的使用点改名并迁移到 `metadata_private_range(socket)`。  
+3. EP-RNF 保持 **全局单个** `_chiRequestInFlight` 串行化，不做 per-socket/per-plane 并发。  
+4. `num_sockets > 1` 时，EP-RNF 必须拿到 **完整的每-socket HN-F 版本槽位**；缺失即 `fatal`。  
+5. cluster/topology 构造时显式传入 `socket_id`。  
+6. EPBackend 提供 `registerEpSnf(socket)` / `getEpSnf(socket)`，并在 `init()` 做完整性检查。  
+
+---
+
+## 1. 目标拓扑（冻结）
 
 ```text
-Node i
+Node i:
+  CPU L1D/L2 clusters (each cluster has explicit socket_id=0/1)
+    │
+    ├── PA.homeSocket = 0 ──> HN-F(i,0) ──> EP-SNF(i,0)
+    └── PA.homeSocket = 1 ──> HN-F(i,1) ──> EP-SNF(i,1)
 
-CPU/L1/L2 clusters
-      │
-    HN-F_i (single L3)
-      │
-  ┌───┴───────────────┐
-  │ DL_SNF_i          │ EP_SNF_i
-  │ local/home DRAM   │ DSM proxy
-  └───────────────────┘
-             │
-        EPBackend_i
-         │      │
-      EP-RNF_i  UBAdapter_i ─ UBRouter_i ─ UBCC_i
+  EP-SNF(i,0) ─┐
+  EP-SNF(i,1) ─┴─> EPBackend(i)
+                    │
+                    └─> EP-RNF(i)   // single controller, PA.homeSocket-selecting
+                          │
+                 UBAdapter(i,0) / UBAdapter(i,1)
+                 UBRouter(i,0)  / UBRouter(i,1)
+                 UBCC(i,0)      / UBCC(i,1)
+                 MetaRNF(i,0)   / MetaRNF(i,1)
 ```
 
-问题：
+### 1.1 地址归属原则
 
-1. DSM 只编码 `homeNode`，不编码 `homeSocket`。  
-2. `UBRouter`/`UBAdapter`/`UBCC` 只有 node 维度实例。  
-3. `EPBackend` 仍持有直接 `_ubcc` 访问路径。  
-4. 写回 fallback 依赖 direct `getEpochForLine()/getOwnerForLine()`。  
-5. `MetaRNFController` 仍是 per-node singleton。  
-6. HN-F / EP-SNF 缺少 `requesterSocket` / `ingressSocket` sideband。
+- `HN-F(i,k)` 覆盖：`local_private(k)` + `metadata_private(k)` + `DSM(*,k)`。
+- `EP-SNF(i,k)` 覆盖：`DSM(*,k)`。
+- `EP-RNF(i)` 根据 `PA.homeSocket` 选择下游 `HN-F(i,k)`。
+- `EPBackend(i)` 仍为单实例，但持有 per-socket `EP-SNF` 句柄表。
 
-### 1.2 目标双 socket 结构
+### 1.2 命名澄清
 
-```text
-Node i
+当前代码里有两个“metadata”概念，必须区分：
 
-CPU/L1/L2 clusters on socket 0/1
-            │
-        HN-F_i (single per node)
-            │
-         EP_SNF_i
-            │
-        EPBackend_i (per-node)
-        ┌───────────────┬───────────────┐
-        │               │               │
-  UBAdapter(i,0)   UBAdapter(i,1)   EP-RNF_i
-        │               │
-  UBRouter(i,0)    UBRouter(i,1)
-        │               │
-   UBCC(i,0)         UBCC(i,1)
-        │               │
- MetaRNF(i,0)      MetaRNF(i,1)
-```
-
-核心原则：
-
-1. **目录归属由 `homeSocket` 决定。**  
-2. **请求从 `ingressSocket` 出发，抵达 `homeSocket`。**  
-3. **home UBCC fanout recall/invalidate 时，固定走“与自己同 socket 的 router plane”。**  
-4. **HN-F 仅保存 `requesterSocket` 于 TBE，用于 sideband / latency hint；不进入持久目录。**
-
-### 1.3 关键数据流
-
-```text
-Read miss:
-CPU(socket=r) → HN-F(TBE.requesterSocket=r)
-             → EP_SNF(msg.ubcc_requester_socket=r)
-             → EPBackend
-             → UBAdapter(node=req, socket=r)
-             → UBRouter(req,r)
-             → UBRouter(home,homeSocket)
-             → UBCC(home,homeSocket)
-
-Recall / Invalidate:
-UBCC(home,homeSocket)
-   → UBRouter(home,homeSocket)
-   → UBRouter(dst,homeSocket)
-   → UBAdapter(dst,homeSocket)
-   → EPBackend(dst)
-   → EP-RNF(dst)
-```
+1. **routing window**：原 `ubcc_exclusive_range` 的那一段，改名为 `metadata_private_range(socket)`；这是 HN-F/CPU-visible 的 per-socket 私有窗口。  
+2. **metadata backstore**：当前 `metadata_private_base/size` 对应的 16MB 元数据后备存储；该块继续保留，供 `EPBackend/MetaRNF` 使用。为避免额外文件改动，**EPBackend 参数名保持不变**，但文档上统一称其为“metadata backstore”。
 
 ---
 
-## 2. PA Encoding Scheme
+## 2. 不需要改的前提件
 
-### 2.1 现状基线
+以下文件已具备 dual-socket 基础能力，本轮只消费，不再扩展：
 
-- C++ `NodeAddressMap.hh:24-56` 与 Python `CHI_basic_framework_config.py:46-80` 当前只支持：
-  - `DSM_(request_node, home_node)`
-  - 每个 node 视图只有 `N` 个 DSM 段。
-
-### 2.2 新编码目标
-
-采用已确认方案：**显式 `DSM_(home_node, home_socket)` 子段编码**。
-
-每个 requester node 的 PA 视图改为：
-
-```text
-PHY_BASE_i + [0, 1*SEG)      : LocalPrivate
-PHY_BASE_i + [1, 2*SEG)      : UbccExclusive
-PHY_BASE_i + [2, 2+N*S) * SEG: DSM_(homeNode, homeSocket)
-PHY_BASE_i + metadata_base   : Metadata private
-```
-
-其中：
-
-- `N = num_nodes`
-- `S = num_sockets`
-- 当前目标 `S = 2`
-
-### 2.3 地址公式
-
-建议统一为：
-
-```cpp
-dsm_index   = homeNode * numSockets + homeSocket;
-pa          = nodeBase(requestNode)
-            + 2 * segSize
-            + dsm_index * segSize
-            + offset;
-
-homeNode    = ((pa - nodeBase(requestNode) - 2 * segSize) / segSize) / numSockets;
-homeSocket  = ((pa - nodeBase(requestNode) - 2 * segSize) / segSize) % numSockets;
-```
-
-### 2.4 对现有布局的直接影响
-
-对于 `N=3, S=2`：
-
-- DSM 窗口从原先 `3 * SEG` 扩为 `6 * SEG`
-- `metadata_private_base` 必须从原 `phy_base + 5*SEG` 后移到 `phy_base + 8*SEG`
-- `NodeConfig.dsm_global_range()` / `dsm_local_range()` / `dsm_range_for()` 都要改为 socket-aware 版本
-
-### 2.5 单 socket 退化行为
-
-当 `num_sockets=1` 时：
-
-- `dsm_index = homeNode`
-- 新公式退化为当前实现
-- `metadata_private_base` 自动退化回当前位置
-- 不需要单独维护 legacy 分支
+- `gem5/src/mem/ruby/protocol/chi/ep/NodeAddressMap.hh:19-74`  
+  已支持 `num_sockets`、`homeSocket()`、`buildDsmPA(..., home_socket)`。
+- `gem5/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh:25` / `.cc:15-28`  
+  已支持 `(node_id, socket_id)` 键注册；Python 侧只需真正实例化 per-socket MetaRNF。
 
 ---
 
-## 3. UBMsg Header Changes
-
-### 3.1 现状基线
-
-- `UBMsg.hh:17-35` 只有现有消息类型。  
-- `UBMsg.hh:49-73` 的 `UBMsgHeader` 只有 node 维度字段，无 socket。  
-- `ubMsgToString()` (`UBMsg.hh:216-229`) 也未打印 socket。
-
-### 3.2 Header 扩展
-
-在 `UBMsgHeader` 中新增：
-
-```cpp
-uint16_t srcSocket;
-uint16_t dstSocket;
-```
-
-规则：
-
-- `srcSocket`：消息发起的本地 socket 平面
-- `dstSocket`：目标 UBRouter/UBCC/UBAdapter 所在 socket 平面
-- `homeSocket` **不新增独立 header 字段**，直接从 `homeLinePa` 解码
-
-### 3.3 新消息类型
-
-在 `UBMsgType` 增加：
-
-```cpp
-QueryLineMetaReq,
-QueryLineMetaResp,
-HomeWritebackNotify,
-```
-
-推荐顺序：放在 `WritebackReq/Resp` 附近，便于归类。
-
-### 3.4 新 body 定义
-
-#### QueryLineMetaReq
-
-- 无额外 body 字段；用 `homeLinePa` 作为 key。
-
-#### QueryLineMetaResp
-
-建议 body：
-
-```cpp
-struct UBQueryLineMetaRespBody {
-    bool found;
-    int16_t ownerNode;   // -1 if none
-    uint8_t mesi;        // G_I/G_S/G_E/G_M snapshot
-    uint64_t epoch;
-};
-```
-
-用途：
-
-- requester-side `_requesterLines` 无条目时，写回前查询 home committed metadata
-- 只读查询，不创建 outstanding，不改变 epoch，不触发目录填充副作用
-
-#### HomeWritebackNotify
-
-建议 body 为空，复用 header：
-
-- `homeLinePa`：home-view PA
-- `epoch`：写回对应的 `expectedEpoch`
-- `srcNode/srcSocket = home node/home socket`
-- `dstNode/dstSocket = home node/home socket`
-
-语义：
-
-- HN-F → EP-SNF 完成对 home DRAM 的写入后，通知同 socket 的 home UBCC 进行最终目录释放
-- UBCC 必须将其视为 **可丢弃的 stale 通知**：若当前 committed epoch 已变化，则直接忽略
-
-### 3.5 所有消息统一携带 socket 字段
-
-根据已确认决策，以下全部要填 `srcSocket/dstSocket`：
-
-- `ReadReq/Resp`
-- `WritebackReq/Resp`
-- `EvictReq/Resp`
-- `UpgradeReq/Resp`
-- `UpgradeDoneReq/Resp`
-- `ClearReq/Resp`
-- `RecallReq/Resp`
-- `InvalidateReq/Ack`
-- `UpgradeAckNotify`
-- `QueryLineMetaReq/Resp`
-- `HomeWritebackNotify`
+## 3. 文件级实施清单
 
 ---
 
-## 4. UBRouter Per-Socket Registry + Latency Tables
+## 3.1 `gem5/configs/ruby/CHI_basic_framework_config.py`
 
-### 4.1 现状基线
+### A. 当前基线
 
-- `UBRouter.hh:23-28` 注释仍假设 per-node only。  
-- `UBRouter.hh:70-72` / `UBRouter.cc:17-29` 静态 registry 为 `std::map<int, UBRouter*>`。  
-- `UBRouter.hh:81-82` 队列 key 为 `(srcNode,dstNode)`。  
-- `UBRouter.cc:125-180` 本地/远端投递只判断 `dstNode`。
+- `NodeConfig`：`96-128`
+  - `local_private_range` 为单段。
+  - `ubcc_exclusive_range` 为单段。
+  - `metadata_private_range` 是 DSM 之后的 16MB 整段。
+- `get_all_system_ranges()`：`149-156`
+  - 仍把 `ubcc_exclusive_range` 作为系统地址空间一部分。
+- `ClusterCHI_RNF`：`159-233`
+  - 无 `socket_id`。
+  - 无 per-cluster socket 元信息可供 topology/latency 使用。
 
-### 4.2 新 registry key
+### B. 必改范围
 
-改为：
+1. **`NodeConfig` 重构（修改 `96-128`）**
 
-```cpp
-using RouterKey = std::pair<int,int>; // (nodeId, socketId)
-static std::map<RouterKey, UBRouter*> _routers;
-```
+   将当前单值属性改成 per-socket helper：
 
-接口改为：
+   ```python
+   def local_private_range(self, socket_id): ...
+   def metadata_private_range(self, socket_id): ...   # 原 ubcc_exclusive slot
+   def metadata_backstore_range(self, socket_id): ... # 16MB 后备区切片
+   def all_local_private_ranges(self): ...
+   def all_metadata_private_ranges(self): ...
+   def all_metadata_backstore_ranges(self): ...
+   ```
 
-```cpp
-static UBRouter* getRouter(int nodeId, int socketId);
-static void registerRouter(int nodeId, int socketId, UBRouter* router);
-```
+   明确布局：
 
-### 4.3 Router 实例属性
+   ```text
+   [0*SEG, 1*SEG) : local_private total window, evenly split by socket
+   [1*SEG, 2*SEG) : metadata_private total window, evenly split by socket
+   [2*SEG, 2+N*S) : DSM(*, socket)
+   [metadata_backstore_base, metadata_backstore_end) : 16MB backstore, split by socket
+   ```
 
-`UBRouter` 新增：
+   删除：
 
-```cpp
-int _socketId;
-int socketId() const;
-```
+   ```python
+   ubcc_exclusive_base
+   ubcc_exclusive_end
+   ubcc_exclusive_range
+   ```
 
-并在 Python `UBRouter.py` 增加参数：
+2. **保留 EPBackend 参数兼容名**
 
-```python
-socket_id = Param.Int(0, "Socket ID for this router")
-```
+   `metadata_private_base/size/end` 当前在 `105-116` 定义。这里建议：
 
-### 4.4 Pair queue key 扩展
+   - 代码字段继续保留现名，避免连带修改 SimObject param。  
+   - 文档/注释补充说明：这些字段表示 **metadata backstore**，不是新的 `metadata_private_range(socket)`。
 
-队列 key 需至少扩为四元组：
+3. **`get_all_system_ranges()` 更新（修改 `149-156`）**
 
-```cpp
-(srcNode, srcSocket, dstNode, dstSocket)
-```
+   用：
 
-否则 `(node0,socket0→node1,socket1)` 与 `(node0,socket1→node1,socket1)` 会错误复用同一 FIFO。
+   - `all_local_private_ranges()`
+   - `all_metadata_private_ranges()`
+   - `NodeConfig.dsm_global_range(...)`
 
-### 4.5 本地投递条件
+   替换原 `ubcc_exclusive_range` 收集逻辑。
 
-`drainReadyQueues()` 中：
+4. **`ClusterCHI_RNF` 增加显式 socket 参数（修改 `159-233`）**
 
-- 当前：`msg.h.dstNode == _nodeId`
-- 新逻辑：`msg.h.dstNode == _nodeId && msg.h.dstSocket == _socketId`
+   `__init__` 新增：
 
-否则一律 remote-forward 到 `getRouter(msg.h.dstNode, msg.h.dstSocket)`。
+   ```python
+   def __init__(..., socket_id=0):
+       self.socket_id = socket_id
+   ```
 
-### 4.6 home-side sharer routing 规则
+   这是 topology latency 的唯一来源；禁止再用 cluster 下标隐式推断。
 
-已确认规则：
+### C. 本文件新增/保留接口清单
 
-> `UBCC(node=H, socket=s)` fanout recall/invalidate 时，统一发往 `UBRouter(dstNode, socket=s)`。
-
-因此：
-
-- directory plane 由 `homeSocket` 锁定
-- sharer 不需要扩展成 `(node,socket)` 粒度
-- 远端 `EPBackend` 收到消息后，若需进一步面向本地 CHI 域处理，再用 `ingressSocket`/本地规则完成 node 内延迟建模
-
-### 4.7 Latency 表语义
-
-`ub_msg_latency` 继续作为配置入口，但语义扩展为：
-
-- 默认可仍是单值 “per-hop latency”
-- 若已有 per-pair 配置解析逻辑，则索引维度扩展为 `(srcNode,srcSocket,dstNode,dstSocket)`
-- 单 socket 时，所有索引退化到 `socket=0`
+- 新增：`local_private_range(socket_id)`
+- 新增：`metadata_private_range(socket_id)`
+- 新增：`metadata_backstore_range(socket_id)`
+- 新增：`all_*_ranges()` 辅助函数
+- 删除：`ubcc_exclusive_range`
+- 新增：`ClusterCHI_RNF.socket_id`
 
 ---
 
-## 5. EPBackend Multi-Adapter Routing
+## 3.2 `gem5/configs/ruby/CHI_ubcc_framework.py`
 
-### 5.1 现状基线
+### A. 当前基线
 
-- `EPBackend.hh:662-665` 当前持有 `_ubcc` 与单个 `_ubAdapter`。  
-- `EPBackend.cc:119-123` 构造函数内直接 new `UBCCController`。  
-- `EPBackend.cc:1243-1249` 直接 `_ubcc->notifyHomeWritebackComplete()`。  
-- `EPBackend.cc:1284-1293` 直接 `_ubcc->getEpochForLine()/getOwnerForLine()`。
+- 环境与 `num_sockets` 读取：`155-176`
+- 本地 SNF / EP-SNF / HN-F / MetaRNF / EP-RNF 创建：`200-329`
+  - 每节点仅 1 个 `ep_snf_cntrl`
+  - 每节点仅 1 个 `hnf_cntrl`
+  - 每节点仅 1 个 `meta_rnf_cntrl`
+  - EP-RNF 只绑定 `downstream_destinations=[nd['hnf_cntrl']]`
+- cluster 创建：`334-372`
+  - 无 `socket_id`
+  - cluster 下游只接单个 HN-F
+- HN-F downstream 回填：`373-392`
+  - 只回填单个 `ep_snf_cntrl`
 
-这与已确认的 **DETACHED message-passing only** 设计冲突。
+### B. 必改范围
 
-### 5.2 目标对象关系
+1. **本地内存窗口与 L_SNF 地址覆盖（修改 `204-223`）**
 
-`EPBackend` 改为：
+   当前：
 
-```cpp
-std::vector<UBAdapter*> _ubAdapters;      // size = num_sockets
-std::vector<MetaRNFController*> _metaRnfs; // size = num_sockets
-int _numSockets;
-```
+   ```python
+   addr_ranges=[
+       cfg.local_private_range,
+       cfg.ubcc_exclusive_range,
+       cfg.metadata_private_range,
+   ]
+   ```
 
-删除：
+   改为：
 
-- `UBCCController *_ubcc`
-- `getUBCC()` 单实例接口
-- `setUBAdapter(UBAdapter*)` 单指针接口
+   ```python
+   addr_ranges = (
+       cfg.all_local_private_ranges()
+       + cfg.all_metadata_private_ranges()
+       + cfg.all_metadata_backstore_ranges()
+   )
+   ```
 
-保留：
+   `l_backstore_range` 继续覆盖整块 node-local DRAM；只更新注释，说明第二段已经不是 `ubcc_exclusive`。
 
-- `UBCC -> EPBackend` 的 backstore callback 绑定可继续存在
-- 但 **EPBackend -> UBCC** 一律通过 `UBAdapter/UBRouter/UBMsg`
+2. **每节点创建 2 个 EP-SNF（修改 `257-281`）**
 
-### 5.3 路由选择规则
+   当前单实例：
 
-#### Remote miss
+   - `nd['ep_snf_cntrl']`
+   - `addr_ranges=[DSM(nid,sid) for nid for sid]`
 
-- `homeSocket = addrMap.homeSocket(...)`（新接口）
-- `srcSocket = ingressSocket`（来自 HN-F sideband）
-- 发送适配器选 `_ubAdapters[srcSocket]`
-- `ReadReq.dstSocket = homeSocket`
+   改为列表：
 
-理由：
+   ```python
+   nd['ep_snf_cntrls'] = []
+   nd['ep_snf_wrappers'] = []
+   for sid in range(num_sockets):
+       ep_snf = EPSNFController(
+           ...,
+           ep_backend=ep_backend,
+           addr_ranges=[NodeConfig.dsm_range_for(nid, seg_size, cfg.phy_base,
+                                                 num_sockets, sid)
+                        for nid in range(num_nodes)])
+   ```
 
-- 请求“从哪个本地 socket 进入系统”应保留在源 socket 平面
-- 目录由 `homeSocket` 决定
+   命名要求：
 
-#### Recall / Invalidate fanout
+   - `ep_snf_node{node_id}_s{sid}`：真实 dual-socket 名称
+   - `num_sockets == 1` 时额外保留 legacy alias：`ep_snf_node{node_id}`
 
-- 发起者是 home UBCC
-- `srcSocket = homeSocket`
-- `dstSocket = homeSocket`
-- 远端 `EPBackend` 收到后，按该 socket 平面进入本地适配层
+3. **每节点创建 2 个 HN-F（修改 `283-299`）**
 
-#### Clear / UpgradeDone / Writeback / Evict
+   当前单实例 `hnf_ranges` 直接覆盖所有 DSM。  
+   改为：
 
-- 目录提交类消息都以 `dstSocket = homeSocket`
-- `srcSocket` 对于 requester 发起路径使用 `ingressSocket`
+   ```python
+   nd['hnf_cntrls'] = []
+   nd['hnf_wrappers'] = []
+   for sid in range(num_sockets):
+       hnf_ranges = [
+           cfg.local_private_range(sid),
+           cfg.metadata_private_range(sid),
+           cfg.metadata_backstore_range(sid),
+       ] + [NodeConfig.dsm_range_for(nid, seg_size, cfg.phy_base,
+                                     num_sockets, sid)
+            for nid in range(num_nodes)]
+   ```
 
-### 5.4 `handleRemoteMiss()` 签名变更
+   命名要求同上：
 
-建议从：
+   - `hnf_node{node_id}_s{sid}`
+   - `num_sockets == 1` 时保留 `hnf_node{node_id}` alias
 
-```cpp
-int handleRemoteMiss(uint64_t line_pa, int neededPerm, bool writeIntent,
-                     int& outHomeNode);
-```
+4. **每节点创建 2 个 MetaRNF（修改 `301-315`）**
 
-改为：
+   当前只创建 `socket_id=0` 的单实例。  
+   改为：
 
-```cpp
-int handleRemoteMiss(uint64_t line_pa, int neededPerm, bool writeIntent,
-                     int ingressSocket,
-                     int& outHomeNode, int& outHomeSocket);
-```
+   ```python
+   nd['meta_rnf_cntrls'] = []
+   for sid in range(num_sockets):
+       MetaRNFController(
+           socket_id=sid,
+           addr_ranges=[cfg.metadata_backstore_range(sid)],
+           metadata_private_range=cfg.metadata_backstore_range(sid),
+           downstream_destinations=[nd['hnf_cntrls'][sid]])
+   ```
 
-`RetryEntry` 也要存：
+   说明：这里必须用 **backstore slice**，不能错误复用新的 routing `metadata_private_range(socket)`。
 
-```cpp
-int ingressSocket;
-```
+5. **EP-RNF 绑定所有本地 HN-F（修改 `316-329`）**
 
-### 5.5 写回前 metadata 查询
+   当前：
 
-当前 direct fallback：
+   ```python
+   addr_ranges=[DSM(node_id, socket0)]
+   downstream_destinations=[nd['hnf_cntrl']]
+   ```
 
-- `EPBackend.cc:1284-1293`
+   改为：
 
-改为：
+   ```python
+   addr_ranges=[NodeConfig.dsm_range_for(node_id, seg_size, cfg.phy_base,
+                                         num_sockets, sid)
+                for sid in range(num_sockets)]
+   downstream_destinations=[nd['hnf_cntrls'][sid] for sid in range(num_sockets)]
+   ```
 
-1. 若 `_requesterLines` 有条目：继续用本地 requester epoch。  
-2. 若没有条目：发送 `QueryLineMetaReq(homePa)` 至 `UBCC(homeNode, homeSocket)`。  
-3. `QueryLineMetaResp` 返回 `{found, epoch, ownerNode}`。  
-4. `WritebackReq` 使用 `expectedEpoch = resp.epoch`。  
-5. 若 `ownerNode >= 0`，则 `requesterNode = ownerNode`；否则退化为 `_nodeId`。
+   **顺序必须稳定**：list index 就是 `socket_id`。
 
-### 5.6 home writeback notify 消息化
+6. **EPBackend 绑定 per-socket EP-SNF（修改 `257-266` 与 EP-SNF 创建后）**
 
-当前：
+   checklist 目标：
 
-- `EPBackend::handleHomeWritebackComplete()` 直接调用 UBCC
+   ```python
+   ep_backend.registerEpSnf(sid, nd['ep_snf_cntrls'][sid])
+   ```
 
-新方案：
+   如果 Python 侧 SimObject 代理不能直接调用该方法，则保持设计不变，但必须在实现时确保等价注册时序发生在 `m5.instantiate()` 前后之一，且 `EPBackend::init()` 的完整性检查能看见全部槽位。
 
-1. `EPSNF.recvDataMsg()` 在 home DRAM 写入完成后调用 `EPBackend.handleHomeWritebackComplete(homePa, ingressSocket)`  
-2. `EPBackend` 解析 `homeSocket = PA`  
-3. 通过 `_ubAdapters[homeSocket]` 发送 `HomeWritebackNotify` 到 `UBCC(homeNode, homeSocket)`  
-4. UBCC 以 `epoch` 做 optimistic stale drop
+7. **cluster 显式带 `socket_id`（修改 `334-350`）**
 
-### 5.7 inspection/test hook 调整
+   当前：
 
-现有：
+   ```python
+   cluster = ClusterCHI_RNF(...)
+   ```
 
-- `EPBackend.hh:580-585` 暴露 `getUBCC()/getUBAdapter()`
+   改为：
 
-改为：
+   ```python
+   cluster_socket = <from CPU objects, explicit socket_id>
+   cluster = ClusterCHI_RNF(..., socket_id=cluster_socket)
+   ```
 
-- `getUBAdapter(int socket)`
-- 若确需测试查看 UBCC，则通过 router registry / topology 暴露 `getUbccForSocket(socket)`，但不允许协议主路径调用
+   同时加两条断言：
+
+   - 一个 cluster 内所有 CPU 的 `socket_id` 必须一致。
+   - `socket_id` 必须在 `[0, num_sockets)`。
+
+8. **cluster 下游改为所有本地 HN-F（修改 `373-378`）**
+
+   当前：
+
+   ```python
+   hnf_c_list = [nd['hnf_cntrl']]
+   ```
+
+   改为：
+
+   ```python
+   hnf_c_list = [nd['hnf_cntrls'][sid] for sid in range(num_sockets)]
+   ```
+
+   由地址路由把请求送到正确 `homeSocket` 的 HN-F。
+
+9. **每个 HN-F 只下挂对应 socket 的 EP-SNF（修改 `379-392`）**
+
+   当前：单个 HN-F 下挂单个 `ep_snf_cntrl`。  
+   改为：对每个 `sid`：
+
+   ```python
+   snf_dests = []
+   snf_dests.extend(nd['l_snf'].getAllControllers())
+   snf_dests.append(nd['ep_snf_cntrls'][sid])
+   nd['hnf_wrappers'][sid].setDownstream(snf_dests)
+   nd['hnf_cntrls'][sid].unproxyParams()
+   ```
+
+10. **CPU/HN-F NUMA latency 标记（修改 `334-392` 周边）**
+
+   本文件必须为 topology 提供以下信息：
+
+   - `cluster.socket_id`
+   - `hnf.socket_id`（可通过容器下标或显式属性）
+   - `lat_local` / `lat_numa`
+
+   要求：
+
+   - same-socket `cluster -> HN-F` 使用 `lat_local`
+   - cross-socket `cluster -> HN-F` 使用 `lat_numa`
+
+   若当前 `create_topology()` 分支无法直接区分 pairwise latency，则至少先把 `socket_id` 元信息挂到 controller/wrapper 上，作为 topology builder 的输入；不要把 NUMA 推断写死在 cluster 序号里。
+
+11. **L1/L2 addr_ranges 同步修改（修改 `356-371`）**
+
+   当前含：
+
+   - `cfg.local_private_range`
+   - `cfg.ubcc_exclusive_range`
+   - `cfg.metadata_private_range`
+
+   改为：
+
+   ```python
+   cntrl.addr_ranges = (
+       cfg.all_local_private_ranges()
+       + cfg.all_metadata_private_ranges()
+       + cfg.all_metadata_backstore_ranges()
+       + dsm_ranges
+   )
+   ```
+
+### C. 本文件输出结构要求
+
+- `nd['hnf_cntrls'][sid]`
+- `nd['ep_snf_cntrls'][sid]`
+- `nd['meta_rnf_cntrls'][sid]`
+- `nd['clusters'][*].socket_id`
+- `nd['ep_rnf_cntrl']` 单实例，`downstream_destinations` 长度=`num_sockets`
 
 ---
 
-## 6. UBCC Per-Socket + QueryLineMeta
+## 3.3 `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.hh`
 
-### 6.1 现状基线
+### A. 当前基线
 
-- `UBCCController` 当前构造为 per-node：`UBCCController.hh:202-205`  
-- `_instances` registry 也是 `node_id -> UBCC*`：`UBCCController.hh:225-226`, `UBCCController.cc:45-59`  
-- `isDsmAddr()` 的 `_dsmLocalBase/_dsmSegSize` 仍按单 socket 计算：`UBCCController.cc:86-97`
+- `sendChiRequest()` 声明：`351-355`
+- `_hnfVersion` / `_chiRequestInFlight`：`433-451`
+- 当前只有单个 HN-F 版本号，且无 socket-aware downstream 表。
 
-### 6.2 新实例粒度
+### B. 必改范围
 
-`UBCCController` 改为 `UBCCController(node_id, socket_id, ...)`。
+1. **新增 socket-aware 成员（修改 `348-355` 与 `433-451`）**
 
-新增成员：
+   将：
 
-```cpp
-int _socketId;
-int _numSockets;
-```
+   ```cpp
+   int _hnfVersion;
+   ```
 
-静态 registry 改为：
+   改为：
 
-```cpp
-static std::map<std::pair<int,int>, UBCCController*> _instances;
-```
+   ```cpp
+   int _numSockets;
+   NodeAddressMap _addrMap;
+   std::vector<int> _hnfVersions;               // index == socket_id
+   std::vector<MachineID> _downstreamBySocket;  // index == socket_id
+   ```
 
-### 6.3 ResidentDir 语义
+   保留：
 
-`ResidentDir` 本身位宽不变：
+   ```cpp
+   bool _chiRequestInFlight;
+   std::deque<DeferredChiRequest> _deferredChiReqs;
+   ```
 
-- `ResidentDir.hh:21-27` 的 `UBCCDirEntry` 不加 socket 字段
-- `ResidentDir.cc:170-183` 的 56-bit 打包格式不变
+   即：**序列化仍是全局单份**。
 
-原因：
+2. **头文件 include 补充（文件顶部 `11-20` 附近）**
 
-- 目录已经由 “哪个 UBCC 实例持有” 隐含 socket 归属
-- 每 socket 一个 `ResidentDir`，天然隔离
-- 保持条目编码稳定，最小化状态迁移风险
+   增加：
 
-### 6.4 `isDsmAddr()` 与本地 home 范围
+   ```cpp
+   #include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
+   ```
 
-当前单 socket：
+3. **新增辅助函数（建议放在 `350-409` 私有区）**
 
-- `_dsmLocalBase = nodeBase + 2*seg + node*seg`
+   ```cpp
+   int decodeHomeSocket(uint64_t linePa) const;
+   MachineID selectHnfDestination(uint64_t linePa) const;
+   ```
 
-新逻辑必须改成：
+   目的：把 `PA -> homeSocket -> MachineID` 选择逻辑从 `sendChiRequest()` 抽出来，避免后续 recall/upgrade 路径再复制一遍。
 
-```cpp
-_dsmLocalBase = nodeBase(node_id)
-              + 2 * segSize
-              + (node_id * numSockets + socket_id) * segSize;
-_dsmSegSize   = segSize;
-```
+### C. 必须满足的结构约束
 
-即每个 UBCC 只接受：
-
-- “本 node 为 home”
-- “本 socket 为 homeSocket”
-
-### 6.5 `QueryLineMetaReq/Resp`
-
-新增接口：
-
-```cpp
-bool queryLineMeta(uint64_t line_pa,
-                   uint64_t &epoch,
-                   int &ownerNode,
-                   MESIState &state,
-                   bool &found) const;
-```
-
-处理规则：
-
-1. 先查 resident dir  
-2. 若 resident miss 且 metadata offload/backstore 可用，则查 backstore  
-3. 不创建 resident placeholder  
-4. 不触发 fillPending / wbPending  
-5. 只返回 committed 快照
-
-这是写回 fallback 的只读查询面，不参与排序。
-
-### 6.6 `processWriteback()` 语义保持，但入口变更
-
-当前实现（`UBCCController.cc:1490-1572`）仍有效，需做两点调整：
-
-1. 参数名语义统一为 `expectedEpoch`  
-2. 只允许由 `dstSocket == _socketId` 的 router 本地投递进入
-
-### 6.7 `HomeWritebackNotify` 处理
-
-替代 `notifyHomeWritebackComplete()` 的 direct 调用。
-
-推荐处理规则：
-
-1. lookup `DirEntry`；不存在则忽略  
-2. 若 `isLineBusy(homePa)`，忽略（或保守记录 deferred stat，但不排队）  
-3. 若 `msg.h.epoch != 0 && checkEpochForLine(homePa, msg.h.epoch)==false`，忽略  
-4. 否则执行与当前 `notifyHomeWritebackComplete()` 等价的 `G_* -> G_I` 释放
-
-这样可与 optimistic epoch validation 保持一致。
-
-### 6.8 sharer routing 不扩 socket 粒度
-
-已确认：
-
-- `sharersMask` 仍只表示 node
-- recall/invalidate 从 home UBCC 的 socket plane 发出
-- 因此 `getPendingInvalidationMask()`、`getUpgradePendingTargetMask()` 等接口都无需扩大 bit-width
+- `_hnfVersions.size() == _numSockets`
+- `_downstreamBySocket.size() == _numSockets`
+- `num_sockets==1` 时，`_hnfVersions[0]` 等价旧 `_hnfVersion`
 
 ---
 
-## 7. MetaRNF Per-Socket
+## 3.4 `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.cc`
 
-### 7.1 现状基线
+### A. 当前基线
 
-- `MetaRNFController.hh:25` / `.cc:15-38` 的 singleton key 仅为 `node_id`
-- `EPBackend.cc:237-239` 也是 `MetaRNFController::getInstance(_nodeId)`
+- 构造函数：`217-234`
+  - 只取 `p.downstream_destinations[0]`
+- `init()`：`259-275`
+  - 只打印单个 `hnfVersion`
+- `sendChiRequest()`：`925-985`
+  - 固定发往 `_hnfVersion`
 
-### 7.2 目标
+### B. 必改范围
 
-改为 `MetaRNF(node, socket)`：
+1. **构造函数数组化（修改 `217-234`）**
 
-```cpp
-static MetaRNFController* getInstance(int node_id, int socket_id);
-static std::map<std::pair<int,int>, MetaRNFController*> _instances;
-```
+   目标行为：
 
-### 7.3 metadata 地址空间
+   - `_numSockets = p.num_sockets`（若无直接 param，则从 `_backend->numSockets()` 或 Ruby config 中取；但最终对象内必须持有该值）
+   - `_addrMap = NodeAddressMap(3, _numSockets, 128MB)`
+   - 依 `p.downstream_destinations` 顺序填：
 
-需要将 `metadata_private_range` 也做 per-socket 切分。推荐：
+   ```cpp
+   _hnfVersions.resize(_numSockets, -1);
+   _downstreamBySocket.resize(_numSockets);
+   for (int s = 0; s < _numSockets; ++s) {
+       _hnfVersions[s] = p.downstream_destinations[s]->getVersion();
+       _downstreamBySocket[s] = MachineID{MachineType_Cache, _hnfVersions[s]};
+   }
+   ```
 
-- 每 node 保留一个大的 metadata private 区间
-- 按 `socket_id` 划分成 `num_sockets` 个子区间
-- `metadataBackstorePa()` 的哈希槽仅在该 socket 子区间内分配
+2. **严格完整性检查（修改 `259-275`）**
 
-这样：
+   `init()` 中新增：
 
-- `UBCC(node,0)` 与 `UBCC(node,1)` 的 metadata 不会 alias
-- backstore 查询天然与 per-socket ResidentDir 对齐
+   - `num_sockets > 1` 且 `downstream_destinations.size() != num_sockets` -> `fatal`
+   - 任一 `_hnfVersions[s] < 0` -> `fatal`
+   - `decodeHomeSocket(linePa)` 结果越界 -> `fatal`
 
-### 7.4 EPBackend 绑定
+   打印信息改为完整数组，而不是单个 `hnfVersion=%d`。
 
-`EPBackend` 改为：
+3. **`sendChiRequest()` 改按 `PA.homeSocket` 选 HN-F（修改 `925-985`）**
 
-- `_metaRnfs[socket]`
-- `issueBackstoreRead/Write/Delete(homePa)` 先解析 `homeSocket`，再路由到对应 `MetaRNF`
+   当前：
 
-### 7.5 单 socket 兼容
+   ```cpp
+   hnfId.num = _hnfVersion;
+   ```
 
-`num_sockets=1` 时：
+   改为：
 
-- `_instances[(node,0)]`
-- metadata range 不切分或切分后仍为整段
+   ```cpp
+   int homeSocket = decodeHomeSocket(linePa);
+   MachineID hnfId = _downstreamBySocket[homeSocket];
+   ```
 
----
+   同时 DPRINTF/printf 必须打印：
 
-## 8. HN-F TBE Changes（requesterSocket）
+   - `homeSocket`
+   - `dest.num`
+   - `inFlight`
 
-### 8.1 现状基线
+4. **保持 Q2 约束：不拆 `_chiRequestInFlight`**
 
-- `CHI-cache.sm:646-739` 的 `TBE` 无 socket 字段
-- `CHI-msg.sm:138-143` 只有 `ubcc_needed_perm` / `ubcc_write_intent`
+   不允许引入：
 
-### 8.2 新字段
+   - `_chiRequestInFlight[num_sockets]`
+   - `per-socket deferred queue`
 
-在 `CHI-cache.sm` 的 `TBE` 中新增：
+   本轮只做目标 HN-F 选择，不做并发模型升级。
 
-```text
-int requesterSocket, default="0";
-```
+### C. 必测行为
 
-用途：
-
-- 仅记录发起 miss / writeback / upgrade 的本地 socket
-- 作为 EP-SNF sideband 的来源
-- 绝不进入 `DirEntry` / 持久目录
-
-### 8.3 sideband 扩展
-
-在 `CHI-msg.sm` 的 `CHIRequestMsg` 中新增：
-
-```text
-int ubcc_requester_socket, default="0";
-```
-
-语义：
-
-- HN-F → EP-SNF 的 NUMA latency hint
-- EP-SNF → EPBackend 原样转发为 `ingressSocket`
-
-### 8.4 HN-F 填充点
-
-在 `CHI-cache-funcs.sm`：
-
-1. TBE 分配时，从 requestor machine / cluster topology 推导 `requesterSocket`  
-2. `prepareRequest()`/`prepareRequestRetry()` 对发往 EP-SNF 的 `ReadNoSnp/WriteNoSnp` 写入 `ubcc_requester_socket`
-
-### 8.5 不进入持久状态
-
-已确认：
-
-- `requesterSocket` 不写入 HN-F 目录
-- 不写入 UBCC directory
-- 只存在于 TBE 与消息 sideband
+- `ReadShared/ReadUnique/CleanUnique` 对同一 EP-RNF：
+  - socket0 地址发到 `HN-F(i,0)`
+  - socket1 地址发到 `HN-F(i,1)`
+- 同 tick 若 socket0 请求在飞，socket1 请求也必须被 defer，而不是绕过全局串行化。
 
 ---
 
-## 9. EPSNF NUMA Latency Integration
+## 3.5 `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.hh`
 
-### 9.1 现状基线
+### A. 当前基线
 
-- `EPSNFController.cc:181-182` 只读 `neededPerm/writeIntent`  
-- `EPSNFController.hh:44-51` 的 `RetryEntry` 无 socket  
-- `recvDataMsg()` (`EPSNFController.cc:429-519`) 对 writeback 路径无 socket hint
+- UBAdapter 接口：`588-607`
+- MetaRNF 单指针：`693`
+- `_ubAdapters` / `_numSockets`：`694-695`
 
-### 9.2 `recvRequestMsg()` 变更
+### B. 必改范围
 
-新增读取：
+1. **新增 EP-SNF 注册接口（修改 `588-607` 附近）**
 
-```cpp
-int ingressSocket = msg->m_ubcc_requester_socket;
-```
+   新增：
 
-并把它传给：
+   ```cpp
+   void registerEpSnf(int socketId, EPSNFController *ctrl);
+   EPSNFController* getEpSnf(int socketId) const;
+   ```
 
-- `EPBackend::handleRemoteMiss(..., ingressSocket, ...)`
+2. **新增字段（修改 `688-699`）**
 
-### 9.3 Retry / deferred queue 扩展
+   在私有成员区加入：
 
-以下结构体都要持久化 `ingressSocket`：
+   ```cpp
+   std::vector<EPSNFController*> _epSnfs;
+   ```
 
-- `RetryEntry`
-- 任何 deferred grant / deferred writeback helper
+   保持：
 
-否则 BUSY 后重试会丢失原始 socket hint。
+   ```cpp
+   std::vector<UBAdapter*> _ubAdapters;
+   int _numSockets;
+   ```
 
-### 9.4 `recvDataMsg()` 写回链路
+3. **前置声明（文件顶部 `22-28`）**
 
-当前 `recvDataMsg()`：
+   增加：
 
-- 把 `NCBWrData` 写入 home DRAM 后，若 `_backend->isDsmAddr(writePa)`，调用 `_backend->handleWriteback(writePa, false)`
+   ```cpp
+   class EPSNFController;
+   ```
 
-新方案：
+### C. 兼容性要求
 
-1. `recvDataMsg()` 从原始 request/TBE 带来的 socket 上下文拿到 `ingressSocket`  
-2. 调 `handleWriteback(writePa, false, ingressSocket)`  
-3. DRAM 写入成功后，再调 `handleHomeWritebackComplete(writePa, ingressSocket)`  
-4. 后者内部转为 `HomeWritebackNotify`
-
-### 9.5 latency 使用点
-
-`ingressSocket` 只影响：
-
-- 选哪个本地 `UBAdapter(srcSocket)` 出发
-- 本地 node 内 same-socket / cross-socket latency bucket（若配置存在）
-
-它**不影响**：
-
-- home directory 归属
-- sharersMask
-- committed owner
+- `getEpSnf()` 默认可支持 `socket=0` 调用。
+- `num_sockets==1` 时 `_epSnfs.size()==1` 即通过。
 
 ---
 
-## 10. Configuration Parameters
+## 3.6 `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc`
 
-### 10.1 新增参数
+### A. 当前基线
 
-建议新增：
+- 构造函数：`99-140`
+  - 只初始化 `_ubAdapters`
+- `init()`：`242-275`
+  - 只校验/绑定 UBAdapter
+- backstore MetaRNF 路径：`978-1059`
+  - 仍走单 `_metaRnf`
 
-#### Python SimObject params
+### B. 必改范围
 
-- `UBRouter.py`
-  - `socket_id`
-- `UBAdapter.py`
-  - `socket_id`
-- `MetaRNFController.py`
-  - `socket_id`
-- `EPBackend.py`
-  - `num_sockets`
-  - `ub_adapters = VectorParam.UBAdapter(...)`
-  - `meta_rnfs = VectorParam.MetaRNFController(...)`
+1. **构造函数初始化 `_epSnfs`（修改 `99-140`）**
 
-#### C++ helper params / config
+   与 `_ubAdapters` 同步：
 
-- `NodeAddressMap(num_nodes, num_sockets, seg_size)`
-- `NodeConfig(num_sockets=1)`
+   ```cpp
+   _epSnfs.resize(_numSockets, nullptr);
+   ```
 
-### 10.2 `CHI_ubcc_framework.py` 拓扑构造
+2. **实现 `registerEpSnf()` / `getEpSnf()`（新增实现块）**
 
-当前：
+   规则：
 
-- `UBRouter/UBAdapter/MetaRNF` 均为 per-node：`CHI_ubcc_framework.py:246-305`
+   - `socketId >= size` 时允许 resize 到 `socketId+1`
+   - 允许覆盖前 `fatal_if(existing && existing != ctrl)`，避免 silent alias
 
-新方案：
+3. **`init()` 完整性检查（修改 `242-275`）**
 
-```text
-for node in num_nodes:
-  create EPBackend(node)                      # one per node
-  for socket in num_sockets:
-    create UBRouter(node,socket)
-    create UBAdapter(node,socket)
-    create UBCC(node,socket)
-    create MetaRNF(node,socket)
-  wire arrays into EPBackend
-```
+   在现有 UBAdapter 绑定循环后追加：
 
-### 10.3 地址范围构造
+   ```cpp
+   for (int s = 0; s < _numSockets; ++s) {
+       fatal_if(_epSnfs[s] == nullptr,
+                "EPBackend node_id=%d: missing EP-SNF for socket %d", ...);
+   }
+   ```
 
-`NodeConfig` 必须：
+   这是 Q5 的强制要求。
 
-- 暴露 `dsm_range_for(homeNode, homeSocket, phy_base)`
-- 暴露 `dsm_socket_global_range()` / `all_dsm_ranges()` 辅助函数
-- 更新 `metadata_private_base`
+4. **说明：本轮 EPBackend 主协议路径不改为 per-socket 实例**
 
-### 10.4 环境变量 / 默认值
+   仍保持：
 
-建议新增：
+   - 单个 `EPBackend`
+   - 单个 `EP-RNF`
+   - `_ubAdapters[s]` 按 socket 使用
 
-- `UBCC_NUM_SOCKETS=1`（默认）
-- `UBCC_SOCKET_LOCAL_LATENCY` / `UBCC_SOCKET_REMOTE_LATENCY`（可选）
+   新增 `_epSnfs[s]` 主要用于：
 
-若不配置，继续使用现有 `ub_msg_latency` 默认路径。
+   - 拓扑完整性校验
+   - 后续如果需要从 backend 回指 EP-SNF 时已有稳定索引
 
----
+5. **metadata backstore 备注（关联 `978-1059`）**
 
-## 11. Single-Socket Backward Compatibility
+   若 `metadataBackstorePa()` 已按 `homePa` 哈希落到 node-wide backstore，则本轮至少要保证：
 
-### 11.1 统一数组化
+   - MetaRNF 实例化为 per-socket
+   - `EPBackend::init()`/wiring 能拿到对应 socket 的 MetaRNF
 
-已确认采用方案 A：
-
-- 所有 per-socket 组件统一数组化
-- `num_sockets=1` 时数组大小为 1
-- 所有 `socketId` 默认 0
-
-### 11.2 兼容性规则
-
-1. `NodeAddressMap` 新公式在 `num_sockets=1` 下退化为旧布局  
-2. `UBMsg.srcSocket/dstSocket` 都为 0  
-3. router/ubcc/meta registry key 统一为 `(node,0)`  
-4. sideband `ubcc_requester_socket` 默认 0  
-5. `tests/e2e/test_e2e.py` 默认不改 case 内容，只默认 `num_sockets=1`
-
-### 11.3 不允许的兼容实现
-
-不得：
-
-- 维护单独的 single-socket fast path
-- 在单 socket 模式下继续使用 direct `_ubcc`
-- 通过 `if num_sockets == 1` 绕过 QueryLineMeta / HomeWritebackNotify 协议路径
+   若暂不扩 `_metaRnf` 为数组，必须在本文件注释里明确：当前 backstore 仍通过单指针访问，仅作为单 socket 兼容路径；dual-socket 正式接线时不可遗漏该点。
 
 ---
 
-## 12. File-by-File Implementation Checklist
+## 4. 精确修改顺序（建议执行顺序）
 
-下面按实施优先级给出逐文件清单。
+1. **先改地址帮助类**：`CHI_basic_framework_config.py`
+2. **再改 topology 构造**：`CHI_ubcc_framework.py`
+3. **再改 EP-RNF 目标选择**：`EPRNFController.hh/cc`
+4. **最后改 backend 完整性与 EP-SNF 注册**：`EPBackend.hh/cc`
 
-### 12.1 地址 / 配置层
-
-| 文件 | 当前基线 | 必要修改 |
-|---|---|---|
-| `gem5/configs/ruby/CHI_basic_framework_config.py` | `NodeAddressMap` 只支持 `homeNode`，`NodeConfig.metadata_private_base = phy_base + 5*SEG`（行 29-128） | 增加 `num_sockets`、`homeSocket()`、`buildDsmPA(..., homeSocket, ...)`；DSM range 扩展为 `N*S` 段；metadata 基址后移 |
-| `gem5/src/mem/ruby/protocol/chi/ep/NodeAddressMap.hh` | `isDsm/homeNode/buildDsmPA` 仅 node 粒度（行 24-56） | 新增 `numSockets` 成员、`homeSocket()`、socket-aware `buildDsmPA()`；保留单 socket 退化 |
-| `gem5/configs/ruby/CHI_ubcc_framework.py` | 当前 per-node 创建 `UBRouter/UBAdapter/MetaRNF`（行 246-305） | 改为 per-socket 创建；`EPBackend` 接数组；为每 socket 建 `UBCC/MetaRNF`；更新 addr_ranges |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBRouter.py` | 仅 `node_id` + `ub_msg_latency`（行 7-13） | 增加 `socket_id` |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.py` | 仅 `node_id` + `router`（行 7-13） | 增加 `socket_id` |
-| `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.py` | 单 `ub_adapter`、单 `meta_rnf`（行 12-22） | 改为 `num_sockets` + adapter/meta_rnf 数组 |
-| `gem5/src/mem/ruby/protocol/chi/ep/MetaRNFController.py` | 无 `socket_id`（行 5-12） | 增加 `socket_id`；metadata range 切分 |
-
-### 12.2 UB message / transport 层
-
-| 文件 | 当前基线 | 必要修改 |
-|---|---|---|
-| `gem5/src/mem/ruby/protocol/chi/ep/UBMsg.hh` | header 无 socket；无 `QueryLineMeta*` / `HomeWritebackNotify`（行 17-73） | 增加 `srcSocket/dstSocket`；新增 3 个消息类型与 body；更新 debug string |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBRouter.hh` | registry key 为 node；queue key 为 `(src,dst)`（行 67-92） | 改为 `(node,socket)` registry；queue key 扩为四元组；新增 `socketId()` |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBRouter.cc` | `getRouter/registerRouter/sendMessage/drain` 均只按 node 路由（行 17-203） | 全面 socket-aware；本地投递检查 `dstSocket`；remote delivery 查 `(dstNode,dstSocket)`；新增新消息类型分发 |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.hh` | 单 node 粒度接口；无 QueryLineMeta/HomeWritebackNotify API（行 36-160） | 增加 `socketId()`、`sendQueryLineMetaReq()`、`sendHomeWritebackNotify()`；所有 send/recv API 增 socket 语义 |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc` | 所有消息只填 node 字段（行 61-669） | 所有消息填 `srcSocket/dstSocket`；新增 meta query/notify 构造与响应解析；`recvFromRouter()` 向 backend 传 `ingressSocket` |
-
-### 12.3 EPBackend / UBCC 主协议层
-
-| 文件 | 当前基线 | 必要修改 |
-|---|---|---|
-| `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.hh` | 仍有 `_ubcc` + 单 `_ubAdapter` + 单 `_metaRnf`（行 660-666） | 删除 direct `_ubcc` 主路径；改为 `_ubAdapters[]/_metaRnfs[]/_numSockets`；所有主入口增加 `ingressSocket` |
-| `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc` | 构造时直接 new UBCC（行 99-131）；`handleRemoteMiss`/`handleWriteback`/`handleHomeWritebackComplete` 直接或间接依赖 `_ubcc`（行 381-739, 1243-1343） | 取消 direct `_ubcc` 访问；remote miss 按 `srcSocket=ingressSocket,dstSocket=homeSocket` 发送；writeback fallback 改为 `QueryLineMetaReq/Resp`；home writeback 改为 `HomeWritebackNotify` |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.hh` | per-node ctor / registry；direct `notifyHomeWritebackComplete/getEpochForLine/getOwnerForLine` 接口（行 202-226, 347-386） | 增 `socket_id` / `(node,socket)` registry；新增 `queryLineMeta()`；保留 `processWriteback/processEvict`；把 home writeback 改为消息处理入口 |
-| `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.cc` | `_instances`、DSM local base、writeback/notify 逻辑均单 socket（行 45-98, 1461-1610） | 按 socket 更新 registry 与 `isDsmAddr()`；实现 `QueryLineMetaResp`；实现 `HomeWritebackNotify` 的 stale-safe 应用 |
-| `gem5/src/mem/ruby/protocol/chi/ep/ResidentDir.hh` | 条目编码不含 socket（行 21-27, 48-50） | **不改格式**；仅更新注释说明“per-socket resident dir instance” |
-| `gem5/src/mem/ruby/protocol/chi/ep/ResidentDir.cc` | 56-bit packed entry 稳定（行 170-195） | **不改位宽**；仅必要断言/注释 |
-| `gem5/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh/.cc` | singleton key 仅 node（行 25-26；`.cc` 15-38） | 改为 `(node,socket)` key；metadata range per-socket；实例注册与查询 socket-aware |
-
-### 12.4 CHI sideband / HN-F / EP-SNF 层
-
-| 文件 | 当前基线 | 必要修改 |
-|---|---|---|
-| `gem5/src/mem/ruby/protocol/chi/CHI-msg.sm` | 只有 `ubcc_needed_perm` / `ubcc_write_intent`（行 138-143） | 新增 `ubcc_requester_socket` sideband，默认 0 |
-| `gem5/src/mem/ruby/protocol/chi/CHI-cache.sm` | `TBE` 无 socket 字段（行 646-739） | 增 `requesterSocket`，默认 0 |
-| `gem5/src/mem/ruby/protocol/chi/CHI-cache-funcs.sm` | `prepareRequest()`/`prepareRequestRetry()` 只设置现有 sideband（行 668-769） | 新增 `out_msg.ubcc_requester_socket := tbe.requesterSocket`；在 TBE 初始化时推导 requesterSocket |
-| `gem5/src/mem/ruby/protocol/chi/ep/EPSNFController.hh` | `RetryEntry` 无 socket（行 44-51） | 新增 `ingressSocket` 字段 |
-| `gem5/src/mem/ruby/protocol/chi/ep/EPSNFController.cc` | `recvRequestMsg()`/`recvDataMsg()` 不读 socket sideband（行 181-203, 429-519） | 读取 `ubcc_requester_socket`；传给 backend；retry 队列保留该字段；writeback/home-writeback 链路使用该字段 |
-
-### 12.5 测试 / harness 层
-
-| 文件 | 当前基线 | 必要修改 |
-|---|---|---|
-| `tests/e2e/test_e2e.py` | 当前用例注册到 TC28（行 20-50） | 默认 `num_sockets=1` 回归不变；新增 dual-socket 配置入口与 smoke/regression 子集；现有用例不改判定语义 |
+原因：Python topology 改完后，C++ 侧的 `downstream_destinations` / `registerEpSnf()` 才有真实对象可接。
 
 ---
 
-## 13. Message Flow Diagrams for Key Operations
+## 5. `num_sockets=1` 退化要求（必须逐条满足）
 
-### 13.1 Remote Read Miss
-
-```text
-CPU(socket=r)
-  → HN-F: allocate TBE.requesterSocket=r
-  → EP_SNF: ReadNoSnp + {neededPerm, writeIntent, requesterSocket=r}
-  → EPBackend.handleRemoteMiss(..., ingressSocket=r)
-  → decode PA → {homeNode, homeSocket}
-  → UBAdapter(reqNode, r): ReadReq{srcSocket=r, dstSocket=homeSocket}
-  → UBRouter(req,r)
-  → UBRouter(home,homeSocket)
-  → UBCC(home,homeSocket)
-  → ReadResp back to UBAdapter(req,r)
-  → EPBackend populateGrantData + sendClear
-  → EP_SNF returns CompData to HN-F
-```
-
-关键点：
-
-- `homeSocket` 只由 PA 决定
-- `ingressSocket` 只由 sideband 决定
-- Clear 提交仍落在 `homeSocket` 对应 UBCC
-
-### 13.2 Remote Read Miss with Recall
-
-```text
-Requester EPBackend(req, ingress=r)
-  → ReadReq(dstSocket=homeSocket)
-  → UBCC(home,homeSocket): decide recallNeeded, recallOwnerNode
-  → UBAdapter(homeSocket plane) sends RecallReq to dstNode=owner, dstSocket=homeSocket
-  → UBRouter(owner,homeSocket)
-  → UBAdapter(owner,homeSocket)
-  → EPBackend(owner) → EP-RNF(owner) → HN-F(owner) → local L2 snoop/CHI req
-  → RecallResp(srcSocket=homeSocket, dstSocket=homeSocket)
-  → UBCC(home,homeSocket)
-  → grant / Clear commit
-```
-
-关键点：
-
-- sharer routing 固定走 `homeSocket` plane
-- owner 本地实际 CPU 位于哪个 socket 不进入 sharersMask；仅影响 node 内 NUMA latency 模型
-
-### 13.3 Writeback with Requester Metadata Hit
-
-```text
-HN-F/EP_SNF(req socket=r)
-  → EPBackend.handleWriteback(line_pa, keepAsClean, ingressSocket=r)
-  → _requesterLines[line_pa] hit → obtain epoch
-  → decode homeSocket from PA
-  → UBAdapter(req,r): WritebackReq{srcSocket=r, dstSocket=homeSocket, epoch=expectedEpoch}
-  → UBCC(home,homeSocket): processWriteback(expectedEpoch)
-```
-
-### 13.4 Writeback with Requester Metadata Miss
-
-```text
-EPBackend.handleWriteback(...)
-  → _requesterLines miss
-  → QueryLineMetaReq{srcSocket=r, dstSocket=homeSocket}
-  → UBCC(home,homeSocket) returns {epoch, ownerNode}
-  → WritebackReq(expectedEpoch=resp.epoch, requesterNode=resp.ownerNode or self)
-  → UBCC optimistic epoch validation
-```
-
-### 13.5 Home Writeback Notify
-
-```text
-HN-F(home node) writes data to DRAM
-  → EP_SNF.recvDataMsg()
-  → EPBackend.handleHomeWritebackComplete(homePa, ingressSocket)
-  → decode homeSocket from PA
-  → UBAdapter(homeSocket): HomeWritebackNotify{epoch=expectedEpoch}
-  → UBCC(home,homeSocket): if epoch still current, release dir entry
-```
-
-### 13.6 Local Upgrade
-
-```text
-Local L2 write upgrade on requester socket=r
-  → HN-F snoops EP-RNF
-  → EPBackend.notifyLocalWriteUpgrade(line_pa, homeNode, ingressSocket=r)
-  → decode homeSocket from PA
-  → UBAdapter(req,r): UpgradeReq{dstSocket=homeSocket}
-  → UBCC(home,homeSocket): freeze targetMask, maybe fanout invalidations on same socket plane
-  → all InvalidateAck return to UBCC(home,homeSocket)
-  → UpgradeAckNotify back to requester socket plane
-  → EP-RNF replies HN-F
-  → UpgradeDone(dstSocket=homeSocket)
-```
+1. 仍只创建 1 个 `HN-F(i,0)` / `EP-SNF(i,0)` / `MetaRNF(i,0)`。  
+2. 仍只创建 1 个 `downstream_destinations[0]`。  
+3. `EP-RNF::_hnfVersions.size()==1`。  
+4. `_chiRequestInFlight` 行为与当前完全一致。  
+5. legacy alias 名称仍可访问：
+   - `hnf_node{node_id}`
+   - `ep_snf_node{node_id}`
+   - `meta_rnf_node{node_id}`（若当前测试依赖）
+6. 28 个既有 TC 不允许因对象命名或 addr_ranges 变化而失效。
 
 ---
 
-## 14. Impact on Existing Test Suite
+## 6. 必做代码审查点
 
-### 14.1 单 socket 回归要求
+### 6.1 地址空间
 
-必须保证 `num_sockets=1` 时，现有 `TC1-TC28` 语义不变。
+- 是否还残留 `cfg.ubcc_exclusive_range`
+- 是否所有 HN-F/L1/L2/L_SNF 覆盖都切换到了 `metadata_private_range(socket)`
+- 是否 `MetaRNF` 使用的是 `metadata_backstore_range(socket)`，不是 routing window
 
-重点回归路径：
+### 6.2 HN-F / EP-SNF 一一对应
 
-- **TC2/TC3/TC4**：remote read 基础路由
-- **TC5/TC6**：多 requester / Clear replay / pending requester
-- **TC7**：writeback / evict / epoch / owner 校验
-- **TC8/TC11/TC16**：upgrade + invalidate + delayed ack
-- **TC18-TC24**：ResidentDir / offload / capacity / bloom / stress
-- **TC28**：metadata backstore consistency
+- `HN-F(i,0)` 是否只下挂 `EP-SNF(i,0)`
+- `HN-F(i,1)` 是否只下挂 `EP-SNF(i,1)`
+- EP-RNF 的 `downstream_destinations` 顺序是否与 `socket_id` 完全一致
 
-### 14.2 双 socket 新增覆盖建议
+### 6.3 严格模式
 
-建议至少新增以下 smoke/regression：
+- `num_sockets=2` 且只给 1 个 HN-F downstream 是否 `fatal`
+- `EPBackend` 少注册一个 `EP-SNF` 是否 `fatal`
 
-1. **DS-TC1：跨 socket remote read**  
-   - requester socket1 访问 `(homeNode=0, homeSocket=0)`
-   - 验证 `srcSocket=1,dstSocket=0`
+### 6.4 全局串行化不变
 
-2. **DS-TC2：跨 socket writeback fallback**  
-   - 清空 requester bookkeeping，强制走 `QueryLineMetaReq/Resp`
+- 不能出现 `socket0` 与 `socket1` CHI 请求并行发往两个 HN-F 的新行为
 
-3. **DS-TC3：home writeback notify stale drop**  
-   - 写回后在 notify 到达前插入新 epoch，验证 notify 被丢弃
+### 6.5 NUMA latency 元信息
 
-4. **DS-TC4：dual-socket local upgrade**  
-   - requesterSocket!=homeSocket，验证 Ack/Done 仍正确绑定 `homeSocket`
-
-5. **DS-TC5：single-socket compat**  
-   - `num_sockets=1` 下复跑 TC2/TC7/TC8/TC18/TC28
-
-### 14.3 harness 修改原则
-
-`tests/e2e/test_e2e.py` 只做两类扩展：
-
-- 增加 dual-socket 运行参数 / 环境变量
-- 增加新的 dual-socket case registry
-
-不修改现有 TC 的 verdict 逻辑。
+- `cluster.socket_id` 是否真实来自 CPU/cluster 输入，而不是循环下标猜测
+- topology builder 是否能看到 `cluster.socket_id` 与目标 `hnf socket`
 
 ---
 
-## 15. Recommended Build / Landing Order
+## 7. 建议验收矩阵
 
-### Layer A：地址与配置骨架
+### P0：单 socket 回归
 
-1. `CHI_basic_framework_config.py`
-2. `NodeAddressMap.hh`
-3. `UBRouter.py / UBAdapter.py / EPBackend.py / MetaRNFController.py`
-4. `CHI_ubcc_framework.py`
+- `UBCC_NUM_SOCKETS=1`
+- 全 28 TC 通过
+- 对比对象数、消息流、fatal/warn 数量无异常新增
 
-### Layer B：UB transport socket 化
+### P1：双 socket 构造与路由
 
-1. `UBMsg.hh`
-2. `UBRouter.hh/.cc`
-3. `UBAdapter.hh/.cc`
+- `UBCC_NUM_SOCKETS=2` 能成功 instantiate
+- 每节点出现：2×HN-F、2×EP-SNF、2×MetaRNF、1×EP-RNF、1×EPBackend
+- `EP-RNF sendChiRequest()` 日志能打印正确 `homeSocket`
 
-### Layer C：EPBackend / UBCC detached 化
+### P2：双 socket 定向路径
 
-1. `UBCCController.hh/.cc`
-2. `EPBackend.hh/.cc`
-3. `MetaRNFController.hh/.cc`
+- socket0 地址 miss -> `HN-F(i,0)`
+- socket1 地址 miss -> `HN-F(i,1)`
+- `HN-F(i,0)` 的 downstream 只走 `EP-SNF(i,0)`
+- `HN-F(i,1)` 的 downstream 只走 `EP-SNF(i,1)`
 
-### Layer D：CHI sideband / EP-SNF / HN-F
+### P3：错误注入
 
-1. `CHI-msg.sm`
-2. `CHI-cache.sm`
-3. `CHI-cache-funcs.sm`
-4. `EPSNFController.hh/.cc`
-
-### Layer E：验证
-
-1. `num_sockets=1` 全量 E2E
-2. dual-socket smoke
-3. dual-socket race / stale notify / fallback query
+- 缺少 `downstream_destinations[1]` -> `fatal`
+- 缺少 `registerEpSnf(1, ...)` -> `fatal`
+- cluster mixed-socket CPUs -> `assert/fatal`
 
 ---
 
-## 16. Final Normative Decisions Summary
+## 8. 一页式执行摘要
 
-1. **PA 直接编码 `(homeNode, homeSocket)`；每 node 视图有 `N*2` DSM 子段。**  
-2. **UBRouter / UBAdapter / UBCC / MetaRNF 全部改为 per-(node,socket)。**  
-3. **EPBackend 保持 per-node，但不再持有 direct `_ubcc` 主路径。**  
-4. **所有 EPBackend→UBCC 交互统一消息化，经 `UBMsg/UBRouter`。**  
-5. **写回前 metadata fallback 统一走 `QueryLineMetaReq/Resp`。**  
-6. **HN-F→DRAM 写回完成后的目录释放统一走 `HomeWritebackNotify`。**  
-7. **所有 UBMsg 都携带 `srcSocket/dstSocket`。**  
-8. **sharer routing 固定为“home UBCC 所在 socket plane”。**  
-9. **`homeSocket` 来自 PA；`ingressSocket` 来自 sideband，仅用于源 socket/NUMA hint。**  
-10. **写回采用 optimistic epoch validation，仅校验 `expectedEpoch`。**  
-11. **`requesterSocket` 只进入 HN-F TBE 与 EP-SNF sideband，不进入持久目录。**  
-12. **`num_sockets=1` 走完全相同代码路径，`socketId=0`。**
+本次真正要做的只有四件事：
+
+1. **把 node 内单 HN-F / 单 EP-SNF 改成 per-socket 双实例。**
+2. **把地址覆盖从“单段 private + 全 DSM”改成“per-socket private + per-socket DSM”。**
+3. **让单个 EP-RNF 按 `PA.homeSocket` 选对应 HN-F，但仍保持全局串行化。**
+4. **让单个 EPBackend 显式保存 per-socket EP-SNF 槽位，并在 `init()` 做 completeness check。**
+
+只要这四点做到，且 `num_sockets=1` 严格退化，本文设计即闭环。
