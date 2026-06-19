@@ -17,6 +17,30 @@
 
 ---
 
+## D-36: 新增离线分析报告（无真实多节点框架时的形式化验证/模块拆分工作包）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-19 |
+| **位置** | `docs/recovery/offline_analysis_report.md` |
+| **偏离内容** | 基于当前 `UBCC/UBRouter/UBAdapter/ResidentDir/EPBackend` 代码和既有恢复文档，新增一份只读型离线分析报告，系统整理出三类可在“未接入真实多节点框架”条件下推进的工作：① 形式化验证（状态机枚举、TLA+ M1、wait-for graph、wire ABI 说明书等）；② 模块拆分/API 边界分析（gem5 污染面、host/transport/clock 切面、模块归属证明等）；③ 代码质量/重构分析（god object 热区、消息构造重复、dispatcher 膨胀、纯函数抽取点等）。同时对确实需要后续改代码的任务，补充了目标文件与建议改动清单。 |
+| **偏离原因** | 用户要求在当前无法接触真实多节点框架的约束下，盘点哪些工作仍可根据现有代码推进，并区分只读任务与需要代码改动的任务。 |
+| **状态** | ✅ 已完成；本次仅新增文档，不改变代码行为。 |
+
+---
+
+## D-37: recovery 文档清理与去重（单一入口化）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-19 |
+| **位置** | `docs/recovery/README.md`, `migration_plan.md`, `verification_plan.md`，以及一组已删除历史文档 |
+| **偏离内容** | 对 `docs/recovery/` 执行文档治理：1) 删除 11 个一次性恢复/方法论/流程提示类旧文档（`catalog/phase_plan/entry_document/extraction_plan/quick_start_prompts/few_shot_methodology/methodology_supplement/env_workflow_audit/design_drift` 等）；2) 将 `formal_verification_plan.md` 合并到 `verification_plan.md`（形成验证单一入口）；3) 将 `c2c_migration_assessment.md` 的未来演进定位并入 `migration_plan.md` 后删除原文件；4) 新增 `README.md` 作为目录导航与维护规则。 |
+| **偏离原因** | 用户要求清理冗余与过时文档、删除完全过期文件，并将目录结构重组为“基线文档优先 + 主题文档按需 + 历史回溯最小集合”。 |
+| **状态** | ✅ 已完成；仅文档变更，无代码行为影响。 |
+
+---
+
 ## D-34: TC7 workload 限制为每节点 primary CPU 执行
 
 | 字段 | 内容 |

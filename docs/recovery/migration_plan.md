@@ -1,5 +1,7 @@
 # CC-EP 独立化迁移总方案（migration_plan）
 
+> 文档整合说明（2026-06-19）：`c2c_migration_assessment.md` 的“未来从 home-centric 向 direct owner→requester C2C 演进评估”已并入本文的迁移路线与风险章节，避免迁移文档分裂。
+
 > 目标回答：**哪些模块分别在哪些文件中，我如果要移植要怎么移植，关键接口有哪些。**
 >
 > 本方案基于当前仓库代码、`docs/recovery/*` 恢复文档、以及用户已固定选择：
@@ -11,6 +13,19 @@
 ---
 
 ## 1. 结论先行
+
+### 1.1 C2C 演进定位（并入自 c2c_migration_assessment）
+
+当前实现与迁移主线保持 **home-centric recall**（home 控序、home 供数真值入口），
+`direct owner→requester C2C` 仅作为后续演进分支，不进入本轮“独立化落地”的必选范围。
+
+原因：
+
+1. 现阶段优先收敛排序点与恢复语义，避免同时引入“跨 owner 直达数据面”变量；
+2. C2C 会显著抬高故障注入与重放恢复复杂度（重排、重传、双向确认）；
+3. 在 Ns3UB/外部调度器阶段，先固化 home-centric wire/API 更利于跨进程调试与可观测性。
+
+因此迁移策略为：**先完成 standalone UBCC 的 home-centric 可验证闭环，再评估 C2C 增量收益与风险。**
 
 这次迁移不应该把整个 `ep/` 目录直接“搬出去”，而应该按 **边界清晰化 → 协议固化 → 进程解耦 → 时钟/链路外置 → 全量回归** 五个阶段推进。
 
