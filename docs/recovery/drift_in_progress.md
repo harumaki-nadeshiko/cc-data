@@ -5,6 +5,18 @@
 
 ---
 
+## D-39: 新增 FV-7 Recall 数据链路静态核查报告
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv7_recall_path_report.md` |
+| **偏离内容** | 新增一份只读型验证报告，基于 `EPBackend/EPRNFController/UBAdapter/UBRouter/UBCCController` 指定代码段，逐段追踪 recall 数据链路：`OuterRecallMsg -> startReadShared/Unique -> CHI CompData -> recallDataBlk -> callback/backend capture -> RecallResponse(data) -> UBCC outstanding.dataBuf -> GRANT_HANDSHAKE -> requester grant data`，并标注 ReadShared/ReadUnique 分支差异与潜在丢数点。 |
+| **偏离原因** | 用户要求对 FV-7 recall data path 做定点静态验证并输出正式报告。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
 ## D-35: E2E 扩展 TC22~TC28（ResidentDir/BF/L3/epoch/backstore 覆盖）
 
 | 字段 | 内容 |
