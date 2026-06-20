@@ -15,7 +15,7 @@
  * Scope: single PA, 3 nodes (0,1,2), single socket.
  *)
 
-EXTENDS Naturals, FiniteSets, Sequences, TLC
+EXTENDS Naturals, Integers, FiniteSets, Sequences, TLC
 
 (***************************************************************************)
 (* Constants                                                                *)

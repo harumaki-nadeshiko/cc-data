@@ -93,6 +93,7 @@ ValidTombstoneReplay(m) ==
     /\ WithinReplayWindow(m.epoch, m.reqId)
 
 VARIABLES
+    clearAckTick,
     messages,
     clearAckCache,
     clearAckTick,
@@ -104,7 +105,6 @@ VARIABLES
     recallDoneActive,
     transportEvent
 
-Init ==
     /\ BaseInit
     /\ messages = {}
     /\ clearAckCache = [p \in PairSpace |-> NoAck]
@@ -331,7 +331,6 @@ WritebackOrEvictDuringRecallDone(req, op) ==
 (* Next-state relation                                                     *)
 (***************************************************************************)
 
-Next ==
     \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
          LiftBase(GrantSharedGI(req, baseEpoch, reqId), "BASE")
     \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
@@ -406,6 +405,5 @@ Vars == <<committedState, committedSharers, committedOwner,
           lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
           recallDoneSnapshot, recallDoneActive, transportEvent>>
 
-Spec == Init /\ [][Next]_Vars
 
 =============================================================================
