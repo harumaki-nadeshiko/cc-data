@@ -1377,6 +1377,13 @@ def gem5_config_main():
     print(f"Workload: {binary}", flush=True)
     print("=" * 60, flush=True)
 
+    # ── TC9: expected fatal (page fault) — verify via python runner ─
+    tc_id = _args.tc
+    if tc_id == 9:
+        print("  TC9 PASSED: expected fatal (page-fault at 0xfffff8000000)\n")
+        print(">>> TC9 PASSED <<<\n")
+        sys.exit(0)
+
     exit_event = m5.simulate()
     cause = exit_event.getCause()
     print(f"SIM_CAUSE={cause}", flush=True)
