@@ -58,3 +58,18 @@ Root cause: transport model has conflicting operator names with base model and m
 | TLC result | No violations detected through 74M states |
 
 With 4 CPUs the state space exceeds practical bounds. 2 CPUs provides sufficient coverage for protocol verification.
+
+## ep_intra_node_dual.tla (Dual-Socket EP model) — FIXED
+
+**Status**: ✅ PASSED
+
+| Metric | Value |
+|--------|-------|
+| States generated | 52,559,586 |
+| Distinct states | 10,413,943 |
+| State graph depth | 41 |
+| Time | 2min 29s |
+| Invariants checked | 8 (including CrossSocketDataIntegrity) |
+| Fix | HnfInstallGrantRemote phase guard + cpuState/cpuData update |
+
+**Root cause**: `HnfInstallGrantRemote` required `hnfTbePhase=WAIT_BACKEND` but remote path uses `WAIT_SNF`. Also `cpuState/cpuData` were UNCHANGED — grant data never reached the requesting CPU. Fixed by accepting both phases and directly updating CPU state.

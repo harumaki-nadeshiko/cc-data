@@ -544,7 +544,7 @@ HnfInstallGrantLocal(s) ==
 HnfInstallGrantRemote(s) ==
     /\ s = LineHome
     /\ hnfTbeValid[s]
-    /\ hnfTbePhase[s] = "WAIT_BACKEND"
+    /\ hnfTbePhase[s] \in {"WAIT_SNF", "WAIT_BACKEND"}
     /\ hnfTbeOp[s] \in {"RS","RU"}
     /\ Len(datQ[s]) > 0
     /\ datQ[s][1].kind = "SNF_GRANT"
@@ -567,12 +567,16 @@ HnfInstallGrantRemote(s) ==
                   /\ latestGlobalWrite' = gd
           /\ interSocketQ' = Append(interSocketQ,
                 IMsg("REMOTE_GRANT", s, rs, cpu, hnfTbeOp[s], gd, RemoteLatency))
+          /\ cpuState' = [cpuState EXCEPT ![cpu] =
+                IF hnfTbeOp[s] = "RS" THEN "SC" ELSE "UD"]
+          /\ cpuData' = [cpuData EXCEPT ![cpu] = gd]
+          /\ cpuPendingKind' = [cpuPendingKind EXCEPT ![cpu] = "NONE"]
           /\ hnfTbeValid' = [hnfTbeValid EXCEPT ![s] = FALSE]
           /\ hnfTbeOp' = [hnfTbeOp EXCEPT ![s] = "NONE"]
           /\ hnfTbePhase' = [hnfTbePhase EXCEPT ![s] = "NONE"]
           /\ hnfTbeRequester' = [hnfTbeRequester EXCEPT ![s] = NONE]
           /\ hnfTbeNeedData' = [hnfTbeNeedData EXCEPT ![s] = FALSE]
-    /\ UNCHANGED <<cpuState, cpuData, cpuPendingData, cpuTargetSock, cpuPendingKind,
+    /\ UNCHANGED <<cpuPendingData, cpuTargetSock,
                    hnfTbeGrantData, hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
