@@ -1,0 +1,15 @@
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadReq pa=0x10000000 epoch=1 reqId=1 action=ENQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadReq pa=0x10000000 epoch=1 reqId=1 action=DEQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadReq pa=0x10000000 epoch=1 reqId=1 action=DELIVER
+73426000: global: [UBST] tick=73426000 home=0,0 pa=0x10000000 old=G_I new=G_M epoch=1 sharers=0x0 action=OUTSTANDING
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadResp pa=0x10000000 epoch=1 reqId=1 action=ENQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadResp pa=0x10000000 epoch=1 reqId=1 action=DEQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ReadResp pa=0x10000000 epoch=1 reqId=1 action=DELIVER
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearReq pa=0x10000000 epoch=1 reqId=1 action=ENQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearReq pa=0x10000000 epoch=1 reqId=1 action=DEQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearReq pa=0x10000000 epoch=1 reqId=1 action=DELIVER
+73426000: global: [UBST] tick=73426000 home=0,0 pa=0x10000000 old=G_I new=G_M epoch=1 sharers=0x1 action=COMMIT
+73426000: global: [UBST] tick=73426000 home=0,0 pa=0x10000000 old=G_M new=Tombstone epoch=1 sharers=0x0 action=RETIRE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearResp pa=0x10000000 epoch=1 reqId=1 action=ENQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearResp pa=0x10000000 epoch=1 reqId=1 action=DEQUEUE
+73426000: system.ruby.ep_snf_node0.ctrl.ep_backend.ub_adapter.router: [UBLAT] tick=73426000 src=0,0 dst=0,0 type=ClearResp pa=0x10000000 epoch=1 reqId=1 action=DELIVER

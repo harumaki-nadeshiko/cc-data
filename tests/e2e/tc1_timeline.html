@@ -1,0 +1,55 @@
+<html><head><meta charset='UTF-8'><title>Latency Trace — debug.log</title>
+    <style>
+        body { font-family: -apple-system, 'Segoe UI', sans-serif;
+               margin: 0; padding: 16px; background: #f8f9fa; }
+        h1 { margin: 0 0 4px 0; font-size: 18px; }
+        .legend { display: flex; flex-wrap: wrap; gap: 4px 12px;
+                   margin: 8px 0 16px; font-size: 11px; }
+        .legend-item { display: inline-flex; align-items: center; gap: 4px; }
+        .legend-swatch { width: 12px; height: 12px; border-radius: 2px;
+                          border: 1px solid #888; }
+        .pa-group { margin-bottom: 24px; border: 1px solid #ccc;
+                     border-radius: 6px; overflow: hidden; background: #fff; }
+        .pa-header { padding: 6px 12px; background: #e9ecef;
+                      font-weight: 600; font-size: 13px;
+                      cursor: pointer; user-select: none; }
+        .pa-header:hover { background: #dee2e6; }
+        .pa-body { display: block; }
+        .pa-body.collapsed { display: none; }
+        .timeline-svg { width: 100%; overflow-x: auto; }
+        .tooltip { position: absolute; background: rgba(0,0,0,0.85);
+                    color: #fff; padding: 4px 8px; border-radius: 4px;
+                    font-size: 11px; pointer-events: none; z-index: 999;
+                    white-space: nowrap; display: none; }
+        .lane-label { font-size: 10px; fill: #333; }
+        .axis-label { font-size: 9px; fill: #999; }
+        /* state-change marker */
+        .state-marker { cursor: pointer; }
+    </style>
+    </head><body>
+<h1>Latency Trace — debug.log</h1>
+<div class="legend"><b>Msg types:</b><span class="legend-item"><span class="legend-swatch" style="background:#c49c94"></span>ClearReq</span><span class="legend-item"><span class="legend-swatch" style="background:#f7b6d2"></span>ClearResp</span><span class="legend-item"><span class="legend-swatch" style="background:#bcbd22"></span>EvictReq</span><span class="legend-item"><span class="legend-swatch" style="background:#17becf"></span>EvictResp</span><span class="legend-item"><span class="legend-swatch" style="background:#f0e442"></span>HomeWritebackNotify</span><span class="legend-item"><span class="legend-swatch" style="background:#8c564b"></span>InvalidateAck</span><span class="legend-item"><span class="legend-swatch" style="background:#9467bd"></span>InvalidateReq</span><span class="legend-item"><span class="legend-swatch" style="background:#9edae5"></span>QueryLineMetaReq</span><span class="legend-item"><span class="legend-swatch" style="background:#e5e5e5"></span>QueryLineMetaResp</span><span class="legend-item"><span class="legend-swatch" style="background:#1f77b4"></span>ReadReq</span><span class="legend-item"><span class="legend-swatch" style="background:#2ca02c"></span>ReadResp</span><span class="legend-item"><span class="legend-swatch" style="background:#d62728"></span>RecallReq</span><span class="legend-item"><span class="legend-swatch" style="background:#ff7f0e"></span>RecallResp</span><span class="legend-item"><span class="legend-swatch" style="background:#dbdb8d"></span>UpgradeAckNotify</span><span class="legend-item"><span class="legend-swatch" style="background:#98df8a"></span>UpgradeDoneReq</span><span class="legend-item"><span class="legend-swatch" style="background:#c5b0d5"></span>UpgradeDoneResp</span><span class="legend-item"><span class="legend-swatch" style="background:#aec7e8"></span>UpgradeReq</span><span class="legend-item"><span class="legend-swatch" style="background:#ffbb78"></span>UpgradeResp</span><span class="legend-item"><span class="legend-swatch" style="background:#e377c2"></span>WritebackReq</span><span class="legend-item"><span class="legend-swatch" style="background:#7f7f7f"></span>WritebackResp</span> | <b>States:</b><span class="legend-item"><span class="legend-swatch" style="background:#ffcc00"></span>G_E</span><span class="legend-item"><span class="legend-swatch" style="background:#e0e0e0"></span>G_I</span><span class="legend-item"><span class="legend-swatch" style="background:#ff4444"></span>G_M</span><span class="legend-item"><span class="legend-swatch" style="background:#72bcd4"></span>G_S</span><span class="legend-item"><span class="legend-swatch" style="background:#cccccc"></span>Tombstone</span></div>
+<div class="pa-group"><div class="pa-header" onclick="togglePaGroup(this)">▶ PA 0x10000000 — 12 msg events, 3 state changes (tick 73426000–73426000)</div><div class="pa-body"><svg width="1600" height="90" viewBox="0 0 1600 90" xmlns="http://www.w3.org/2000/svg"><defs><marker id="arrow-268435456" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#555"/></marker></defs><line x1="0" y1="50" x2="1600" y2="50" stroke="#ddd" stroke-width="1"/><text x="4" y="44" class="lane-label">N0S0</text><rect x="6.0" y="42.0" width="8" height="16" fill="#fff2cc" stroke="#333" stroke-width="1" class="state-marker" onmouseover="showTooltip(event,&#39;OUTSTANDING G_I->G_M epoch=1 sharers=0x0&#39;)" onmouseout="hideTooltip(event)"/><rect x="6.0" y="42.0" width="8" height="16" fill="#d5e8d4" stroke="#333" stroke-width="1" class="state-marker" onmouseover="showTooltip(event,&#39;COMMIT G_I->G_M epoch=1 sharers=0x1&#39;)" onmouseout="hideTooltip(event)"/><rect x="6.0" y="42.0" width="8" height="16" fill="#dae8fc" stroke="#333" stroke-width="1" class="state-marker" onmouseover="showTooltip(event,&#39;RETIRE G_M->Tombstone epoch=1 sharers=0x0&#39;)" onmouseout="hideTooltip(event)"/><rect x="-780.0" y="45.0" width="1580.0" height="10" fill="#1f77b4" stroke="#555" stroke-width="1" rx="2" onmouseover="showTooltip(event,&#39;ReadReq ENQUEUE tick=73426000 pa=0x10000000 epoch=1 reqId=1&#39;)" onmouseout="hideTooltip(event)"/><rect x="-780.0" y="45.0" width="1580.0" height="10" fill="#2ca02c" stroke="#555" stroke-width="1" rx="2" onmouseover="showTooltip(event,&#39;ReadResp ENQUEUE tick=73426000 pa=0x10000000 epoch=1 reqId=1&#39;)" onmouseout="hideTooltip(event)"/><rect x="-780.0" y="45.0" width="1580.0" height="10" fill="#c49c94" stroke="#555" stroke-width="1" rx="2" onmouseover="showTooltip(event,&#39;ClearReq ENQUEUE tick=73426000 pa=0x10000000 epoch=1 reqId=1&#39;)" onmouseout="hideTooltip(event)"/><rect x="-780.0" y="45.0" width="1580.0" height="10" fill="#f7b6d2" stroke="#555" stroke-width="1" rx="2" onmouseover="showTooltip(event,&#39;ClearResp ENQUEUE tick=73426000 pa=0x10000000 epoch=1 reqId=1&#39;)" onmouseout="hideTooltip(event)"/><line x1="10.0" y1="50.0" x2="10.0" y2="50.0" stroke="#1f77b4" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-268435456)" onmouseover="showTooltip(event,&#39;ReadReq enq_tick=73426000 deq_tick=73426000 lat=0&#39;)" onmouseout="hideTooltip(event)"/><line x1="10.0" y1="50.0" x2="10.0" y2="50.0" stroke="#2ca02c" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-268435456)" onmouseover="showTooltip(event,&#39;ReadResp enq_tick=73426000 deq_tick=73426000 lat=0&#39;)" onmouseout="hideTooltip(event)"/><line x1="10.0" y1="50.0" x2="10.0" y2="50.0" stroke="#c49c94" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-268435456)" onmouseover="showTooltip(event,&#39;ClearReq enq_tick=73426000 deq_tick=73426000 lat=0&#39;)" onmouseout="hideTooltip(event)"/><line x1="10.0" y1="50.0" x2="10.0" y2="50.0" stroke="#f7b6d2" stroke-width="1.5" stroke-opacity="0.7" marker-end="url(#arrow-268435456)" onmouseover="showTooltip(event,&#39;ClearResp enq_tick=73426000 deq_tick=73426000 lat=0&#39;)" onmouseout="hideTooltip(event)"/></svg></div></div>
+
+    <script>
+    function togglePaGroup(header) {
+        const body = header.nextElementSibling;
+        body.classList.toggle('collapsed');
+    }
+    const tooltip = document.createElement('div');
+    tooltip.className = 'tooltip';
+    document.body.appendChild(tooltip);
+    document.addEventListener('mousemove', function(e) {
+        tooltip.style.left = (e.pageX + 12) + 'px';
+        tooltip.style.top = (e.pageY - 8) + 'px';
+    });
+    function showTooltip(ev, text) {
+        tooltip.textContent = text;
+        tooltip.style.display = 'block';
+    }
+    function hideTooltip(ev) {
+        tooltip.style.display = 'none';
+    }
+    </script>
+    
+</body></html>

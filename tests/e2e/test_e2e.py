@@ -1467,6 +1467,9 @@ def runner_main():
     parser.add_argument("--tc", type=int, default=0)
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--outdir", default="m5out/e2e")
+    parser.add_argument("--trace-latency", action="store_true",
+                        help="Enable UBLatency debug tracing and generate "
+                             "HTML latency timeline.")
     args = parser.parse_args()
 
     if args.tc:
@@ -1497,6 +1500,10 @@ def runner_main():
             os.path.abspath(__file__),
             f"--tc={tc_id}",
         ]
+        if args.trace_latency:
+            debug_file = os.path.join(outdir, "debug.log")
+            cmd.append(f"--debug-flags=UBLatency")
+            cmd.append(f"--debug-file={debug_file}")
         print(f"  CMD: {' '.join(cmd)}", flush=True)
         env = os.environ.copy()
         lib_paths = ["/mnt/data1/cgc/miniconda3/lib", env.get("LD_LIBRARY_PATH", "")]
@@ -1517,6 +1524,29 @@ def runner_main():
         for f in failures:
             print(f"    MISMATCH: {f['raw']}", flush=True)
         results[tc_id] = passed
+
+        # ── Latency trace post-processing ─────────────────────────
+        if args.trace_latency:
+            debug_log = os.path.join(outdir, "debug.log")
+            html_out = os.path.join(outdir, "latency_trace.html")
+            if os.path.exists(debug_log):
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                html_script = os.path.join(
+                    script_dir, "../../tools/latency_trace_to_html.py")
+                html_cmd = [
+                    sys.executable, html_script,
+                    "--log", debug_log,
+                    "--out", html_out,
+                ]
+                print(f"  Post-processing latency trace...", flush=True)
+                html_proc = subprocess.run(
+                    html_cmd, capture_output=True, text=True, timeout=60)
+                print(f"  {html_proc.stdout.strip()}", flush=True)
+                if html_proc.stderr.strip():
+                    print(f"  {html_proc.stderr.strip()}", flush=True)
+            else:
+                print(f"  WARNING: debug.log not found, skipping HTML gen.",
+                      flush=True)
 
     print(f"\n{'='*60}")
     passed_cnt = sum(1 for v in results.values() if v)
