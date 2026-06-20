@@ -5,6 +5,18 @@
 
 ---
 
+## D-50: 新增 FV_v3 传输故障 TLA+ 模型（drop/dup/reorder）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/ubcc_transport_faults.tla` |
+| **偏离内容** | 基于既有 `ubcc_protocol.tla` 新增一份 future-work 传输故障模型：在纯目录状态机之上补入 `messages` in-flight 消息池，显式加入 `DropMessage` / `DuplicateMessage` / `ReorderMessages` 三类网络故障动作，并抽象建模 `Clear` / `InvalidateAck` / `RecallResp` 的入池与投递；同时增加 3 个恢复性质：`TombstoneReplayConsistency`、`StaleRejectUnderReorder`、`RecallDONE_WritebackSafety`。 |
+| **偏离原因** | 用户要求在 `fv_v3/` 下补一个简洁的 transport-fault TLA+ 扩展模型，作为 Q4=B future work。 |
+| **状态** | ✅ 已完成；本次仅新增形式化文档模型，不改变实现代码。 |
+
+---
+
 ## D-48: 输出 FV_v3 版 Recall 数据链路复核报告
 
 | 字段 | 内容 |
