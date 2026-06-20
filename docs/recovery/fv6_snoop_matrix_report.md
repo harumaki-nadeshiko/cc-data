@@ -1,175 +1,262 @@
 # FV-6: Snoop Handling Correctness Matrix
 
-> **Source code baseline**: `EPRNFController.cc:331-795, 866-943, 1348-1407`, `EPBackend.cc:1530-1600, 1635-1892`, `EPRNFController.hh:241-443`
+> **Source code baseline**: `EPRNFController.cc:331-795, 866-943, 1348-1407`, `EPBackend.cc:1530-1600, 1635-1892`, `EPRNFController.hh:241-443`, `UBCCController.cc:1739-1955`, `CHI-cache-actions.sm:1973-2228`
 > **Date**: 2026-06-20
 
 ---
 
 ## 1. Snoop Response Matrix
 
-| Snoop Type | Condition | Response Sent | Code Location | Classification (Q3=B) | Match? |
-|---|---|---|---|---|---|
-| **SnpCleanInvalid** | Upgrade pending (`_upgradePending.valid == true`) | `SnpResp_I` (deferred — sent via `receiveUpgradeAck()`) | `L669-680` | **Deferred** (until OuterUpgradeAck(true)) | ✅ |
-| | First arrival, DSM line, `lastUpgradeAck().accepted == true` (fast path) | `SnpResp_I` (deferred — `receiveUpgradeAck()` called immediately) | `L695-732`, `L723-725` | **Deferred** (fast ack) | ✅ |
-| | First arrival, DSM line, `lastUpgradeAck().accepted == false` (slow path) | `SnpResp_I` (deferred — wait `notifyUpgradeAckReady()`) | `L695-732`, `L727-731` | **Deferred** (wait invalidation acks) | ✅ |
-| | First arrival, DSM line, `notifyLocalWriteUpgrade() == false` | `false` (snoop NOT consumed — retried later) | `L700-708` | **Deferred** (retry on rejection) | ✅ |
-| | Non-upgrade (not DSM line, no pending) | `SnpResp_I` (immediate via `sendSnpRespI()`) | `L735-743` | **Immediate** | ✅ |
-| | Queued (CHI txn in-flight), then processed | Same as above (dependent on context at process time) | `L349-368`, `L866-894` | **Queued until CHI txn completes** | ✅ |
-| **SnpUnique** | `m_retToSrc == true` | `SnpResp_I` (NO data — _code mismatch with comment_) | `L768-783` | **Immediate** | ⚠️ (see §2.1) |
-| | `m_retToSrc == false` | `SnpResp_I` (immediate via `sendSnpRespI()`) | `L781-783` | **Immediate** | ✅ |
-| | Queued (CHI txn in-flight) | Same as above (processed after CHI txn) | `L349-368`, `L866-894` | **Queued** | ✅ |
-| **SnpOnce** | Always | `SnpRespData_SC` (response + zero data beats) | `L789-795`, `L830-861` | **Immediate** | ✅ |
-| | Queued (CHI txn in-flight) | Same as above (processed after CHI txn) | `L349-368`, `L866-894` | **Queued** | ✅ |
-| **SnpShared** | Always (F4 diagnostic — should be unreachable) | `SnpResp_SC` (defensive preserving response) | `L634-644` | **Immediate** (error path) | ⚠️ (see §2.2) |
-| **SnpSharedFwd** | Always (F4 diagnostic — should be unreachable) | `SnpResp_SC` (defensive preserving response) | `L634-644` | **Immediate** (error path) | ⚠️ (see §2.2) |
-| **Unknown snoop type** | Default | `SnpResp_I` (fallback) | `L645-653` | **Immediate** | ✅ |
+Each row shows: snoop type → HN-F expected response (from CHI-cache-actions.sm) → EP-RNF actual response → classification.
 
-### Legend
-- ✅ — Actual behavior matches the classified delay design (Q3=B: upgrade-deferred, recall-queued, others-immediate)
-- ⚠️ — Deviations or risks requiring attention
+| # | Snoop Type | HN-F Expected Response (SLICC) | EP-RNF Actual Response | Code Location | Classification | Match? |
+|---|---|---|---|---|---|---|
+| **1** | **SnpCleanInvalid** — non-upgrade | `SnpResp_I` (via `setExpectedForInvSnoop(tbe,false)`) | `SnpResp_I` via `sendSnpRespI()` | `EPRNFController.cc:735-743` | **Immediate** | ✅ |
+| **2** | **SnpCleanInvalid** — upgrade pending | `SnpResp_I` | `SnpResp_I` (deferred until `receiveUpgradeAck()`) | `EPRNFController.cc:669-680` | **Deferred** (upgrade) | ✅ |
+| **3** | **SnpCleanInvalid** — upgrade first arrival, fast ack (targetMask=0) | `SnpResp_I` | `SnpResp_I` (deferred, `receiveUpgradeAck()` called inline) | `EPRNFController.cc:721-725` | **Deferred** (upgrade, immediate ack) | ✅ |
+| **4** | **SnpCleanInvalid** — upgrade first arrival, slow ack (targetMask≠0) | `SnpResp_I` | `SnpResp_I` (deferred, wait `notifyUpgradeAckReady()`) | `EPRNFController.cc:727-731` | **Deferred** (upgrade, wait inval) | ✅ |
+| **5** | **SnpCleanInvalid** — upgrade rejected by UBCC | `SnpResp_I` | `false` (snoop not consumed, retried later) | `EPRNFController.cc:700-708` | **Deferred** (retry on reject) | ✅ |
+| **6** | **SnpUnique** — `retToSrc=false` (via `Send_SnpUnique` or `Send_SnpUnique_RetToSrc` with F1 mitigation) | `SnpResp_I` or `SnpRespData_I` (via `setExpectedForInvSnoop(tbe,true)`) | `SnpResp_I` via `sendSnpRespI()` | `EPRNFController.cc:781-783` | **Immediate** | ✅ |
+| **7** | **SnpUnique** — `retToSrc=true` (should be impossible for EP-RNF due to F1 mitigation, see §2.1) | `SnpRespData_I` (expectCleanWB) | `SnpResp_I` (dead code — F1 prevents this path) | `EPRNFController.cc:768-780` | **Immediate** (dead) | ⚠️ (see §2.1) |
+| **8** | **SnpOnce** (non-owner sharer fetch, or EP-RNF sole sharer via DCT fallback) | `SnpRespData_SC` | `SnpResp_SC` + `SnpRespData_SC` (zero data) | `EPRNFController.cc:789-795, 830-861` | **Immediate** | ✅ |
+| **9** | **SnpOnceFwd** (Fwd variant) | `SnpResp_SC_Fwded_I` | Never received — EP-RNF excluded via assert in `Send_SnpOnceFwd` | `CHI-cache-actions.sm:2188-2190` | N/A | ✅ |
+| **10** | **SnpShared** (preserving snoop — should be unreachable) | `SnpRespData_SC` / `SnpRespData_SC_PD` | `SnpResp_SC` (defensive, F4 diagnostic) | `EPRNFController.cc:634-644` | **Immediate** (error path) | ⚠️ (see §2.2) |
+| **11** | **SnpSharedFwd** (forwarding variant) | Various `SnpResp*_Fwded_*` types | Never received — assert in `Send_SnpSharedFwd_ToSharer`: `fwdDest != epRnfMachineID` | `CHI-cache-actions.sm:2117-2119` | N/A | ✅ |
+| **12** | **SnpUniqueFwd** (forwarding invalidation) | `SnpResp_I_Fwded_UC` / `SnpResp_I_Fwded_UD_PD` | Never received — `Send_SnpUniqueFwd` sends to `dir_sharers` via non-Fwd DCT fallback | `CHI-cache-actions.sm:2018-2029` | N/A | ✅ |
+| **13** | **Unknown snoop** | Varies | `SnpResp_I` (fallback) | `EPRNFController.cc:645-653` | **Immediate** | ✅ |
+
+### Helper functions
+
+| Helper | Response Sent | Used For |
+|---|---|---|
+| `sendSnpRespI()` | `CHIResponseType_SnpResp_I` | SnpCleanInvalid (non-upgrade), SnpUnique (retToSrc=false), unknown |
+| `sendSnpRespSC()` | `CHIResponseType_SnpResp_SC` | SnpShared/SnpSharedFwd defensive (F4 diagnostic) |
+| `sendSnpRespDataSC()` | `CHIResponseType_SnpResp_SC` + `CHIDataType_SnpRespData_SC` (zero data) | SnpOnce |
+
+### Expected vs Actual Response Detail per `setExpectedForInvSnoop()`
+
+The HN-F uses `setExpectedForInvSnoop(tbe, expectCleanWB)` (defined in `CHI-cache-funcs.sm:1101`) to set expectations:
+
+| `expectCleanWB` | `dataMaybeDirtyUpstream` | Expected Types | Count |
+|---|---|---|---|
+| `false` (SnpCleanInvalid) | `true` (owner exists) | `SnpRespData_I_PD` + possibly `SnpResp_I` | `dir_sharers.count()` |
+| `false` (SnpCleanInvalid) | `false` (no owner, sharers only) | `SnpResp_I` | `dir_sharers.count()` |
+| `true` (SnpUnique) | `true` (owner exists) | `SnpRespData_I` + `SnpRespData_I_PD` + possibly `SnpResp_I` | `dir_sharers.count()` |
+| `true` (SnpUnique) | `false` (no owner, sharers only) | `SnpRespData_I` + `SnpResp_I` | `dir_sharers.count()` |
+
+**Key observation**: When EP-RNF is sole sharer and `dataMaybeDirtyUpstream==false`, the HN-F accepts either `SnpRespData_I` or `SnpResp_I`. EP-RNF sends `SnpResp_I`, which is in the union. ✅
 
 ---
 
 ## 2. Flagged Deviations & Code Path Risks
 
-### 2.1 `handleSnpUnique`: Comment says `SnpRespData_I`, Code sends `SnpResp_I`
+### 2.1 `handleSnpUnique` — `retToSrc=true` Dead Code (F1 Mitigation)
 
-**File**: `EPRNFController.cc:756-782`
+**File**: `EPRNFController.cc:747-783`, `CHI-cache-actions.sm:1973-2007`
 
-```
-// Comment L756-L762:  retToSrc && hasData && !isDirty → SnpRespData_I
-//                     retToSrc && !hasData → SnpResp_I
-//                     !retToSrc → SnpResp_I
-// Code  L768-L783:  if retToSrc → SnpResp_I     <-- mismatches comment
-//                    else → SnpResp_I            <-- matches
-```
+The `handleSnpUnique()` handler has a branch for `msg->m_retToSrc == true` that sends `SnpResp_I` (response only, no data beat). The comment on lines 756-762 states the CHI spec requires `SnpRespData_I` for `retToSrc=true && hasData && !isDirty`, yet the code at L776-779 sends `CHIResponseType_SnpResp_I`.
 
-The comment at L771 states *"We return `SnpRespData_I` to indicate successful invalidation without dirty data (PD=pass dirty=false)"*, but the actual message constructed at L776-779 uses `CHIResponseType_SnpResp_I`. The `CHIResponseType_SnpRespData_I` type exists in `CHI-msg.sm:220` (`CHIDataType`) but is never sent by EP-RNF.
-
-**Risk**: When HN-F sends SnpUnique with `retToSrc=true`, it expects the snoopee to return data. EP-RNF sends `SnpResp_I` (no data). The HN-F may hang waiting for `SnpRespData` beats that never arrive, or may correctly treat EP-RNF's data-less response as completion. The CHI spec (§4.6.3) requires `SnpRespData_I` (or `_PD`) for `retToSrc=true` cases.
-
-**Diagnosis**: This is intentional ("EP-RNF has no data of its own", L765). However, it relies on HN-F tolerating `SnpResp_I` where `SnpRespData_I` is spec-mandated. If HN-F transitions are strict, this will cause a protocol deadlock.
-
-### 2.2 SnpShared/SnpSharedFwd: Defensive `SnpResp_SC` (F4 diagnostic)
-
-**File**: `EPRNFController.cc:634-644`
-
-These snoop types are explicitly labeled as F4 diagnostics — "should be unreachable but init-phase page-table setup triggers them." The preserving response `SnpResp_SC` is an acknowledged workaround pending root-cause fix.
-
-**Risk**: If a legitimate SnpShared arrives during normal operation (not init-phase), the EP-RNF returns `SnpResp_SC` (Shared Clean) instead of the correct `SnpResp_I` (Invalid). This means the HN-F believes the EP-RNF still holds the line in SC state, potentially causing coherence violations.
-
-### 2.3 Upgrade Path / CHI Txn Interaction — Snoop Queue Context Loss
-
-**File**: `EPRNFController.cc:346-368`, `EPRNFController.cc:657-743`
-
-When a CHI transaction is in-flight for a PA (e.g., a `CleanUnique` from invalidation fanout), incoming snoops are queued in the 1-entry per-PA slot. When the CHI txn completes and the queued snoop is processed, the `handleSnpCleanInvalid` handler re-evaluates `_upgradePending` and `isDsmLine`. There are two edge cases:
-
-| Scenario | Sequence | Outcome |
-|---|---|---|
-| **A**: First SnpCleanInvalid initiates upgrade → `_upgradePending` set → invalidation fanout creates CleanUnique CHI txn → second SnpCleanInvalid arrives | CHI txn in-flight → snoop queued → CleanUnique completes → processQueuedSnoop → `_upgradePending` found | ✅ Correct — deferred SnpResp_I |
-| **B**: CleanUnique CHI txn from unrelated cause (e.g., remote sharer invalidation) is in-flight → SnpCleanInvalid arrives | CHI txn in-flight → snoop queued → CleanUnique completes → processQueuedSnoop → NO `_upgradePending`, `isDsmLine` may trigger new upgrade | ⚠️ May attempt spurious OuterUpgradeReq on a line already in transition |
-
-**Scenario B risk**: If `isDsmLine` is true but the CleanUnique was triggered by a remote sharer's invalidation (not a local upgrade), `handleSnpCleanInvalid` will call `notifyLocalWriteUpgrade()` at L695-698. The UBCC should reject this (line already being upgraded by another node), causing `accepted=false` → `handleSnpCleanInvalid` returns `false` → snoop is NOT consumed and will be retried. This is technically safe but wastes a round-trip.
-
-**Worse case**: If `isDsmLine` is false (non-cross-node line) but `_upgradePending` is also absent, the non-upgrade path fires (L735-743) with a warning *"local upgrade path is disconnected"*. This is a correctness concern: the SnpCleanInvalid is acknowledged with `SnpResp_I` even though the line may NOT have been properly transitioned through the outer protocol.
-
-### 2.4 ReceiveUpgradeAck Context Loss Warning
-
-**File**: `EPRNFController.cc:1354-1363`
+**However**, this path is **dead code** due to the **F1 mitigation** in `Send_SnpUnique_RetToSrc` (CHI-cache-actions.sm:1993-1998):
 
 ```
-if (upIt == _upgradePending.end() || !upIt->second.valid) {
-    warn("EP_RNF node_id=%d: receiveUpgradeAck PA=0x%lx lost upgrade "
-         "context before deferred SnpResp_I\n", ...);
-    return;
+bool useRetToSrc := true;
+if (epRnfMachineVersion >= 0 && dest == tbe.epRnfMachineID) {
+    useRetToSrc := false;  // EP-RNF never gets retToSrc=true
 }
 ```
 
-If `_upgradePending` is erased between SnpCleanInvalid deferral and `receiveUpgradeAck()` arrival, the deferred `SnpResp_I` is **never sent**. The `_upgradePending` is only erased in `receiveUpgradeAck()` itself (L1406), so this should not happen in normal operation. However, if any other code path clears it (e.g., a reset or timeout), the HN-F will hang waiting for the snoop response.
+Additionally, when EP-RNF is the *sole* sharer and `snpNeedsData` triggers the RetToSrc path, `useRetToSrc=false` is sent. When EP-RNF is one of *multiple* sharers, the secondary message (L2007-2014) sends `retToSrc=false` to all remaining sharers including EP-RNF.
 
-### 2.5 Snoop Queue Overflow Fatal (1-Entry Slot)
+**Verdict**: The `retToSrc=true` branch is never executed for EP-RNF. The misleading comment/code should be cleaned up but poses no runtime risk.
+
+### 2.2 SnpShared/SnpSharedFwd — Defensive SnpResp_SC (F4 Diagnostic)
+
+**File**: `EPRNFController.cc:634-644`, `CHI-cache-actions.sm:2039-2060`
+
+The F4 diagnostic path fires when `SnpShared` or `SnpSharedFwd` reaches EP-RNF. The HN-F has an assert preventing this (`assert(tbe.dir_owner != tbe.epRnfMachineID)` at L2054), but init-phase page-table setup triggers it.
+
+**Response mismatch**:
+- HN-F expects: `SnpRespData_SC` or `SnpRespData_SC_PD` (with data)
+- EP-RNF sends: `SnpResp_SC` (response only, **no data beat**)
+
+The `SnpResp_SC` response (without data) may cause the HN-F to wait indefinitely for data beats that never arrive. The F4 comment acknowledges this is a diagnostic workaround pending root-cause fix.
+
+### 2.3 Snoop Queue Overflow — 1-Entry Per-PA Slot Fatal
 
 **File**: `EPRNFController.cc:352-357`
 
 ```
 if (txnIt->second.snoopSlotValid) {
-    fatal("... second snoop for PA=0x%lx while snoop slot already occupied "
-          "— protocol violation (HN-F single-flight assumption broken)");
+    fatal("EP_RNF node_id=%d: second snoop for PA=0x%lx while "
+          "snoop slot already occupied — protocol violation "
+          "(HN-F single-flight assumption broken)");
 }
 ```
 
-The 1-entry per-PA snoop slot is a hard limit. If HN-F violates the single-flight assumption and sends a second snoop before the first queued snoop is processed, the simulation fatals. This is by design but means any multi-snoop scenario will crash.
+The design relies on HN-F serializing snoops per-PA. If a CHI txn (ReadShared/CleanUnique/ReadUnique) is in-flight and a snoop arrives, it's queued. If a **second** snoop arrives before the first is processed, the simulation fatals. This is a hard limit — not a recoverable error.
+
+**Risk**: Any scenario where HN-F issues multiple snoops to EP-RNF for the same PA while a CHI txn is active will crash.
+
+### 2.4 Upgrade + CHI Txn Interaction — Spurious OuterUpgradeReq
+
+**File**: `EPRNFController.cc:346-368, 657-743`
+
+When a SnpCleanInvalid arrives while a CHI txn (e.g., CleanUnique from remote invalidation) is in-flight, the snoop is queued. After the CHI txn completes, `processQueuedSnoop()` re-evaluates. If `isDsmLine` is true but the CHI txn was unrelated to local upgrade, `handleSnpCleanInvalid` issues `notifyLocalWriteUpgrade()` — a spurious OuterUpgradeReq that UBCC will likely reject (duplicate upgrade). The snoop returns `false` in that case and must be retried.
+
+**Worse case**: If `isDsmLine` is false (non-cross-node line) and `_upgradePending` is absent, the non-upgrade path fires with a warning *"local upgrade path is disconnected"* and sends immediate `SnpResp_I`. The outer protocol state may be inconsistent.
+
+### 2.5 Upgrade Path — `receiveUpgradeAck()` Context Loss
+
+**File**: `EPRNFController.cc:1348-1407`
+
+If `_upgradePending` is erased between SnpCleanInvalid deferral and `receiveUpgradeAck()` arrival, the deferred `SnpResp_I` is **never sent**. The erase only occurs in `receiveUpgradeAck()` itself (L1406), so this should not happen in normal operation. However, a premature erase would cause HN-F to hang.
+
+### 2.6 UBCC Upgrade Flow — Tentative Done Caching (D4)
+
+**File**: `UBCCController.cc:1895-1927`
+
+The `processOuterUpgradeDone()` handler has a TENTATIVE path for when `UpgradeDone` arrives before all invalidation acks complete:
+
+```
+if (ost->stage == OpStage::WAITING_ALL_ACKS) {
+    // TENTATIVE: cache the Done tuple, do NOT commit yet
+    ost->upgradeDoneArrived = true;
+    ost->upgradeDoneEpoch = epoch;
+    ost->upgradeDoneReqId = reqId;
+    ost->upgradeSavedStage = ost->stage;
+    return true; // accepted but not committed
+}
+```
+
+When all acks later arrive (in `processInvalidationAck()`, L1366-1376), the cached Done is auto-committed:
+
+```
+if (ost->upgradeDoneArrived) {
+    commitIntendedResult(entry, *ost);
+    _directory.update(line_pa, entry);
+    ...
+    removeOutstanding(line_pa);
+}
+```
+
+**Risk**: The tentative caching means the upgrade directory state transition is deferred. If the requester (EP-RNF) sends `UpgradeDone` early and then crashes before the invalidation acks complete, the UBCC has tentative state that will be committed once acks arrive — but the requester may have already moved on. This is marked TENTATIVE in the code.
+
+### 2.7 `Send_SnpUnique_RetToSrc` — RetToSrc and EP-RNF Interaction (F1)
+
+**File**: `CHI-cache-actions.sm:1973-2014`
+
+When `Send_SnpUnique_RetToSrc` sends to EP-RNF:
+1. If EP-RNF is sole sharer: `useRetToSrc=false` (L1996-1998), only one message sent
+2. If EP-RNF is sole sharer but `Send_SnpUnique` (non-RetToSrc) is used instead: `retToSrc=false`, `setExpectedForInvSnoop(tbe,true)` expects `SnpRespData_I` or `SnpResp_I` — EP-RNF sends `SnpResp_I` ✅
+3. If EP-RNF is one of multiple sharers and selected as primary dest: `useRetToSrc=false` for EP-RNF, separate `retToSrc=true` to actual owner ✅
+4. If EP-RNF is one of multiple sharers but NOT selected as primary dest: `retToSrc=false` to remaining sharers including EP-RNF ✅
+
+**The `setExpectedForInvSnoop(tbe, true)` always expects `SnpRespData_I` (via `expectCleanWB=true`)** regardless of `useRetToSrc`. Since EP-RNF sends `SnpResp_I` for `retToSrc=false`, and `SnpResp_I` is also in the expected union (when `dataMaybeDirtyUpstream==false`), this works. But it's relying on the union match.
+
+### 2.8 CleanUnique Invalidation Callback — EPBackend `handleInvalidationRequest`
+
+**File**: `EPBackend.cc:1530-1600`
+
+The `handleInvalidationRequest()` correctly serializes with HN-F via `startCleanUnique()`: the invalidation ack is only sent after the CleanUnique callback fires. This is the fix for §4.2.4 (previously acked directly, bypassing HN-F).
+
+**Callback flow**: `startCleanUnique` → CHI CleanUnique to HN-F → HN-F sends SnpCleanInvalid to other agents → HW collects responses → HN-F returns Comp_UC → EP-RNF callback fires → invalidation ack sent to UBCC.
+
+**Edge case**: If `startCleanUnique` callback receives `ok=false`, the invalidation ack is still sent with `success=ok`. The UBCC receives a negative ack. The UBCC `processInvalidationAck` does not check `success` flag — it only checks node presence in targetMask. A negative ack with `success=false` is treated as a valid ack.
 
 ---
 
-## 3. Comparison Against Classified Delay Design (Q3=B)
+## 3. UBCC Upgrade Path — Full Sequence
 
-The Q3=B design classifies snoop handling into three delay categories:
+The complete upgrade sequence involves four components: HN-F, EP-RNF, EPBackend, UBCC.
+
+```
+Step 1: HN-F sends SnpCleanInvalid → EP-RNF
+Step 2: EP-RNF detects DSM line, calls EPBackend::notifyLocalWriteUpgrade()
+Step 3: EPBackend sends OuterUpgradeReq → UBCC via UBAdapter
+Step 4: UBCC::processOuterUpgradeReq():
+        - Checks requester is committed sharer
+        - Checks no outstanding for this PA
+        - Allocates reservedEpoch
+        - If targetMask==0: stage=WAITING_LOCAL_DONE, accepted=true
+        - If targetMask!=0: stage=WAITING_ALL_ACKS, accepted=false, fans out invalidations
+Step 5a (fast): targetMask==0 → EPBackend sees accepted=true → receiveUpgradeAck() → SnpResp_I → UpgradeDone
+Step 5b (slow): targetMask!=0 → invalidations fan out → all acks arrive →
+                processInvalidationAck() → UpgradeAckNotify → EPBackend::notifyUpgradeAckReady() →
+                receiveUpgradeAck() → SnpResp_I → UpgradeDone
+Step 6: UBCC::processOuterUpgradeDone() → commitIntendedResult()
+```
+
+**PB machine state transition at UBCC**:
+| Stage | Meaning |
+|---|---|
+| `WAITING_ALL_ACKS` | Invalidation acks pending from other sharers |
+| `WAITING_LOCAL_DONE` | All acks in (or no sharers), waiting for UpgradeDone |
+| `DONE` | Committed; removed from outstanding map |
+
+**Potential D4 issue**: If UpgradeDone arrives during `WAITING_ALL_ACKS` (before all invalidation acks), it's cached tentatively and committed later. The directory is NOT updated until all acks arrive and the cached Done is applied. Between the cached Done arrival and full ack completion, the UBCC's directory reflects the pre-upgrade state.
+
+---
+
+## 4. Comparison Against Classified Delay Design (Q3=B)
 
 | Category | Design Rule | Implementation Status |
 |---|---|---|
-| **Upgrade-deferred** | SnpCleanInvalid deferred until `OuterUpgradeAck(true)` received | ✅ Implemented via `_upgradePending` → `receiveUpgradeAck()` flow. Two sub-paths: fast (immediate ack, L723-725) and slow (wait `notifyUpgradeAckReady`, L727-731) |
-| **Recall-queued** | Snoops arriving during in-flight CHI recall txn are queued in 1-entry per-PA slot | ✅ Implemented via `recvSnoopMsg` L346-368, processed by `processQueuedSnoop` L866-894 after `finishChiTxn` |
-| **Others-immediate** | SnpUnique, SnpOnce processed immediately (no deferral) | ✅ Match for both SnpUnique and SnpOnce (with SnpUnique retToSrc caveat, see §2.1) |
-
-**Overall compliance**: The implementation matches the Q3=B classification design intent, with the one code-comment mismatch for SnpUnique/retToSrc being the main concern.
+| **Upgrade-deferred** | SnpCleanInvalid deferred until `OuterUpgradeAck(true)` received | ✅ Two sub-paths: fast (immediate ack) and slow (wait invalidation acks via `notifyUpgradeAckReady`) |
+| **Recall-queued** | Snoops arriving during in-flight CHI recall txn queued in 1-entry per-PA slot | ✅ `recvSnoopMsg` L346-368, `processQueuedSnoop` L866-894. Fatal on overflow. |
+| **Others-immediate** | SnpUnique, SnpOnce processed immediately (no deferral) | ✅ SnpUnique: immediate `SnpResp_I`. SnpOnce: immediate `SnpRespData_SC`. |
+| **HN-F F1 mitigations** | EP-RNF excluded from Fwd snoops and retToSrc=true paths | ✅ DCT fallback, `useRetToSrc=false` override, asserts in `Send_SnpOnceFwd`, `Send_SnpSharedFwd_ToSharer` |
 
 ---
 
-## 4. Recommended Instrumentation Points for Runtime Verification
+## 5. Issues Summary
 
-Insert `printf` / `DPRINTF` probes at the following points to enable test assertions:
+| ID | Severity | Component | Description | Status |
+|---|---|---|---|---|
+| **F1** | Low | CHI-cache-actions.sm / EPRNFController | EP-RNF excluded from retToSrc=true / Fwd snoops via mitigation. Dead code in `handleSnpUnique` retainToSrc branch. | Mitigated — asserts and DCT fallback active |
+| **F4** | **High** | EPRNFController.cc | SnpShared/SnpSharedFwd reaches EP-RNF during init. Defensive `SnpResp_SC` without data may hang HN-F. | Open — root cause under investigation |
+| **F6-1** | Medium | EPRNFController.cc | 1-entry snoop slot overflow fatal. If HN-F violates single-flight, simulation crashes. | By design — documented limitation |
+| **F6-2** | Medium | EPRNFController.cc | Upgrade + CHI txn overlap may trigger spurious OuterUpgradeReq or disconnected non-upgrade path. | Safe but wasteful in most cases |
+| **F6-3** | Low | EPRNFController.cc | `receiveUpgradeAck()` context loss silently drops deferred `SnpResp_I`. | Low probability — only erased in same function |
+| **D4** | **High** | UBCCController.cc | Tentative Done caching before invalidation acks complete. Directory state out-of-sync until acks arrive. | Marked TENTATIVE — needs review |
+| **F6-4** | Low | EPRNFController.cc | `handleSnpUnique` comment says `SnpRespData_I` but code sends `SnpResp_I` for `retToSrc=true` path. Dead code per F1. | Cosmetic — no runtime impact |
+| **F6-5** | Low | EPBackend.cc | Invalidation ack sent with `success=false` if `startCleanUnique` callback fails. UBCC ignores success flag. | Potential invisible failure |
 
-| # | Location (file:line) | Instrumentation | Purpose |
+---
+
+## 6. Recommended Instrumentation Points
+
+| # | Location | Instrumentation | Purpose |
 |---|---|---|---|
-| **P1** | `EPRNFController.cc:669` | `printf("[SNOOP-DIAG] node=%d SnpCleanInvalid upgrade_pending PA=0x%lx\\n", ...)` | Confirm upgrade path taken |
-| **P2** | `EPRNFController.cc:735` | `printf("[SNOOP-DIAG] node=%d SnpCleanInvalid non-upgrade PA=0x%lx\\n", ...)` | Confirm non-upgrade path (also verify `isDsmLine` result) |
-| **P3** | `EPRNFController.cc:723` | `printf("[SNOOP-DIAG] node=%d SnpCleanInvalid fast-ack PA=0x%lx\\n", ...)` | Fast path: immediate `receiveUpgradeAck()` |
-| **P4** | `EPRNFController.cc:727-731` | `printf("[SNOOP-DIAG] node=%d SnpCleanInvalid deferred-ack PA=0x%lx\\n", ...)` | Slow path: wait for `notifyUpgradeAckReady()` |
-| **P5** | `EPRNFController.cc:700-708` | `printf("[SNOOP-DIAG] node=%d SnpCleanInvalid REJECTED PA=0x%lx — retrying\\n", ...)` | Upgrade req rejected — snoop not consumed |
-| **P6** | `EPRNFController.cc:768-782` | `printf("[SNOOP-DIAG] node=%d SnpUnique retToSrc=%d PA=0x%lx sends SnpResp_I (NOT SnpRespData_I)\\n", ...)` | Verify retToSrc behavior (flag if HN-F expects data) |
-| **P7** | `EPRNFController.cc:789-795` | `printf("[SNOOP-DIAG] node=%d SnpOnce PA=0x%lx SnpRespData_SC\\n", ...)` | Confirm SnpOnce always returns data |
-| **P8** | `EPRNFController.cc:352-357` | `printf("[SNOOP-DIAG] node=%d FATAL snoop-queue overflow PA=0x%lx\\n", ...)` | Detect HN-F single-flight violation (currently fatal — demote to warn for test) |
-| **P9** | `EPRNFController.cc:1354-1363` | `printf("[SNOOP-DIAG] node=%d receiveUpgradeAck MISSING context PA=0x%lx\\n", ...)` | Detect orphaned `receiveUpgradeAck()` — would hang HN-F |
-| **P10** | `EPBackend.cc:1570-1583` | `printf("[SNOOP-DIAG] node=%d startCleanUnique PA=0x%lx callback ok=%d — sending OuterInvalidationAck\\n", ...)` | Verify invalidation ack path from CleanUnique callback |
-| **P11** | `EPBackend.cc:1865-1892` | `printf("[SNOOP-DIAG] node=%d notifyUpgradeAckReady PA=0x%lx -> receiveUpgradeAck(0x%lx)\\n", ...)` | Confirm upgrade ack notification → deferred SnpResp_I trigger |
-| **P12** | `EPRNFController.cc:866-894` | `printf("[SNOOP-DIAG] node=%d processing queued snoop type=%d PA=0x%lx\\n", ...)` | Verify queued snoop replayed after CHI txn completion |
-| **P13** | `EPRNFController.cc:634-644` | `printf("[SNOOP-DIAG] node=%d SnpShared/SnpSharedFwd F4 defensive SnpResp_SC PA=0x%lx\\n", ...)` | Track F4 diagnostic hits |
-| **P14** | `EPRNFController.cc:900-943` | `printf("[SNOOP-DIAG] node=%d finishChiTxn PA=0x%lx success=%d hadQueuedSnoop=%d\\n", ...)` | Entry/exit of `finishChiTxn` with queued-snoop status |
-
-### Test assertions for automated verification
-
-```
-# Expected invariants (pseudocode — place in test harness):
-assert(   snoop_type == SnpCleanInvalid
-       && (_upgradePending[addr].valid || isDsmLine(addr))
-   → SnpResp_I is deferred, never immediate
-)
-
-assert(   snoop_type == SnpSnpUnique && msg->m_retToSrc
-   → response is SnpResp_I           # NOTE: spec says SnpRespData_I — see §2.1
-)
-
-assert(   snoop_type == SnpOnce
-   → response == SnpRespData_SC
-)
-
-assert(   count_pendingChiTxns_for_addr(addr) == 0
-       OR snoop_was_queued(addr)
-   → no fatal from snoop queue overflow
-)
-```
+| P1 | `EPRNFController.cc:669` | Log upgrade_pending path taken | Confirm deferred SnpResp_I flow |
+| P2 | `EPRNFController.cc:735` | Log non-upgrade path | Verify `isDsmLine` result |
+| P3 | `EPRNFController.cc:721-725` | Log fast-ack receiveUpgradeAck() | Fast upgrade path tracking |
+| P4 | `EPRNFController.cc:727-731` | Log deferred-ack wait | Slow upgrade path tracking |
+| P5 | `EPRNFController.cc:700-708` | Log REJECTED snoop | Detect upgrade req rejection |
+| P6 | `EPRNFController.cc:768-783` | Log SnpUnique retToSrc flag | Verify F1 mitigation (expect retToSrc=false always) |
+| P7 | `EPRNFController.cc:789-795` | Log SnpOnce path | Confirm SnpRespData_SC |
+| P8 | `EPRNFController.cc:352-357` | Log snoop queue overflow | Detect HN-F single-flight violation |
+| P9 | `EPRNFController.cc:1354-1363` | Log receiveUpgradeAck context loss | Detect orphaned deferred SnpResp_I |
+| P10 | `EPBackend.cc:1570-1583` | Log startCleanUnique callback | Verify invalidation ack serialization |
+| P11 | `EPBackend.cc:1865-1892` | Log notifyUpgradeAckReady | Confirm upgrade ack notification |
+| P12 | `EPRNFController.cc:866-894` | Log queued snoop processing | Verify queued snoop replay after CHI txn |
+| P13 | `EPRNFController.cc:634-644` | Log F4 defensive SnpResp_SC | Track SnpShared diagnostic hits |
+| P14 | `EPRNFController.cc:900-943` | Log finishChiTxn with queued-snoop status | Entry/exit of finishChiTxn |
+| P15 | `UBCCController.cc:1895-1927` | Log tentative Done caching | Track D4 tentative Done path |
+| P16 | `CHI-cache-actions.sm:1993-1998` | Log EP-RNF useRetToSrc override | Verify F1 mitigation activation |
 
 ---
 
-## 5. Summary
+## 7. Overall Verdict
 
 | Aspect | Verdict |
 |---|---|
-| **SnpCleanInvalid upgrade path** | ✅ Matches Q3=B: deferred until OuterUpgradeAck(true). Both fast and slow ack paths implemented. |
-| **SnpUnique immediate** | ✅ Matches Q3=B: always immediate. ⚠️ Comment/code mismatch for retToSrc case — code sends `SnpResp_I` where spec says `SnpRespData_I`. |
-| **SnpOnce immediate** | ✅ Always `SnpRespData_SC` with zero-fill data. |
-| **Recall snoop queuing** | ✅ 1-entry per-PA slot during CHI txn in-flight. Fatal on overflow. |
-| **Upgrade + CHI txn overlap** | ⚠️ Edge case B (§2.3) may trigger spurious upgrade attempt if SnpCleanInvalid arrives during unrelated CleanUnique. Safe but wasteful. |
-| **Lost deferred SnpResp_I** | ⚠️ (§2.4) `receiveUpgradeAck()` with no `_upgradePending` context silently drops the deferred response. |
-| **SnpShared/SnpSharedFwd** | ⚠️ Known F4 gap — defensive `SnpResp_SC` masks potential coherence violation. |
+| **SnpCleanInvalid upgrade path** | ✅ Deferred until OuterUpgradeAck(true). Fast and slow ack paths implemented. |
+| **SnpUnique immediate** | ✅ Always immediate. F1 mitigation ensures retToSrc=false always. Dead code in retToSrc=true branch (cosmetic). |
+| **SnpOnce immediate** | ✅ `SnpRespData_SC` with zero-fill data. |
+| **SnpShared/SnpSharedFwd** | ⚠️ F4 diagnostic — defensive `SnpResp_SC` mask. Should never reach EP-RNF in normal operation. |
+| **Recall snoop queuing** | ✅ 1-entry per-PA slot. Fatal on overflow. |
+| **F1 mitigations (Fwd/retToSrc exclusion)** | ✅ DCT fallback, `useRetToSrc=false`, asserts in `Send_SnpOnceFwd`, `Send_SnpSharedFwd_ToSharer`. |
+| **Upgrade + CHI txn overlap** | ⚠️ Edge case may trigger spurious upgrade or disconnected non-upgrade path. |
+| **Lost deferred SnpResp_I** | ⚠️ `receiveUpgradeAck()` context loss silently drops response. |
+| **D4 tentative Done caching** | ⚠️ UBCC caches UpgradeDone arriving before invalidation acks complete. Marks TENTATIVE. |
+| **Overall design compliance** | ✅ Matches Q3=B classification for delay categories. |

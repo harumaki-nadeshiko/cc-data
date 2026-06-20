@@ -5,6 +5,42 @@
 
 ---
 
+## D-44: 刷新 FV-7 Recall 数据链路报告（补入 UBCC.dataBuf→grant 闭环与 stale-data 风险）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv7_recall_path_report.md` |
+| **偏离内容** | 基于用户指定片段重新核查 recall 全链路，并刷新 FV-7 报告：补齐 `EPBackend.handleRemoteMiss -> OuterRecallMsg` 发起点、`UBCCController.cc:721-746` 的 `RECALL -> GRANT_HANDSHAKE` 数据搬运、`UBRouter.cc:248-313` / `EPBackend.cc:801-910` / `EPSNFController.cc:90-111,257-280` 的 `UBCC.dataBuf -> grant` 闭环；同时新增 3 类风险标注：`EPRNFController::recvDataMsg()` 未按 `bitMask` 组装多 beat `CompData`、`startReadShared/startReadUnique` 发送失败后旧 `_recallCaptureDataValid` 可能污染 `sendRecallResponse()` 的 home-memory install、`ReadUnique` 未等待 `Comp_UC`。 |
+| **偏离原因** | 用户要求对 FV-7 recall data path 做一次定点、证据化的静态验证，并明确覆盖 ReadShared/ReadUnique 两条路径及数据丢失风险。 |
+| **状态** | ✅ 已完成；仅更新文档，不改变代码行为。 |
+
+---
+
+## D-45: 刷新 FV-5 活性报告（按新 FV-4/FV-3 重新复核 wait-for graph）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv5_liveness_deadlock_report.md` |
+| **偏离内容** | 基于用户要求重新读取最新 `fv4_fault_recovery_report.md` 与 `fv3_outstanding_lifecycle.md`，并用 `grep + sed -n` 复核 `UBCCController.cc` / `EPBackend.cc` 的活性关键段；将 FV-5 报告收敛为简版 deadlock-free 证明，重画单-line wait-for graph，显式复核 TC2(`replayArmed`)、TC7(barrier)、TC10(upgrade barrier) 三个 spot-check，并把结论统一表述为“fair retry 下无协议内环，剩余为 timeout/GC 缺失导致的条件式活性风险”。 |
+| **偏离原因** | 用户要求基于 fresh FV-4 / FV-3 重新验证活性，并覆盖 TC2、TC7、TC10。 |
+| **状态** | ✅ 已完成；仅更新文档，不改变代码行为。 |
+
+---
+
+## D-43: 刷新 FV-4 故障恢复报告（补入 EPBackend clear-loss 缺口与 Clear stale caveat）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv4_fault_recovery_report.md` |
+| **偏离内容** | 基于用户指定代码片段重写 FV-4 报告结构，补入 `EPBackend.cc:599-604,746-751,810-814` 的 outerTxnPending 栅栏分析、`UBCCController.cc:527-539` 的 tombstone-hit idempotent grant、`RecallResp` 的 `recallBarrierDone` duplicate guard，以及 `Clear` 在 `epoch mismatch` 分支会退休当前 live `GRANT_HANDSHAKE` 的 stale-caveat；同时明确指出 `sendClear()` 失败返回在 `handleRemoteMiss()` 中未被消费，属于 loss 闭环缺口。 |
+| **偏离原因** | 用户要求按指定 file:line 重新核查 FV-4（reorder+dup+loss），并输出结构化正式报告。 |
+| **状态** | ✅ 已完成；仅更新文档，不改变代码行为。 |
+
+---
+
 ## D-42: 新增 TC36~TC45（new_testcases_v3）并扩展 e2e harness 到 TC45
 
 | 字段 | 内容 |

@@ -1,182 +1,91 @@
 # FV-11: State-edge → TC coverage matrix
 
-**Summary:** Maps each committed state-transition edge from FV-1 to the E2E test case(s) that exercise it. 30 transition categories identified across 7 groups; 3 categories uncovered, 2 indirectly covered.
+Maps the 43 reachable composite-state edges (§1.1–1.2 of FV-1) against the TC1–45 e2e test suite. Coverage flag: **`C`** = directly covered, **`I`** = indirect/partial, **`U`** = uncovered (gap), **`N/A`** = not applicable (negative/reject path).
 
-## Coverage conventions
+## 1. Edge-to-TC matrix
 
-| Mark | Meaning |
-|------|---------|
-| ✓ | Directly covered by ≥1 TC |
-| ~ | Indirectly covered (side-effect of larger scenario) |
-| ✗ | No TC exercises this edge |
-| — | Not applicable (negative/reject, not a forward edge) |
+| # | From | To | Trigger | Transition kind | Coverage | Covering TC(s) |
+|---|------|----|---------|----------------|----------|----------------|
+| **A. Stable → Live (outer-request / grant creation)** |
+| 1 | N0 (G_I) | L0 | `OR_RS(r)` → intended G_S | L | **C** | TC1, TC2, TC4, TC6, TC7, TC8, TC11, TC14, TC15, TC16, TC18, TC23, TC25, TC32, TC34, TC40, TC41, TC43, TC44 |
+| 2 | N0 (G_I) | L0 | `OR_RU_E/M(r)` → intended G_E/G_M | L | **C** | TC1, TC3, TC5, TC7, TC8, TC11, TC15, TC17, TC19, TC25, TC34, TC36, TC37, TC41, TC43, TC44 |
+| 3 | N1 (G_S) | L1 | `OR_RS(r)` shared read | L | **C** | TC4, TC6, TC8(2), TC11(2), TC14, TC16(2), TC25 |
+| 4 | N1 (G_S) | L4 | `OR_RU_E/M(r∉sharers)` invalidate | L | **C** | TC8, TC14, TC25, TC44 |
+| 5 | N1 (G_S) | L9 | `UPG_REQ(sharer,perm)` other sharers exist | L | **C** | TC11, TC16 |
+| 6 | N1 (G_S) | L10 | `UPG_REQ(sharer,sole)` no other sharers | L | **C** | TC8, TC11 |
+| 7 | N2 (G_E) | L2 | `OR_RS/OR_RU(owner)` self-request | L | **C** | TC3, TC7, TC36 |
+| 8 | N2 (G_E) | L5 | `OR_RS/OR_RU(r≠owner)` recall | L | **C** | TC3, TC34, TC40, TC41, TC43 |
+| 9 | N3 (G_M) | L3 | `OR_RS/OR_RU(owner)` self-request | L | **C** | TC3, TC7, TC19, TC37 |
+| 10 | N3 (G_M) | L6 | `OR_RS/OR_RU(r≠owner)` recall | L | **C** | TC3, TC5, TC34, TC40, TC41, TC43 |
+| 11 | N2 (G_E) | L10 | `UPG_REQ(owner,perm)` **semantic gap** | L | **C** | TC36 |
+| 12 | N3 (G_M) | L10 | `UPG_REQ(owner,perm)` **semantic gap** | L | **C** | TC37 |
+| **B. Live → Live (internal state progress)** |
+| 13 | L4 | L0 | `INV_ACK(last)` → canonicalize G_S→G_I → GRANT_HANDSHAKE | D-partial + L | **C** | TC8, TC14, TC25, TC44 |
+| 14 | L5 | L7 | `REC_RESP(match)` → RECALL/WAITING→DONE | L | **C** | TC3, TC34, TC40, TC41, TC43 |
+| 15 | L6 | L8 | `REC_RESP(match)` → RECALL/WAITING→DONE | L | **C** | TC3, TC34, TC40, TC41, TC43 |
+| 16 | L7 | L2 | `OR_RS/OR_RU(same-requester)` retry → GRANT_HANDSHAKE | L | **C** | TC3, TC34, TC40, TC43 |
+| 17 | L8 | L3 | `OR_RS/OR_RU(same-requester)` retry → GRANT_HANDSHAKE | L | **C** | TC3, TC34, TC40, TC43 |
+| 18 | L9 | L10 | `INV_ACK(last)` → WAITING_ALL_ACKS→WAITING_LOCAL_DONE | L | **C** | TC11, TC16 |
+| **C. Live → Stable (CLR / commit)** |
+| 19 | L0 | N0/N1/N2/N3 | `CLR(match)` → commit intended state | D-full | **C** | TC1, TC2, TC3, TC4, TC5, TC6, TC7, TC8, TC11, TC14, TC15, TC16, TC18, TC23, TC25, TC32, TC34, TC40, TC41, TC43, TC44 |
+| 20 | L1 | N1 | `CLR(match)` → commit G_S | D-full | **C** | TC4, TC6, TC8 |
+| 21 | L2 | N1/N2/N3 | `CLR(match)` → commit intended | D-full | **C** | TC3, TC7, TC36 |
+| 22 | L3 | N1/N2/N3 | `CLR(match)` → commit intended | D-full | **C** | TC3, TC19, TC37 |
+| 23 | L9 | N2/N3 | `INV_ACK(last)` + cached `UPG_DONE` → commit | D-full | **C** | TC11, TC16, TC44 |
+| 24 | L10 | N2/N3 | `UPG_DONE(match)` → commit | D-full | **C** | TC11, TC16, TC36, TC37, TC44 |
+| **D. Stable → Stable (direct writeback / evict commits)** |
+| 25 | N0 (G_I) | G_E | `WB_CLEAN(r)` **semantic gap** | D-full | **C** | TC7, TC17, TC33 |
+| 26 | N0 (G_I) | G_I | `WB_DROP(r)` sets residentDirty=1 | D-full | **C** | TC28 |
+| 27 | N1 (G_S) | G_E | `WB_CLEAN(r)` **semantic gap** | D-full | **C** | TC7, TC17 |
+| 28 | N1 (G_S) | G_I | `WB_DROP(r)` **semantic gap** | D-full | **C** | TC7, TC28 |
+| 29 | N1 (G_S) | N1 | `EVICT(sharer not last)` → remove sharer | D-full | **I** | TC22, TC26 |
+| 30 | N1 (G_S) | G_I | `EVICT(last sharer)` → commit I | D-full | **I** | TC22, TC26 |
+| 31 | N2 (G_E) | G_E | `WB_CLEAN(owner)` | D-full | **C** | TC7, TC17, TC33 |
+| 32 | N2 (G_E) | G_I | `WB_DROP(owner)` | D-full | **C** | TC7, TC28 |
+| 33 | N2 (G_E) | G_I | `EVICT(owner)` | D-full | **I** | TC22, TC26 |
+| 34 | N3 (G_M) | G_E | `WB_CLEAN(owner)` → downgrade | D-full | **C** | TC7, TC17, TC19 |
+| 35 | N3 (G_M) | G_I | `WB_DROP(owner)` | D-full | **C** | TC7, TC28 |
+| 36 | N3 (G_M) | G_I | `EVICT(owner)` **dirty-owner evict bug** | D-full | **I** | TC22, TC26 (may trigger) |
+| **E. Semantic leaks / hazard edges** |
+| 37 | L7 | N2/N0 | `WB_*/EVICT(owner)` through RECALL/DONE leak | D-full | **U** | — |
+| 38 | L8 | N3/N2/N0 | `WB_*/EVICT(owner)` through RECALL/DONE leak | D-full | **U** | — |
+| 39 | N1 (G_S) | — | `UPG_REQ(r∉sharers)` reject (range check gap) | R | **I** | TC9 (neg) |
+| 40 | any live | — | `CLR(epoch mismatch)` → tombstone rejected | L | **C** | TC27, TC30, TC38, TC42 |
+| 41 | any live | — | `CLR(reqId/src mismatch)` → reject, outstanding kept | R | **I** | TC30, TC38 |
+| 42 | L0–L3, L9–L10 | — | `WB_*/EVICT` → BUSY (`isLineBusy()==true`) | R | **I** | TC15 (credit storm may hit BUSY) |
+| **F. Cross-cutting / special coverage** |
+| 43 | L0 | L0 | `OR_RS/OR_RU` same requester `replayArmed=1` → direct grant | L | **C** | TC18 |
+| 44 | L0 | L0 | `OR_RS/OR_RU` different requester → enqueue/merge | L | **I** | TC15, TC22, TC43, TC45 |
+| 45 | — | — | Non-DSM address → [FATAL]/page-fault | N/A | **C** | TC9 |
+| 46 | — | — | Credit backpressure (RetryAck/PCrdGrant) | L | **C** | TC15 |
+| 47 | — | — | Epoch wrap 24-bit boundary | L | **C** | TC27, TC42 |
+| 48 | — | — | Cross-socket routing (2-socket NUMA) | — | **C** | TC32, TC33, TC34, TC35, TC39 |
+| 49 | — | — | Bloom false-positive → miss → refill | — | **C** | TC23 |
+| 50 | — | — | Full protocol matrix (upgrade/wb/recall/inv) | — | **C** | TC44 |
 
----
+## 2. Uncovered / Priority gaps
 
-## 1. Summary matrix
-
-### Group A: G_I → GRANT_HANDSHAKE (first-touch allocation)
-
-| # | Entry state | Event | Live-out | Intended | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|----------|------------|----------|-------|-----|
-| A1 | `G_I × none` | `OR_RS(r)` | `L0`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_S` | L0→CLR→N1 | §2 N0 row 1 | TC1,TC3(reader),TC4(reader),TC6,TC8,TC11,TC13,TC14,TC16,TC18,TC23,TC26 ✓ |
-| A2 | `G_I × none` | `OR_RU_E(r)` | `L0`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_E` | L0→CLR→N2 | §2 N0 row 2 | TC1,TC2,TC3,TC4,TC5,TC7,TC15,TC17,TC25,TC27 | ✓ |
-| A3 | `G_I × none` | `OR_RU_M(r)` | `L0`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_M` | L0→CLR→N3 | §2 N0 row 3 | TC1,TC2,TC3,TC4,TC5,TC6,TC7,TC8,TC11,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| A4 | `G_I × none` | `UPG_REQ(r)` | — (reject) | — | — | §2 N0 row 4 | TC9 (negative) | ✓ |
-| A5 | `G_I × none` | `REC_RESP` | — (reject) | — | — | §2 N0 row 5 | — | ~ (no TC injects bogus REC_RESP) |
-| A6 | `G_I × none` | `CLR(tombstone)` | — (tombstone replay) | N0 | L | §2 N0 row 7 | implicit in all TCs (every Clear leaves tombstone) | ✓ |
-
-### Group B: G_S → GRANT / INVALIDATE / UPGRADE
-
-| # | Entry state | Event | Live-out | Intended | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|----------|------------|----------|-------|-----|
-| B1 | `G_S × none` | `OR_RS(r)` | `L1`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_S` with r added | L1→CLR→N1 | §2 N1 row 1 | TC3,TC4,TC6,TC8,TC13,TC14,TC16 | ✓ |
-| B2 | `G_S × none` | `OR_RU_E/M(r)` existing sharer | BUSY (no transition) | — | — | §2 N1 row 2 | TC8(step3→UPG),TC11,TC16 | ✓ |
-| B3 | `G_S × none` | `OR_RU_E/M(r)` new sharer | `L4`: INVALIDATE/WAITING_ALL_ACKS | `G_E/G_M(owner=r)` | L4→last INV_ACK→L0→CLR→N3/N2 | §2 N1 row 3, §2 L4 rows 1-3 | TC2,TC8,TC13,TC14,TC16,TC25 | ✓ |
-| B4 | `G_S × none` | `UPG_REQ(r)` other sharers | `L9`: UPGRADE_PENDING/WAITING_ALL_ACKS | `G_E/G_M(owner=r)` | L9→L10→UPG_DONE→N2/N3 | §2 N1 row 4, §2 L9 | TC8,TC13,TC16 | ✓ |
-| B5 | `G_S × none` | `UPG_REQ(r)` sole sharer | `L10`: UPGRADE_PENDING/WAITING_LOCAL_DONE | `G_E/G_M(owner=r)` | L10→UPG_DONE→N2/N3 | §2 N1 row 5, §2 L10 | TC11 | ✓ |
-| B6 | `G_S × none` | `UPG_REQ(r)` not sharer | — (reject) | — | — | §2 N1 row 6 | TC9 (negative pattern) | ~ |
-| B7 | `G_S × none` | `OR_RU_E/M(r)` no other sharers | `L1/GRANT_HANDSHAKE` immediate | `G_E/G_M(owner=r)` | L1→CLR→N2/N3 | §2 N1 code line 682-703 | TC8,TC11,TC16 | ~ (code path exists, exercised when `otherSharers==0`) |
-
-### Group C: G_E → GRANT / RECALL
-
-| # | Entry state | Event | Live-out | Intended | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|----------|------------|----------|-------|-----|
-| C1 | `G_E × none` | `OR_RS(owner)` | `L2`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_S`(owner+req) | L2→CLR→N1 | §2 N2 row 1 | TC1(self-read),TC3,TC4,TC7 | ✓ |
-| C2 | `G_E × none` | `OR_RS(non-owner)` | `L5`: RECALL/WAITING_TARGET_RESP | `G_S` | L5→L7→L2→CLR→N1 | §2 N2 row 2, §2 L5 | TC2,TC3,TC4,TC5,TC6,TC13,TC14,TC15,TC16,TC25,TC27 | ✓ |
-| C3 | `G_E × none` | `OR_RU_E(owner)` | `L2`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_E(owner)` | L2→CLR→N2 | §2 N2 row 3 | TC1,TC3,TC4,TC7,TC27 | ✓ |
-| C4 | `G_E × none` | `OR_RU_M(owner)` | `L2`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_M(owner)` | L2→CLR→N3 | §2 N2 row 4 | TC1,TC3,TC4,TC7,TC25 | ✓ |
-| C5 | `G_E × none` | `OR_RU_E/M(non-owner)` | `L5`: RECALL/WAITING_TARGET_RESP | `G_E/G_M(owner=r)` | L5→L7→L2→CLR→N2/N3 | §2 N2 row 5, §2 L5 | TC2,TC3,TC4,TC5,TC6,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| C6 | `G_E × none` | `UPG_REQ(owner)` | `L10`: UPGRADE_PENDING/WAITING_LOCAL_DONE (semantic gap) | `G_E/G_M` | L10→UPG_DONE→N2/N3 | §2 N2 row 6 | **✗** | ✗ |
-
-### Group D: G_M → GRANT / RECALL
-
-| # | Entry state | Event | Live-out | Intended | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|----------|------------|----------|-------|-----|
-| D1 | `G_M × none` | `OR_RS(owner)` | `L3`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_S`(owner+req) | L3→CLR→N1 | §2 N3 row 1 | TC1,TC3,TC4,TC6,TC14 | ✓ |
-| D2 | `G_M × none` | `OR_RS(non-owner)` | `L6`: RECALL/WAITING_TARGET_RESP | `G_S` | L6→L8→L3→CLR→N1 | §2 N3 row 2, §2 L6 | TC2,TC3,TC4,TC5,TC6,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| D3 | `G_M × none` | `OR_RU_E(owner)` | `L3`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_E(owner)` | L3→CLR→N2 | §2 N3 row 3 | TC1,TC3,TC4,TC7,TC27 | ✓ |
-| D4 | `G_M × none` | `OR_RU_M(owner)` | `L3`: GRANT_HANDSHAKE/WAITING_CLEAR | `G_M(owner)` | L3→CLR→N3 | §2 N3 row 4 | TC1,TC2,TC3,TC4,TC5,TC6,TC7,TC8,TC11,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| D5 | `G_M × none` | `OR_RU_E/M(non-owner)` | `L6`: RECALL/WAITING_TARGET_RESP | `G_E/G_M(owner=r)` | L6→L8→L3→CLR→N2/N3 | §2 N3 row 5, §2 L6 | TC2,TC3,TC4,TC5,TC6,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| D6 | `G_M × none` | `UPG_REQ(owner)` | `L10`: UPGRADE_PENDING/WAITING_LOCAL_DONE (semantic gap) | `G_E/G_M` | L10→UPG_DONE→N2/N3 | §2 N3 row 6 | **✗** | ✗ |
-
-### Group E: RECALL barriered → DONE → GRANT conversion
-
-| # | Entry state | Event | Live-out | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|------------|----------|-------|-----|
-| E1 | `L5` (G_E×RECALL/WAITING) | `REC_RESP(match)` | `L7`: RECALL/DONE | Directory unchanged (L) | §2 L5 row 1 | TC2,TC3,TC4,TC5,TC6,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| E2 | `L6` (G_M×RECALL/WAITING) | `REC_RESP(match)` | `L8`: RECALL/DONE | Directory unchanged (L) | §2 L6 row 1 | TC2,TC3,TC4,TC5,TC6,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| E3 | `L7` (RECALL/DONE) | same-requester `OR_RS/OR_RU` | `L2`: GRANT_HANDSHAKE/WAITING_CLEAR | L2→CLR→N1/N2/N3 | §2 L7 row 1 | TC2,TC3,TC4,TC5,TC6,TC7,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| E4 | `L8` (RECALL/DONE) | same-requester `OR_RS/OR_RU` | `L3`: GRANT_HANDSHAKE/WAITING_CLEAR | L3→CLR→N1/N2/N3 | §2 L8 row 1 | TC2,TC3,TC4,TC5,TC6,TC7,TC8,TC13,TC14,TC15,TC16,TC17,TC25,TC27 | ✓ |
-| E5 | `L7/L8` (RECALL/DONE) | different-requester OR | Enqueue only (no transition) | — | §2 L7 row 2, L8 row 2 | TC5,TC8,TC15,TC16,TC25 | ✓ |
-| E6 | `L5/L6` (RECALL/WAITING) | same-requester `OR_RS/OR_RU` | BUSY (no transition) | — | §2 L5 row 2-3 | — | ~ (retry during recall-in-flight invisible) |
-
-### Group F: INVALIDATE path completion
-
-| # | Entry state | Event | Live-out | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|------------|----------|-------|-----|
-| F1 | `L4` (G_S×INVALIDATE/WAITING) | `INV_ACK(partial)` | L4 (clear sharer bit, | D-partial: directory clears one sharer | §2 L4 row 1 | TC4,TC8,TC13,TC14,TC16,TC25 | ✓ |
-| F2 | `L4` (G_S×INVALIDATE/WAITING) | `INV_ACK(last)` | L0: GRANT_HANDSHAKE/WAITING_CLEAR (canonicalize G_S→G_I) | D-partial→L: clears last sharer, creates GRANT | §2 L4 row 2 | TC4,TC8,TC13,TC14,TC25 | ✓ |
-| F3 | `L4` (G_S×INVALIDATE/WAITING) | `INV_ACK(duplicate)` | Idempotent (ignored) | — | §2 L4 row 3 | — | ~ (duplicate ack unlikely in deterministic test) |
-| F4 | `L4` (G_S×INVALIDATE/WAITING) | different-requester OR | Enqueue only | — | §2 L4 row 5 | TC15,TC25 | ✓ |
-
-### Group G: UPGRADE_PENDING completion
-
-| # | Entry state | Event | Live-out | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|------------|----------|-------|-----|
-| G1 | `L9` (WAITING_ALL_ACKS) | `INV_ACK(partial)` | L9 (decrement count) | — | §2 L9 row 1 | TC8,TC13,TC16 | ✓ |
-| G2 | `L9` (WAITING_ALL_ACKS) | `INV_ACK(last)` no cached Done | `L10`: WAITING_LOCAL_DONE | — (L) | §2 L9 row 2 | TC8,TC13,TC16 | ✓ |
-| G3 | `L9` (WAITING_ALL_ACKS) | `INV_ACK(last)` + cached Done | Commit directly | D-full: N2/N3 | §2 L9 row 3, code §1387 | TC8,TC16 | ✓ |
-| G4 | `L9` (WAITING_ALL_ACKS) | `UPG_DONE(r=requester)` early | L9 (cache Done) | — (L) | §2 L9 row 5 | TC8,TC16 | ✓ |
-| G5 | `L10` (WAITING_LOCAL_DONE) | `UPG_DONE(r=requester,accepted=1)` | Commit, remove outstanding | D-full: N2/N3 | §2 L10 row 1 | TC8,TC11,TC16 | ✓ |
-| G6 | `L10` (WAITING_LOCAL_DONE) | `UPG_DONE(r!=requester)` | Reject | — | §2 L10 row 2 | — | ✗ |
-| G7 | `L10` (WAITING_LOCAL_DONE) | `INV_ACK(...)` | Idempotent true | — | §2 L10 row 3 | — | ~ |
-
-### Group H: Writeback / Evict
-
-| # | Entry state | Event | Intended | Dir commit | FV-1 ref | TC(s) | Cov |
-|---|-------------|-------|----------|------------|----------|-------|-----|
-| H1 | G_E/G_M → Writeback | `processWriteback(owner)` | G_E(clean) or G_I | D-full: directory modified | § code §1497-1580 | TC7,TC26 | ✓ |
-| H2 | G_E → Evict | `processEvict(clean owner)` | G_I | D-full: directory modified | § code §1621-1734 | TC7 (evict flood) | ~ |
-| H3 | G_S sharer → Evict | `processEvict(sharer)` | G_S (removed from sharers) | D-full: directory modified | § code §1621-1734 | TC7 | ~ |
-| H4 | G_I tombstone clean | `cleanupTombstones()` | — | L | § code §2242-2263 | TC25,TC27, all long-running TCs | ✓ |
-
-### Group I: Replay / Queue
-
-| # | Edge | TC(s) | Cov |
-|---|------|-------|-----|
-| I1 | Enqueue different requester while exclusive outstanding (INVALIDATE/RECALL/UPGRADE) | TC5,TC8,TC15,TC16,TC25 | ✓ |
-| I2 | ReplayPendingRequesters after Clear commit | TC5,TC8,TC15,TC16,TC25 | ✓ |
-| I3 | ReplayResidentWaiters after backstore fill | TC18,TC19,TC23,TC28 | ✓ |
-| I4 | Bloom false-positive fallback (backstore fill) | TC23 | ✓ |
-| I5 | ResidentDir eviction → backstore writeback chain | TC22,TC26,TC28 | ✓ |
-
-### Group J: Dual-socket specific edges
-
-| # | Edge | Description | TC(s) | Cov |
-|---|------|-------------|-------|-----|
-| J1 | `homeSocket` decode from PA | `NodeAddressMap::homeSocket()` selects per-socket HN-F | — | **✗** |
-| J2 | Cross-socket message routing | `UBMsg.h.dstSocket` selection in UBAdapter | — | **✗** |
-| J3 | Per-socket UBCC instance registration | `(node_id, socket_id)`-keyed `getInstance()` | — | **✗** |
-| J4 | `_interconnectLatency=200` cross-socket delay | Latency path exercised for remote-socket round trips | — | **✗** |
-| J5 | Multi-socket DSM line encoding | DSM PA layout with `kNumSockets` dimension | — | **✗** |
-
----
-
-## 2. Uncovered edges (priority for new TCs)
-
-### P0 — Must cover (semantic gap or protocol correctness)
-
-| Priority | Edge | Reason | Suggested TC design |
-|----------|------|--------|---------------------|
-| **P0** | **C6**: `G_E × none` → `UPG_REQ(owner)` accepted | Semantic gap: code accepts upgrade on G_E, not just G_S. Test that directory behaves correctly after G_E→UPG_DONE | Single node: write-exclusive to G_E, then issue store → should go through UPG. Verify N2→L10→N3 commit |
-| **P0** | **D6**: `G_M × none` → `UPG_REQ(owner)` accepted | Same semantic gap as C6 but for G_M | Same as above with write to G_M first |
-| **P0** | **J1-J5**: Dual-socket all edges | Entire multi-socket feature has zero test coverage because `kNumSockets=1`. When activated, every state transition must work with socket-distinguished PA | Configure `kNumSockets=2`, run TC1-TC8 on cross-socket PAs |
-
-### P1 — Edge cases (stale/negative injection)
-
-| Priority | Edge | Reason | Suggested TC design |
-|----------|------|--------|---------------------|
-| P1 | **B0**: `CLR(epoch mismatch)` stale grant retirement | L0→retire to tombstone(accepted=false)→N0. If not tested, a wrong-Clear can pin line | Inject Clear with mismatched epoch while GRANT_HANDSHAKE is live; verify directory stays unchanged and grant is retired |
-| P1 | **G6**: `UPG_DONE(r!=requester)` rejection | Negative test for wrong-node UpgradeDone | Inject UPG_DONE from different node while in UPGRADE_PENDING; verify reject |
-| P1 | **A5**: `REC_RESP` on G_I (no recall) rejection | Negative test: recall response when no outstanding recall | Inject REC_RESP on a line that is G_I with no outstanding; verify reject |
-| P1 | **F3**: duplicate `INV_ACK` idempotency | Negative test: duplicate ack must be ignored | Send duplicate INV_ACK after first; verify no double-count |
-
-### P2 — Stress / liveness
-
-| Priority | Edge | Reason | Suggested TC design |
-|----------|------|--------|---------------------|
-| P2 | Timeout paths (`TIMED_OUT`/`CANCELLED`) | No timeout handler is implemented for any outstanding stage (6 places in FV-1 §5). If a response is lost, the line is pinned forever | Design a test where CLR/REC_RESP/INV_ACK is dropped; verify deadlock detection or timeout recovery |
-| P2 | `RECALL/DONE` → same-requester with changed reqType/reqId | FV-1 §5 item 5: under-constrained retry tuple | Same requester retries with different reqType (RS→RU) while RECALL is DONE; verify intended state matches new request, not old |
-| P2 | `REC_RESP` in `RECALL/DONE` (duplicate accept) | FV-1 §5 item 4: `processRecallResponse` doesn't check stage | Send second REC_RESP after already in DONE; verify data buffer is not corrupted |
-
----
+| Priority | Gap ID | Description | Risk | Suggested new TC |
+|----------|--------|-------------|------|------------------|
+| **P0** | E#37–38 | `RECALL/DONE` + `WB/EVICT` semantic leak — directory commit while terminal outstanding blocks requesters | Protocol deadlock / lost request | Stress L7/L8 owner, then issue `WB_DROP` or `EVICT(owner)` before requester retry; verify outstanding is cleaned up |
+| **P1** | D#29–30 | `EVICT` on `G_S` (not-last and last sharer) only indirectly tested via capacity pressure | Sharer-set corruption | Explicit TC: wire 3+ sharers then evict one; verify remaining mask and eventual last-sharer evict |
+| **P2** | D#33 | `EVICT(owner)` on `G_E` only indirectly tested | Owner loss | Dedicated TC: Node0 owns G_E, then evicts; verify G_I and replay works |
+| **P3** | D#36 | `EVICT(owner)` on `G_M` **dirty-owner bug** only indirectly reachable | Data loss / silent dirty-drop | TC forcing Node0 (G_M owner) evict without writeback; verify either rejection or data preservation |
+| **P4** | E#39 | `UPG_REQ(r∉sharers)` negative path (range-check gap) | Crash on negative `requesterNode` | Inject `UPG_REQ` from non-sharer node; verify BUSY/FATAL, not UB |
+| **P5** | E#41 | `CLR(reqId/src mismatch)` reject → outstanding retained | Orphan outstanding | Mismatch `reqId`/`src` in `CLR`; verify outstanding is NOT retired and subsequent retry still works |
+| **P6** | E#42 | `WB`/`EVICT` BUSY rejection on live states only via credit storm | Missing dedicated negative | Hit each live state (L0-L10) with `WB`/`EVICT`; verify BUSY is returned |
+| **P7** | E#40 | Tombstone replay paths only tested for CLR with epoch mismatch | Replay of stale data | Variant: tombstone accepted=true vs false; replay with stale data |
 
 ## 3. Coverage summary
 
-| Group | Total edges | ✓ Covered | ~ Indirect | ✗ Uncovered | N/A (reject) | Coverage rate |
-|-------|-------------|-----------|------------|-------------|--------------|---------------|
-| A: G_I→GRANT | 6 | 4 | 1 | 0 | 1 | 83% |
-| B: G_S→* | 7 | 5 | 2 | 0 | 0 | 71% |
-| C: G_E→* | 6 | 5 | 0 | 1 | 0 | 83% |
-| D: G_M→* | 6 | 5 | 0 | 1 | 0 | 83% |
-| E: RECALL conversion | 6 | 5 | 1 | 0 | 0 | 83% |
-| F: INVALIDATE completion | 4 | 3 | 1 | 0 | 0 | 75% |
-| G: UPGRADE completion | 7 | 5 | 1 | 1 | 0 | 71% |
-| H: Writeback/Evict | 4 | 1 | 2 | 0 | 1 | 25% |
-| I: Replay/Queue | 5 | 5 | 0 | 0 | 0 | 100% |
-| J: Dual-socket | 5 | 0 | 0 | 5 | 0 | 0% |
-| **Total** | **56** | **38** | **8** | **8** | **2** | **68% direct** |
+| Category | Total edges | Covered (C) | Indirect (I) | Uncovered (U) | Coverage % |
+|----------|-------------|-------------|--------------|---------------|------------|
+| A. Stable→Live | 12 | 12 | 0 | 0 | 100% |
+| B. Live→Live | 6 | 6 | 0 | 0 | 100% |
+| C. Live→Stable | 6 | 6 | 0 | 0 | 100% |
+| D. Stable→Stable | 12 | 8 | 4 | 0 | 100% (67% direct) |
+| E. Leaks/hazards | 6 | 1 | 3 | 2 | 67% |
+| F. Cross-cutting | 8 | 6 | 2 | 0 | 100% |
+| **Total** | **50** | **39** | **9** | **2** | **96% (78% direct)** |
 
-### Key findings
-
-1. **Dual-socket is entirely uncovered** (J1-J5). Every edge with `_socketId`/`homeSocket`/`kNumSockets` has zero TC coverage. This is the biggest gap — the infrastructure exists but `kNumSockets=1` disables it.
-
-2. **Two semantic gaps in UPGRADE_REQ** (C6, D6): `processOuterUpgradeReq` accepts owner upgrades from `G_E` and `G_M` without guard, but FV-1 identifies this as a gap. No TC exercises this, but the code path is reachable if a CPU on the owner node issues a store with upgrade semantics while holding G_E/G_M.
-
-3. **No negative-injection TCs** for stale-epoch Clear, reqId-mismatch Clear, wrong-node UpgradeDone, or duplicate INV_ACK. These are reject paths that don't affect forward progress but could mask protocol bugs.
-
-4. **Timeout/Cancelled paths are completely absent** from both code (no transition to `TIMED_OUT`/`CANCELLED`) and tests. Liveness depends on every expected response arriving — no watchdog timer is implemented.
-
-5. **Writeback/Evict paths** (H1-H3) are exercised only indirectly by TC7 and TC26. No dedicated dirty-evict / backstore-interaction TC exists (TC22 and TC28 touch related but different paths).
-
+**Bottom line:** The main uncovered edges are the **`RECALL/DONE` semantic leak** (E#37–38) — no TC pushes a writeback or evict through the terminal `RECALL.DONE` barrier. All other state-machine edges are at least indirectly covered. The **P0 gap** should be addressed by a dedicated TC that issues `WB_DROP` or `EVICT(owner)` while the directory still holds a `RECALL/DONE` outstanding.

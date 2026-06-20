@@ -1,146 +1,131 @@
 # FV-3: OutstandingRequest Lifecycle Audit
 
-File: `gem5/src/mem/ruby/protocol/chi/ep/UBCCController.cc` / `.hh`
+Source: `UBCCController.hh:61-161`, `UBCCController.cc` — grep + read audit.
 
 ---
 
-## 1. OutstandingRequest — Field Definitions
+## 1. Create → Remove Lifecycle Table
 
-| Field | Type | Init | Purpose |
-|-------|------|------|---------|
-| `linePa` | uint64_t | 0 | Cache-line physical address |
-| `opType` | OpType | GRANT_HANDSHAKE | RECALL / INVALIDATE / GRANT_HANDSHAKE / UPGRADE_PENDING |
-| `stage` | OpStage | CREATED | Lifecycle stage |
-| `requesterNode` | int | -1 | Who originated the request |
-| `targetNode` | int | -1 | Recall target / upgrade requester |
-| `targetMask` | uint64_t | 0 | Invalidation target mask |
-| `totalMask` | uint64_t | 0 | Full invalidation mask (frozen at create) |
-| `pendingAckCount` | int | 0 | Remaining invalidation acks |
-| `ackMask` | uint64_t | 0 | Received invalidation ack bits (monotonic OR) |
-| `replayArmed` | bool | false | Retry-from-replay allowed to match this grant |
-| `recallBarrierDone` | bool | false | Recall response received |
-| `invalidateBarrierDone` | bool | false | All invalidation acks received |
-| `clearAckCached` | bool | false | ClearAck cached for tombstone replay |
-| `reservedEpoch` | uint64_t | 0 | Intent reservation (committed epoch + 1) |
-| `baseEpoch` | uint64_t | 0 | Epoch at request time |
-| `reqId` | uint64_t | 0 | Request ID |
-| `intendedState/SharersMask/OwnerNode/Dirty` | various | defaults | Intended directory result |
-| `upgradeTargetMask/AckMask/PendingAckCount` | uint64/int | 0 | Upgrade-specific invalidation tracking |
+| # | Entry Point | `opType` | `stage` Sequence | Remove Site | Terminal Stage |
+|---|---|---|---|---|---|
+| R1 | `processOuterRequest` RECALL path (`.cc:859`) | `RECALL` | `CREATED` → `WAITING_TARGET_RESP` → `DONE` (on recall response, `.cc:1129`) → then **removed** at `.cc:725` to free slot for GRANT_HANDSHAKE | `removeOutstanding` at `.cc:725` | `DONE` (then immediate recreation as GRANT_HANDSHAKE) |
+| R2 | `processOuterRequest` INVALIDATE path (`.cc:660`) | `INVALIDATE` | `CREATED` → `WAITING_ALL_ACKS` → `DONE` (all acks, `.cc:1393`) → **in-place convert** to `GRANT_HANDSHAKE` (`opType=GRANT_HANDSHAKE`, `stage=WAITING_CLEAR`, `.cc:1399-1400`) | `removeOutstanding` on Clear (`.cc:2085`) | `DONE` |
+| R3 | `processOuterRequest` direct grant (`.cc:688,879,899`) | `GRANT_HANDSHAKE` | `CREATED` → `WAITING_CLEAR` (immediate) | `removeOutstanding` on Clear (`.cc:2085`) | `DONE` |
+| R4 | `handleLocalUpgrade` UPGRADE_PENDING path (`.cc:1791`) | `UPGRADE_PENDING` | `CREATED` → `WAITING_ALL_ACKS` (if other sharers) → `WAITING_LOCAL_DONE` → `DONE` + remove | `removeOutstanding` at `.cc:1380` (early if Done cached), or `.cc:1942` (normal commit) | `DONE` |
+| R5 | `handleLocalUpgrade` UPGRADE_PENDING fast (`.cc:1837`) | `UPGRADE_PENDING` | `CREATED` → `WAITING_LOCAL_DONE` (no other sharers) → `DONE` + remove | `removeOutstanding` at `.cc:1942` | `DONE` |
+| R6 | `processClear` stale epoch mismatch (`.cc:2037`) | any (found by `findOutstanding`) | any live stage → **forced tombstone retire + remove** | `removeOutstanding` at `.cc:2037` | n/a (forced cleanup) |
+
+**Remove-outstanding call sites** (all in `.cc`):
+- `725` — RECALL done, free slot for new GRANT_HANDSHAKE
+- `1380` — UPGRADE_PENDING Done arrived before acks (TENTATIVE)
+- `1942` — UPGRADE_PENDING normal commit
+- `2037` — stale Clear forces retirement
+- `2085` — GRANT_HANDSHAKE Clear commit
 
 ---
 
-## 2. Lifecycle Table: Create → Stage Transitions → Remove
+## 2. Structural Lifecycle: Stage Flow
 
-### 2a. GRANT_HANDSHAKE
-
-| # | Create line | Trigger | Stage sequence | Remove line | Trigger |
-|---|-------------|---------|---------------|-------------|---------|
-| 1 | 559 | G_I + RS | WAITING_CLEAR → [Clear] → DONE/TOMBSTONE | 2082 | processClear accepted → retireToTombstone + erase |
-| 2 | 577 | G_I + RU (no WI) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 3 | 594 | G_I + RU (WI) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 4 | 617 | G_S + RS | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 5 | 688 | G_S + RU (no other sharers) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 6 | 731 | After removing RECALL.DONE retry hit | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 7 | 879 | G_E/G_M + RS (no recall) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| 8 | 901 | G_E/G_M + RU (no recall) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-| — | 1396 | INVALIDATE→GRANT_HANDSHAKE (in-place conversion) | WAITING_CLEAR → [Clear] → DONE | 2082 | same |
-
-**Stale removal:** line 2034 — epoch mismatch → retireToTombstone(false) + `removeOutstanding` (no commit).
-
-### 2b. INVALIDATE
-
-| # | Create line | Trigger | Stage sequence | Remove line | Trigger |
-|---|-------------|---------|---------------|-------------|---------|
-| 1 | 658 | G_S + RU with other sharers | WAITING_ALL_ACKS → [all acks] → DONE | 1396 | In-place conversion to GRANT_HANDSHAKE (`opType=GRANT_HANDSHAKE`, `stage=WAITING_CLEAR`). No `removeOutstanding` call. Final removal deferred to GRANT_HANDSHAKE Clear. |
-
-### 2c. RECALL
-
-| # | Create line | Trigger | Stage sequence | Remove line | Trigger |
-|---|-------------|---------|---------------|-------------|---------|
-| 1 | 859 | G_E/G_M + recall needed | WAITING_TARGET_RESP → [RecallResponse] → DONE → waits for retry | 725 | Same-requester retry in `processOuterRequest` → `removeOutstanding` then create GRANT_HANDSHAKE |
-
-**Note:** RECALL.DONE stays in `_outstandingReqs` indefinitely until the original requester retries. No timeout-based eviction. If the requester never retries the RECALL.DONE entry leaks, keeping the line pinned via `refreshPinnedBit` (line 243).
-
-### 2d. UPGRADE_PENDING
-
-| # | Create line | Trigger | Stage sequence | Remove line | Trigger |
-|---|-------------|---------|---------------|-------------|---------|
-| 1 | 1788 | processOuterUpgradeReq | WAITING_ALL_ACKS → [all acks] → WAITING_LOCAL_DONE → [Done] → DONE | 1939 | processOuterUpgradeDone → `commitIntendedResult` + `removeOutstanding` |
-| — | — | (early-Done variant) | WAITING_ALL_ACKS → [Done arrives early] → cached → [all acks] → DONE | 1377 | processInvalidationAck (allAcksDone) + upgradeDoneArrived → commit + `removeOutstanding` |
-
----
-
-## 3. Create/Remove Balance (Leak Check)
-
-| OpType | Create sites | Remove sites | Balanced? |
-|--------|-------------|-------------|-----------|
-| GRANT_HANDSHAKE | 559, 577, 594, 617, 688, 731, 879, 901, (+1396 conversion from INVALIDATE) | 2034 (stale), 2082 (success) | **YES** — every GRANT_HANDSHAKE is removed on Clear (accepted or epoch-mismatch) |
-| INVALIDATE | 658 | 1396 (converted in-place to GRANT_HANDSHAKE, not erased) | **YES** — no leak; object lives on as GRANT_HANDSHAKE |
-| RECALL | 859 | 725 (same-requester retry consumes it) | **PARTIAL** — removed only if requester retries; no timeout/GC. Terminal DONE stays in map if no retry. |
-| UPGRADE_PENDING | 1788 | 1377 (early-Done), 1939 (normal Done) | **YES** — always removed on commit |
-
-**Finding:** RECALL.DONE objects have no background eviction. If the requester never retries (e.g., crashes), the entry leaks in `_outstandingReqs` and keeps the line pinned. A periodic tombstone-style cleanup for RECALL.DONE entries may be needed.
-
----
-
-## 4. replayArmed Set/Clear Conditions
-
-| Line | Action | Context |
-|------|--------|---------|
-| 149 (hh) | `replayArmed(false)` | Constructor default — all new outstanding start unarmed |
-| 1398 | `ost->replayArmed = true` | INVALIDATE→GRANT_HANDSHAKE conversion (all acks received). Allows the requester's retry to match without duplication. |
-| 2519 | `ost->replayArmed = true` | During `replayPendingRequesters`, after replay creates a new outstanding. Marks the grant so the replayed requester's subsequent Clear retry hits the match path. |
-
-**Check site** (line 447):
 ```
-if (existing->replayArmed &&
-    existing->stage == OpStage::WAITING_CLEAR &&
-    existing->reqId == reqId &&
-    existing->reqType == reqType &&
-    existing->writeIntent == writeIntent)
-```
-→ Returns the grant directly instead of BUSY.
-
-**Property:** `replayArmed` is **set-only** (never cleared back to false for a live object). Once armed, remains armed until object destruction. This is safe because:
-- The flag only gates the duplicate-retry fast path
-- Once the GRANT_HANDSHAKE is removed (Clear), the object is gone
-- No scenario requires disarming a live outstanding
-
----
-
-## 5. ackMask Monotonicity Verification
-
-| Field | Init | Mutation | Monotonic? |
-|-------|------|----------|------------|
-| `ackMask` (INVALIDATE) | 0 (line 2575, 669) | `effAckMask \|= nodeBit` (line 1276) | **YES** — only OR; bits never cleared |
-| `upgradeAckMask` (UPGRADE_PENDING) | 0 (line 1821, 2575) | same line 1276 via reference | **YES** — only OR |
-| `pendingAckCount` | 0 (line 2574) | `pendingAckCount--` (line 1280) | **YES** — only decrements (by construction, never negative due to duplicate-ack guard at line 1267) |
-| `upgradePendingAckCount` | 0 (line 1820) | `upgradePendingAckCount--` (line 1278) | **YES** — only decrements |
-
-**Duplicate-ack guard** (line 1267–1273):
-```cpp
-if (effAckMask & nodeBit) {
-    // duplicate ack — ignore
-    return true;
-}
-```
-Ensures no double-counting on `pendingAckCount` decrement and no double-set on `ackMask`.
-
-**Invariant:** For INVALIDATE and UPGRADE_PENDING:
-```
-ackMask ⊆ totalMask   (all acked bits are a subset of targeted bits)
-pendingAckCount == popcount(totalMask) - popcount(ackMask)
+                    ┌──────────────────────────────────────────────┐
+                    │          processOuterRequest                  │
+                    │  (or handleLocalUpgrade for UPGRADE_PENDING)  │
+                    └──────────────┬───────────────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┬──────────────────────┐
+              ▼                    ▼                    ▼                      ▼
+         RECALL              INVALIDATE          GRANT_HANDSHAKE        UPGRADE_PENDING
+         CREATED              CREATED              CREATED                CREATED
+              │                    │                    │                     │
+              ▼                    ▼                    ▼                     ▼
+     WAITING_TARGET_RESP   WAITING_ALL_ACKS      WAITING_CLEAR       WAITING_ALL_ACKS
+              │                    │                    │            (if other sharers)
+              ▼                    ▼                    ▼                     │
+            DONE                DONE                  Clear            WAITING_LOCAL_DONE
+              │                    │                    │                     │
+              │  remove + create   │ in-place convert   │                     ▼
+              │  GRANT_HANDSHAKE   │ GRANT_HANDSHAKE    │                   DONE
+              ▼                    ▼                    ▼                     │
+        WAITING_CLEAR        WAITING_CLEAR          DONE               removeOutstanding
+              │                    │                    │
+              ▼                    ▼                    ▼
+            Clear                Clear               DONE
+              │                    │
+              ▼                    ▼
+            DONE                 DONE
+         removeOutstanding   removeOutstanding
 ```
 
+Non-terminal stages that count as **busy** (`isLineBusy`, `.cc:1160-1175`):
+`CREATED`, `WAITING_TARGET_RESP`, `WAITING_ALL_ACKS`, `WAITING_LOCAL_DONE`, `WAITING_CLEAR`, `PERSISTENT_BUSY`
+
+Terminal stages (`DONE`, `CANCELLED`, `TIMED_OUT`) → **not busy**.
+
 ---
 
-## 6. Summary of Findings
+## 3. Leak Check: Written-Never-Read Fields
 
-| Check | Status | Detail |
-|-------|--------|--------|
-| Every create has a matching remove | ✅ GRANT_HANDSHAKE, INVALIDATE, UPGRADE_PENDING | ⚠️ RECALL.DONE has removal path but relies on requester retry; no timeout GC |
-| replayArmed set/clear balanced | ✅ set-only, never cleared (intentional) | Safe because only gates retry-fast-path, object destroyed at Clear |
-| ackMask monotonic (only grows) | ✅ OR-only, never cleared | Duplicate-ack guard prevents double-counting |
-| `pendingAckCount` never goes negative | ✅ | Duplicate guard at line 1267; decrement only on first ack from each node |
+| Field | Written (set sites) | Read sites | Verdict |
+|---|---|---|---|
+| `clearAckCached` | `.hh:106` declared, `.hh:149` init `false`, `.cc:2570` `req.clearAckCached = false` in `createOutstanding` | **NONE** | 🔴 **DEAD FIELD** — set twice but never tested or branched on. Comment says "True if ClearAck has been cached for tombstone replay" but feature is unimplemented. |
+| `accepted` | `.hh:114`, `.hh:151` init `false`, `.cc:1338` set `true`, `.cc:1839` set `true` | Used in `handleLocalUpgrade` (stage gates) | ✅ Live |
+| `homeNode` | `.hh:89` declared, init `-1` | **NONE in `.cc`** — stored but never consumed in runtime logic | ⚠️ **DORMANT** — may be used by serialization or debug print; not dead but check intent |
+| `upgradeDoneArrived` / `upgradeDoneEpoch` / `upgradeDoneReqId` / `upgradeSavedStage` | `.hh:135-138`, init `false/0/0/CREATED` | Read at `.cc:1370` for early-commit TENTATIVE path | ✅ Used |
 
-**Recommendation:** Consider adding a timeout/eviction for RECALL.DONE entries that stay too long, to prevent pinned-line leaks.
+---
+
+## 4. ackMask Monotonic Proof
+
+**Invariant**: `ackMask` (and `upgradeAckMask`) are **strictly monotonic** — bits are only ever set, never cleared or decremented.
+
+| Operation | Location | Effect on `ackMask` / `upgradeAckMask` |
+|---|---|---|
+| Init (INVALIDATE create) | `.cc:669` | `invOreq->ackMask = 0` |
+| Init (generic createOutstanding) | `.cc:2578` | `req.ackMask = 0` |
+| Init (UPGRADE_PENDING create) | `.cc:1824` | `oreq->upgradeAckMask = 0` |
+| On each ack | `.cc:1279` | `effAckMask \|= nodeBit` — **only write, strictly monotonic** |
+| On all-acks-done | `.cc:1321-1322` | Only **reads** `pendingAckCount == 0` — mask never modified |
+| Convert INVALIDATE→GRANT_HANDSHAKE | `.cc:1393-1400` | `ackMask` not touched (carried into GRANT_HANDSHAKE) |
+| `getPendingInvalidationMask` | `.cc:1437` | Read-only: `totalMask & ~ackMask` |
+| Serialization | `.cc:983` | Read-only: `"invalidatedAckMask"` in JSON dump |
+
+**Corollary**: `pendingAckCount` monotonically **decreases** (decremented at `.cc:1281,1283`), while `ackMask` monotonically **increases**. `pendingAckCount == 0` iff `ackMask == totalMask` (all expected acks received).
+
+---
+
+## 5. replayArmed Conditions
+
+| Set Site | File & Line | Condition / Trigger |
+|---|---|---|
+| S1 | `.cc:1401` | INVALIDATE all-acks-complete → in-place convert to GRANT_HANDSHAKE: `ost->replayArmed = true` |
+| S2 | `.cc:2522` | `replayPendingRequesters` creates a new outstanding from queue replay: `ost->replayArmed = true` |
+
+| Read/Test Site | File & Line | Logic |
+|---|---|---|
+| T1 | `.cc:430-465` (`processOuterRequest`) | If `existing->replayArmed && stage == WAITING_CLEAR && reqId match && reqType match && writeIntent match` → **grant retry-hit directly** (bypasses BUSY) |
+| T2 | `.cc:435-438` | Debug log prints `replayArmed=1` for any existing outstanding found |
+
+**Default**: `false` (set in struct init `.hh:149` and `createOutstanding` `.cc:2571`).
+
+**Guarantee**: `replayArmed` is never cleared once set — it is sticky for the lifetime of the `OutstandingRequest` struct.
+
+---
+
+## 6. Tombstone Transition (retireToTombstone + checkTombstone)
+
+| Operation | Location | Mechanism |
+|---|---|---|
+| Retire GRANT_HANDSHAKE | `.cc:2200-2219` | Copies `(linePa, baseEpoch, reqId, opType, accepted)` into `GrantHandshakeTombstone` with `expireTick = curTick() + tombstoneWindowW` |
+| Store | `.cc:2211` | Appended to `_tombstones[linePa]` deque (multi-entry per PA) |
+| Lookup | `.cc:2221-2240` | `cleanupTombstones()` then scan deque for matching `(epoch, reqId)` |
+| Replay guard | `.cc:528-538` | Tombstone hit → return idempotent grant without creating new outstanding |
+| Clear guard | `.cc:1981-1987` | Tombstone hit → `tsAccepted` reflects original Clear outcome |
+
+---
+
+## 7. Summary of Red Flags
+
+1. **`clearAckCached`**: Declared, initialized in constructor and `createOutstanding`, but **never read** — dead field, 3 LoC of technical debt.
+2. **`homeNode`**: Stored in struct, initialized `-1`, never consumed in `.cc` runtime logic.
+3. **RECALL→GRANT_HANDSHAKE split**: RECALL reaches `DONE` then is **removed** (`.cc:725`) and a *new* `GRANT_HANDSHAKE` is created. INVALIDATE does an **in-place conversion** (`.cc:1399`). This inconsistency is intentional (avoiding PA-key collision) but creates two different code paths for the same conceptual transition.
+4. **No `removeOutstanding` guard**: `removeOutstanding` unconditionally erases — no check that the outstanding is in a terminal stage. Callers must ensure this.
