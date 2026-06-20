@@ -5,6 +5,42 @@
 
 ---
 
+## D-48: 输出 FV_v3 版 Recall 数据链路复核报告
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/fv7_recall_path_report.md` |
+| **偏离内容** | 按用户指定范围重新用 `grep -n` + `sed -n` 复核 `EPBackend.cc:1154-1315`、`EPRNFController.cc:470-547,899-943,1088-1180`、`UBCCController.cc:1058-1154`，并补充 `EPRNFController.cc:397-418`、`UBCCController.cc:722-748,2137-2146` 作为闭环交叉证据；输出一版 FV_v3 recall 报告，覆盖 ReadShared / ReadUnique 两条路径，并明确标记 `recvDataMsg()` 对多 beat `CompData` 仅整块覆盖、缺少 merge 的数据丢失风险，以及 ReadUnique 未等待 `Comp_UC` 的完成时序风险。 |
+| **偏离原因** | 用户要求基于指定 file:line 追踪 recall data chain，输出到 `fv_v3/` 子目录，并显式标出数据丢失点。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
+## D-49: 输出 FV_v3 版活性 / 死锁复核报告
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/fv5_liveness_deadlock_report.md` |
+| **偏离内容** | 按用户要求重读 `docs/recovery/fv_v3/fv4_fault_recovery_report.md` 与 `docs/recovery/fv_v3/fv3_outstanding_lifecycle.md`，并交叉复核 `UBCCController.cc` 的 `processOuterRequest/processRecallResponse/processInvalidationAck/processClear/processOuterUpgradeDone/replayPendingRequesters` 关键片段；输出一版简要 FV_v3 活性报告，重述单-line wait-for graph，并给出“fair retry 下无 cycles，剩余仅为 timeout/GC 缺失导致的条件式活性风险”的结论。 |
+| **偏离原因** | 用户要求基于 FV-3 / FV-4 复核 wait-for graph 是否无环，并将结果输出到 `fv_v3/` 子目录。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
+## D-47: 输出 FV_v3 版故障恢复复核报告（Clear/RecallResp/InvalidateAck）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/fv4_fault_recovery_report.md` |
+| **偏离内容** | 按用户指定范围重新用 `grep + sed -n` 复核 `UBRouter.cc`、`UBAdapter.cc`、`UBCCController.cc`，输出一版精简 FV-4 报告，结论聚焦于：`Clear` tombstone replay 幂等成立；`RecallResp`/`InvalidateAck` 的 half-range stale-epoch reject 成立；`Clear` 不具备同类 half-range stale-epoch reject，而是 `tombstone + live GRANT_HANDSHAKE tuple strict match`。 |
+| **偏离原因** | 用户要求基于指定 file:line 做一次定点、简洁复核，并将结果输出到 `fv_v3/` 子目录。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
 ## D-46: 落地 TC46 多 beat recall 数据完整性用例（默认 data_width=32）
 
 | 字段 | 内容 |
