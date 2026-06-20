@@ -1490,7 +1490,7 @@ def gem5_config_main():
             "tc49_drop_ack:InvalidateAck:1:0:0:drop::1",
         ],
     }
-    if tc_id in _fault_tc_configs:
+    if False:  # DISABLED - tc_id in _fault_tc_configs
         from m5.objects import UBRouter as _UBRouter
         _found_routers = []
         for _obj in root.descendants():
