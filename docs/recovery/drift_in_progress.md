@@ -5,6 +5,30 @@
 
 ---
 
+## D-40: 新增 FV-5 活性/无死锁静态分析报告
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv5_liveness_deadlock_report.md` |
+| **偏离内容** | 新增一份只读型验证报告，基于 `fv3/fv4/verification_plan` 与 `UBCCController.cc` 指定代码段，静态枚举 UBCC 的 wait-for 依赖、构建单-line wait-for graph，检查 `RECALL/INVALIDATE/GRANT_HANDSHAKE/UPGRADE_PENDING` 四类 outstanding 的阻塞关系，给出“在公平 retry 假设下无协议内死锁”的条件式结论，并单独复核 TC2 replayArmed、TC7 barrier、TC10 upgrade barrier 三类已修场景及剩余 livelock 风险。 |
+| **偏离原因** | 用户要求补齐 FV-5 活性/死锁报告，并明确 wait-for graph、已修死锁复核与后续插桩点。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
+## D-38: 新增 FV-4 故障恢复静态分析报告
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv4_fault_recovery_report.md` |
+| **偏离内容** | 新增一份只读型验证报告，基于 `UBCCController/UBRouter/UBAdapter` 指定代码段，静态梳理三类故障模型（reorder / duplicate / loss）下的脆弱消息、现有保护、tombstone replay 幂等性、stale-epoch rejection，以及 M1/M2 的故障注入锚点设计。 |
+| **偏离原因** | 用户要求对 FV-4 故障模型做定点代码审查并输出正式恢复报告。 |
+| **状态** | ✅ 已完成；仅新增文档，不改变代码行为。 |
+
+---
+
 ## D-39: 新增 FV-7 Recall 数据链路静态核查报告
 
 | 字段 | 内容 |
