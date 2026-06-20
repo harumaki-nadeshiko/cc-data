@@ -17,7 +17,7 @@ Also, `CHI_ubcc_framework.py` currently binds controller `data_channel_size` to 
 - `EPRNFController(... data_channel_size=params.data_width)` at lines 354-355
 - `for cntrl in all_cntrls: cntrl.data_channel_size = params.data_width` at line 438
 
-The default `NoC_Params.data_width` is currently `32`, so the default system is only 2 beats per 64B line. This TC requires forcing it to `16` so recall returns **4 CHI data beats**.
+The default `NoC_Params.data_width` is currently `32`, which already makes each 64B line transfer as **2 CHI data beats (32B + 32B)**. TC46 can directly validate multi-beat recall assembly on default config; no extra config override is required.
 
 ---
 
@@ -30,8 +30,8 @@ The default `NoC_Params.data_width` is currently `32`, so the default system is 
 
 ### Required harness/config change
 
-- Set `NoC_Params.data_width = 16` for this testcase run.
-- Because `data_channel_size` is derived from `params.data_width`, this makes each 64B line transfer as **4 beats × 16B**.
+- **No config change required.** Keep default `NoC_Params.data_width = 32`.
+- Because `data_channel_size` is derived from `params.data_width`, this already exercises **2 beats × 32B** for each 64B line.
 
 ### Workload shape
 
@@ -75,10 +75,10 @@ Use one 64B-aligned DSM line `X` homed on **Node0**.
 
 ### Why this reliably exposes the bug
 
-With `data_channel_size=16`, each recall returns 4 beats. If EP-RNF overwrites instead of merges:
+With default `data_channel_size=32`, each recall returns 2 beats. If EP-RNF overwrites instead of merges:
 
-- bytes from the last beat (`48..63`) may be correct,
-- earlier bytes (`0..47`) will likely come back as stale home-memory data, zero, or otherwise corrupted.
+- bytes from the last beat (`32..63`) may be correct,
+- earlier bytes (`0..31`) will likely come back as stale home-memory data, zero, or otherwise corrupted.
 
 Because each 16B region has a unique signature, the failure points directly to which beats were lost.
 
@@ -100,8 +100,8 @@ Because each 16B region has a unique signature, the failure points directly to w
 7. Requester-side backend sends `OuterRecallMsg` to owner Node1.
 8. Owner-side `EPBackend::handleRecallRequest()` calls `EPRNFController::startReadShared(ownerLocalPa, cb)`.
 9. Owner EP-RNF sends CHI `ReadShared` to owner-local HN-F.
-10. HN-F recalls data from the owner path and returns **4 `CompData` beats**.
-11. EP-RNF must assemble beat0+beat1+beat2+beat3 into one 64B `recallDataBlk`.
+10. HN-F recalls data from the owner path and returns **2 `CompData` beats**.
+11. EP-RNF must assemble beat0+beat1 into one 64B `recallDataBlk`.
 12. On final beat, EP-RNF sends one `CompAck` and finishes the CHI txn.
 13. `finishChiTxn()` pushes the assembled line into `EPBackend::_recallCaptureDataBlock`.
 14. Owner backend sends `OuterRecallResponse` with data payload to home UBCC.
@@ -128,36 +128,31 @@ For Node2 and Node0 final reads:
 
 ### Strong corruption signature
 
-Map the 64B line into four 16B beat regions:
+Map the 64B line into two 32B beat regions:
 
-- Beat0: words 0-1
-- Beat1: words 2-3
-- Beat2: words 4-5
-- Beat3: words 6-7
+- Beat0: words 0-3
+- Beat1: words 4-7
 
 Expected failure pattern for the current bug:
 
-- Beat3 correct
-- Beat0/1/2 stale or zero
+- Beat1 correct
+- Beat0 stale or zero
 
 That makes the testcase diagnostic, not just pass/fail.
 
 ### Recommended workload-visible outputs
 
-Emit one line per observed word on Node2 and Node0, or at minimum emit four per-beat pass/fail markers:
+Emit one line per observed word on Node2 and Node0, or at minimum emit two per-beat pass/fail markers:
 
-- `beat0_ok = (w0==N0 && w1==N1)`
-- `beat1_ok = (w2==N2 && w3==N3)`
-- `beat2_ok = (w4==N4 && w5==N5)`
-- `beat3_ok = (w6==N6 && w7==N7)`
+- `beat0_ok = (w0==N0 && w1==N1 && w2==N2 && w3==N3)`
+- `beat1_ok = (w4==N4 && w5==N5 && w6==N6 && w7==N7)`
 
 The testcase should fail if any beat-level check fails.
 
-### Optional negative/positive comparison
+### Optional comparison
 
-- Run once with default `data_width=32` (2-beat baseline).
-- Run again with `data_width=16` (4-beat target).
-- The bug is much easier to expose in the 4-beat run.
+- Run with default `data_width=32` (2-beat path, TC46 target).
+- If needed, an extra stress experiment can force `data_width=16` to increase beat count, but it is **not required** for TC46 acceptance.
 
 ---
 
@@ -204,20 +199,20 @@ and for final full-line capture:
 
 ---
 
-## 5. Note: requires config change (`data_channel_size`)
+## 5. Note: no extra config change required (`data_channel_size`)
 
-Yes — this TC is only meaningful if the run forces a multi-beat data path.
+TC46 is meaningful on default config and already targets a multi-beat path.
 
-- Current framework behavior: `data_channel_size = params.data_width`
+- Framework behavior: `data_channel_size = params.data_width`
 - Current default: `data_width = 32`
-- Required for TC46: `data_width = 16`
+- Effective transfer shape: **2 beats per 64B line**
 
-Without that change, the testcase still exercises recall, but not the targeted **4-beat recall assembly** hazard.
+Therefore TC46 directly checks the targeted recall assembly hazard without forcing `data_width=16`.
 
 ## Recommended acceptance criteria
 
-- TC46 passes with `data_width=16`
-- logs show exactly **4 recall `CompData` beats** on the owner EP-RNF path
+- TC46 passes with default `data_width=32`
+- logs show exactly **2 recall `CompData` beats** on the owner EP-RNF path
 - Node2 final read returns all `N0..N7`
 - Node0 reread also returns all `N0..N7`
 - no beat-level mismatch, no stale `O*` residue, no zero-filled regions

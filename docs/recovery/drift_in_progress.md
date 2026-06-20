@@ -5,6 +5,18 @@
 
 ---
 
+## D-46: 落地 TC46 多 beat recall 数据完整性用例（默认 data_width=32）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_fixes/tc_multibeat_recall_design.md`, `tests/e2e/workloads/e2e_tc46_multibeat_recall.c`, `tests/e2e/test_e2e.py` |
+| **偏离内容** | 将 TC46 设计文档从“必须设置 `data_width=16`/4-beat”修正为“默认 `data_width=32` 已是 2-beat multi-beat，无需改配置”；新增 workload `e2e_tc46_multibeat_recall.c`：Node0 对同一 64B line 做 8 次 `dsm_store64` 写入 64 个互异字节模式，Node1 用 8 次 `dsm_load64` 回读并逐字节输出 `[TC46_BYTE]`/`[TC46_SUMMARY]`；同时在 `test_e2e.py` 注册 TC46 并新增 `verify_tc46`，校验 64 个字节索引完整覆盖且全部 MATCH。 |
+| **偏离原因** | 用户要求实现 TC46，并明确“`data_width=32` 已满足 multi-beat，不需要 data_channel_size=16 配置变更”。 |
+| **状态** | ✅ 已完成并实测通过：`m5out/tc46_v1` 下 TC46 PASS，`[TC46_SUMMARY] checked=64 mismatches=0`。 |
+
+---
+
 ## D-44: 刷新 FV-7 Recall 数据链路报告（补入 UBCC.dataBuf→grant 闭环与 stale-data 风险）
 
 | 字段 | 内容 |

@@ -64,6 +64,7 @@ TESTCASES = {
     43: "e2e_tc43_rapid_owner_cycle",
     44: "e2e_tc44_full_protocol_matrix",
     45: "e2e_tc45_fill_conflict_bloom_sat",
+    46: "e2e_tc46_multibeat_recall",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -880,6 +881,44 @@ def verify_tc45(reads, lines):
     return True, 'TC45 PASSED: fill-conflict+bloom-pressure marker and final value validated', []
 
 
+def verify_tc46(reads, lines):
+    byte_lines = [l for l in lines if '[TC46_BYTE]' in l]
+    if len(byte_lines) != 64:
+        return False, f'TC46 FAILED: expected 64 byte-check lines, got {len(byte_lines)}', []
+
+    mismatches = []
+    seen_idx = set()
+    for l in byte_lines:
+        m = re.search(r'idx=(\d+)\s+exp=(\d+)\s+act=(\d+)\s+(MATCH|MISMATCH)', l)
+        if not m:
+            mismatches.append({'raw': l})
+            continue
+        idx = int(m.group(1))
+        exp = int(m.group(2))
+        act = int(m.group(3))
+        verdict = m.group(4)
+        seen_idx.add(idx)
+        if verdict != 'MATCH' or exp != act:
+            mismatches.append({'raw': l})
+
+    if seen_idx != set(range(64)):
+        missing = sorted(set(range(64)) - seen_idx)
+        return False, f'TC46 FAILED: missing byte indices {missing}', mismatches[:8]
+
+    summary = next((l for l in lines if '[TC46_SUMMARY]' in l), None)
+    if not summary:
+        return False, 'TC46 FAILED: missing summary marker', mismatches[:8]
+    sm = re.search(r'checked=(\d+)\s+mismatches=(\d+)', summary)
+    if not sm:
+        return False, f'TC46 FAILED: invalid summary marker: {summary}', mismatches[:8]
+    if int(sm.group(1)) != 64 or int(sm.group(2)) != 0:
+        return False, f'TC46 FAILED: summary not clean: {summary}', mismatches[:8]
+
+    if mismatches:
+        return False, f'TC46 FAILED: {len(mismatches)} byte mismatches detected', mismatches[:8]
+    return True, 'TC46 PASSED: 64-byte multi-beat recall integrity verified', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -895,7 +934,7 @@ VERIFIERS = {
     33: verify_tc33, 34: verify_tc34, 35: verify_tc35,
     36: verify_tc36, 37: verify_tc37, 38: verify_tc38, 39: verify_tc39,
     40: verify_tc40, 41: verify_tc41, 42: verify_tc42, 43: verify_tc43,
-    44: verify_tc44, 45: verify_tc45,
+    44: verify_tc44, 45: verify_tc45, 46: verify_tc46,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1033,7 +1072,7 @@ def gem5_config_main():
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-45.", flush=True)
+        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-46.", flush=True)
         sys.exit(1)
 
     # Dual-socket tests: TC32~TC35 + TC39 force 2 sockets.
