@@ -659,12 +659,18 @@ def verify_tc33(reads, lines):
 
 
 def verify_tc34(reads, lines):
-    # NOTE: TC34 requires dual-socket DSM_VA_BASE, but dsm_access.h hardcodes
-    # single-socket VA. Smoke test only: verify dual-socket topology instantiates.
-    had_smoke = any('[TC34_SMOKE]' in l or 'TC34' in l for l in lines)
-    if had_smoke:
-        return True, 'TC34 PASSED: dual-socket topology instantiated (cross-socket deferred)', []
-    return False, 'TC34 FAILED: no smoke marker found', []
+    """TC34: dual-socket pingpong — Node0 writes DSM(0,0), Node1 writes DSM(0,1), Node2 reads both."""
+    node2 = [r for r in reads if r['node'] == 2]
+    if len(node2) < 2:
+        return False, f'TC34 FAILED: expected 2 reads from Node2, got {len(node2)}', node2
+    a = int(node2[0]['actual'], 16)
+    b = int(node2[1]['actual'], 16)
+    exp_a = 0xCAFE0000
+    exp_b = 0xBEEF0000
+    ok = (a == exp_a and b == exp_b)
+    if not ok:
+        return False, f'TC34 FAILED: expected {hex(exp_a)}+{hex(exp_b)}, got {hex(a)}+{hex(b)}', node2
+    return True, 'TC34 PASSED: dual-socket pingpong — both socket planes converged', []
 
 
 def verify_tc35(reads, lines):
