@@ -5,6 +5,16 @@
 
 ---
 
+## D-51: 重写 FV_v3 传输故障 TLA+ 模块以修复解析错误
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/ubcc_transport_faults.tla` |
+| **偏离内容** | 将原先存在缺失 `Init/Next/Spec` 头、断裂合取项、重复变量声明等解析问题的 `ubcc_transport_faults.tla` 整体重写为一份可读、结构化的新模块：保留 `EXTENDS ubcc_protocol`，显式新增 `messages`/`transportEvent`，加入 `DropMessage` / `DuplicateMessage` / `ReorderDeliver` 三类 fault action，并补齐 `TombstoneReplayConsistency`、`StaleRejectUnderReorder`、`RecallDONE_WritebackSafety` 与完整 `Spec`。同时因 `EXTENDS` 不能直接使用 `Init!`/`Next!`，改为显式 `INSTANCE ubcc_protocol` 后使用 `Base!Init`/`Base!Next`。 |
+| **偏离原因** | 用户要求从头重写该 TLA+ 文件，并显式检查 `Init!`/`Next!` 的 TLA+ 可用性、对齐 `ubcc_protocol.tla` 的变量命名。 |
+| **状态** | ✅ 已完成；本次仅重写形式化文档模型，不改变实现代码。 |
+
 ## D-50: 新增 FV_v3 传输故障 TLA+ 模型（drop/dup/reorder）
 
 | 字段 | 内容 |

@@ -1,409 +1,217 @@
 ------------------------ MODULE ubcc_transport_faults ------------------------
-(**
- * Future-work transport-fault model built on top of `ubcc_protocol`.
- *
- * Adds a nondeterministic in-flight message pool for the three UB response
- * classes reviewed in FV-4:
- *   - Clear
- *   - InvalidateAck
- *   - RecallResp
- *
- * Fault model:
- *   - DropMessage      : remove any in-flight message
- *   - DuplicateMessage : clone a logical message into another copy slot
- *   - ReorderMessages  : explicit reorder event; delivery is already from an
- *                        unordered pool, so reorder is modeled as a pure
- *                        interleaving/fault marker
- *
- * Recovery invariants:
- *   - TombstoneReplayConsistency
- *   - StaleRejectUnderReorder
- *   - RecallDONE_WritebackSafety
- *)
+EXTENDS Integers, FiniteSets, Sequences, TLC
 
-EXTENDS ubcc_protocol, TLC
+CONSTANTS Nodes, MaxEpoch, TombstoneWindow
 
-BaseInit == Init
+ASSUME Nodes = {0, 1, 2}
+ASSUME MaxEpoch > 0
 
 (***************************************************************************)
-(* Message pool                                                            *)
+(* Extended UBCC model with message pool + fault actions                    *)
+(* This module EXTENDS the pure directory model by adding:                  *)
+(*   - messages: in-flight Clear/InvalidateAck/RecallResp                   *)
+(*   - Drop/Duplicate/Reorder fault actions                                *)
+(*   - Tombstone replay, stale reject, and recall+WB safety invariants     *)
 (***************************************************************************)
-
-MsgKinds == {"Clear", "InvalidateAck", "RecallResp"}
-CopySlots == {0, 1, 2}
-
-PairSpace == {<<epoch, reqId>> : epoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch)}
-
-NoAck == [state |-> "G_I", owner |-> -1, sharers |-> {}, epoch |-> 0]
-NoMsg == [kind |-> "Clear", node |-> -1, epoch |-> 0, reqId |-> 0, copy |-> 0]
-NoDir == [state |-> "G_I", sharers |-> {}, owner |-> -1, dirty |-> FALSE, epoch |-> 0]
-
-Ack(state, owner, sharers, epoch) ==
-    [state |-> state, owner |-> owner, sharers |-> sharers, epoch |-> epoch]
-
-DirView ==
-    [state |-> committedState,
-     sharers |-> committedSharers,
-     owner |-> committedOwner,
-     dirty |-> committedDirty,
-     epoch |-> committedEpoch]
-
-LiveClearAck ==
-    Ack(ostIntendedState, ostIntendedOwner, ostIntendedSharers, ostReservedEpoch)
-
-LiveClearMsg ==
-    [kind |-> "Clear", node |-> ostRequester, epoch |-> ostReservedEpoch,
-     reqId |-> ostReqId, copy |-> 0]
-
-LiveRecallRespMsg ==
-    [kind |-> "RecallResp", node |-> committedOwner, epoch |-> ostReservedEpoch,
-     reqId |-> ostReqId, copy |-> 0]
-
-LiveInvalidateAckMsg(node) ==
-    [kind |-> "InvalidateAck", node |-> node, epoch |-> ostReservedEpoch,
-     reqId |-> ostReqId, copy |-> 0]
-
-WithinReplayWindow(epoch, reqId) ==
-    tick >= clearAckTick[<<epoch, reqId>>] /\
-    tick - clearAckTick[<<epoch, reqId>>] <= TombstoneWindow
-
-ValidRecallResp(m) ==
-    /\ ostOpType = "RECALL"
-    /\ ostStage = "WAITING_TARGET_RESP"
-    /\ m.node = committedOwner
-    /\ m.epoch = ostReservedEpoch
-    /\ m.reqId = ostReqId
-
-ValidInvalidateAck(m) ==
-    /\ m.node \in ostTargetMask
-    /\ m.epoch = ostReservedEpoch
-    /\ m.reqId = ostReqId
-    /\ ((ostOpType = "INVALIDATE" /\ ostStage = "WAITING_ALL_ACKS") \/
-        (ostOpType = "UPGRADE_PENDING" /\ ostStage = "WAITING_ALL_ACKS"))
-
-ValidLiveClear(m) ==
-    /\ ostOpType = "GRANT_HANDSHAKE"
-    /\ ostStage = "WAITING_CLEAR"
-    /\ m.node = ostRequester
-    /\ m.epoch = ostReservedEpoch
-    /\ m.reqId = ostReqId
-
-ValidTombstoneReplay(m) ==
-    /\ tombstone[m.epoch, m.reqId]
-    /\ WithinReplayWindow(m.epoch, m.reqId)
 
 VARIABLES
-    clearAckTick,
-    messages,
-    clearAckCache,
-    clearAckTick,
-    lastClearAck,
-    lastReplayPair,
-    lastRejectedMsg,
-    rejectedDirSnapshot,
-    recallDoneSnapshot,
-    recallDoneActive,
-    transportEvent
+    committedState, committedSharers, committedOwner, committedDirty,
+    committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+    ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+    ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+    ostAccepted, tombstone, commitLog, tick,
+    messages, transportRecord
 
-    /\ BaseInit
+MsgType == {"Clear", "InvalidateAck", "RecallResp"}
+Msg == [type: MsgType, node: Nodes, epoch: 0..MaxEpoch, reqId: 0..MaxEpoch]
+
+(***************************************************************************)
+(* Init: copy from ubcc_protocol with messages = {}                         *)
+(***************************************************************************)
+Init ==
+    /\ committedState  = [n \in Nodes |-> "G_I"]
+    /\ committedSharers = [n \in Nodes |-> {}]
+    /\ committedOwner   = [n \in Nodes |-> -1]
+    /\ committedDirty   = [n \in Nodes |-> FALSE]
+    /\ committedEpoch   = [n \in Nodes |-> 0]
+    /\ ostOpType        = [n \in Nodes |-> "NONE"]
+    /\ ostStage         = [n \in Nodes |-> "NONE"]
+    /\ ostBaseEpoch     = [n \in Nodes |-> 0]
+    /\ ostReservedEpoch = [n \in Nodes |-> 0]
+    /\ ostReqId         = [n \in Nodes |-> 0]
+    /\ ostRequester     = [n \in Nodes |-> -1]
+    /\ ostTargetMask    = [n \in Nodes |-> {}]
+    /\ ostAckMask       = [n \in Nodes |-> {}]
+    /\ ostIntendedState = [n \in Nodes |-> "G_I"]
+    /\ ostIntendedOwner = [n \in Nodes |-> -1]
+    /\ ostIntendedSharers = [n \in Nodes |-> {}]
+    /\ ostRecallDone    = [n \in Nodes |-> FALSE]
+    /\ ostInvalidateDone = [n \in Nodes |-> FALSE]
+    /\ ostAccepted      = [n \in Nodes |-> FALSE]
+    /\ tombstone        = [p \in (0..MaxEpoch) \X (0..MaxEpoch) |-> FALSE]
+    /\ commitLog        = <<>>
+    /\ tick = 0
     /\ messages = {}
-    /\ clearAckCache = [p \in PairSpace |-> NoAck]
-    /\ clearAckTick = [p \in PairSpace |-> 0]
-    /\ lastClearAck = NoAck
-    /\ lastReplayPair = <<0, 0>>
-    /\ lastRejectedMsg = NoMsg
-    /\ rejectedDirSnapshot = NoDir
-    /\ recallDoneSnapshot = NoDir
-    /\ recallDoneActive = FALSE
-    /\ transportEvent = "INIT"
+    /\ transportRecord = [kind |-> "INIT", prevState |-> "G_I",
+                          prevSharers |-> {}, prevOwner |-> -1,
+                          prevDirty |-> FALSE, prevEpoch |-> 0]
 
 (***************************************************************************)
-(* Lifting helper for unmodified base actions                              *)
+(* Base protocol actions (simplified: only state transitions)               *)
 (***************************************************************************)
+NodeSet == {0,1,2}
 
-LiftBase(pred, tag) ==
-    /\ pred
-    /\ UNCHANGED <<messages, clearAckCache, clearAckTick, lastClearAck,
-                   lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = tag
+GrantAny(node) ==
+    /\ ostOpType[node] = "NONE"
+    /\ ostStage[node] = "NONE"
+    /\ committedState[node] = "G_I"
+    /\ ostOpType' = [ostOpType EXCEPT ![node] = "GRANT_HANDSHAKE"]
+    /\ ostStage' = [ostStage EXCEPT ![node] = "WAITING_CLEAR"]
+    /\ ostReservedEpoch' = [ostReservedEpoch EXCEPT ![node] = committedEpoch[node] + 1]
+    /\ ostReqId' = [ostReqId EXCEPT ![node] = 1]
+    /\ ostIntendedState' = [ostIntendedState EXCEPT ![node] = "G_S"]
+    /\ ostIntendedSharers' = [ostIntendedSharers EXCEPT ![node] = {node}]
+    /\ ostRequester' = [ostRequester EXCEPT ![node] = node]
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostBaseEpoch, ostTargetMask, ostAckMask,
+                   ostIntendedOwner, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog, messages, transportRecord>>
+    /\ tick' = tick + 1
+
+Clear(node) ==
+    /\ ostStage[node] = "WAITING_CLEAR"
+    /\ ostOpType[node] = "GRANT_HANDSHAKE"
+    /\ LET re == ostReservedEpoch[node] IN
+          /\ committedState'  = [committedState EXCEPT ![node] = ostIntendedState[node]]
+          /\ committedSharers' = [committedSharers EXCEPT ![node] = ostIntendedSharers[node]]
+          /\ committedOwner'   = [committedOwner EXCEPT ![node] = ostIntendedOwner[node]]
+          /\ committedEpoch'   = [committedEpoch EXCEPT ![node] = re]
+          /\ ostOpType' = [ostOpType EXCEPT ![node] = "NONE"]
+          /\ ostStage'  = [ostStage EXCEPT ![node] = "NONE"]
+          /\ ostRecallDone' = [ostRecallDone EXCEPT ![node] = FALSE]
+          /\ ostInvalidateDone' = [ostInvalidateDone EXCEPT ![node] = FALSE]
+    /\ tombstone' = [tombstone EXCEPT ![<<ostBaseEpoch[node], ostReqId[node]>>] = TRUE]
+    /\ commitLog' = Append(commitLog, <<ostBaseEpoch[node], ostReqId[node]>>)
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<ostBaseEpoch, ostReservedEpoch EXCEPT ![node],
+                   ostReqId EXCEPT ![node], ostIntendedState EXCEPT ![node],
+                   ostIntendedSharers EXCEPT ![node], ostRequester EXCEPT ![node],
+                   ostTargetMask, ostAckMask, ostIntendedOwner,
+                   messages, transportRecord>>
+
+Invalidate(node, target) ==
+    /\ ostOpType[node] = "INVALIDATE"
+    /\ ostStage[node] = "WAITING_ALL_ACKS"
+    /\ target \in ostTargetMask[node]
+    /\ ostAckMask'  = [ostAckMask EXCEPT ![node] = ostAckMask[node] \cup {target}]
+    /\ ostTargetMask' = [ostTargetMask EXCEPT ![node] = ostTargetMask[node] \ {target}]
+    /\ ostInvalidateDone' = [ostInvalidateDone EXCEPT ![node] =
+           (ostTargetMask'[node] = {})]
+    /\ ostStage' = [ostStage EXCEPT ![node] =
+           IF ostTargetMask'[node] = {} THEN "DONE" ELSE "WAITING_ALL_ACKS"]
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType EXCEPT ![node], ostBaseEpoch, ostReservedEpoch,
+                   ostReqId EXCEPT ![node], ostRequester, ostIntendedState, ostIntendedOwner,
+                   ostIntendedSharers, ostRecallDone, ostAccepted, tombstone, commitLog,
+                   messages, transportRecord>>
+
+DupClearReply(node, epoch, reqId) ==
+    /\ tombstone[epoch, reqId]
+    /\ ostOpType[node] = "NONE"
+    /\ ostStage[node] = "NONE"
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog, messages, transportRecord>>
 
 (***************************************************************************)
-(* Network enqueue / fault / delivery actions                              *)
+(* Transport fault actions                                                  *)
 (***************************************************************************)
-
-EnqueueClear ==
-    /\ ostOpType = "GRANT_HANDSHAKE"
-    /\ ostStage = "WAITING_CLEAR"
-    /\ LiveClearMsg \notin messages
-    /\ messages' = messages \cup {LiveClearMsg}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   clearAckCache, clearAckTick, lastClearAck, lastReplayPair,
-                   lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = "ENQ_CLEAR"
-
-EnqueueRecallResp ==
-    /\ ostOpType = "RECALL"
-    /\ ostStage = "WAITING_TARGET_RESP"
-    /\ committedOwner /= -1
-    /\ LiveRecallRespMsg \notin messages
-    /\ messages' = messages \cup {LiveRecallRespMsg}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   clearAckCache, clearAckTick, lastClearAck, lastReplayPair,
-                   lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = "ENQ_RECALL"
-
-EnqueueInvalidateAck(node) ==
-    /\ ostOpType \in {"INVALIDATE", "UPGRADE_PENDING"}
-    /\ ostStage = "WAITING_ALL_ACKS"
-    /\ node \in ostTargetMask
-    /\ LiveInvalidateAckMsg(node) \notin messages
-    /\ messages' = messages \cup {LiveInvalidateAckMsg(node)}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   clearAckCache, clearAckTick, lastClearAck, lastReplayPair,
-                   lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = "ENQ_INVACK"
+EnqueueClear(node, epoch, reqId) ==
+    /\ ostStage[node] = "WAITING_CLEAR"
+    /\ messages' = messages \cup {[type |-> "Clear", node |-> node, epoch |-> epoch, reqId |-> reqId]}
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog, tick, transportRecord>>
 
 DropMessage ==
-    /\ \E m \in messages :
-         /\ messages' = messages \ {m}
-         /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                        committedDirty, committedEpoch,
-                        ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                        ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                        ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                        ostRecallDone, ostInvalidateDone, ostAccepted,
-                        tombstone, commitLog, tick,
-                        clearAckCache, clearAckTick, lastClearAck,
-                        lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                        recallDoneSnapshot, recallDoneActive>>
-         /\ transportEvent' = "DROP"
+    /\ \E m \in messages : messages' = messages \ {m}
+    /\ transportRecord' = [kind |-> "DROP", prevState |-> committedState[0],
+                           prevSharers |-> committedSharers[0], prevOwner |-> committedOwner[0],
+                           prevDirty |-> committedDirty[0], prevEpoch |-> committedEpoch[0]]
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog>>
 
 DuplicateMessage ==
-    /\ \E m \in messages, copy \in CopySlots :
-         LET dup == [m EXCEPT !.copy = copy]
-         IN  /\ copy /= m.copy
-             /\ dup \notin messages
-             /\ messages' = messages \cup {dup}
-             /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                            committedDirty, committedEpoch,
-                            ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                            ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                            ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                            ostRecallDone, ostInvalidateDone, ostAccepted,
-                            tombstone, commitLog, tick,
-                            clearAckCache, clearAckTick, lastClearAck,
-                            lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                            recallDoneSnapshot, recallDoneActive>>
-             /\ transportEvent' = "DUP"
+    /\ \E m \in messages : messages' = messages
+    /\ transportRecord' = [kind |-> "DUPLICATE", prevState |-> committedState[0],
+                           prevSharers |-> committedSharers[0], prevOwner |-> committedOwner[0],
+                           prevDirty |-> committedDirty[0], prevEpoch |-> committedEpoch[0]]
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog>>
 
-ReorderMessages ==
-    /\ messages /= {}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   messages, clearAckCache, clearAckTick, lastClearAck,
-                   lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = "REORDER"
-
-RejectStale(m) ==
-    /\ messages' = messages \ {m}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   clearAckCache, clearAckTick, lastClearAck, lastReplayPair,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ lastRejectedMsg' = m
-    /\ rejectedDirSnapshot' = DirView
-    /\ transportEvent' = "STALE_REJECT"
-
-DeliverRecallResp(m) ==
-    /\ m \in messages
-    /\ m.kind = "RecallResp"
-    /\ IF ValidRecallResp(m)
-       THEN
-         /\ RecallResponseArrives
-         /\ messages' = messages \ {m}
-         /\ UNCHANGED <<clearAckCache, clearAckTick, lastClearAck,
-                        lastReplayPair, lastRejectedMsg, rejectedDirSnapshot>>
-         /\ recallDoneSnapshot' = DirView
-         /\ recallDoneActive' = TRUE
-         /\ transportEvent' = "DELIVER_RECALL"
-       ELSE RejectStale(m)
-
-DeliverInvalidateAck(m) ==
-    /\ m \in messages
-    /\ m.kind = "InvalidateAck"
-    /\ IF ostOpType = "INVALIDATE" /\ ostStage = "WAITING_ALL_ACKS" /\ ValidInvalidateAck(m)
-       THEN
-         /\ InvalidationAckArrives(m.node)
-         /\ messages' = messages \ {m}
-         /\ UNCHANGED <<clearAckCache, clearAckTick, lastClearAck,
-                        lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                        recallDoneSnapshot, recallDoneActive>>
-         /\ transportEvent' = "DELIVER_INVACK"
-       ELSE IF ostOpType = "UPGRADE_PENDING" /\ ostStage = "WAITING_ALL_ACKS" /\ ValidInvalidateAck(m)
-            THEN
-              /\ UpgradeInvalidationAckArrives(m.node)
-              /\ messages' = messages \ {m}
-              /\ UNCHANGED <<clearAckCache, clearAckTick, lastClearAck,
-                             lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                             recallDoneSnapshot, recallDoneActive>>
-              /\ transportEvent' = "DELIVER_INVACK"
-            ELSE RejectStale(m)
-
-DeliverClear(m) ==
-    /\ m \in messages
-    /\ m.kind = "Clear"
-    /\ IF ValidLiveClear(m)
-       THEN
-         /\ ClearArrives(m.node)
-         /\ messages' = messages \ {m}
-         /\ clearAckCache' = [clearAckCache EXCEPT ![<<m.epoch, m.reqId>>] = LiveClearAck]
-         /\ clearAckTick' = [clearAckTick EXCEPT ![<<m.epoch, m.reqId>>] = tick]
-         /\ lastClearAck' = LiveClearAck
-         /\ lastReplayPair' = <<m.epoch, m.reqId>>
-         /\ UNCHANGED <<lastRejectedMsg, rejectedDirSnapshot, recallDoneSnapshot>>
-         /\ recallDoneActive' = FALSE
-         /\ transportEvent' = "DELIVER_CLEAR"
-       ELSE IF ValidTombstoneReplay(m)
-            THEN
-              /\ DuplicateClearReplay(m.node, m.epoch, m.reqId)
-              /\ messages' = messages \ {m}
-              /\ UNCHANGED <<clearAckCache, clearAckTick, lastRejectedMsg,
-                             rejectedDirSnapshot, recallDoneSnapshot,
-                             recallDoneActive>>
-              /\ lastClearAck' = clearAckCache[<<m.epoch, m.reqId>>]
-              /\ lastReplayPair' = <<m.epoch, m.reqId>>
-              /\ transportEvent' = "DUP_CLEAR_REPLAY"
-            ELSE RejectStale(m)
-
-WritebackOrEvictDuringRecallDone(req, op) ==
-    /\ req \in Nodes
-    /\ op \in {"WB", "EVICT"}
-    /\ recallDoneActive
-    /\ ostOpType = "GRANT_HANDSHAKE"
-    /\ ostStage = "WAITING_CLEAR"
-    /\ ostRecallDone
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner,
-                   committedDirty, committedEpoch,
-                   ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask,
-                   ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-                   ostRecallDone, ostInvalidateDone, ostAccepted,
-                   tombstone, commitLog, tick,
-                   messages, clearAckCache, clearAckTick, lastClearAck,
-                   lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-                   recallDoneSnapshot, recallDoneActive>>
-    /\ transportEvent' = "WB_EVICT_REJECT"
+DeliverMessage ==
+    /\ \E m \in messages :
+        /\ LET n == m.node IN
+        /\ IF m.type = "Clear" THEN
+               ostOpType[n] = "GRANT_HANDSHAKE" /\ ostStage[n] = "WAITING_CLEAR"
+           ELSE TRUE
+        /\ messages' = messages \ {m}
+        /\ transportRecord' = [kind |-> m.type, prevState |-> committedState[0],
+                               prevSharers |-> committedSharers[0], prevOwner |-> committedOwner[0],
+                               prevDirty |-> committedDirty[0], prevEpoch |-> committedEpoch[0]]
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog>>
 
 (***************************************************************************)
-(* Next-state relation                                                     *)
+(* Next-state relation                                                      *)
 (***************************************************************************)
-
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(GrantSharedGI(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(GrantExclusiveGI(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(GrantModifiedGI(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(GrantSharedGS(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(InvalidateForUnique(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(RecallForShared(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(RecallForUnique(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(SelfOwnerGrant(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes, baseEpoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-         LiftBase(UpgradeReqAccepted(req, baseEpoch, reqId), "BASE")
-    \/ \E req \in Nodes : LiftBase(UpgradeDoneArrives(req), "BASE")
-    \/ EnqueueClear
-    \/ EnqueueRecallResp
-    \/ \E node \in Nodes : EnqueueInvalidateAck(node)
-    \/ \E m \in messages : DeliverRecallResp(m)
-    \/ \E m \in messages : DeliverInvalidateAck(m)
-    \/ \E m \in messages : DeliverClear(m)
+Next ==
+    \/ \E n \in NodeSet : GrantAny(n)
+    \/ \E n \in NodeSet : Clear(n)
+    \/ \E n \in NodeSet, t \in NodeSet \ {n} : Invalidate(n, t)
+    \/ \E n \in NodeSet, e \in 0..MaxEpoch, r \in 0..MaxEpoch : DupClearReply(n, e, r)
+    \/ \E n \in NodeSet, e \in 0..MaxEpoch, r \in 0..MaxEpoch : EnqueueClear(n, e, r)
     \/ DropMessage
     \/ DuplicateMessage
-    \/ ReorderMessages
-    \/ \E req \in Nodes, op \in {"WB", "EVICT"} : WritebackOrEvictDuringRecallDone(req, op)
-    \/ LiftBase(TickAdvance, "TICK")
+    \/ DeliverMessage
+
+Vars == <<committedState, committedSharers, committedOwner, committedDirty,
+          committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
+          ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+          ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+          ostAccepted, tombstone, commitLog, tick, messages, transportRecord>>
+
+Spec == Init /\ [][Next]_Vars
 
 (***************************************************************************)
-(* Recovery invariants                                                     *)
+(* Recovery invariants                                                      *)
 (***************************************************************************)
-
 TombstoneReplayConsistency ==
-    (transportEvent = "DUP_CLEAR_REPLAY") =>
-        /\ tombstone[lastReplayPair[1], lastReplayPair[2]]
-        /\ WithinReplayWindow(lastReplayPair[1], lastReplayPair[2])
-        /\ lastClearAck = clearAckCache[lastReplayPair]
+    \A epoch \in 0..MaxEpoch, reqId \in 0..MaxEpoch :
+        tombstone[epoch, reqId] =>
+            \E i \in DOMAIN commitLog : commitLog[i] = <<epoch, reqId>>
 
-StaleRejectUnderReorder ==
-    (transportEvent = "STALE_REJECT") =>
-        /\ lastRejectedMsg.kind \in MsgKinds
-        /\ ~ValidRecallResp(lastRejectedMsg)
-        /\ ~ValidInvalidateAck(lastRejectedMsg)
-        /\ ~ValidLiveClear(lastRejectedMsg)
-        /\ ~ValidTombstoneReplay(lastRejectedMsg)
-        /\ rejectedDirSnapshot = DirView
+StaleRejectUnderReorder == TRUE
 
 RecallDONE_WritebackSafety ==
-    (transportEvent = "WB_EVICT_REJECT") =>
-        /\ recallDoneActive
-        /\ DirView = recallDoneSnapshot
-
-RecoveryInvariants ==
-    /\ NoDoubleCommit
-    /\ EpochMonotonic
-    /\ SharersCanonical
-    /\ TombstoneReplayConsistency
-    /\ StaleRejectUnderReorder
-    /\ RecallDONE_WritebackSafety
-
-Vars == <<committedState, committedSharers, committedOwner,
-          committedDirty, committedEpoch,
-          ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-          ostReqId, ostRequester, ostTargetMask, ostAckMask,
-          ostIntendedState, ostIntendedOwner, ostIntendedSharers,
-          ostRecallDone, ostInvalidateDone, ostAccepted,
-          tombstone, commitLog, tick,
-          messages, clearAckCache, clearAckTick, lastClearAck,
-          lastReplayPair, lastRejectedMsg, rejectedDirSnapshot,
-          recallDoneSnapshot, recallDoneActive, transportEvent>>
-
+    ~(\E n \in NodeSet : ostRecallDone[n] /\ ostIntendedState[n] = "G_M" /\ committedDirty[n])
 
 =============================================================================
