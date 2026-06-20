@@ -5,6 +5,18 @@
 
 ---
 
+## D-53: 新增 FV_v3 双 Socket EP TLA+ 模型与 TLC 验证工单
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `docs/recovery/fv_v3/ep_intra_node_dual.tla`, `docs/recovery/fv_v3/ep_intra_node_dual.cfg` |
+| **偏离内容** | 基于 `ep_intra_node_single.tla` 新建双 Socket 抽象模型：引入 `Sockets={0,1}`、socket-indexed HN-F/EP-RNF/EP-SNF/Backend/DRAM 状态、`interSocketQ` 传输层、`CpuRemoteLoad/Store/Evict`、`InterSocketTick/Deliver*`、remote grant/response 路径，以及新增不变量 `SocketIsolation`/`CrossSocketDataIntegrity`。同时加入 stale remote grant 丢弃与 grant-kind 区分以削减跨 Socket 竞态误接收。 |
+| **偏离原因** | 用户要求实现 `ep_intra_node_dual.tla/.cfg` 并执行 TLC deadlock 检查；该模型为 FV_v3 验证草案，不对应 gem5 运行时代码路径。 |
+| **状态** | 🔄 进行中：TLC 可运行但 `CrossSocketDataIntegrity` 仍触发反例（当前 run: generated 236,172 / distinct 82,712，未通过）。 |
+
+---
+
 ## D-52: 修复 TC47/48/49 fault-injection 验证与 TC49 故障模型
 
 | 字段 | 内容 |
