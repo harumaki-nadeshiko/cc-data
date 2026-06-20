@@ -54,6 +54,16 @@ TESTCASES = {
     33: "e2e_tc33_cross_socket_writeback",
     34: "e2e_tc34_dual_socket_pingpong",
     35: "e2e_tc35_numa_latency_stress",
+    36: "e2e_tc36_owner_upgrade_ge_window",
+    37: "e2e_tc37_owner_upgrade_gm_window",
+    38: "e2e_tc38_stale_clear_tombstone_storm",
+    39: "e2e_tc39_dual_socket_same_pa_interference",
+    40: "e2e_tc40_recall_timeout_retry",
+    41: "e2e_tc41_recall_invalidate_overlap",
+    42: "e2e_tc42_exact_epoch_wrap_24b",
+    43: "e2e_tc43_rapid_owner_cycle",
+    44: "e2e_tc44_full_protocol_matrix",
+    45: "e2e_tc45_fill_conflict_bloom_sat",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -691,6 +701,185 @@ def verify_tc35(reads, lines):
     return True, 'TC35 PASSED: NUMA mixed stress has forward progress on all nodes', []
 
 
+def verify_tc36(reads, lines):
+    need = 0x3600BB22
+    if not any('[TC36_GE]' in l and 'ge=1' in l and 'upg_owner=1' in l for l in lines):
+        return False, 'TC36 FAILED: missing committed G_E + owner-upgrade marker', []
+    if any('[TC36_GE]' in l and ('recall=1' in l or 'inv=1' in l) for l in lines):
+        return False, 'TC36 FAILED: unexpected recall/invalidate marker before upgrade completion', []
+    node_last = {}
+    for r in reads:
+        node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC36 FAILED: final reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC36 FAILED: final value not converged to upgraded write: {bad}', []
+    return True, 'TC36 PASSED: owner upgrade in G_E window converged without recall/inv marker', []
+
+
+def verify_tc37(reads, lines):
+    need = 0x3700D222
+    if not any('[TC37_GM]' in l and 'gm_before_second=1' in l for l in lines):
+        return False, 'TC37 FAILED: missing committed G_M marker before second owner write', []
+    if any('reject' in l.lower() or 'duplicate owner' in l.lower() for l in lines):
+        return False, 'TC37 FAILED: illegal transition marker/log observed', []
+    node_last = {}
+    for r in reads:
+        node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC37 FAILED: final reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC37 FAILED: final value mismatch after second owner write: {bad}', []
+    return True, 'TC37 PASSED: G_M owner-side second write converged legally', []
+
+
+def verify_tc38(reads, lines):
+    need = 0x38CC0033
+    line = next((l for l in lines if '[TC38_CLR]' in l), None)
+    if not line:
+        return False, 'TC38 FAILED: missing stale clear storm marker', []
+    m = re.search(r'stale_clear_seen=(\d+)\s+replay_ok=(\d+)', line)
+    if not m:
+        return False, f'TC38 FAILED: malformed stale-clear marker: {line}', []
+    if int(m.group(1)) < 2 or int(m.group(2)) != 1:
+        return False, f'TC38 FAILED: marker constraints not met: {line}', []
+    target = [r for r in reads if r['node'] in (1, 2)]
+    if len(target) < 2:
+        return False, f'TC38 FAILED: expected final reads from Node1/Node2, got {len(target)}', target
+    bad = [r for r in target[-2:] if int(r['actual'], 16) != need]
+    if bad:
+        return False, 'TC38 FAILED: stale clear/tombstone storm corrupted final value', bad
+    return True, 'TC38 PASSED: stale clear storm markers + final convergence validated', []
+
+
+def verify_tc39(reads, lines):
+    need = 0x3900B022
+    route_lines = [l for l in lines if '[TC39_ROUTE]' in l and 'homeSocket=1' in l]
+    if len(route_lines) < 2:
+        return False, 'TC39 FAILED: insufficient socket-routing markers for homeSocket=1', []
+    node_last = {}
+    for r in reads:
+        if r['home'] == 1:
+            node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC39 FAILED: final same-PA reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC39 FAILED: split-brain final value detected: {bad}', []
+    return True, 'TC39 PASSED: dual-socket same-PA converged on home socket 1', []
+
+
+def verify_tc40(reads, lines):
+    need = 0x4000D1A1
+    retry_line = next((l for l in lines if '[TC40_RECALL]' in l), None)
+    if not retry_line:
+        return False, 'TC40 FAILED: missing recall timeout/retry marker', []
+    m = re.search(r'retry_count=(\d+)', retry_line)
+    if not m or int(m.group(1)) < 1:
+        return False, f'TC40 FAILED: retry marker invalid: {retry_line}', []
+    node2 = [r for r in reads if r['node'] == 2]
+    node0 = [r for r in reads if r['node'] == 0]
+    if not node2 or not node0:
+        return False, 'TC40 FAILED: missing Node2/Node0 completion reads', reads
+    if int(node2[-1]['actual'], 16) != need or int(node0[-1]['actual'], 16) != need:
+        return False, 'TC40 FAILED: recall retry path did not converge to owner value', [node2[-1], node0[-1]]
+    return True, 'TC40 PASSED: retry marker observed and eventual completion succeeded', []
+
+
+def verify_tc41(reads, lines):
+    need = 0x4100B222
+    has_recall = any('[TC41_PHASE]' in l and 'step=recall' in l for l in lines)
+    has_inv = any('[TC41_PHASE]' in l and 'step=invalidate' in l for l in lines)
+    if not (has_recall and has_inv):
+        return False, 'TC41 FAILED: missing recall/invalidate overlap markers', []
+    node_last = {}
+    for r in reads:
+        node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC41 FAILED: final reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC41 FAILED: stale value survived after invalidate sequence: {bad}', []
+    return True, 'TC41 PASSED: recall+invalidate serialized and converged to V2', []
+
+
+def verify_tc42(reads, lines):
+    need = 0x42A00001
+    ep = next((l for l in lines if '[TC42_EPOCH]' in l), None)
+    if not ep or 'ffffff,0' not in ep:
+        return False, 'TC42 FAILED: missing exact wrap boundary marker (ffffff->0)', []
+    node_last = {}
+    for r in reads:
+        node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC42 FAILED: final reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC42 FAILED: wrap-window final convergence failed: {bad}', []
+    return True, 'TC42 PASSED: exact wrap marker seen and final value converged', []
+
+
+def verify_tc43(reads, lines):
+    need = 0x43000000 | (64 - 1)
+    bad_reads = [r for r in reads if r['verdict'] == 'MISMATCH']
+    if bad_reads:
+        return False, f'TC43 FAILED: {len(bad_reads)} mismatches during owner cycling', bad_reads[:20]
+    progress = sum(1 for l in lines if '[TC43_ROUND]' in l)
+    if progress < 4:
+        return False, f'TC43 FAILED: insufficient progress markers ({progress})', []
+    node_last = {}
+    for r in reads:
+        node_last[r['node']] = int(r['actual'], 16)
+    if set(node_last.keys()) != {0, 1, 2}:
+        return False, f'TC43 FAILED: final reads missing nodes, got {sorted(node_last.keys())}', []
+    bad = {n: v for n, v in node_last.items() if v != need}
+    if bad:
+        return False, f'TC43 FAILED: final tag mismatch after rapid ownership cycles: {bad}', []
+    return True, 'TC43 PASSED: rapid owner cycles maintained liveness and final convergence', []
+
+
+def verify_tc44(reads, lines):
+    expected_vals = {0x44A00022, 0x44B00022, 0x44C00022, 0x44D00022}
+    paths = {'upgrade', 'writeback_fill', 'recall', 'invalidate_unique'}
+    seen_paths = set()
+    for l in lines:
+        m = re.search(r'\[TC44_PATH\].*tag=(\S+)', l)
+        if m:
+            seen_paths.add(m.group(1))
+    if not paths.issubset(seen_paths):
+        return False, f'TC44 FAILED: missing protocol path markers: {sorted(paths - seen_paths)}', []
+    node_reads = {0: [], 1: [], 2: []}
+    for r in reads:
+        if r['node'] in node_reads:
+            node_reads[r['node']].append(int(r['actual'], 16))
+    for n in (0, 1, 2):
+        if len(node_reads[n]) < 4:
+            return False, f'TC44 FAILED: node {n} missing final 4-line reads', []
+        got = set(node_reads[n][-4:])
+        if got != expected_vals:
+            return False, f'TC44 FAILED: node {n} final matrix mismatch {sorted(hex(v) for v in got)}', []
+    return True, 'TC44 PASSED: full protocol matrix paths + per-line finals validated', []
+
+
+def verify_tc45(reads, lines):
+    need = 0x4500BB22
+    marker = next((l for l in lines if '[TC45_STRESS]' in l), None)
+    if not marker:
+        return False, 'TC45 FAILED: missing bloom/fill stress marker', []
+    m = re.search(r'sat_count=(\d+)\s+fill_conflict=(\d+)', marker)
+    if not m or int(m.group(1)) < 1 or int(m.group(2)) != 1:
+        return False, f'TC45 FAILED: invalid stress marker: {marker}', []
+    t = [r for r in reads if r['node'] in (1, 2)]
+    if len(t) < 2:
+        return False, f'TC45 FAILED: expected final reads from Node1/Node2, got {len(t)}', t
+    bad = [r for r in t[-2:] if int(r['actual'], 16) != need]
+    if bad:
+        return False, 'TC45 FAILED: target line corrupted under bloom/fill pressure', bad
+    return True, 'TC45 PASSED: fill-conflict+bloom-pressure marker and final value validated', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -704,6 +893,9 @@ VERIFIERS = {
     25: verify_tc25, 26: verify_tc26, 27: verify_tc27, 28: verify_tc28,
     29: verify_tc29, 30: verify_tc30, 31: verify_tc31, 32: verify_tc32,
     33: verify_tc33, 34: verify_tc34, 35: verify_tc35,
+    36: verify_tc36, 37: verify_tc37, 38: verify_tc38, 39: verify_tc39,
+    40: verify_tc40, 41: verify_tc41, 42: verify_tc42, 43: verify_tc43,
+    44: verify_tc44, 45: verify_tc45,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -721,7 +913,20 @@ def compile_workload(tc_name):
     if os.path.exists(elf_path) and os.path.getmtime(src_path) <= os.path.getmtime(elf_path):
         return elf_path
     cc = "aarch64-linux-gnu-gcc"
-    cmd = [cc, "-static", "-O0", "-g", "-I", WORKLOAD_DIR, "-o", elf_path, src_path]
+    dual_socket_tcs = {
+        "e2e_tc32_cross_socket_read_miss",
+        "e2e_tc33_cross_socket_writeback",
+        "e2e_tc34_dual_socket_pingpong",
+        "e2e_tc35_numa_latency_stress",
+        "e2e_tc39_dual_socket_same_pa_interference",
+    }
+    num_sockets = "2" if tc_name in dual_socket_tcs else "1"
+    cmd = [
+        cc, "-static", "-O0", "-g",
+        "-DNUM_NODES=3", f"-DNUM_SOCKETS={num_sockets}",
+        "-I", WORKLOAD_DIR,
+        "-o", elf_path, src_path,
+    ]
     print(f"  Compiling: {' '.join(cmd)}", flush=True)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -828,11 +1033,11 @@ def gem5_config_main():
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-35.", flush=True)
+        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-45.", flush=True)
         sys.exit(1)
 
-    # FV-11 dual-socket tests: TC32~TC35 force 2 sockets.
-    if _args.tc in (32, 33, 34, 35):
+    # Dual-socket tests: TC32~TC35 + TC39 force 2 sockets.
+    if _args.tc in (32, 33, 34, 35, 39):
         os.environ["UBCC_NUM_SOCKETS"] = "2"
     else:
         os.environ["UBCC_NUM_SOCKETS"] = "1"

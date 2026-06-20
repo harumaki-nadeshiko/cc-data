@@ -5,6 +5,18 @@
 
 ---
 
+## D-42: 新增 TC36~TC45（new_testcases_v3）并扩展 e2e harness 到 TC45
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `tests/e2e/workloads/e2e_tc36_*.c` ~ `e2e_tc45_*.c`, `tests/e2e/test_e2e.py` |
+| **偏离内容** | 按 `docs/recovery/new_testcases_v3.md` 新增 10 个 E2E workload：TC36(owner upgrade @ G_E window)、TC37(owner upgrade @ G_M window)、TC38(stale clear/tombstone storm)、TC39(dual-socket same-PA interference)、TC40(recall timeout/retry analogue)、TC41(recall+invalidate overlap)、TC42(exact epoch wrap 24b marker window)、TC43(rapid owner cycle)、TC44(full protocol matrix)、TC45(fill conflict + bloom saturation stress)。同时在 `test_e2e.py` 扩展 `TESTCASES/VERIFIERS` 到 TC45，新增 `verify_tc36~verify_tc45`，将非法 `--tc` 提示范围改为 1-45，并将 TC39 加入 dual-socket 运行集合；编译入口 `compile_workload()` 统一注入 `-DNUM_NODES=3`，并按 testcase 自动设置 `-DNUM_SOCKETS=1/2`。 |
+| **偏离原因** | 用户要求基于 `new_testcases_v3.md` 落地 TC36~TC45（含 workload、注册、校验、编译与运行验证）。 |
+| **状态** | ✅ 已完成并实测：TC36~TC45 均 PASS（TC45 首轮触发 `Sequencer deadlock`，已通过降载+分段 barrier 修复后复测 PASS）。 |
+
+---
+
 ## D-41: 新增 FV-11 / P7 的 TC29~TC35（多线程 + 双 Socket）
 
 | 字段 | 内容 |
