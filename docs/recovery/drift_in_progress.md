@@ -5,6 +5,18 @@
 
 ---
 
+## D-41: 新增 FV-11 / P7 的 TC29~TC35（多线程 + 双 Socket）
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `tests/e2e/workloads/e2e_tc29_*.c` ~ `e2e_tc35_*.c`, `tests/e2e/test_e2e.py` |
+| **偏离内容** | 按 FV-11 gap 与 P7 需求新增 7 个 E2E 用例：TC29（local upgrade from exclusive）、TC30（stale clear/tombstone replay 场景）、TC31（4 CPU/node 并发不同 line）、TC32（dual-socket cross-socket read miss + latency marker）、TC33（dual-socket writeback 路径到 home socket0）、TC34（dual-socket concurrent pingpong）、TC35（3-node NUMA mixed stress/forward progress）。同时扩展 harness 注册与 `verify_tc29~verify_tc35`，并在 TC32~TC35 自动设置 `UBCC_NUM_SOCKETS=2`。 |
+| **偏离原因** | 用户要求补齐 dual-socket 零覆盖与 8 条未覆盖边（FV-11）并新增可运行 E2E 设计。 |
+| **状态** | 🔄 已完成代码与验证逻辑，待本轮 build + TC29~TC35 实测结果。 |
+
+---
+
 ## D-40: 新增 FV-5 活性/无死锁静态分析报告
 
 | 字段 | 内容 |

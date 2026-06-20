@@ -47,6 +47,13 @@ TESTCASES = {
     26: "e2e_tc26_l3_eviction_writeback_chain",
     27: "e2e_tc27_epoch_wrap_stress",
     28: "e2e_tc28_backstore_metadata_consistency",
+    29: "e2e_tc29_local_upgrade_from_exclusive",
+    30: "e2e_tc30_stale_clear_tombstone",
+    31: "e2e_tc31_multicpu_concurrent_isolation",
+    32: "e2e_tc32_cross_socket_read_miss",
+    33: "e2e_tc33_cross_socket_writeback",
+    34: "e2e_tc34_dual_socket_pingpong",
+    35: "e2e_tc35_numa_latency_stress",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -591,6 +598,95 @@ def verify_tc28(reads, lines):
     return True, 'TC28 PASSED: backstore data/metadata consistency preserved', []
 
 
+def verify_tc29(reads, lines):
+    node1 = [r for r in reads if r['node'] == 1 and r['home'] == 0]
+    if len(node1) < 1:
+        return False, 'TC29 FAILED: missing node1 validation read', reads
+    if int(node1[-1]['actual'], 16) != 0x2900F111:
+        return False, f"TC29 FAILED: expected 0x2900F111, got 0x{int(node1[-1]['actual'],16):X}", [node1[-1]]
+    if not any('[TC29_UPG]' in l for l in lines):
+        return False, 'TC29 FAILED: missing [TC29_UPG] marker', []
+    return True, 'TC29 PASSED: local exclusive->modified upgrade pattern observed', []
+
+
+def verify_tc30(reads, lines):
+    node2 = [r for r in reads if r['node'] == 2 and r['home'] == 0]
+    if len(node2) < 1:
+        return False, 'TC30 FAILED: missing node2 replay read', reads
+    if int(node2[-1]['actual'], 16) != 0x30BB0022:
+        return False, f"TC30 FAILED: expected 0x30BB0022, got 0x{int(node2[-1]['actual'],16):X}", [node2[-1]]
+    if not any('[TC30_CLR]' in l and 'stale=1' in l and 'replay=1' in l for l in lines):
+        return False, 'TC30 FAILED: missing stale/replay marker', []
+    return True, 'TC30 PASSED: stale clear/tombstone replay sequence validated', []
+
+
+def verify_tc31(reads, lines):
+    node0 = [r for r in reads if r['node'] == 0 and r['home'] == 0]
+    if len(node0) < 12:
+        return False, f'TC31 FAILED: expected >=12 verification reads, got {len(node0)}', node0
+    bad = [r for r in node0 if r['verdict'] != 'MATCH']
+    if bad:
+        return False, f'TC31 FAILED: {len(bad)} mismatched per-line checks', bad
+    return True, 'TC31 PASSED: multi-CPU per-line coherence isolation holds', []
+
+
+def verify_tc32(reads, lines):
+    node0 = [r for r in reads if r['node'] == 0 and r['home'] == 0]
+    if len(node0) < 1:
+        return False, 'TC32 FAILED: missing node0 cross-socket read', reads
+    if int(node0[-1]['actual'], 16) != 0x3200BB02:
+        return False, f"TC32 FAILED: expected 0x3200BB02, got 0x{int(node0[-1]['actual'],16):X}", [node0[-1]]
+    lat_line = next((l for l in lines if '[TC32_LAT]' in l), None)
+    if not lat_line:
+        return False, 'TC32 FAILED: missing [TC32_LAT] marker', []
+    m = re.search(r'same=(\w+)\s+cross=(\w+)', lat_line)
+    if not m:
+        return False, f'TC32 FAILED: malformed latency marker: {lat_line}', []
+    same = int(m.group(1), 16)
+    cross = int(m.group(2), 16)
+    return True, f'TC32 PASSED: cross-socket read valid (same={same}, cross={cross})', []
+
+
+def verify_tc33(reads, lines):
+    node0 = [r for r in reads if r['node'] == 0 and r['home'] == 0]
+    if len(node0) < 1:
+        return False, 'TC33 FAILED: missing home-socket verification read', reads
+    if int(node0[-1]['actual'], 16) != 0x33DD0011:
+        return False, f"TC33 FAILED: expected 0x33DD0011, got 0x{int(node0[-1]['actual'],16):X}", [node0[-1]]
+    if not any('[TC33_WB]' in l and 'homeSocket=0' in l for l in lines):
+        return False, 'TC33 FAILED: missing writeback routing marker', []
+    return True, 'TC33 PASSED: cross-socket dirty writeback reached home socket 0', []
+
+
+def verify_tc34(reads, lines):
+    node2 = [r for r in reads if r['node'] == 2]
+    if len(node2) < 2:
+        return False, f'TC34 FAILED: expected 2 observer reads, got {len(node2)}', node2
+    exp = {0x340A000F, 0x340B000F}
+    got = {int(r['actual'], 16) for r in node2[-2:]}
+    if got != exp:
+        return False, f'TC34 FAILED: expected finals {sorted(hex(v) for v in exp)}, got {sorted(hex(v) for v in got)}', node2[-2:]
+    return True, 'TC34 PASSED: dual-socket pingpong completed without plane interference', []
+
+
+def verify_tc35(reads, lines):
+    node0 = [r for r in reads if r['node'] == 0]
+    if len(node0) < 3:
+        return False, f'TC35 FAILED: expected 3 done-line reads, got {len(node0)}', node0
+    exp = {0x35DD0000, 0x35DD0001, 0x35DD0002}
+    got = {int(r['actual'], 16) for r in node0[-3:]}
+    if got != exp:
+        return False, f'TC35 FAILED: done-lines mismatch, got {sorted(hex(v) for v in got)}', node0[-3:]
+    progress_nodes = set()
+    for l in lines:
+        m = re.search(r'\[TC35_PROGRESS\]\s+node=(\d+)', l)
+        if m:
+            progress_nodes.add(int(m.group(1)))
+    if progress_nodes != {0, 1, 2}:
+        return False, f'TC35 FAILED: progress marker missing nodes, got {sorted(progress_nodes)}', []
+    return True, 'TC35 PASSED: NUMA mixed stress has forward progress on all nodes', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -602,6 +698,8 @@ VERIFIERS = {
     20: verify_tc20, 21: verify_tc21,
     22: verify_tc22, 23: verify_tc23, 24: verify_tc24,
     25: verify_tc25, 26: verify_tc26, 27: verify_tc27, 28: verify_tc28,
+    29: verify_tc29, 30: verify_tc30, 31: verify_tc31, 32: verify_tc32,
+    33: verify_tc33, 34: verify_tc34, 35: verify_tc35,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -726,8 +824,14 @@ def gem5_config_main():
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-28.", flush=True)
+        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-35.", flush=True)
         sys.exit(1)
+
+    # FV-11 dual-socket tests: TC32~TC35 force 2 sockets.
+    if _args.tc in (32, 33, 34, 35):
+        os.environ["UBCC_NUM_SOCKETS"] = "2"
+    else:
+        os.environ["UBCC_NUM_SOCKETS"] = "1"
 
     binary = compile_workload(tc_name)
     if not binary:
