@@ -1,11 +1,10 @@
 /* dsm_access.h — DSM load/store inline macros for E2E ARM workloads.
  *
- * DSM_VA_BASE = MaxAddr - 4*SEG_SIZE  (installed by setup_dsm_va_mapping)
- * Each node k's DSM_k window = DSM_VA_BASE + k * SEG_SIZE
- * SEG_SIZE = 128 MB = 0x8000000
+ * DSM_VA_BASE = MaxAddr - (num_nodes * num_sockets + 1) * SEG_SIZE
+ * Must match setup_dsm_va_mapping() in CHI_ubcc_framework.py.
  *
- * All loads/stores use volatile inline asm to prevent compiler reordering
- * and ensure real memory access through the cache hierarchy.
+ * Compile with -DNUM_SOCKETS=2 for dual-socket tests.
+ * Default: NUM_SOCKETS=1, NUM_NODES=3.
  */
 #ifndef E2E_DSM_ACCESS_H
 #define E2E_DSM_ACCESS_H
@@ -14,13 +13,17 @@
 
 #define SEG_SIZE  0x8000000ULL   /* 128 MB */
 
-/* DSM_VA_BASE: (MaxAddr+1) - 4*SEG_SIZE for page-aligned mapping.
- * Must match setup_dsm_va_mapping() in CHI_ubcc_framework.py.
- * (0xFFFFFFFFFFFFULL + 1) = 0x1000000000000 for 48-bit VA space.
- * 4 * SEG_SIZE = 512MB = 0x20000000
- * Base = 0x1000000000000 - 0x20000000 = 0xFFFFFFE0000000
- */
-#define DSM_VA_BASE  ((0xFFFFFFFFFFFFULL + 1) - 4 * SEG_SIZE)
+#ifndef NUM_NODES
+#define NUM_NODES 3
+#endif
+#ifndef NUM_SOCKETS
+#define NUM_SOCKETS 1
+#endif
+
+#define TOTAL_SEGS  (NUM_NODES * NUM_SOCKETS)
+
+/* DSM_VA_BASE = (MaxAddr+1) - (TOTAL_SEGS + 1) * SEG_SIZE */
+#define DSM_VA_BASE  ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_SEGS + 1) * (uint64_t)SEG_SIZE)
 
 static inline volatile uint32_t* dsm_addr(int home_node, uint32_t offset)
 {
