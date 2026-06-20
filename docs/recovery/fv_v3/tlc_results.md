@@ -25,3 +25,21 @@
 
 Root cause: transport model has conflicting operator names with base model and minor syntax issues. The base model is verified; transport model needs a refactored module structure to separate concerns.
 
+
+## ep_intra_node.tla (Intra-Node EP model)
+
+**Status**: ✅ PASSED
+
+| Metric | Value |
+|--------|-------|
+| States generated | 97 |
+| Distinct states | 82 |
+| State graph depth | 16 |
+| Time | < 1 second |
+| Deadlock | None detected |
+
+**Invariants checked** (all passed):
+- `NoDeadlock` — at least one Next action always enabled when pending
+- `DataIntegrity` — WriteBackRnf preserves dataVer correctness
+- `SnoopCorrectness` — SnpCleanInvalid reaches EP-RNF and transitions to correct state
+- `CallbackOrdering` — EP-RNF callback fires only after Comp_UC + CompAck complete
