@@ -1,16 +1,15 @@
-/* TC49: reorder acks.
+/* TC49: duplicate InvalidateAck perturbation.
  *
  * Scenario:
  *   Node0 writes a value to DSM home=0.
  *   Node1 and Node2 read (become sharers, G_S).
  *   Node0 does exclusive upgrade → INVALIDATE to Node1/Node2.
- *   Fault rule DROPS Node1's InvalidateAck (forcing retry),
- *   then Node2's ack arrives first. Reordered acks must still converge.
+ *   Fault rule duplicates Node1's InvalidateAck once.
+ *   Ack re-observation / idempotent handling must still converge.
  *   Final read must see the upgraded value (0x49CC0033).
  *
  * Fault config (applied in test_e2e.py):
- *   Rule: match InvalidateAck, src=1, dst=0 → drop (once)
- *   This forces Node1 to retry its ack after Node2's ack has already arrived.
+ *   Rule: match InvalidateAck, src=1, dst=0 → duplicate (once)
  */
 #include "dsm_access.h"
 #include "e2e_common.h"
@@ -56,7 +55,7 @@ int main(int argc, char **argv)
     }
     sync_wait(0b111);
 
-    /* Phase 4: All nodes read — must see final_val despite reordered acks */
+    /* Phase 4: All nodes read — must see final_val despite duplicated ack */
     uint32_t got = dsm_load(HOME_NODE, MAIN_OFF);
     emit_read_val(node_id, HOME_NODE, final_val, got, got == final_val);
     if (got != final_val) fail++;

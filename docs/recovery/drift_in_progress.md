@@ -5,6 +5,18 @@
 
 ---
 
+## D-52: 修复 TC47/48/49 fault-injection 验证与 TC49 故障模型
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-20 |
+| **位置** | `tests/e2e/test_e2e.py`, `tests/e2e/workloads/e2e_tc49_reorder_acks.c` |
+| **偏离内容** | 1) 调整 `verify_tc47/48/49`：不再仅依赖 `simout` 中的 `[UBFAULT]`，而是统一通过 `_fault_evidence_seen()` 识别 `[UBFAULT]`/`[E2E-FAULT]`/fault-rule 标签；若 workload 读值正确但完全无故障证据则判 FAIL，避免“未注入也误报 PASS”。2) 在 gem5 配置模式将 `[E2E-FAULT]` 配置行回灌到 `raw_lines`，并在 Python runner 模式把 `proc.stdout` 合并进 verifier 输入，确保 stdout 中的 fault marker 可被校验逻辑看到。3) 将 TC49 fault 规则从 `delay` 改为 `dup`（`tc49_dup_inv_ack`），并同步更新 workload 注释，去掉“drop+retry/延迟”依赖，改为“duplicate+幂等收敛”模型。 |
+| **偏离原因** | 用户要求修复 TC47/48 verifier 对 stdout marker 不可见导致的判定问题，并将 TC49 从 delay/retry 场景简化为 duplicate 扰动以消除超时。 |
+| **状态** | ✅ 已完成并回归通过：`TC47/TC48/TC49` 均 PASS（`m5out/tc47_fix`, `m5out/tc48_fix`, `m5out/tc49_fix`）。 |
+
+---
+
 ## D-51: 重写 FV_v3 传输故障 TLA+ 模块以修复解析错误
 
 | 字段 | 内容 |

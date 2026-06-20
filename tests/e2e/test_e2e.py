@@ -922,6 +922,20 @@ def verify_tc46(reads, lines):
     return True, 'TC46 PASSED: 64-byte multi-beat recall integrity verified', []
 
 
+def _fault_evidence_seen(lines, tc_id):
+    """Detect fault-injection evidence from simout and/or gem5 stdout lines."""
+    tc_tag = f"TC{tc_id}"
+    low_tc_tag = f"tc{tc_id}_"
+    for l in lines:
+        if '[UBFAULT]' in l:
+            return True
+        if '[E2E-FAULT]' in l and tc_tag in l:
+            return True
+        if low_tc_tag in l and ('dup' in l or 'drop' in l or 'delay' in l):
+            return True
+    return False
+
+
 def verify_tc47(reads, lines):
     """TC47: drop Clear, verify tombstone recovery.
     Node1 must read 0x47AA0011 despite a dropped ClearReq."""
@@ -938,11 +952,11 @@ def verify_tc47(reads, lines):
     for r in node2_reads:
         if int(r['actual'], 16) != target_val:
             return False, f"TC47 FAILED: Node2 read 0x{r['actual']}, expected 0x{target_val:X}", [r]
-    # Check for fault injection evidence
-    fault_seen = any('[UBFAULT]' in l for l in lines)
+    fault_seen = _fault_evidence_seen(lines, 47)
     if not fault_seen:
-        return True, "TC47 PASSED: fault injection active (check stdout for UBFAULT markers)", []
-    return True, 'TC47 PASSED: tombstone recovery after dropped Clear', []
+        return False, ('TC47 FAILED: workload completed but no fault evidence found '
+                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
+    return True, 'TC47 PASSED: dropped/duplicated Clear fault injected and final value converged', []
 
 
 def verify_tc48(reads, lines):
@@ -957,14 +971,15 @@ def verify_tc48(reads, lines):
             return False, f'TC48 FAILED: no READ_VAL from Node{n}', reads
         if node_reads[n][-1] != target_val:
             return False, f"TC48 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
-    fault_seen = any('[UBFAULT]' in l for l in lines)
+    fault_seen = _fault_evidence_seen(lines, 48)
     if not fault_seen:
-        return True, "TC47 PASSED: fault injection active (check stdout for UBFAULT markers)", []
+        return False, ('TC48 FAILED: workload completed but no fault evidence found '
+                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
     return True, 'TC48 PASSED: duplicate InvalidateAck handled idempotently', []
 
 
 def verify_tc49(reads, lines):
-    """TC49: reorder acks — dropped ack forces retry, converges anyway."""
+    """TC49: duplicate ack perturbation — converges anyway."""
     target_val = 0x49CC0033
     # All 3 nodes must read the final value
     node_reads = {}
@@ -975,10 +990,11 @@ def verify_tc49(reads, lines):
             return False, f'TC49 FAILED: no READ_VAL from Node{n}', reads
         if node_reads[n][-1] != target_val:
             return False, f"TC49 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
-    fault_seen = any('[UBFAULT]' in l for l in lines)
+    fault_seen = _fault_evidence_seen(lines, 49)
     if not fault_seen:
-        return True, "TC47 PASSED: fault injection active (check stdout for UBFAULT markers)", []
-    return True, 'TC49 PASSED: reordered acks converged correctly', []
+        return False, ('TC49 FAILED: workload completed but no fault evidence found '
+                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
+    return True, 'TC49 PASSED: duplicate InvalidateAck perturbation converged correctly', []
 
 
 VERIFIERS = {
@@ -1476,8 +1492,9 @@ def gem5_config_main():
     _fault_tc_configs = {
         47: ["tc47_dup_clear:ClearReq:1:0:0:dup::1"],
         48: ["tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1"],
-        49: ["tc49_delay_ack:InvalidateAck:1:0:0:delay::1"],
+        49: ["tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1"],
     }
+    _fault_cfg_line = None
     if _args.tc in _fault_tc_configs:
         from m5.objects import UBRouter as _UBR
         _found = []
@@ -1485,7 +1502,8 @@ def gem5_config_main():
             if isinstance(_r, _UBR):
                 _r.fault_rules = _fault_tc_configs[_args.tc]
                 _found.append(f"{_r.node_id}.{_r.socket_id}")
-        print(f"[E2E-FAULT] TC{_args.tc}: applied fault rules to routers: {_found}", flush=True)
+        _fault_cfg_line = f"[E2E-FAULT] TC{_args.tc}: applied fault rules to routers: {_found}"
+        print(_fault_cfg_line, flush=True)
 
     m5.instantiate()
     print(f"[FAULT-DEBUG] NODES={NODES} ruby_system type={type(ruby_system)}", flush=True)
@@ -1523,6 +1541,9 @@ def gem5_config_main():
     if os.path.exists(simerr_path):
         with open(simerr_path, "r") as f:
             raw_lines.extend(line.rstrip("\n") for line in f)
+
+    if _fault_cfg_line:
+        raw_lines.append(_fault_cfg_line)
 
     all_reads = parse_read_vals(raw_lines)
 
@@ -1599,6 +1620,7 @@ def runner_main():
         if os.path.exists(simout):
             with open(simout, "r") as f:
                 raw_lines = [line.rstrip("\n") for line in f]
+        raw_lines.extend(proc.stdout.splitlines())
 
         reads = parse_read_vals(raw_lines)
         passed, msg, failures = verify_testcase(tc_id, reads, raw_lines)
