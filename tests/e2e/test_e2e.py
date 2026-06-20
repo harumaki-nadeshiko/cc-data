@@ -1473,35 +1473,27 @@ def gem5_config_main():
           flush=True)
 
     # ── Debug Fault Injection Config (TC47-49) ────────────────────
-    # Apply fault rules to UBRouter objects based on test case ID.
-    # Fault rules are consumed by UBRouter::parseFaultRules() at init
-    # and applied in sendMessage() before enqueue.
     _fault_tc_configs = {
-        47: [
-            # Drop ClearReq from Node1 to Node0 (once) → forces tombstone replay
-            "tc47_drop_clear:ClearReq:1:0:0:drop::1",
-        ],
-        48: [
-            # Duplicate InvalidateAck from Node2 to Node0 (once)
-            "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1",
-        ],
-        49: [
-            # Drop InvalidateAck from Node1 to Node0 (once) → forces retry/reorder
-            "tc49_drop_ack:InvalidateAck:1:0:0:drop::1",
-        ],
+        47: ["tc47_drop_clear:ClearReq:1:0:0:drop::1"],
+        48: ["tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1"],
+        49: ["tc49_drop_ack:InvalidateAck:1:0:0:drop::1"],
     }
-    if False:  # DISABLED - tc_id in _fault_tc_configs
-        from m5.objects import UBRouter as _UBRouter
-        _found_routers = []
-        for _obj in root.descendants():
-            if isinstance(_obj, _UBRouter):
-                _obj.fault_rules = _fault_tc_configs[tc_id]
-                _found_routers.append(f"{_obj.node_id}.{_obj.socket_id}")
-        print(f"[E2E-FAULT] TC{tc_id}: applied fault rules to routers: "
-              f"{_found_routers}", flush=True)
+    if _args.tc in _fault_tc_configs:
+        from m5.objects import UBRouter as _UBR
+        _found = []
+        for _r in ruby_system.descendants():
+            if isinstance(_r, _UBR):
+                _r.fault_rules = _fault_tc_configs[_args.tc]
+                _found.append(f"{_r.node_id}.{_r.socket_id}")
+        print(f"[E2E-FAULT] TC{_args.tc}: applied fault rules to routers: {_found}", flush=True)
 
     m5.instantiate()
+    print(f"[FAULT-DEBUG] NODES={NODES} ruby_system type={type(ruby_system)}", flush=True)
 
+    _cnt = sum(1 for x in dir(ruby_system)); print(f"[FAULT-DEBUG] attrs={_cnt}", flush=True)
+    from m5.objects import UBRouter as _UBR
+    _routers = [x for x in ruby_system.descendants() if isinstance(x, _UBR)]
+    print(f"[FAULT-DEBUG] UBRouter via descendants: {len(_routers)}", flush=True)
     print("=" * 60, flush=True)
     print(f"E2E Test: {tc_name}  (nodes={NODES}, CPUs={TOTAL_CPUS})", flush=True)
     print(f"Workload: {binary}", flush=True)
