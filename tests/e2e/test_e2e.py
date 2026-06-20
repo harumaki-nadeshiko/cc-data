@@ -65,6 +65,9 @@ TESTCASES = {
     44: "e2e_tc44_full_protocol_matrix",
     45: "e2e_tc45_fill_conflict_bloom_sat",
     46: "e2e_tc46_multibeat_recall",
+    47: "e2e_tc47_drop_clear",
+    48: "e2e_tc48_dup_inv_ack",
+    49: "e2e_tc49_reorder_acks",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -919,6 +922,65 @@ def verify_tc46(reads, lines):
     return True, 'TC46 PASSED: 64-byte multi-beat recall integrity verified', []
 
 
+def verify_tc47(reads, lines):
+    """TC47: drop Clear, verify tombstone recovery.
+    Node1 must read 0x47AA0011 despite a dropped ClearReq."""
+    target_val = 0x47AA0011
+    node1_reads = [r for r in reads if r['node'] == 1]
+    node2_reads = [r for r in reads if r['node'] == 2]
+    if not node1_reads:
+        return False, 'TC47 FAILED: no READ_VAL from Node1', reads
+    if not node2_reads:
+        return False, 'TC47 FAILED: no READ_VAL from Node2', reads
+    for r in node1_reads:
+        if int(r['actual'], 16) != target_val:
+            return False, f"TC47 FAILED: Node1 read 0x{r['actual']}, expected 0x{target_val:X}", [r]
+    for r in node2_reads:
+        if int(r['actual'], 16) != target_val:
+            return False, f"TC47 FAILED: Node2 read 0x{r['actual']}, expected 0x{target_val:X}", [r]
+    # Check for fault injection evidence
+    fault_seen = any('[UBFAULT]' in l for l in lines)
+    if not fault_seen:
+        return False, 'TC47 FAILED: no [UBFAULT] marker — fault injection not active', []
+    return True, 'TC47 PASSED: tombstone recovery after dropped Clear', []
+
+
+def verify_tc48(reads, lines):
+    """TC48: duplicate InvalidateAck — idempotent ack handling."""
+    target_val = 0x48BB0022
+    # All 3 nodes must read the final value
+    node_reads = {}
+    for r in reads:
+        node_reads.setdefault(r['node'], []).append(int(r['actual'], 16))
+    for n in (0, 1, 2):
+        if n not in node_reads or not node_reads[n]:
+            return False, f'TC48 FAILED: no READ_VAL from Node{n}', reads
+        if node_reads[n][-1] != target_val:
+            return False, f"TC48 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
+    fault_seen = any('[UBFAULT]' in l for l in lines)
+    if not fault_seen:
+        return False, 'TC48 FAILED: no [UBFAULT] marker — fault injection not active', []
+    return True, 'TC48 PASSED: duplicate InvalidateAck handled idempotently', []
+
+
+def verify_tc49(reads, lines):
+    """TC49: reorder acks — dropped ack forces retry, converges anyway."""
+    target_val = 0x49CC0033
+    # All 3 nodes must read the final value
+    node_reads = {}
+    for r in reads:
+        node_reads.setdefault(r['node'], []).append(int(r['actual'], 16))
+    for n in (0, 1, 2):
+        if n not in node_reads or not node_reads[n]:
+            return False, f'TC49 FAILED: no READ_VAL from Node{n}', reads
+        if node_reads[n][-1] != target_val:
+            return False, f"TC49 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
+    fault_seen = any('[UBFAULT]' in l for l in lines)
+    if not fault_seen:
+        return False, 'TC49 FAILED: no [UBFAULT] marker — fault injection not active', []
+    return True, 'TC49 PASSED: reordered acks converged correctly', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -935,6 +997,7 @@ VERIFIERS = {
     36: verify_tc36, 37: verify_tc37, 38: verify_tc38, 39: verify_tc39,
     40: verify_tc40, 41: verify_tc41, 42: verify_tc42, 43: verify_tc43,
     44: verify_tc44, 45: verify_tc45, 46: verify_tc46,
+    47: verify_tc47, 48: verify_tc48, 49: verify_tc49,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1408,6 +1471,34 @@ def gem5_config_main():
             be.enable_self_test = False
     print(f"[E2E] Self-tests disabled on all {NODES} EPBackend nodes",
           flush=True)
+
+    # ── Debug Fault Injection Config (TC47-49) ────────────────────
+    # Apply fault rules to UBRouter objects based on test case ID.
+    # Fault rules are consumed by UBRouter::parseFaultRules() at init
+    # and applied in sendMessage() before enqueue.
+    _fault_tc_configs = {
+        47: [
+            # Drop ClearReq from Node1 to Node0 (once) → forces tombstone replay
+            "tc47_drop_clear:ClearReq:1:0:0:drop::1",
+        ],
+        48: [
+            # Duplicate InvalidateAck from Node2 to Node0 (once)
+            "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1",
+        ],
+        49: [
+            # Drop InvalidateAck from Node1 to Node0 (once) → forces retry/reorder
+            "tc49_drop_ack:InvalidateAck:1:0:0:drop::1",
+        ],
+    }
+    if tc_id in _fault_tc_configs:
+        from m5.objects import UBRouter as _UBRouter
+        _found_routers = []
+        for _obj in root.descendants():
+            if isinstance(_obj, _UBRouter):
+                _obj.fault_rules = _fault_tc_configs[tc_id]
+                _found_routers.append(f"{_obj.node_id}.{_obj.socket_id}")
+        print(f"[E2E-FAULT] TC{tc_id}: applied fault rules to routers: "
+              f"{_found_routers}", flush=True)
 
     m5.instantiate()
 
