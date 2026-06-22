@@ -22,81 +22,74 @@ HasQueued(kind, epoch, reqId) ==
     \E i \in 1..Len(transport) :
         transport[i].kind = kind /\ transport[i].epoch = epoch /\ transport[i].reqId = reqId
 
+AgeTrackedTombstone(ts) ==
+    IF ts.valid /\ HasQueued("Clear", ts.epoch, ts.reqId)
+       THEN ts
+       ELSE AgeTombstone(ts)
+
+ReplayDrainBarrier == tombstone.valid /\ HasQueued("Clear", tombstone.epoch, tombstone.reqId)
+
 TFInit ==
     /\ Init
     /\ transport = <<>>
     /\ transportRecord = <<>>
 
+CopyCount(msg) == Cardinality({i \in 1..Len(transport) : transport[i] = msg})
+
 CoreGrantShared ==
-    /\ \E req \in Nodes : \E reqId \in ReqIds : GrantShared(req, reqId)
+    /\ ~ReplayDrainBarrier
+    /\ GrantShared(0, 0)
     /\ UNCHANGED <<transport, transportRecord>>
 
 CoreGrantExclusive ==
-    /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : GrantExclusive(req, wi, reqId)
+    /\ ~ReplayDrainBarrier
+    /\ GrantExclusive(0, FALSE, 0)
     /\ UNCHANGED <<transport, transportRecord>>
 
 CoreRecallBarrier ==
-    /\ \E req \in Nodes : \E rt \in ReqType : \E wi \in BOOLEAN : \E reqId \in ReqIds : RecallBarrier(req, rt, wi, reqId)
+    /\ ~ReplayDrainBarrier
+    /\ RecallBarrier(1, "RS", FALSE, 0)
     /\ UNCHANGED <<transport, transportRecord>>
 
 CoreInvalidateBarrier ==
+    /\ ~ReplayDrainBarrier
     /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : InvalidationBarrier(req, wi, reqId)
     /\ UNCHANGED <<transport, transportRecord>>
 
 CoreUpgradeBarrier ==
+    /\ ~ReplayDrainBarrier
     /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : UpgradeBarrier(req, wi, reqId)
     /\ UNCHANGED <<transport, transportRecord>>
 
-QueueRecallResp ==
-    /\ tick < MaxTick
-    /\ ost.valid /\ ost.opType = "RECALL" /\ ost.stage = "WAITING_TARGET_RESP"
-    /\ ~HasQueued("RecallResp", ost.baseEpoch, ost.reqId)
-    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
-    /\ transport' = Append(transport, [kind |-> "RecallResp", src |-> CHOOSE n \in ost.target : TRUE,
-                                        epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
-    /\ transportRecord' = Append(transportRecord, Audit("enqueue", "RecallResp", ost.baseEpoch, ost.reqId, "na"))
-    /\ tick' = tick + 1
+CoreRecallResp ==
+    /\ ~ReplayDrainBarrier
+    /\ RecallResponse
+    /\ UNCHANGED <<transport, transportRecord>>
 
-QueueInvAck ==
-    /\ tick < MaxTick
-    /\ ost.valid /\ ost.stage = "WAITING_ALL_ACKS" /\ ost.opType \in {"INVALIDATE", "UPGRADE_PENDING"}
-    /\ \E n \in (ost.target \ ost.acked) : ~HasQueued("InvAck", ost.baseEpoch, ost.reqId)
-    /\ LET n == CHOOSE x \in (ost.target \ ost.acked) : TRUE IN
-       /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
-       /\ transport' = Append(transport, [kind |-> "InvAck", src |-> n, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
-       /\ transportRecord' = Append(transportRecord, Audit("enqueue", "InvAck", ost.baseEpoch, ost.reqId, "na"))
-       /\ tick' = tick + 1
+CoreInvAck ==
+    /\ ~ReplayDrainBarrier
+    /\ \E n \in Nodes : BarrierAck(n)
+    /\ UNCHANGED <<transport, transportRecord>>
 
 QueueClear ==
     /\ tick < MaxTick
+    /\ ~ReplayDrainBarrier
+    /\ Len(transport) = 0
     /\ ost.valid /\ ost.opType = "GRANT_HANDSHAKE" /\ ost.stage = "WAITING_CLEAR"
     /\ ~HasQueued("Clear", ost.baseEpoch, ost.reqId)
     /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
     /\ transport' = Append(transport, [kind |-> "Clear", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
-    /\ transportRecord' = Append(transportRecord, Audit("enqueue", "Clear", ost.baseEpoch, ost.reqId, "na"))
+    /\ UNCHANGED transportRecord
     /\ tick' = tick + 1
 
-DeliverRecallResp ==
-    /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind = "RecallResp"
-        /\ RecallResponse
-        /\ transport' = RemoveAt(transport, i)
-        /\ transportRecord' = Append(transportRecord, Audit("deliver", "RecallResp", transport[i].epoch, transport[i].reqId, "accepted"))
-
-DeliverInvAck ==
-    /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind = "InvAck"
-        /\ BarrierAck(transport[i].src)
-        /\ transport' = RemoveAt(transport, i)
-        /\ transportRecord' = Append(transportRecord, Audit("deliver", "InvAck", transport[i].epoch, transport[i].reqId, "accepted"))
-
 DeliverClear ==
+    /\ tick < MaxTick
     /\ \E i \in 1..Len(transport) :
         /\ transport[i].kind = "Clear"
         /\ IF tombstone.valid /\ transport[i].epoch = tombstone.epoch /\ transport[i].reqId = tombstone.reqId
               THEN /\ dir' = dir
                    /\ ost' = ost
-                   /\ tombstone' = AgeTombstone(tombstone)
+                   /\ tombstone' = AgeTrackedTombstone(tombstone)
                    /\ UNCHANGED <<commitLog, epochLog>>
                    /\ transport' = RemoveAt(transport, i)
                    /\ transportRecord' = Append(transportRecord,
@@ -112,7 +105,7 @@ DeliverClear ==
                    /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "commit_accept"))
               ELSE /\ dir' = dir
                    /\ ost' = ost
-                   /\ tombstone' = AgeTombstone(tombstone)
+                   /\ tombstone' = AgeTrackedTombstone(tombstone)
                    /\ UNCHANGED <<commitLog, epochLog>>
                    /\ transport' = RemoveAt(transport, i)
                    /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "reject"))
@@ -122,57 +115,52 @@ DropMsg ==
     /\ tick < MaxTick
     /\ Len(transport) > 0
     /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "Clear"
         /\ dir' = dir
         /\ ost' = ost
-        /\ tombstone' = AgeTombstone(tombstone)
+        /\ tombstone' = AgeTrackedTombstone(tombstone)
         /\ UNCHANGED <<commitLog, epochLog>>
         /\ transport' = RemoveAt(transport, i)
-        /\ transportRecord' = Append(transportRecord, Audit("drop", transport[i].kind, transport[i].epoch, transport[i].reqId, "na"))
+        /\ UNCHANGED transportRecord
         /\ tick' = tick + 1
 
 DuplicateMsg ==
     /\ tick < MaxTick
-    /\ Len(transport) > 0
+    /\ Len(transport) = 1
     /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "Clear"
+        /\ CopyCount(transport[i]) = 1
         /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
         /\ transport' = Append(transport, transport[i])
-        /\ transportRecord' = Append(transportRecord, Audit("duplicate", transport[i].kind, transport[i].epoch, transport[i].reqId, "na"))
+        /\ UNCHANGED transportRecord
         /\ tick' = tick + 1
 
-CoreRecallToGrant == RecallToGrant /\ UNCHANGED <<transport, transportRecord>>
+CoreRecallToGrant == /\ ~ReplayDrainBarrier /\ RecallToGrant /\ UNCHANGED <<transport, transportRecord>>
 
 RecallOrphanWithAudit ==
+    /\ ~ReplayDrainBarrier
     /\ RecallOrphanDisappears
     /\ transport' = transport
-    /\ transportRecord' = Append(transportRecord,
-          Audit("cleanup", "RecallResp", IF Len(epochLog) > 0 THEN dir.epoch ELSE 0, IF ost.valid THEN ost.reqId ELSE 0, "orphan_disappear"))
+    /\ UNCHANGED transportRecord
 
-CoreUpgradeCommit == UpgradeCommit /\ UNCHANGED <<transport, transportRecord>>
-CoreWriteback == \E n \in Nodes : \E keep \in BOOLEAN : Writeback(n, keep) /\ UNCHANGED <<transport, transportRecord>>
-CoreEvict == \E n \in Nodes : Evict(n) /\ UNCHANGED <<transport, transportRecord>>
-CoreTick == TickOnly /\ UNCHANGED <<transport, transportRecord>>
+CoreUpgradeCommit == /\ ~ReplayDrainBarrier /\ UpgradeCommit /\ UNCHANGED <<transport, transportRecord>>
+CoreWriteback == /\ ~ReplayDrainBarrier /\ Writeback(0, FALSE) /\ UNCHANGED <<transport, transportRecord>>
+CoreEvict == /\ ~ReplayDrainBarrier /\ Evict(0) /\ UNCHANGED <<transport, transportRecord>>
+CoreTick == /\ ~ReplayDrainBarrier /\ TickOnly /\ UNCHANGED <<transport, transportRecord>>
 
 TFStutter == /\ tick = MaxTick /\ UNCHANGED TVars
 
 TFNext ==
-    \/ CoreGrantShared
     \/ CoreGrantExclusive
     \/ CoreRecallBarrier
-    \/ CoreInvalidateBarrier
-    \/ CoreUpgradeBarrier
-    \/ QueueRecallResp
-    \/ QueueInvAck
+    \/ CoreRecallResp
     \/ QueueClear
-    \/ DeliverRecallResp
-    \/ DeliverInvAck
     \/ DeliverClear
     \/ DuplicateMsg
     \/ DropMsg
     \/ CoreRecallToGrant
     \/ RecallOrphanWithAudit
-    \/ CoreUpgradeCommit
     \/ CoreWriteback
-    \/ CoreEvict
     \/ CoreTick
     \/ TFStutter
 

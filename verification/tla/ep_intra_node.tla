@@ -23,6 +23,27 @@ VARIABLES rnf, hnfState, inflight, queuedSnoop, deferredReq, callbackPending, po
 
 Vars == <<rnf, hnfState, inflight, queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait, tick>>
 
+UniqueLike(st) == st \in {"HAVE_UC", "HAVE_UD", "PENDING_CU", "PENDING_RU"}
+
+ApplyReadSharedSnoop(r, cpu) ==
+    [c \in CPUs |-> IF c = cpu
+                    THEN "PENDING_RS"
+                    ELSE IF r[c] \in {"HAVE_UC", "HAVE_UD"}
+                            THEN "HAVE_SC"
+                            ELSE r[c]]
+
+ApplyUniqueSnoop(r, cpu, pendingState) ==
+    [c \in CPUs |-> IF c = cpu
+                    THEN pendingState
+                    ELSE IF r[c] \in {"HAVE_SC", "HAVE_UC", "HAVE_UD"}
+                            THEN "IDLE"
+                            ELSE r[c]]
+
+ApplyIncomingSnoop(r, typ) ==
+    IF typ = "SnpOnce"
+       THEN [c \in CPUs |-> IF r[c] \in {"HAVE_UC", "HAVE_UD"} THEN "HAVE_SC" ELSE r[c]]
+       ELSE [c \in CPUs |-> IF r[c] \in {"HAVE_SC", "HAVE_UC", "HAVE_UD"} THEN "IDLE" ELSE r[c]]
+
 Init ==
     /\ rnf = [c \in CPUs |-> "IDLE"]
     /\ hnfState = "H_IDLE"
@@ -40,7 +61,7 @@ StartReadShared(cpu) ==
     /\ ~inflight.valid
     /\ ~postFinish
     /\ rnf[cpu] = "IDLE"
-    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_RS"]
+    /\ rnf' = ApplyReadSharedSnoop(rnf, cpu)
     /\ hnfState' = "H_WAIT_SNF"
     /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "RS"]
     /\ UNCHANGED <<queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait>>
@@ -52,7 +73,7 @@ StartReadUnique(cpu) ==
     /\ ~inflight.valid
     /\ ~postFinish
     /\ rnf[cpu] = "IDLE"
-    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_RU"]
+    /\ rnf' = ApplyUniqueSnoop(rnf, cpu, "PENDING_RU")
     /\ hnfState' = "H_WAIT_SNF"
     /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "RU"]
     /\ UNCHANGED <<queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait>>
@@ -64,7 +85,7 @@ StartCleanUnique(cpu) ==
     /\ ~inflight.valid
     /\ ~postFinish
     /\ rnf[cpu] = "HAVE_SC"
-    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_CU"]
+    /\ rnf' = ApplyUniqueSnoop(rnf, cpu, "PENDING_CU")
     /\ hnfState' = "H_WAIT_SNP"
     /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "CU"]
     /\ queuedSnoop' = queuedSnoop
@@ -102,7 +123,7 @@ RecvSnoopImmediate(typ) ==
     /\ inflight' = inflight
     /\ deferredReq' = deferredReq
     /\ callbackPending' = callbackPending
-    /\ rnf' = rnf
+    /\ rnf' = ApplyIncomingSnoop(rnf, typ)
     /\ hnfState' = IF typ = "SnpCleanInvalid" /\ upgradeWait THEN "H_WAIT_COMP" ELSE "H_IDLE"
     /\ postFinish' = postFinish
     /\ upgradeWait' = upgradeWait
@@ -128,7 +149,7 @@ ProcessQueuedSnoop ==
     /\ tick < MaxTick
     /\ postFinish
     /\ queuedSnoop.valid
-    /\ rnf' = rnf
+    /\ rnf' = ApplyIncomingSnoop(rnf, queuedSnoop.typ)
     /\ inflight' = inflight
     /\ deferredReq' = deferredReq
     /\ callbackPending' = callbackPending
@@ -143,7 +164,9 @@ LaunchDeferredReq ==
     /\ postFinish
     /\ ~queuedSnoop.valid
     /\ deferredReq.valid
-    /\ rnf' = [rnf EXCEPT ![deferredReq.cpu] = IF deferredReq.op = "RS" THEN "PENDING_RS" ELSE "PENDING_RU"]
+    /\ rnf' = IF deferredReq.op = "RS"
+                 THEN ApplyReadSharedSnoop(rnf, deferredReq.cpu)
+                 ELSE ApplyUniqueSnoop(rnf, deferredReq.cpu, "PENDING_RU")
     /\ hnfState' = "H_WAIT_SNF"
     /\ inflight' = [valid |-> TRUE, cpu |-> deferredReq.cpu, op |-> deferredReq.op]
     /\ deferredReq' = [valid |-> FALSE, cpu |-> deferredReq.cpu, op |-> "NONE"]
@@ -154,6 +177,8 @@ LaunchDeferredReq ==
 RunCallback ==
     /\ tick < MaxTick
     /\ postFinish
+    /\ hnfState = "H_IDLE"
+    /\ ~upgradeWait
     /\ ~queuedSnoop.valid
     /\ ~deferredReq.valid
     /\ callbackPending.valid
