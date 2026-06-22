@@ -139,17 +139,50 @@ DeliverMessage ==
                    ostAccepted, tombstone, commitLog>>
 
 (***************************************************************************)
+(* Recall orphan cleanup: RECALL disappears before requester retry          *)
+(* Models the dual-layer cleanup from recall_orphan_solution.md.            *)
+(* Only modifies outstanding — committed DirEntry unchanged.               *)
+(***************************************************************************)
+
+RecallOrphanDisappears ==
+    /\ ostOpType = "RECALL"
+    /\ ostStage \in {"WAITING_TARGET_RESP", "DONE"}
+    /\ ostOpType' = "NONE"
+    /\ ostStage' = "CREATED"
+    /\ transportRecord' = [kind |-> "RECALL_ORPHAN_CLEANUP",
+                            prevState |-> committedState,
+                            prevSharers |-> committedSharers,
+                            prevOwner |-> committedOwner,
+                            prevDirty |-> committedDirty,
+                            prevEpoch |-> committedEpoch]
+    /\ tick' = tick + 1
+    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
+                   committedEpoch, ostBaseEpoch, ostReservedEpoch,
+                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
+                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
+                   ostAccepted, tombstone, commitLog, messages>>
+
+(***************************************************************************)
+(* BaseNext wrapped: core protocol actions leave transport vars UNCHANGED   *)
+(***************************************************************************)
+
+BaseNextWrapped ==
+    /\ BaseNext
+    /\ UNCHANGED <<messages, transportRecord>>
+
+(***************************************************************************)
 (* Next-state relation                                                      *)
 (***************************************************************************)
 
 Next ==
-    \/ BaseNext
+    \/ BaseNextWrapped
     \/ EnqueueClear
-    \/ \E node ∈ Nodes : EnqueueInvalidationAck(node)
+    \/ \E node \in Nodes : EnqueueInvalidationAck(node)
     \/ EnqueueRecallResp
     \/ DropMessage
     \/ DuplicateMessage
     \/ DeliverMessage
+    \/ RecallOrphanDisappears
 
 (***************************************************************************)
 (* Specification                                                            *)
