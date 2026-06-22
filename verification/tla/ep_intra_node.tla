@@ -1,393 +1,207 @@
---------------------------- MODULE ep_intra_node ---------------------------
-(**
- * TLA+ specification of the intra-node EP path.
- *
- * Answered design points:
- *   - Q1: multi-channel transport (reqMsgs / snpMsgs / rspMsgs / datMsgs)
- *   - Q2: single node index domain for HN-F / EP-RNF / EP-SNF
- *   - Q3: RNF stable states + pending RS/CU/RU transients
- *   - Q4: RNF local closure callback on CompUCSeen /\ CompAckSent
- *   - Q5: data version number for writeback integrity
- *
- * Scope: bounded intra-node path only, independent of ubcc_protocol.
- *)
-
-EXTENDS Naturals, FiniteSets, Sequences, TLC
+----------------------------- MODULE ep_intra_node -----------------------------
+EXTENDS Integers, Naturals, FiniteSets, TLC
 
 (***************************************************************************)
-(* Constants                                                               *)
+(* EP intra-node abstraction for one PA and two CPUs.                      *)
+(* Models only CHI-facing controller ordering, not data payloads.          *)
 (***************************************************************************)
 
-CONSTANTS
-    Nodes,
-    MaxTxn
+CONSTANTS Nodes, MaxTxn
 
-ASSUME Cardinality(Nodes) > 0
+ASSUME Nodes = {0}
+ASSUME MaxTxn \in Nat
 ASSUME MaxTxn > 0
 
-(***************************************************************************)
-(* Types                                                                   *)
-(***************************************************************************)
+CPUs == {0, 1}
+RNFState == {"IDLE", "HAVE_SC", "HAVE_UC", "HAVE_UD", "PENDING_RS", "PENDING_CU", "PENDING_RU"}
+HNFState == {"H_IDLE", "H_WAIT_SNF", "H_WAIT_SNP", "H_WAIT_COMP", "H_WAIT_WB"}
+SnoopTypes == {"SnpCleanInvalid", "SnpUnique", "SnpOnce"}
+TxnOp == {"NONE", "RS", "RU", "CU"}
+MaxTick == MaxTxn + 8
 
-HnfStates == {
-    "H_IDLE", "H_WAIT_SNF", "H_WAIT_SNP", "H_WAIT_COMP", "H_WAIT_WB"
-}
+VARIABLES rnf, hnfState, inflight, queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait, tick
 
-ReqStates == { "NONE", "RS", "RU" }
-
-RnfStates == {
-    "IDLE",
-    "HAVE_SC", "HAVE_UC", "HAVE_UD",
-    "PENDING_RS", "PENDING_CU", "PENDING_RU"
-}
-
-StableRnfStates == { "IDLE", "HAVE_SC", "HAVE_UC", "HAVE_UD" }
-PendingRnfStates == { "PENDING_RS", "PENDING_CU", "PENDING_RU" }
-
-ReqKinds == { "MISS_RS", "MISS_RU", "FWD_RS", "FWD_RU", "COMP_ACK" }
-SnpKinds == { "SNP_RS", "SNP_CU", "SNP_RU" }
-RspKinds == { "COMP_UC" }
-DatKinds == { "WB" }
-
-AwaitNone == [snf |-> FALSE, snp |-> FALSE, comp |-> FALSE, wb |-> FALSE]
-
-(***************************************************************************)
-(* Variables                                                               *)
-(***************************************************************************)
-
-VARIABLES
-    hnfState,
-    hnfPendingReq,
-    hnfAwaiting,
-    rnfState,
-    rnfCompUCSeen,
-    rnfCompAckSent,
-    snfBusy,
-    cpuReq,
-    reqMsgs,
-    snpMsgs,
-    rspMsgs,
-    datMsgs,
-    dataVer
-
-vars == <<
-    hnfState, hnfPendingReq, hnfAwaiting,
-    rnfState, rnfCompUCSeen, rnfCompAckSent,
-    snfBusy, cpuReq,
-    reqMsgs, snpMsgs, rspMsgs, datMsgs,
-    dataVer
->>
-
-(***************************************************************************)
-(* Initial State                                                           *)
-(***************************************************************************)
+Vars == <<rnf, hnfState, inflight, queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait, tick>>
 
 Init ==
-    /\ hnfState         = [n \in Nodes |-> "H_IDLE"]
-    /\ hnfPendingReq    = [n \in Nodes |-> "NONE"]
-    /\ hnfAwaiting      = [n \in Nodes |-> AwaitNone]
-    /\ rnfState         = [n \in Nodes |-> "IDLE"]
-    /\ rnfCompUCSeen    = [n \in Nodes |-> FALSE]
-    /\ rnfCompAckSent   = [n \in Nodes |-> FALSE]
-    /\ snfBusy          = [n \in Nodes |-> FALSE]
-    /\ cpuReq           = [n \in Nodes |-> "NONE"]
-    /\ reqMsgs          = <<>>
-    /\ snpMsgs          = <<>>
-    /\ rspMsgs          = <<>>
-    /\ datMsgs          = <<>>
-    /\ dataVer          = [n \in Nodes |-> 0]
+    /\ rnf = [c \in CPUs |-> "IDLE"]
+    /\ hnfState = "H_IDLE"
+    /\ inflight = [valid |-> FALSE, cpu |-> 0, op |-> "NONE"]
+    /\ queuedSnoop = [valid |-> FALSE, typ |-> "SnpOnce"]
+    /\ deferredReq = [valid |-> FALSE, cpu |-> 0, op |-> "NONE"]
+    /\ callbackPending = [valid |-> FALSE, cpu |-> 0]
+    /\ postFinish = FALSE
+    /\ upgradeWait = FALSE
+    /\ tick = 0
 
-(***************************************************************************)
-(* Helpers                                                                 *)
-(***************************************************************************)
+StartReadShared(cpu) ==
+    /\ tick < MaxTick
+    /\ cpu \in CPUs
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ rnf[cpu] = "IDLE"
+    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_RS"]
+    /\ hnfState' = "H_WAIT_SNF"
+    /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "RS"]
+    /\ UNCHANGED <<queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
 
-TailSeq(q) == IF Len(q) <= 1 THEN <<>> ELSE SubSeq(q, 2, Len(q))
+StartReadUnique(cpu) ==
+    /\ tick < MaxTick
+    /\ cpu \in CPUs
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ rnf[cpu] = "IDLE"
+    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_RU"]
+    /\ hnfState' = "H_WAIT_SNF"
+    /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "RU"]
+    /\ UNCHANGED <<queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
 
-ReqMsg(k, n, t) == [src |-> n, dst |-> n, kind |-> k, txn |-> t, ver |-> 0]
-SnpMsg(k, n, t) == [src |-> n, dst |-> n, kind |-> k, txn |-> t, ver |-> 0]
-RspMsg(k, n, t) == [src |-> n, dst |-> n, kind |-> k, txn |-> t, ver |-> 0]
-DatMsg(k, n, t, v) == [src |-> n, dst |-> n, kind |-> k, txn |-> t, ver |-> v]
+StartCleanUnique(cpu) ==
+    /\ tick < MaxTick
+    /\ cpu \in CPUs
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ rnf[cpu] = "HAVE_SC"
+    /\ rnf' = [rnf EXCEPT ![cpu] = "PENDING_CU"]
+    /\ hnfState' = "H_WAIT_SNP"
+    /\ inflight' = [valid |-> TRUE, cpu |-> cpu, op |-> "CU"]
+    /\ queuedSnoop' = queuedSnoop
+    /\ deferredReq' = deferredReq
+    /\ callbackPending' = callbackPending
+    /\ postFinish' = FALSE
+    /\ upgradeWait' = TRUE
+    /\ tick' = tick + 1
 
-Quiescent ==
-    /\ reqMsgs = <<>>
-    /\ snpMsgs = <<>>
-    /\ rspMsgs = <<>>
-    /\ datMsgs = <<>>
-    /\ \A n \in Nodes:
-        /\ hnfState[n] = "H_IDLE"
-        /\ hnfPendingReq[n] = "NONE"
-        /\ hnfAwaiting[n] = AwaitNone
-        /\ rnfState[n] \in StableRnfStates
-        /\ ~snfBusy[n]
-        /\ cpuReq[n] = "NONE"
+QueueDeferred(cpu, op) ==
+    /\ tick < MaxTick
+    /\ cpu \in CPUs
+    /\ op \in {"RS", "RU"}
+    /\ inflight.valid
+    /\ ~deferredReq.valid
+    /\ deferredReq' = [valid |-> TRUE, cpu |-> cpu, op |-> op]
+    /\ UNCHANGED <<rnf, hnfState, inflight, queuedSnoop, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
 
-(***************************************************************************)
-(* Actions: CPU injection                                                  *)
-(***************************************************************************)
+RecvSnoopQueued(typ) ==
+    /\ tick < MaxTick
+    /\ typ \in SnoopTypes
+    /\ inflight.valid
+    /\ ~queuedSnoop.valid
+    /\ queuedSnoop' = [valid |-> TRUE, typ |-> typ]
+    /\ UNCHANGED <<rnf, hnfState, inflight, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
 
-CpuReadShared(n) ==
-    /\ n \in Nodes
-    /\ cpuReq[n] = "NONE"
-    /\ hnfState[n] = "H_IDLE"
-    /\ cpuReq' = [cpuReq EXCEPT ![n] = "RS"]
-    /\ UNCHANGED <<hnfState, hnfPendingReq, hnfAwaiting, rnfState,
-                   rnfCompUCSeen, rnfCompAckSent, snfBusy,
-                   reqMsgs, snpMsgs, rspMsgs, datMsgs, dataVer>>
+RecvSnoopImmediate(typ) ==
+    /\ tick < MaxTick
+    /\ typ \in SnoopTypes
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ queuedSnoop' = queuedSnoop
+    /\ inflight' = inflight
+    /\ deferredReq' = deferredReq
+    /\ callbackPending' = callbackPending
+    /\ rnf' = rnf
+    /\ hnfState' = IF typ = "SnpCleanInvalid" /\ upgradeWait THEN "H_WAIT_COMP" ELSE "H_IDLE"
+    /\ postFinish' = postFinish
+    /\ upgradeWait' = upgradeWait
+    /\ tick' = tick + 1
 
-CpuReadUnique(n) ==
-    /\ n \in Nodes
-    /\ cpuReq[n] = "NONE"
-    /\ hnfState[n] = "H_IDLE"
-    /\ cpuReq' = [cpuReq EXCEPT ![n] = "RU"]
-    /\ UNCHANGED <<hnfState, hnfPendingReq, hnfAwaiting, rnfState,
-                   rnfCompUCSeen, rnfCompAckSent, snfBusy,
-                   reqMsgs, snpMsgs, rspMsgs, datMsgs, dataVer>>
+FinishChiTxn ==
+    /\ tick < MaxTick
+    /\ inflight.valid
+    /\ LET cpu == inflight.cpu IN
+       /\ rnf' = [rnf EXCEPT ![cpu] = CASE inflight.op = "RS" -> "HAVE_SC"
+                                              [] inflight.op = "RU" -> "HAVE_UC"
+                                              [] OTHER -> "HAVE_UC"]
+       /\ hnfState' = "H_IDLE"
+       /\ inflight' = [valid |-> FALSE, cpu |-> cpu, op |-> "NONE"]
+       /\ callbackPending' = [valid |-> TRUE, cpu |-> cpu]
+       /\ queuedSnoop' = queuedSnoop
+       /\ deferredReq' = deferredReq
+       /\ postFinish' = TRUE
+       /\ upgradeWait' = upgradeWait
+       /\ tick' = tick + 1
 
-(***************************************************************************)
-(* Actions: HN-F miss path                                                 *)
-(***************************************************************************)
+ProcessQueuedSnoop ==
+    /\ tick < MaxTick
+    /\ postFinish
+    /\ queuedSnoop.valid
+    /\ rnf' = rnf
+    /\ inflight' = inflight
+    /\ deferredReq' = deferredReq
+    /\ callbackPending' = callbackPending
+    /\ queuedSnoop' = [valid |-> FALSE, typ |-> queuedSnoop.typ]
+    /\ hnfState' = IF queuedSnoop.typ = "SnpCleanInvalid" THEN "H_WAIT_COMP" ELSE "H_IDLE"
+    /\ postFinish' = TRUE
+    /\ upgradeWait' = IF queuedSnoop.typ = "SnpCleanInvalid" THEN TRUE ELSE upgradeWait
+    /\ tick' = tick + 1
 
-HnfMissToEpSnf(n) ==
-    /\ n \in Nodes
-    /\ cpuReq[n] \in {"RS", "RU"}
-    /\ hnfState[n] = "H_IDLE"
-    /\ LET k == IF cpuReq[n] = "RS" THEN "MISS_RS" ELSE "MISS_RU"
-           t == dataVer[n]
-       IN /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_SNF"]
-          /\ hnfPendingReq' = [hnfPendingReq EXCEPT ![n] = cpuReq[n]]
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snf = TRUE]]
-          /\ cpuReq' = [cpuReq EXCEPT ![n] = "NONE"]
-          /\ reqMsgs' = Append(reqMsgs, ReqMsg(k, n, t))
-    /\ UNCHANGED <<rnfState, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, snpMsgs, rspMsgs, datMsgs, dataVer>>
+LaunchDeferredReq ==
+    /\ tick < MaxTick
+    /\ postFinish
+    /\ ~queuedSnoop.valid
+    /\ deferredReq.valid
+    /\ rnf' = [rnf EXCEPT ![deferredReq.cpu] = IF deferredReq.op = "RS" THEN "PENDING_RS" ELSE "PENDING_RU"]
+    /\ hnfState' = "H_WAIT_SNF"
+    /\ inflight' = [valid |-> TRUE, cpu |-> deferredReq.cpu, op |-> deferredReq.op]
+    /\ deferredReq' = [valid |-> FALSE, cpu |-> deferredReq.cpu, op |-> "NONE"]
+    /\ UNCHANGED <<queuedSnoop, callbackPending, upgradeWait>>
+    /\ postFinish' = FALSE
+    /\ tick' = tick + 1
 
-EpSnfForward(n) ==
-    /\ n \in Nodes
-    /\ Len(reqMsgs) > 0
-    /\ hnfAwaiting[n].snf
-    /\ ~snfBusy[n]
-    /\ reqMsgs[1].dst = n
-    /\ reqMsgs[1].kind \in {"MISS_RS", "MISS_RU"}
-    /\ LET m == reqMsgs[1]
-           fk == IF m.kind = "MISS_RS" THEN "FWD_RS" ELSE "FWD_RU"
-       IN /\ reqMsgs' = Append(TailSeq(reqMsgs), ReqMsg(fk, n, m.txn))
-          /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_SNP"]
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snf = FALSE]]
-          /\ snfBusy' = [snfBusy EXCEPT ![n] = TRUE]
-    /\ UNCHANGED <<hnfPendingReq, rnfState, rnfCompUCSeen, rnfCompAckSent,
-                   cpuReq, snpMsgs, rspMsgs, datMsgs, dataVer>>
+RunCallback ==
+    /\ tick < MaxTick
+    /\ postFinish
+    /\ ~queuedSnoop.valid
+    /\ ~deferredReq.valid
+    /\ callbackPending.valid
+    /\ UNCHANGED <<rnf, hnfState, inflight, queuedSnoop, deferredReq, upgradeWait>>
+    /\ callbackPending' = [valid |-> FALSE, cpu |-> callbackPending.cpu]
+    /\ postFinish' = FALSE
+    /\ tick' = tick + 1
 
-HnfSnoopEpRnf(n) ==
-    /\ n \in Nodes
-    /\ Len(reqMsgs) > 0
-    /\ snfBusy[n]
-    /\ hnfState[n] = "H_WAIT_SNP"
-    /\ reqMsgs[1].dst = n
-    /\ reqMsgs[1].kind \in {"FWD_RS", "FWD_RU"}
-    /\ LET m == reqMsgs[1]
-           sk == IF m.kind = "FWD_RS" THEN "SNP_RS"
-                 ELSE IF rnfState[n] = "HAVE_SC" THEN "SNP_CU"
-                 ELSE "SNP_RU"
-       IN /\ reqMsgs' = TailSeq(reqMsgs)
-          /\ snpMsgs' = Append(snpMsgs, SnpMsg(sk, n, m.txn))
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snp = TRUE]]
-          /\ snfBusy' = [snfBusy EXCEPT ![n] = FALSE]
-    /\ UNCHANGED <<hnfState, hnfPendingReq, rnfState, rnfCompUCSeen,
-                   rnfCompAckSent, cpuReq, rspMsgs, datMsgs, dataVer>>
+ReceiveUpgradeAck ==
+    /\ tick < MaxTick
+    /\ hnfState = "H_WAIT_COMP"
+    /\ UNCHANGED <<rnf, inflight, queuedSnoop, deferredReq, callbackPending, postFinish>>
+    /\ hnfState' = "H_IDLE"
+    /\ upgradeWait' = FALSE
+    /\ tick' = tick + 1
 
-(***************************************************************************)
-(* Actions: EP-RNF start / closure                                         *)
-(***************************************************************************)
+TickOnly ==
+    /\ tick < MaxTick
+    /\ UNCHANGED <<rnf, hnfState, inflight, queuedSnoop, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
 
-EpRnfStartRS(n) ==
-    /\ n \in Nodes
-    /\ Len(snpMsgs) > 0
-    /\ snpMsgs[1].dst = n
-    /\ snpMsgs[1].kind = "SNP_RS"
-    /\ rnfState[n] \in StableRnfStates
-    /\ LET m == snpMsgs[1]
-       IN /\ snpMsgs' = TailSeq(snpMsgs)
-          /\ rspMsgs' = Append(rspMsgs, RspMsg("COMP_UC", n, m.txn))
-          /\ rnfState' = [rnfState EXCEPT ![n] = "PENDING_RS"]
-          /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_COMP"]
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snp = FALSE, !.comp = TRUE]]
-    /\ UNCHANGED <<hnfPendingReq, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, datMsgs, dataVer>>
-
-EpRnfStartCU(n) ==
-    /\ n \in Nodes
-    /\ Len(snpMsgs) > 0
-    /\ snpMsgs[1].dst = n
-    /\ snpMsgs[1].kind = "SNP_CU"
-    /\ rnfState[n] = "HAVE_SC"
-    /\ LET m == snpMsgs[1]
-       IN /\ snpMsgs' = TailSeq(snpMsgs)
-          /\ rspMsgs' = Append(rspMsgs, RspMsg("COMP_UC", n, m.txn))
-          /\ rnfState' = [rnfState EXCEPT ![n] = "PENDING_CU"]
-          /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_COMP"]
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snp = FALSE, !.comp = TRUE]]
-    /\ UNCHANGED <<hnfPendingReq, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, datMsgs, dataVer>>
-
-EpRnfStartRU(n) ==
-    /\ n \in Nodes
-    /\ Len(snpMsgs) > 0
-    /\ snpMsgs[1].dst = n
-    /\ snpMsgs[1].kind = "SNP_RU"
-    /\ rnfState[n] \in {"IDLE", "HAVE_UC", "HAVE_UD"}
-    /\ LET m == snpMsgs[1]
-       IN /\ snpMsgs' = TailSeq(snpMsgs)
-          /\ rspMsgs' = Append(rspMsgs, RspMsg("COMP_UC", n, m.txn))
-          /\ rnfState' = [rnfState EXCEPT ![n] = "PENDING_RU"]
-          /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_COMP"]
-          /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.snp = FALSE, !.comp = TRUE]]
-    /\ UNCHANGED <<hnfPendingReq, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, datMsgs, dataVer>>
-
-CompUCArrives(n) ==
-    /\ n \in Nodes
-    /\ Len(rspMsgs) > 0
-    /\ rspMsgs[1].dst = n
-    /\ rspMsgs[1].kind = "COMP_UC"
-    /\ hnfAwaiting[n].comp
-    /\ rspMsgs' = TailSeq(rspMsgs)
-    /\ rnfCompUCSeen' = [rnfCompUCSeen EXCEPT ![n] = TRUE]
-    /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.comp = FALSE]]
-    /\ UNCHANGED <<hnfState, hnfPendingReq, rnfState, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, snpMsgs, datMsgs, dataVer>>
-
-CompAckSent(n) ==
-    /\ n \in Nodes
-    /\ rnfCompUCSeen[n]
-    /\ ~rnfCompAckSent[n]
-    /\ reqMsgs' = Append(reqMsgs, ReqMsg("COMP_ACK", n, dataVer[n]))
-    /\ rnfCompAckSent' = [rnfCompAckSent EXCEPT ![n] = TRUE]
-    /\ hnfState' = [hnfState EXCEPT ![n] = "H_IDLE"]
-    /\ hnfPendingReq' = [hnfPendingReq EXCEPT ![n] = "NONE"]
-    /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = AwaitNone]
-    /\ UNCHANGED <<rnfState, rnfCompUCSeen, snfBusy, cpuReq,
-                   snpMsgs, rspMsgs, datMsgs, dataVer>>
-
-EpRnfCallback(n) ==
-    /\ n \in Nodes
-    /\ Len(reqMsgs) > 0
-    /\ reqMsgs[1].dst = n
-    /\ reqMsgs[1].kind = "COMP_ACK"
-    /\ rnfCompUCSeen[n]
-    /\ rnfCompAckSent[n]
-    /\ rnfState[n] \in PendingRnfStates
-    /\ reqMsgs' = TailSeq(reqMsgs)
-    /\ rnfState' = [rnfState EXCEPT ![n] =
-          IF @ = "PENDING_RS" THEN "HAVE_SC"
-          ELSE IF @ = "PENDING_CU" THEN "HAVE_UC"
-          ELSE "HAVE_UD"]
-    /\ rnfCompUCSeen' = [rnfCompUCSeen EXCEPT ![n] = FALSE]
-    /\ rnfCompAckSent' = [rnfCompAckSent EXCEPT ![n] = FALSE]
-    /\ UNCHANGED <<hnfState, hnfPendingReq, hnfAwaiting, snfBusy,
-                   cpuReq, snpMsgs, rspMsgs, datMsgs, dataVer>>
-
-(***************************************************************************)
-(* Actions: writeback                                                      *)
-(***************************************************************************)
-
-WriteBackRnf(n) ==
-    /\ n \in Nodes
-    /\ rnfState[n] = "HAVE_UD"
-    /\ ~hnfAwaiting[n].wb
-    /\ dataVer[n] < MaxTxn
-    /\ datMsgs' = Append(datMsgs, DatMsg("WB", n, dataVer[n], dataVer[n] + 1))
-    /\ dataVer' = [dataVer EXCEPT ![n] = @ + 1]
-    /\ rnfState' = [rnfState EXCEPT ![n] = "IDLE"]
-    /\ hnfState' = [hnfState EXCEPT ![n] = "H_WAIT_WB"]
-    /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.wb = TRUE]]
-    /\ UNCHANGED <<hnfPendingReq, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, snpMsgs, rspMsgs>>
-
-HnfCompleteWriteBack(n) ==
-    /\ n \in Nodes
-    /\ Len(datMsgs) > 0
-    /\ datMsgs[1].dst = n
-    /\ datMsgs[1].kind = "WB"
-    /\ hnfAwaiting[n].wb
-    /\ datMsgs[1].ver = dataVer[n]
-    /\ datMsgs' = TailSeq(datMsgs)
-    /\ hnfState' = [hnfState EXCEPT ![n] = "H_IDLE"]
-    /\ hnfAwaiting' = [hnfAwaiting EXCEPT ![n] = [@ EXCEPT !.wb = FALSE]]
-    /\ UNCHANGED <<hnfPendingReq, rnfState, rnfCompUCSeen, rnfCompAckSent,
-                   snfBusy, cpuReq, reqMsgs, snpMsgs, rspMsgs, dataVer>>
-
-(***************************************************************************)
-(* Next / Spec                                                              *)
-(***************************************************************************)
+Stutter == /\ tick = MaxTick /\ UNCHANGED Vars
 
 Next ==
-    \E n \in Nodes:
-        CpuReadShared(n)
-     \/ CpuReadUnique(n)
-     \/ HnfMissToEpSnf(n)
-     \/ EpSnfForward(n)
-     \/ HnfSnoopEpRnf(n)
-     \/ EpRnfStartRS(n)
-     \/ EpRnfStartCU(n)
-     \/ EpRnfStartRU(n)
-     \/ CompUCArrives(n)
-     \/ CompAckSent(n)
-     \/ EpRnfCallback(n)
-     \/ WriteBackRnf(n)
-     \/ HnfCompleteWriteBack(n)
+    \/ \E c \in CPUs : StartReadShared(c)
+    \/ \E c \in CPUs : StartReadUnique(c)
+    \/ \E c \in CPUs : StartCleanUnique(c)
+    \/ \E c \in CPUs : \E op \in {"RS", "RU"} : QueueDeferred(c, op)
+    \/ \E t \in SnoopTypes : RecvSnoopQueued(t)
+    \/ \E t \in SnoopTypes : RecvSnoopImmediate(t)
+    \/ FinishChiTxn
+    \/ ProcessQueuedSnoop
+    \/ LaunchDeferredReq
+    \/ RunCallback
+    \/ ReceiveUpgradeAck
+    \/ TickOnly
+    \/ Stutter
 
-Spec == Init /\ [][Next]_vars
-
-(***************************************************************************)
-(* Invariants                                                              *)
-(***************************************************************************)
-
-NodeCanStep(n) ==
-       ENABLED CpuReadShared(n)
-    \/ ENABLED CpuReadUnique(n)
-    \/ ENABLED HnfMissToEpSnf(n)
-    \/ ENABLED EpSnfForward(n)
-    \/ ENABLED HnfSnoopEpRnf(n)
-    \/ ENABLED EpRnfStartRS(n)
-    \/ ENABLED EpRnfStartCU(n)
-    \/ ENABLED EpRnfStartRU(n)
-    \/ ENABLED CompUCArrives(n)
-    \/ ENABLED CompAckSent(n)
-    \/ ENABLED EpRnfCallback(n)
-    \/ ENABLED WriteBackRnf(n)
-    \/ ENABLED HnfCompleteWriteBack(n)
+Spec == Init /\ [][Next]_Vars
 
 NoDeadlock ==
-    Quiescent \/ (\E n \in Nodes: NodeCanStep(n))
+    ~(~inflight.valid /\ ~postFinish /\ hnfState # "H_IDLE" /\ ~queuedSnoop.valid /\ ~deferredReq.valid /\ ~callbackPending.valid)
 
 DataIntegrity ==
-    /\ \A n \in Nodes: dataVer[n] \in 0..MaxTxn
-    /\ \A i \in 1..Len(datMsgs):
-        LET m == datMsgs[i]
-        IN /\ m.kind = "WB"
-           /\ m.src = m.dst
-           /\ m.ver \in 1..MaxTxn
-           /\ m.ver = dataVer[m.src]
+    Cardinality({c \in CPUs : rnf[c] \in {"HAVE_UC", "HAVE_UD", "PENDING_CU", "PENDING_RU"}}) <= 1
 
-SnoopCorrectness ==
-    \A i \in 1..Len(snpMsgs):
-        LET m == snpMsgs[i]
-        IN /\ m.kind \in SnpKinds
-           /\ m.src = m.dst
-           /\ hnfState[m.dst] = "H_WAIT_SNP"
-           /\ hnfPendingReq[m.dst] /= "NONE"
-           /\ (m.kind = "SNP_RS" => hnfPendingReq[m.dst] = "RS")
-           /\ (m.kind \in {"SNP_CU", "SNP_RU"} => hnfPendingReq[m.dst] = "RU")
+SnoopCorrectness == queuedSnoop.valid => queuedSnoop.typ \in SnoopTypes
 
-CallbackOrdering ==
-    \A n \in Nodes:
-        /\ (rnfCompAckSent[n] => rnfCompUCSeen[n])
-        /\ ((rnfState[n] \in {"HAVE_SC", "HAVE_UC", "HAVE_UD"} /\ rnfCompUCSeen[n])
-             => rnfCompAckSent[n])
-
-THEOREM Spec => []NoDeadlock
-THEOREM Spec => []DataIntegrity
-THEOREM Spec => []SnoopCorrectness
-THEOREM Spec => []CallbackOrdering
+CallbackOrdering == postFinish /\ queuedSnoop.valid => callbackPending.valid
 
 =============================================================================

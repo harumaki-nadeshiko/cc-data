@@ -1,4 +1,4 @@
 _TTrace_*
-*.bin
-*.st
+*TTrace_*
 states/
+*.bin

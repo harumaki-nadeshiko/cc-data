@@ -1,229 +1,191 @@
------------------------- MODULE ubcc_transport_faults ------------------------
-(**
- * Extended UBCC model with message pool + transport fault actions.
- *
- * This module EXTENDS ubcc_protocol_core (single-PA scalar model) and adds:
- *   - messages: in-flight Clear/InvalidateAck/RecallResp
- *   - Enqueue actions: capture protocol events into the message pool
- *   - Drop/Duplicate/Deliver fault actions: simulate transport faults
- *   - recovery invariants: TombstoneReplayConsistency, StaleRejectUnderReorder,
- *     RecallDONE_WritebackSafety
- *
- * Self-contained top-level: imports core, defines own Init, Next, Spec.
- *)
-
-EXTENDS ubcc_protocol_core
+-------------------------- MODULE ubcc_transport_faults --------------------------
+EXTENDS ubcc_protocol_core, Sequences, TLC
 
 (***************************************************************************)
-(* Additional state variables                                               *)
+(* Transport fault envelope for the core protocol.                         *)
+(* Adds explicit messages for Clear / InvalidationAck / RecallResp and     *)
+(* fault actions Drop / Duplicate / Deliver.                                *)
 (***************************************************************************)
 
-VARIABLES
-    messages,           \* Set of in-flight messages
-    transportRecord     \* Record of last transport event for audit
+VARIABLES transport, transportRecord
 
-(***************************************************************************)
-(* Message types                                                            *)
-(***************************************************************************)
+TVars == <<dir, ost, tombstone, commitLog, epochLog, tick, transport, transportRecord>>
 
-MsgType == {"Clear", "InvalidationAck", "RecallResp"}
-Msg == [type: MsgType, node: Nodes, epoch: (0 .. MaxEpoch), reqId: (0 .. MaxEpoch)]
+MsgKind == {"Clear", "InvAck", "RecallResp"}
 
-(***************************************************************************)
-(* Initial state (extends BaseInit)                                         *)
-(***************************************************************************)
+Audit(action, kind, epoch, reqId, outcome) ==
+    [action |-> action, kind |-> kind, epoch |-> epoch, reqId |-> reqId, outcome |-> outcome]
 
-Init ==
-    /\ BaseInit
-    /\ messages = {}
-    /\ transportRecord = [kind |-> "INIT", prevState |-> "G_I",
-                          prevSharers |-> {}, prevOwner |-> -1,
-                          prevDirty |-> FALSE, prevEpoch |-> 0]
+RemoveAt(seq, i) == SubSeq(seq, 1, i - 1) \o SubSeq(seq, i + 1, Len(seq))
 
-(***************************************************************************)
-(* Enqueue actions: capture protocol events into the message pool           *)
-(* These are "instantaneous" — no tick advance.                            *)
-(***************************************************************************)
+HasQueued(kind, epoch, reqId) ==
+    \E i \in 1..Len(transport) :
+        transport[i].kind = kind /\ transport[i].epoch = epoch /\ transport[i].reqId = reqId
 
-EnqueueClear ==
-    /\ ostOpType = "GRANT_HANDSHAKE"
-    /\ ostStage = "WAITING_CLEAR"
-    /\ messages' = messages \cup {[type |-> "Clear", node |-> ostRequester,
-                                    epoch |-> ostReservedEpoch, reqId |-> ostReqId]}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog, tick, transportRecord>>
+TFInit ==
+    /\ Init
+    /\ transport = <<>>
+    /\ transportRecord = <<>>
 
-EnqueueInvalidationAck(node) ==
-    /\ ostOpType = "INVALIDATE"
-    /\ ostStage = "WAITING_ALL_ACKS"
-    /\ node \in ostTargetMask
-    /\ messages' = messages \cup {[type |-> "InvalidationAck", node |-> node,
-                                    epoch |-> ostReservedEpoch, reqId |-> ostReqId]}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog, tick, transportRecord>>
+CoreGrantShared ==
+    /\ \E req \in Nodes : \E reqId \in ReqIds : GrantShared(req, reqId)
+    /\ UNCHANGED <<transport, transportRecord>>
 
-EnqueueRecallResp ==
-    /\ ostOpType = "RECALL"
-    /\ ostStage = "WAITING_TARGET_RESP"
-    /\ messages' = messages \cup {[type |-> "RecallResp", node |-> committedOwner,
-                                    epoch |-> ostReservedEpoch, reqId |-> ostReqId]}
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog, tick, transportRecord>>
+CoreGrantExclusive ==
+    /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : GrantExclusive(req, wi, reqId)
+    /\ UNCHANGED <<transport, transportRecord>>
 
-(***************************************************************************)
-(* Transport fault actions                                                  *)
-(***************************************************************************)
+CoreRecallBarrier ==
+    /\ \E req \in Nodes : \E rt \in ReqType : \E wi \in BOOLEAN : \E reqId \in ReqIds : RecallBarrier(req, rt, wi, reqId)
+    /\ UNCHANGED <<transport, transportRecord>>
 
-(**
- * DropMessage: remove a message from the pool without delivering it.
- * Simulates message loss in transport.
- *)
-DropMessage ==
-    /\ \E m \in messages : messages' = messages \ {m}
-    /\ transportRecord' = [kind |-> "DROP", prevState |-> committedState,
-                           prevSharers |-> committedSharers, prevOwner |-> committedOwner,
-                           prevDirty |-> committedDirty, prevEpoch |-> committedEpoch]
+CoreInvalidateBarrier ==
+    /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : InvalidationBarrier(req, wi, reqId)
+    /\ UNCHANGED <<transport, transportRecord>>
+
+CoreUpgradeBarrier ==
+    /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : UpgradeBarrier(req, wi, reqId)
+    /\ UNCHANGED <<transport, transportRecord>>
+
+QueueRecallResp ==
+    /\ tick < MaxTick
+    /\ ost.valid /\ ost.opType = "RECALL" /\ ost.stage = "WAITING_TARGET_RESP"
+    /\ ~HasQueued("RecallResp", ost.baseEpoch, ost.reqId)
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+    /\ transport' = Append(transport, [kind |-> "RecallResp", src |-> CHOOSE n \in ost.target : TRUE,
+                                        epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+    /\ transportRecord' = Append(transportRecord, Audit("enqueue", "RecallResp", ost.baseEpoch, ost.reqId, "na"))
     /\ tick' = tick + 1
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog>>
 
-(**
- * DuplicateMessage: keep a message in the pool (simulates duplication).
- * Since messages is a set, duplicates are idempotent — we record the event.
- *)
-DuplicateMessage ==
-    /\ \E m \in messages : messages' = messages
-    /\ transportRecord' = [kind |-> "DUPLICATE", prevState |-> committedState,
-                           prevSharers |-> committedSharers, prevOwner |-> committedOwner,
-                           prevDirty |-> committedDirty, prevEpoch |-> committedEpoch]
+QueueInvAck ==
+    /\ tick < MaxTick
+    /\ ost.valid /\ ost.stage = "WAITING_ALL_ACKS" /\ ost.opType \in {"INVALIDATE", "UPGRADE_PENDING"}
+    /\ \E n \in (ost.target \ ost.acked) : ~HasQueued("InvAck", ost.baseEpoch, ost.reqId)
+    /\ LET n == CHOOSE x \in (ost.target \ ost.acked) : TRUE IN
+       /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+       /\ transport' = Append(transport, [kind |-> "InvAck", src |-> n, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+       /\ transportRecord' = Append(transportRecord, Audit("enqueue", "InvAck", ost.baseEpoch, ost.reqId, "na"))
+       /\ tick' = tick + 1
+
+QueueClear ==
+    /\ tick < MaxTick
+    /\ ost.valid /\ ost.opType = "GRANT_HANDSHAKE" /\ ost.stage = "WAITING_CLEAR"
+    /\ ~HasQueued("Clear", ost.baseEpoch, ost.reqId)
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+    /\ transport' = Append(transport, [kind |-> "Clear", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+    /\ transportRecord' = Append(transportRecord, Audit("enqueue", "Clear", ost.baseEpoch, ost.reqId, "na"))
     /\ tick' = tick + 1
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog>>
 
-(**
- * DeliverMessage: remove a message from the pool and record delivery.
- * For Clear messages, the protocol must be in WAITING_CLEAR state.
- * Protocol state is NOT modified here — that is done by BaseNext actions
- * (ClearArrives, InvalidationAckArrives, RecallResponseArrives).
- * This decoupling allows testing of message reordering vs state transitions.
- *)
-DeliverMessage ==
-    /\ \E m \in messages :
-        /\ IF m.type = "Clear" THEN
-               ostOpType = "GRANT_HANDSHAKE" /\ ostStage = "WAITING_CLEAR"
-           ELSE TRUE
-        /\ messages' = messages \ {m}
-        /\ transportRecord' = [kind |-> m.type, prevState |-> committedState,
-                               prevSharers |-> committedSharers, prevOwner |-> committedOwner,
-                               prevDirty |-> committedDirty, prevEpoch |-> committedEpoch]
-    /\ tick' = tick + 1
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog>>
+DeliverRecallResp ==
+    /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "RecallResp"
+        /\ RecallResponse
+        /\ transport' = RemoveAt(transport, i)
+        /\ transportRecord' = Append(transportRecord, Audit("deliver", "RecallResp", transport[i].epoch, transport[i].reqId, "accepted"))
 
-(***************************************************************************)
-(* Recall orphan cleanup: RECALL disappears before requester retry          *)
-(* Models the dual-layer cleanup from recall_orphan_solution.md.            *)
-(* Only modifies outstanding — committed DirEntry unchanged.               *)
-(***************************************************************************)
+DeliverInvAck ==
+    /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "InvAck"
+        /\ BarrierAck(transport[i].src)
+        /\ transport' = RemoveAt(transport, i)
+        /\ transportRecord' = Append(transportRecord, Audit("deliver", "InvAck", transport[i].epoch, transport[i].reqId, "accepted"))
 
-RecallOrphanDisappears ==
-    /\ ostOpType = "RECALL"
-    /\ ostStage \in {"WAITING_TARGET_RESP", "DONE"}
-    /\ ostOpType' = "NONE"
-    /\ ostStage' = "CREATED"
-    /\ transportRecord' = [kind |-> "RECALL_ORPHAN_CLEANUP",
-                            prevState |-> committedState,
-                            prevSharers |-> committedSharers,
-                            prevOwner |-> committedOwner,
-                            prevDirty |-> committedDirty,
-                            prevEpoch |-> committedEpoch]
-    /\ tick' = tick + 1
-    /\ UNCHANGED <<committedState, committedSharers, committedOwner, committedDirty,
-                   committedEpoch, ostBaseEpoch, ostReservedEpoch,
-                   ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-                   ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-                   ostAccepted, tombstone, commitLog, messages>>
+DeliverClear ==
+    /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "Clear"
+        /\ IF tombstone.valid /\ transport[i].epoch = tombstone.epoch /\ transport[i].reqId = tombstone.reqId
+              THEN /\ dir' = dir
+                   /\ ost' = ost
+                   /\ tombstone' = AgeTombstone(tombstone)
+                   /\ UNCHANGED <<commitLog, epochLog>>
+                   /\ transport' = RemoveAt(transport, i)
+                   /\ transportRecord' = Append(transportRecord,
+                          Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId,
+                                IF tombstone.accepted THEN "replay_accept" ELSE "replay_reject"))
+                   /\ tick' = tick + 1
+              ELSE IF ost.valid /\ ost.opType = "GRANT_HANDSHAKE" /\ ost.stage = "WAITING_CLEAR"
+                      /\ transport[i].src = ost.requester
+                      /\ transport[i].epoch = ost.baseEpoch
+                      /\ transport[i].reqId = ost.reqId
+              THEN /\ ClearCommit
+                   /\ transport' = RemoveAt(transport, i)
+                   /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "commit_accept"))
+              ELSE /\ dir' = dir
+                   /\ ost' = ost
+                   /\ tombstone' = AgeTombstone(tombstone)
+                   /\ UNCHANGED <<commitLog, epochLog>>
+                   /\ transport' = RemoveAt(transport, i)
+                   /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "reject"))
+                   /\ tick' = tick + 1
 
-(***************************************************************************)
-(* BaseNext wrapped: core protocol actions leave transport vars UNCHANGED   *)
-(***************************************************************************)
+DropMsg ==
+    /\ tick < MaxTick
+    /\ Len(transport) > 0
+    /\ \E i \in 1..Len(transport) :
+        /\ dir' = dir
+        /\ ost' = ost
+        /\ tombstone' = AgeTombstone(tombstone)
+        /\ UNCHANGED <<commitLog, epochLog>>
+        /\ transport' = RemoveAt(transport, i)
+        /\ transportRecord' = Append(transportRecord, Audit("drop", transport[i].kind, transport[i].epoch, transport[i].reqId, "na"))
+        /\ tick' = tick + 1
 
-BaseNextWrapped ==
-    /\ BaseNext
-    /\ UNCHANGED <<messages, transportRecord>>
+DuplicateMsg ==
+    /\ tick < MaxTick
+    /\ Len(transport) > 0
+    /\ \E i \in 1..Len(transport) :
+        /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+        /\ transport' = Append(transport, transport[i])
+        /\ transportRecord' = Append(transportRecord, Audit("duplicate", transport[i].kind, transport[i].epoch, transport[i].reqId, "na"))
+        /\ tick' = tick + 1
 
-(***************************************************************************)
-(* Next-state relation                                                      *)
-(***************************************************************************)
+CoreRecallToGrant == RecallToGrant /\ UNCHANGED <<transport, transportRecord>>
 
-Next ==
-    \/ BaseNextWrapped
-    \/ EnqueueClear
-    \/ \E node \in Nodes : EnqueueInvalidationAck(node)
-    \/ EnqueueRecallResp
-    \/ DropMessage
-    \/ DuplicateMessage
-    \/ DeliverMessage
-    \/ RecallOrphanDisappears
+RecallOrphanWithAudit ==
+    /\ RecallOrphanDisappears
+    /\ transport' = transport
+    /\ transportRecord' = Append(transportRecord,
+          Audit("cleanup", "RecallResp", IF Len(epochLog) > 0 THEN dir.epoch ELSE 0, IF ost.valid THEN ost.reqId ELSE 0, "orphan_disappear"))
 
-(***************************************************************************)
-(* Specification                                                            *)
-(***************************************************************************)
+CoreUpgradeCommit == UpgradeCommit /\ UNCHANGED <<transport, transportRecord>>
+CoreWriteback == \E n \in Nodes : \E keep \in BOOLEAN : Writeback(n, keep) /\ UNCHANGED <<transport, transportRecord>>
+CoreEvict == \E n \in Nodes : Evict(n) /\ UNCHANGED <<transport, transportRecord>>
+CoreTick == TickOnly /\ UNCHANGED <<transport, transportRecord>>
 
-Vars == <<committedState, committedSharers, committedOwner, committedDirty,
-          committedEpoch, ostOpType, ostStage, ostBaseEpoch, ostReservedEpoch,
-          ostReqId, ostRequester, ostTargetMask, ostAckMask, ostIntendedState,
-          ostIntendedOwner, ostIntendedSharers, ostRecallDone, ostInvalidateDone,
-          ostAccepted, tombstone, commitLog, tick, messages, transportRecord>>
+TFStutter == /\ tick = MaxTick /\ UNCHANGED TVars
 
-Spec == Init /\ [][Next]_Vars
+TFNext ==
+    \/ CoreGrantShared
+    \/ CoreGrantExclusive
+    \/ CoreRecallBarrier
+    \/ CoreInvalidateBarrier
+    \/ CoreUpgradeBarrier
+    \/ QueueRecallResp
+    \/ QueueInvAck
+    \/ QueueClear
+    \/ DeliverRecallResp
+    \/ DeliverInvAck
+    \/ DeliverClear
+    \/ DuplicateMsg
+    \/ DropMsg
+    \/ CoreRecallToGrant
+    \/ RecallOrphanWithAudit
+    \/ CoreUpgradeCommit
+    \/ CoreWriteback
+    \/ CoreEvict
+    \/ CoreTick
+    \/ TFStutter
 
-(***************************************************************************)
-(* Recovery invariants (in addition to core invariants)                     *)
-(***************************************************************************)
+TFSpec == TFInit /\ [][TFNext]_TVars
 
-(**
- * TombstoneReplayConsistency: every tombstone entry must have a
- * corresponding entry in the commit log.  Ensures tombstone replay
- * only happens for genuinely committed (epoch, reqId) pairs.
- *)
+SameClearOutcome(a, b) ==
+    (a.kind = "Clear" /\ b.kind = "Clear" /\ a.epoch = b.epoch /\ a.reqId = b.reqId)
+      => ((a.outcome \in {"commit_accept", "replay_accept"}) = (b.outcome \in {"commit_accept", "replay_accept"}))
+
 TombstoneReplayConsistency ==
-    \A epoch \in (0 .. MaxEpoch), reqId \in (0 .. MaxEpoch) :
-        tombstone[epoch, reqId] =>
-            \E i \in DOMAIN commitLog : commitLog[i] = <<epoch, reqId>>
+    \A i, j \in 1..Len(transportRecord) : SameClearOutcome(transportRecord[i], transportRecord[j])
 
-(**
- * StaleRejectUnderReorder: placeholder invariant for stale message
- * rejection under reordering.  Currently vacuously true; to be
- * strengthened when stale rejection logic is formalized.
- *)
-StaleRejectUnderReorder == TRUE
-
-(**
- * RecallDONE_WritebackSafety: when recall barrier is done and the
- * intended state would be dirty-modified, the committed dirty flag
- * must not be set.  This prevents a writeback from overwriting
- * data that is being recalled for a new owner.
- *)
 RecallDONE_WritebackSafety ==
-    ~(ostRecallDone /\ ostIntendedState = "G_M" /\ committedDirty)
+    ~(ost.valid /\ ost.opType = "RECALL" /\ ost.stage = "DONE" /\ dir.state \in {"G_I", "G_S"})
 
 =============================================================================
