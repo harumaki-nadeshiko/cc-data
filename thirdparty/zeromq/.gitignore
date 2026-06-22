@@ -1,0 +1,5 @@
+*.a
+*.o
+libzmq-*/
+cppzmq-*/
+*.tar.gz
