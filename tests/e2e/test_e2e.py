@@ -73,6 +73,8 @@ TESTCASES = {
     52: "e2e_tc52_mapreduce_scatter_gather",
     53: "e2e_tc53_cache_contention_storm",
     54: "e2e_tc54_numa_tiled_matmul",
+    63: "e2e_tc63_recall_orphan_timer_cleanup",
+    64: "e2e_tc64_recall_done_orphan_lazy_cleanup",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1069,6 +1071,38 @@ def verify_tc54(reads, lines):
     return True, 'TC54 PASSED: NUMA-aware tiled matmul output correct', []
 
 
+def verify_tc63(reads, lines):
+    """TC63: RECALL orphan timer cleanup — owner never responds, timer sweeps orphan."""
+    marker = next((l for l in lines if '[TC63_ORPHAN] cleanup=timer' in l), None)
+    if not marker:
+        return False, 'TC63 FAILED: missing TC63_ORPHAN timer marker', []
+    node0 = [r for r in reads if r['node'] == 0]
+    if len(node0) < 1:
+        return False, f'TC63 FAILED: expected >=1 Node0 READ_VAL, got {len(node0)}', node0
+    last = node0[-1]
+    if last['verdict'] != 'MATCH':
+        return False, f'TC63 FAILED: Node0 final read mismatch after timer cleanup', [last]
+    return True, 'TC63 PASSED: timer cleanup recovered orphan RECALL, PA accessible again', []
+
+
+def verify_tc64(reads, lines):
+    """TC64: RECALL.DONE lazy cleanup — new requester triggers cleanup before arbitration."""
+    marker = next((l for l in lines if '[TC64_ORPHAN] cleanup=lazy' in l), None)
+    if not marker:
+        return False, 'TC64 FAILED: missing TC64_ORPHAN lazy marker', []
+    node0 = [r for r in reads if r['node'] == 0]
+    node2 = [r for r in reads if r['node'] == 2]
+    if len(node2) < 1:
+        return False, f'TC64 FAILED: expected Node2 to complete recall read first', node2
+    if node2[-1]['verdict'] != 'MATCH':
+        return False, f'TC64 FAILED: Node2 recall read mismatch', [node2[-1]]
+    if len(node0) < 1:
+        return False, f'TC64 FAILED: expected Node0 final read after lazy cleanup', node0
+    if node0[-1]['verdict'] != 'MATCH':
+        return False, f'TC64 FAILED: Node0 final read mismatch after lazy cleanup', [node0[-1]]
+    return True, 'TC64 PASSED: lazy cleanup removed RECALL.DONE orphan, new requester served', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1088,6 +1122,7 @@ VERIFIERS = {
     47: verify_tc47, 48: verify_tc48, 49: verify_tc49,
     50: verify_tc50, 51: verify_tc51, 52: verify_tc52,
     53: verify_tc53, 54: verify_tc54,
+    63: verify_tc63, 64: verify_tc64,
 }
 
 def verify_testcase(tc_id, reads, lines):
