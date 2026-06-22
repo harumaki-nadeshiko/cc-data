@@ -5,6 +5,18 @@
 
 ---
 
+## D-54: 新增 TC50~TC54 真实场景 E2E 用例与延迟可视化回归
+
+| 字段 | 内容 |
+|------|------|
+| **时间** | 2026-06-22 |
+| **位置** | `tests/e2e/workloads/e2e_tc50_*.c` ~ `e2e_tc54_*.c`, `tests/e2e/test_e2e.py` |
+| **偏离内容** | 按用户要求新增 5 个复杂真实场景用例：TC50 生产者-消费者环、TC51 银行账本并发转账、TC52 MapReduce scatter-gather、TC53 热点行争用风暴、TC54 NUMA 感知分块矩阵乘（A/B/C 分别按 home node 0/1/2 布局模拟）。同时在 harness 中注册 TC50~TC54 并新增 `verify_tc50~verify_tc54`。所有 workload 均显式采用 primary CPU 过滤（`cpu_index % 4 == 0`）与 `dsm_store/load + sync_wait + emit_read_val + emit_e2e_meta`。 |
+| **偏离原因** | 用户要求立即落地 5 个新 E2E 场景并输出每个 TC 的延迟时间线 HTML。 |
+| **状态** | ✅ 已完成并实测通过：TC50~TC54 全部 PASS，且已生成 `tests/e2e/tc50_timeline.html` ~ `tc54_timeline.html`。另外在 TC53 初版出现热点行高并发下长时间 retry（疑似 livelock），已通过“每轮单 writer + 全员 barrier”的 storm 设计修正并复测通过。 |
+
+---
+
 ## D-53: 新增 FV_v3 双 Socket EP TLA+ 模型与 TLC 验证工单
 
 | 字段 | 内容 |

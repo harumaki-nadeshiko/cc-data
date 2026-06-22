@@ -68,6 +68,11 @@ TESTCASES = {
     47: "e2e_tc47_drop_clear",
     48: "e2e_tc48_dup_inv_ack",
     49: "e2e_tc49_reorder_acks",
+    50: "e2e_tc50_producer_consumer_ring",
+    51: "e2e_tc51_bank_ledger",
+    52: "e2e_tc52_mapreduce_scatter_gather",
+    53: "e2e_tc53_cache_contention_storm",
+    54: "e2e_tc54_numa_tiled_matmul",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -997,6 +1002,73 @@ def verify_tc49(reads, lines):
     return True, 'TC49 PASSED: duplicate InvalidateAck perturbation converged correctly', []
 
 
+def verify_tc50(reads, lines):
+    """TC50: 3-node producer-consumer ring final token check."""
+    if len(reads) != 3:
+        return False, f"TC50 FAILED: expected 3 READ_VAL, got {len(reads)}", reads
+    by_node = {r['node']: r for r in reads}
+    for n in (0, 1, 2):
+        if n not in by_node:
+            return False, f"TC50 FAILED: missing READ_VAL from Node{n}", reads
+        r = by_node[n]
+        if r['verdict'] != 'MATCH':
+            return False, f"TC50 FAILED: Node{n} final token mismatch", [r]
+    return True, 'TC50 PASSED: ring producer-consumer converged for all 3 nodes', []
+
+
+def verify_tc51(reads, lines):
+    """TC51: bank ledger total invariant must hold."""
+    node0_reads = [r for r in reads if r['node'] == 0]
+    if len(node0_reads) < 5:
+        return False, f"TC51 FAILED: expected >=5 Node0 READ_VAL, got {len(node0_reads)}", node0_reads
+    total_read = node0_reads[-1]
+    expected_total = 4 * 100000
+    got_total = int(total_read['actual'], 16)
+    if got_total != expected_total:
+        return False, f"TC51 FAILED: ledger total {got_total} != {expected_total}", [total_read]
+    if total_read['verdict'] != 'MATCH':
+        return False, 'TC51 FAILED: total invariant read reported mismatch', [total_read]
+    return True, 'TC51 PASSED: concurrent transfers preserved ledger total', []
+
+
+def verify_tc52(reads, lines):
+    """TC52: Node2 gather checks 3 partials + 1 sum."""
+    node2_reads = [r for r in reads if r['node'] == 2]
+    if len(node2_reads) < 4:
+        return False, f"TC52 FAILED: expected >=4 Node2 READ_VAL, got {len(node2_reads)}", node2_reads
+    mismatches = [r for r in node2_reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f"TC52 FAILED: {len(mismatches)} gather mismatches", mismatches
+    return True, 'TC52 PASSED: scatter-map-gather result is consistent', []
+
+
+def verify_tc53(reads, lines):
+    """TC53: contention storm must show all nodes reached full rounds."""
+    node0_reads = [r for r in reads if r['node'] == 0]
+    if len(node0_reads) < 4:
+        return False, f"TC53 FAILED: expected >=4 Node0 READ_VAL, got {len(node0_reads)}", node0_reads
+    fairness_reads = node0_reads[:3]
+    for idx, r in enumerate(fairness_reads):
+        expected = int(r['expected'], 16)
+        actual = int(r['actual'], 16)
+        if actual != expected:
+            return False, f"TC53 FAILED: fairness counter[{idx}]={actual} expected {expected}", [r]
+        if r['verdict'] != 'MATCH':
+            return False, f"TC53 FAILED: fairness read {idx} mismatch", [r]
+    return True, 'TC53 PASSED: cache storm finished without starvation', []
+
+
+def verify_tc54(reads, lines):
+    """TC54: 2x2 tiled matmul output matrix check."""
+    node2_reads = [r for r in reads if r['node'] == 2]
+    if len(node2_reads) != 4:
+        return False, f"TC54 FAILED: expected 4 Node2 READ_VAL, got {len(node2_reads)}", node2_reads
+    mismatches = [r for r in node2_reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f"TC54 FAILED: {len(mismatches)} output mismatches", mismatches
+    return True, 'TC54 PASSED: NUMA-aware tiled matmul output correct', []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1014,6 +1086,8 @@ VERIFIERS = {
     40: verify_tc40, 41: verify_tc41, 42: verify_tc42, 43: verify_tc43,
     44: verify_tc44, 45: verify_tc45, 46: verify_tc46,
     47: verify_tc47, 48: verify_tc48, 49: verify_tc49,
+    50: verify_tc50, 51: verify_tc51, 52: verify_tc52,
+    53: verify_tc53, 54: verify_tc54,
 }
 
 def verify_testcase(tc_id, reads, lines):
