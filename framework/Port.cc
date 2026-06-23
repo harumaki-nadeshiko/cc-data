@@ -60,13 +60,13 @@ Port::recv(uint64_t visibleTick)
             r = it->msg; _deferred.erase(it); return &r;
         }
     }
-    // Poll with 0 timeout first to let ZMQ I/O thread flush
+    // Poll with small timeout to let ZMQ I/O thread flush
     try {
         zmq::pollitem_t items[1];
         items[0].socket = _socket->handle();
         items[0].events = ZMQ_POLLIN;
         items[0].revents = 0;
-        zmq::poll(items, 1, std::chrono::milliseconds(0));
+        zmq::poll(items, 1, std::chrono::milliseconds(1));
         if (!(items[0].revents & ZMQ_POLLIN)) return nullptr;
     } catch (const zmq::error_t&) { return nullptr; }
 
