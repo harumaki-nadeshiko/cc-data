@@ -1,8 +1,33 @@
 # CC-EP → 目标框架迁移指南
 
-> 当前状态：全部 5 阶段重构完成（框架层/改名/模块化/NetworkSim/ZeroMQ）
+> 当前状态：框架层完成，独立模块可独立编译测试，gem5 内部仍为指针耦合
 > 目标框架：基于 ZeroMQ 消息队列的多进程仿真架构
 > 前置阅读：`docs/recovery/refactoring_plan.md`
+
+---
+
+## 0. 诚实状态声明
+
+### 已完成（5 个独立测试全部 PASS）
+
+| 组件 | 测试 | 通信方式 |
+|------|------|---------|
+| `framework/PseudoMemPort` | 本地队列 send/recv/poll 单元测试 | 内存队列 |
+| `modules/ubiomodule/` | CoherenceMessage round-trip via PseudoMemPort | PseudoMemPort |
+| `modules/networksim/` | 两个 UBIOModule 经 NetworkSim 通信 | PseudoMemPort |
+| `thirdparty/zeromq/` | CoherenceMessage via ZMQ DEALER socket | ZeroMQ |
+| gem5 E2E (56 TCs) | 内部编译测试，全部 PASS | **直接指针** |
+
+### 未完成（gem5 内部仍用指针耦合）
+
+gem5 进程内部的 UBAdapter↔UBIOModule↔EPBackend↔UBCCController 之间**仍然是直接 C++ 指针调用**，不是通过 PseudoMemPort 异步消息。
+
+- `UBAdapter::_router->sendMessage()` — 仍然直接调用 UBIOModule
+- `UBIOModule::_localAdapter->recvFromRouter()` — 仍然直接调用 UBAdapter
+- `EPBackend::_ubcc->processOuterRequest()` — 仍然直接调用 UBCCController
+- `UBIOModule::deliverToUbcc()` — 仍然直接调用 UBCCController（这个是正确的，UBCC 在 UBIOModule 进程内）
+
+**根因**：gem5 SCons 构建系统能加 `framework/` include path 但需调通编译。且将所有同步调用转为异步 PseudoMemPort 需要重写 EPBackend 的 ~200 行 pending txn 匹配逻辑。这是 Phase 3c 的核心工作，在下述"待完成事项"中列为最高优先级。
 
 ---
 
@@ -295,16 +320,18 @@ void wakeup() {
 
 ## 8. 待完成事项
 
-| 项目 | 优先级 | 说明 |
-|------|--------|------|
-| gem5 侧 UBAdapter 异步化 | 高 | sendReadReq 等改为异步 PseudoMemPort 路径 |
-| EPBackend pending txn map | 高 | 为异步响应建立请求-响应匹配表 |
-| launcher.py | 高 | 统一启动三类进程的编排脚本 |
-| gem5_run.py | 高 | 单节点 gem5 入口（接收节点编号参数） |
-| UBIOModule standalone 编译 | 中 | gem5_shim.hh 替换真实 gem5 依赖 |
-| FaultInjector 组件 | 中 | 从 gem5 UBIOModule 移植到 framework/ |
-| NetworkSim Phase 2 | 中 | 延迟/乱序/故障注入 |
-| ns3 adapter 替换 | 低 | 替换 NetworkSim 为真实 ns3 网络模拟 |
+| 项目 | 优先级 | TLOC估 | 说明 |
+|------|--------|--------|------|
+| **gem5 SCons 接入 framework/** | **P0** | 3 | 调通 SConscript include path 使 gem5 能 `#include "framework/PseudoMemPort.hh"` |
+| **UBAdapter 异步化** | **P0** | 30 | 14 处 `_router->sendMessage()` → `transportSend()` via PseudoMemPort |
+| **UBIOModule 异步化** | **P0** | 20 | `deliverToAdapter` → PseudoMemPort, wakeup() 加 `transportRecv()` |
+| **EPBackend pending txn map** | **P0** | 150 | 所有 `_ubcc->process*()` 同步调用 → CoherenceMessage 异步请求-响应 |
+| **CHI_ubcc_framework.py 改造** | **P1** | 30 | 创建 PseudoManager, 连接 UBAdapter↔UBIOModule ports |
+| **gem5_run.py** | **P1** | 20 | 单节点 gem5 入口（接收节点编号、UBIOModule endpoint） |
+| **launcher.py** | **P1** | 40 | 统一启动三类进程的编排脚本 |
+| **UBIOModule standalone 完整编译** | **P2** | 50 | gem5_shim.hh 替换真实 gem5 依赖，编译通过 |
+| **FaultInjector 移植** | **P2** | 40 | 从 gem5 UBIOModule 移植到 framework/ |
+| **ns3 adapter 替换** | **P3** | 200 | 替换 NetworkSim 为真实 ns3 网络模拟 |
 
 ---
 
