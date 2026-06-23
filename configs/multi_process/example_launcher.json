@@ -1,0 +1,17 @@
+{
+  "sync_window": 100000,
+  "timeout_seconds": 60,
+  "workdir": "/tmp/cc_ep_demo",
+  "modules": [
+    {"name": "networksim",  "type": "networksim",  "module_id": 0,
+     "executable": "./modules/networksim/networksim"},
+    {"name": "gem5_n0",     "type": "gem5",        "module_id": 10,
+     "executable": "./gem5/build/ARM/gem5.opt", "args": ["--tc=1"]},
+    {"name": "ubio_n0",     "type": "ubiomodule",  "module_id": 20,
+     "executable": "./tools/ubio/ubio_main"}
+  ],
+  "links": [
+    ["gem5_n0",  0, "ubio_n0",  0, 1],
+    ["ubio_n0",  1, "networksim", 1, 5]
+  ]
+}
