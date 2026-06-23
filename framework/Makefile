@@ -1,8 +1,9 @@
-CXXFLAGS = -std=c++17 -Wall -I.. -pthread
+CXXFLAGS = -std=c++17 -Wall -pthread -I.. -I../thirdparty/zeromq/include
+LDFLAGS  = -L../thirdparty/zeromq/lib -lzmq -pthread
 
-OBJS = PseudoMemPort.o PseudoManager.o
+OBJS = ZMQChannel.o Port.o
 
-all: libframework.a
+all: libframework.a port_sync_smoke
 
 libframework.a: $(OBJS)
 	ar rcs $@ $^
@@ -10,5 +11,11 @@ libframework.a: $(OBJS)
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+port_sync_smoke: tests/port_sync_smoke.o libframework.a
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+tests/port_sync_smoke.o: tests/port_sync_smoke.cc
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 clean:
-	rm -f *.o *.a
+	rm -f *.o *.a tests/*.o port_sync_smoke
