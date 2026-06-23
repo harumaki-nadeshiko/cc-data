@@ -53,23 +53,13 @@ Port::send(MemMessage* msg)
 MemMessage*
 Port::recv(uint64_t visibleTick)
 {
-    // Check deferred queue
     for (auto it = _deferred.begin(); it != _deferred.end(); ++it) {
         if (it->ts <= visibleTick) {
             static thread_local MemMessage r;
             r = it->msg; _deferred.erase(it); return &r;
         }
     }
-    // Poll with small timeout to let ZMQ I/O thread flush
-    try {
-        zmq::pollitem_t items[1];
-        items[0].socket = _socket->handle();
-        items[0].events = ZMQ_POLLIN;
-        items[0].revents = 0;
-        zmq::poll(items, 1, std::chrono::milliseconds(1));
-        if (!(items[0].revents & ZMQ_POLLIN)) return nullptr;
-    } catch (const zmq::error_t&) { return nullptr; }
-
+    // Direct non-blocking ZMQ receive — no internal poll
     MemMessage tmp;
     try {
         zmq::message_t zmq_msg;
