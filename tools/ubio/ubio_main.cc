@@ -51,7 +51,7 @@ int main(int argc, char** argv)
 
     while (!done) {
         port.emitSync(tick);
-        MemMessage* msg = port.recv(tick);
+        MemMessage* msg = port.recv(~0ULL);  // accept all timestamps
         if (msg) {
             if (msg->hdr.type == (uint32_t)MemMessageType::TERMINATE) {
                 std::fprintf(stderr, "[ubio:%d] got TERMINATE, exiting\n", node_id);
@@ -86,8 +86,8 @@ int main(int argc, char** argv)
             }
         }
         tick++;
-        if (tick % 10000 == 0)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (tick % 100 == 0)
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     std::fprintf(stderr, "[ubio:%d] done\n", node_id);
     return 0;
