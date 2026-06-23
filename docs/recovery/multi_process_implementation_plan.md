@@ -408,14 +408,106 @@ class UBAdapter : public SimObject
     std::string _moduleConfigPath;
     Tick _syncWindow;
     uint32_t _entrySize;
+
+    std::map<uint64_t, PendingTxn> _pendingByReqId;
+    EventFunctionWrapper _respCheckEvent;
+    bool _respCheckArmed = false;
+    Tick _responseCheckInterval = 10;
+    Tick _responseTimeout = 0;
 };
 ```
 
-### 5.4 wakeup 流程
+其中 `PendingTxn` 必须从“预留结构”升级为真正的异步桥接状态：至少记录 `reqId/reqType/issueTick/deadlineTick`、输出指针集合、`onResp` callback、`onTimeout` callback。建议把输出载荷拆成 `PendingReadOutputs / PendingBoolResp / PendingUpgradeOutputs / PendingQueryMetaOutputs` 四类，避免用一个巨大的可空指针拼盘。约束：**不得在 callback 中捕获栈对象引用**。
+
+### 5.4 现有同步调用链清单（需异步化）
+
+当前调用表面上经过 `UBAdapter -> CoherenceMessage`，但仍依赖同进程内同步返回。多进程化后，以下调用点都要改成“发包后立刻返回，completion 由 `reqId` 驱动”：
+
+| EPBackend 调用点 | UBAdapter API | 当前进程内终点 | 当前返回语义 | 多进程后要求 |
+|---|---|---|---|---|
+| `handleRemoteMiss()` | `sendReadReq()` | `processOuterRequest()` | `int grantType` + sideband 输出 | 返回 `-2` 表示 pending，完成后 callback |
+| `handleWriteback()` | `sendWritebackReq()` | `processWriteback()` | `bool success` | 改为异步 completion |
+| `handleEvict()` | `sendEvictReq()` | `processEvict()` | `bool success` | 改为异步 completion |
+| `notifyLocalWriteUpgrade()` | `sendUpgradeReq()` | `processOuterUpgradeReq()` | `bool accepted` + `targetMask/committedEpoch` | 改为异步 completion |
+| `sendUpgradeDone()` | `sendUpgradeDoneReq()` | `processOuterUpgradeDone()` | `bool accepted` | 改为异步 completion |
+| `sendClear()` | `sendClearReq()` | `processClear()` | `bool accepted` | 改为异步 completion |
+| `handleRecallResponse()` | `sendRecallResp()` | `processRecallResponse()` | 逻辑 fire-and-forget，但当前仍同进程直达 | 保持无响应，但成功只代表本地发送成功 |
+| `sendInvalidationAck()` | `sendInvalidateAck()` | `processInvalidationAck()` | 逻辑 fire-and-forget，但当前仍同进程直达 | 同上 |
+| `sendHomeWritebackNotify()` | `sendHomeWritebackNotify()` | `processHomeWritebackNotify()` | `void`，当前同 tick 可见 | 同上 |
+| `handleWriteback()` 的 metadata fallback（TODO） | `sendQueryLineMetaReq()` | `queryLineMeta()` | `int` + `epoch/owner/found` | 一并按 reqId 异步化 |
+| `UBAdapter::recvFromRouter()` 的响应入口 | `_lastResponse` 单槽 | `_lastResponse/_lastResponseValid` | 仅支持一个同步等待者 | 改为 `_pendingByReqId` 多在途匹配 |
+
+核心修复点是消灭 `_lastResponse/_lastResponseValid` 这种单槽同步假设；多进程下同一时刻允许 `ReadReq/ClearReq/UpgradeReq` 并发等待。
+
+### 5.5 UBAdapter 异步化方案
+
+冻结做法：保留上层 `send*` 名称，但在 Port 路径下改为“发包 + 挂起 + event 轮询”。
+
+1. `sendReadReq()`：
+   - 构造 `CoherenceMessage(ReadReq)`
+   - 封装为 `MemMessage(type=COH_MSG, req_id=reqId)`
+   - `Port::send()` 发往本地 ubio
+   - `_pendingByReqId[reqId]` 保存全部输出指针 + callback + deadline
+   - `scheduleResponseCheck()`
+   - 立即返回 `-2`
+
+2. 其它有响应 API（`sendWritebackReq/sendEvictReq/sendUpgradeReq/sendUpgradeDoneReq/sendClearReq/sendQueryLineMetaReq`）：
+   - 统一改成 tri-state：`-1=发送失败`、`-2=等待响应`、完成值由 callback 回填
+   - 若需兼容单进程旧路径，可保留同步包装，但多进程主线一律走异步版本
+
+3. 无响应 API（`sendRecallResp/sendInvalidateAck/sendHomeWritebackNotify`）：
+   - 不进入 `_pendingByReqId`
+   - 返回值仅表示“已写入本地 Port/ZMQ buffer”，不表示远端 UBCC 已提交
+
+### 5.6 `checkForResponse()` / `scheduleResponseCheck()`
+
+建议新增：
+
+```cpp
+void scheduleResponseCheck();
+void checkForResponse();
+```
+
+语义：
+
+- `scheduleResponseCheck()`：当存在 pending 且事件未 arm 时，在 gem5 事件队列上安排 `curTick()+10` 的 one-shot event
+- `checkForResponse()`：
+  - `pumpInbound()`
+  - `safeTick = synced_receive({_port.get()}, _logicalTick)`
+  - 轮询 `ReadResp/WritebackResp/EvictResp/UpgradeResp/UpgradeDoneResp/ClearResp/QueryLineMetaResp`
+  - 用 `reqId` 命中 `_pendingByReqId`
+  - 回填输出指针，移除 pending entry
+  - 在 gem5 事件队列上调度 callback，避免在收包栈中直接重入 EPBackend
+  - 若 `curTick() >= deadlineTick`，执行 timeout 路径并清理 entry
+
+建议默认 `response_timeout = max(10 * sync_window, 1000 tick)`；`ReadReq` 超时直接 fatal，`Writeback/Clear/UpgradeDone` 至少要 `warn` 并进入显式恢复，而不是静默丢失 completion。
+
+### 5.7 EPBackend 调用方改造
+
+`handleRemoteMiss()` 是关键示例：当 `sendReadReq()` 返回 `-2` 时，`EPBackend` 必须建立 `PendingRemoteMissContext(reqId)`，并在 callback 中执行原先 `sendReadReq()` 之后的全部逻辑：
+
+- M6 recall 路由
+- M8 invalidation fanout
+- `grantEnv/entry.epoch/_requesterLines` 更新
+- outerTxnPending 清理与后续唤醒
+
+其余路径同理：
+
+- `handleWriteback()`：callback 中写 `_lastAckMsg`、`_writebackCount`、Requester state
+- `handleEvict()`：callback 中写 `_lastAckMsg`、`_evictCount`
+- `notifyLocalWriteUpgrade()`：callback 中决定立即 ack 还是 deferred invalidation ack
+- `sendUpgradeDone()`：callback 中填 `_lastUpgradeDoneAck`
+- `sendClear()`：callback 中填 `_lastClearAckMsg`，并与 `PendingGrantTxn.baseEpoch` 生命周期解耦
+
+原则：凡是旧代码依赖同步返回值继续执行的，都必须拆成 issue-phase / completion-phase；多进程主线不得 busy-wait。
+
+### 5.8 wakeup 流程
 
 ```cpp
 void UBAdapter::wakeup()
 {
+    checkForResponse();
+
     Tick safeTick = synced_receive({_port.get()}, _logicalTick);
 
     // 1) 收包：Port -> RubySystem
@@ -439,7 +531,9 @@ void UBAdapter::wakeup()
 }
 ```
 
-### 5.5 RubySystem 注入接口
+实现上可以让 `checkForResponse()` 与 `wakeup()` 复用同一底层 event，但语义顺序必须先做 completion 回填，再处理普通 ingress request。
+
+### 5.9 RubySystem 注入接口
 
 在 `RubySystem` 增加最薄外部接口：
 
@@ -455,7 +549,7 @@ bool popExternalCohMsg(CoherenceMessage& out);
 - 真实处理仍落在 EP/CHI 控制器
 - `UBAdapter` 不直接改 SLICC 状态机，只调用新增的外部消息入口
 
-### 5.6 对现有代码的最小侵入做法
+### 5.10 对现有代码的最小侵入做法
 
 当前 `UBAdapter` 大量 `sendReadReq/sendWritebackReq/...` 已以 `CoherenceMessage` 为核心；因此迁移时保留这些上层 API，不改调用者，只把底层实现从：
 
@@ -561,7 +655,27 @@ class UbioHostIf {
 - `UBCCController` 不再直接持 `EPBackend*`
 - 独立进程实现 `UbioHostIf`
 
-### 7.3 主循环
+### 7.3 UBIOModule 内部保持同步
+
+`EPBackend -> UBAdapter` 需要异步化；但 `UBIOModule -> UBCCController` 不需要。因为后者仍是同一 ubio 进程内的本地函数调用，继续同步最简单，也最接近当前实现。
+
+固定闭环为：
+
+```text
+gem5 Port 收到 MemMessage
+  -> 反序列化 CoherenceMessage
+  -> sendMessage() 进入 timed queue
+  -> drainReadyQueues()
+  -> deliverToUbcc()
+  -> 本地调用 UBCCController::process*
+  -> 组装响应 CoherenceMessage
+  -> 再封装为 MemMessage
+  -> gem5 Port 回发
+```
+
+因此真正跨进程异步的是 `Port` 边界，而不是 ubio 进程内的 UBCC 处理本身。
+
+### 7.4 主循环
 
 ```cpp
 while (!terminated) {
@@ -575,7 +689,7 @@ while (!terminated) {
 }
 ```
 
-### 7.4 收包分流
+### 7.5 收包分流
 
 - 从 `gem5_port` 收到 `COH_MSG`：
   - 若是发往 home UBCC 的请求/ack：交给 `UBCCController`
@@ -584,7 +698,17 @@ while (!terminated) {
   - 若目标是本节点 UBCC：交给 `UBCCController`
   - 若目标是本节点 gem5：转发给 `gem5_port`
 
-### 7.5 2-port 结构
+### 7.6 timed queue 保留理由
+
+`UBIOModule` 现有 `CoherenceMessageQueue + _defaultLatency` 需要保留：
+
+- ubio 侧仍通过 timed queue 表达真实链路/排队延迟
+- gem5 侧只是在事件队列中每 `+10 tick` 调 `checkForResponse()` 观察“响应是否已经可见”
+- ubio 的可见性继续由 `synced_receive` 窗口推进，不会因为 gem5 侧改成 callback 就被压扁成 0 延迟
+
+所以两侧是互补关系：ubio 负责产生延迟，gem5 负责等待延迟兑现。
+
+### 7.7 2-port 结构
 
 冻结为固定 2 端口：
 
@@ -593,7 +717,7 @@ while (!terminated) {
 
 这样 per-module 配置最简单，且与“一个 Port 一个对端”约束匹配。
 
-### 7.6 混合通信模式
+### 7.8 混合通信模式
 
 UBIOModule-UBIOModule 的跨节点语义是**混合的**：
 
@@ -620,7 +744,19 @@ UBIOModule-UBIOModule 的跨节点语义是**混合的**：
 
 `networksim` 为每个连接到它的模块维护一个本地 `Port`。典型连接对象是所有 `ubio_<node>` 模块。
 
-### 8.3 转发规则
+新增 socket 级拓扑约束（要求 4）：
+
+- 允许直达：`ubio_i socket k -> ubio_j socket k`（同 socket plane，跨节点）
+- 允许直达：`ubio_i socket 0 <-> ubio_i socket k`（同节点，跨 socket）
+- **禁止直达**：`ubio_i socket k -> ubio_j socket k'`，其中 `i != j` 且 `k != k'`
+
+因此 `i != j, k != k'` 的消息必须走两跳，并经过 `ubio i socket 0` 或 `ubio j socket 0`。这要求 UBIOModule 具备 transit forwarding 能力。
+
+### 8.3 hop-by-hop 传输约定
+
+为表达上述间接路由，传输层头中的 `dst_module/dst_port` 表示**下一跳**，而 `CoherenceMessage.h.dstNode/dstSocket` 保持**协议语义上的最终目标**。`networksim` 只根据前者转发；UBIOModule 若发现自己只是 transit hop，就按最终目标重写下一跳并再次经 `network_port` 发出。
+
+### 8.4 转发规则
 
 收到 `MemMessage` 后：
 
@@ -635,7 +771,7 @@ forward_msg.timestamp = recv_msg.timestamp + link_latency
 
 5. FIFO 头部消息在其 `timestamp <= local_safeTick` 时，经对应 egress `Port` 发出
 
-### 8.4 FIFO 语义
+### 8.5 FIFO 语义
 
 对同一 `(src_module, dst_module)` 逻辑链路：
 
@@ -643,7 +779,7 @@ forward_msg.timestamp = recv_msg.timestamp + link_latency
 - 不允许乱序绕过前包
 - `CONTROL_SYNC` 也进入该 FIFO，从而与数据包共享同一因果通道
 
-### 8.5 启动时校验
+### 8.6 启动时校验
 
 启动时逐条校验：
 
@@ -770,6 +906,15 @@ launcher 只做占位符展开，不硬编码模块类型到命令映射。
     "entry_size": 1024,
     "log_dir": "run/mp_tc01/logs"
   },
+  "routing": {
+    "cross_node_cross_socket_policy": "via_socket0",
+    "ubio_modules": [
+      {"node_id": 0, "socket_id": 0, "module_id": 2},
+      {"node_id": 0, "socket_id": 1, "module_id": 3},
+      {"node_id": 1, "socket_id": 0, "module_id": 4},
+      {"node_id": 1, "socket_id": 1, "module_id": 5}
+    ]
+  },
   "ports": [
     {
       "port_id": 0,
@@ -802,12 +947,19 @@ launcher 只做占位符展开，不硬编码模块类型到命令映射。
   "module": {"name": "networksim", "module_id": 5, "type": "networksim"},
   "runtime": {"sync_window": 10000, "entry_size": 1024},
   "ports": [... 仅 networksim 自己的邻接端口 ...],
+  "route_policy": {
+    "routing_granularity": "hop",
+    "cross_node_cross_socket": "via_socket0"
+  },
   "routes": [
-    {"src_module": 2, "dst_module": 4, "ingress_port": 0, "egress_port": 1, "latency": 100},
-    {"src_module": 4, "dst_module": 2, "ingress_port": 1, "egress_port": 0, "latency": 100}
+    {"src_module": 21, "dst_module": 20, "ingress_port": 3, "egress_port": 2, "latency": 20},
+    {"src_module": 20, "dst_module": 30, "ingress_port": 2, "egress_port": 5, "latency": 100},
+    {"src_module": 30, "dst_module": 31, "ingress_port": 5, "egress_port": 6, "latency": 20}
   ]
 }
 ```
+
+说明：`routes[]` 表达的是**逐 hop 可达关系**，不是端到端 shortcut。对于 `ubio_i socket k -> ubio_j socket k'` 且 `i != j, k != k'` 的情况，launcher 必须展开为两条 route，而不是伪造一条跨平面直连。
 
 ---
 
@@ -1022,6 +1174,7 @@ struct TerminatePayload {
 - 至少先打通一条 controller-directed + 一条 system-level TC
 - 之后逐步迁移 56 个 E2E 测试
 - 单进程与多进程关键协议路径日志一致
+- 进入最终验收前，必须补跑 §16 的 5 个 TLA+ 模型
 
 ---
 
@@ -1047,6 +1200,7 @@ struct TerminatePayload {
 |---|---|---:|
 | `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.hh` | 修改 | 120 |
 | `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc` | 修改 | 260 |
+| `UBAdapter` 异步 pending/callback/timeout 逻辑（分布于 `UBAdapter.hh/.cc`） | 修改增量 | 180 |
 | `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.py` | 修改 | 30 |
 | `gem5/src/mem/ruby/system/RubySystem.hh` | 修改 | 40 |
 | `gem5/src/mem/ruby/system/RubySystem.cc` | 修改 | 120 |
@@ -1087,7 +1241,7 @@ struct TerminatePayload {
 
 ### 15.6 总量
 
-粗估总新增/改动规模：**约 3.9K ~ 4.4K TLOC**。
+粗估总新增/改动规模：**约 4.1K ~ 4.6K TLOC**。
 
 这其中真正高风险的部分只有三块：
 
@@ -1096,3 +1250,41 @@ struct TerminatePayload {
 3. `UBAdapter ↔ RubySystem` 的外部注入接口
 
 其余部分以胶水和编排为主。
+
+---
+
+## 16. 验收标准（补充）
+
+### 16.1 多进程功能通过线
+
+- `gem5_<node> / ubio_<node> / networksim / launcher.py` 能稳定拉起并正常回收
+- `Read/Recall/Invalidate/Clear/Writeback/Evict/Upgrade/UpgradeDone/HomeWritebackNotify` 各至少有一条 directed 或 E2E 路径跑通
+- `req_id` 在 gem5、ubio、networksim 三侧日志中可串联
+- 不出现 `safeTick` 倒退、同 PA 双飞行、`_pendingByReqId` 泄漏
+
+### 16.2 TLA+ 形式化验证纳入最终验收
+
+多进程改造完成后，必须重新运行 `verification/tla/` 下全部 5 个 TLA+ 模型。参考：
+
+- `verification/CONSOLIDATED_REPORT.md`
+- `verification/tla/run_tlc.sh`
+
+建议执行集合：
+
+1. `ubcc_protocol_core.tla` / `ubcc_config.cfg`（经 `ubcc_protocol.tla` 封装）
+2. `ep_intra_node.tla` / `ep_intra_node.cfg`
+3. `ep_intra_node_single.tla` / `ep_intra_node_single.cfg`
+4. `ep_intra_node_dual.tla` / `ep_intra_node_dual.cfg`
+5. `ubcc_transport_faults.tla` / `ubcc_transport_faults.cfg`
+
+验收条件：
+
+- 5 个模型全部通过 TLC 模型检查
+- TLC 退出码均为 0
+- 无 invariant violation
+- 若模型需要为 `ZMQ + synced_receive` 窗口算法补充传输抽象，允许修改传输层建模；但核心协议状态机（`MESI/Recall/Invalidate/Grant`）不得改变语义
+
+### 16.3 报告更新要求
+
+- 在 `verification/CONSOLIDATED_REPORT.md` 中补记本轮多进程改造后的 TLA+ 重跑结果
+- 若引入 hop-by-hop/窗口可见性抽象，需在报告中显式说明“传输模型变化”与“协议状态机不变项”
