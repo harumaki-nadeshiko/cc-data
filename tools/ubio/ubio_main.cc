@@ -456,7 +456,7 @@ main(int argc, char **argv)
         } else {
             ++tick;
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 
     return 0;
