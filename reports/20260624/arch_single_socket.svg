@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 800" font-family="monospace">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#333"/>
+    </marker>
+    <marker id="arr-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#4a90d9"/>
+    </marker>
+    <marker id="arr-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#28a745"/>
+    </marker>
+    <marker id="arr-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#dc3545"/>
+    </marker>
+    <marker id="arr-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6f42c1"/>
+    </marker>
+    <marker id="arr-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#fd7e14"/>
+    </marker>
+  </defs>
+
+  <rect width="1100" height="800" fill="#fafafa" rx="12"/>
+
+  <!-- Title -->
+  <text x="550" y="35" text-anchor="middle" font-size="18" font-weight="bold" fill="#111">CC-EP 单 gem5 进程 — 单 Socket 架构 (num_sockets=1)</text>
+
+  <!-- gem5 Process Boundary -->
+  <rect x="20" y="55" width="1060" height="620" rx="10" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="8,3"/>
+  <text x="40" y="80" font-size="13" font-weight="bold" fill="#555">gem5 进程 (统一事件循环 &amp; 内存空间)</text>
+
+  <!-- ============================================================ -->
+  <!-- Per-Node Shared Layer -->
+  <!-- ============================================================ -->
+  <rect x="40" y="100" width="1020" height="130" rx="8" fill="#f5f0ff" stroke="#6f42c1" stroke-width="1.5"/>
+  <text x="60" y="125" font-size="13" font-weight="bold" fill="#6f42c1">Per-Node Shared (单例, 全 socket 共享)</text>
+
+  <!-- EPBackend -->
+  <rect x="60" y="140" width="150" height="36" rx="4" fill="#fff9e6" stroke="#ffc107" stroke-width="1.5"/>
+  <text x="135" y="163.5" text-anchor="middle" font-size="11" font-weight="bold" fill="#8a6d00">EPBackend</text>
+
+  <!-- UBCCController + ResidentDir -->
+  <rect x="235" y="140" width="210" height="36" rx="4" fill="#f0e6ff" stroke="#6f42c1" stroke-width="1.5"/>
+  <text x="340" y="155" text-anchor="middle" font-size="11" font-weight="bold" fill="#6f42c1">UBCCController</text>
+  <text x="340" y="169" text-anchor="middle" font-size="9" fill="#6f42c1">ResidentDir + BloomFilter + GroupIndex</text>
+
+  <!-- EPRNF -->
+  <rect x="470" y="140" width="120" height="36" rx="4" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="530" y="155" text-anchor="middle" font-size="11" font-weight="bold" fill="#1a6b30">EPRNF</text>
+  <text x="530" y="169" text-anchor="middle" font-size="9" fill="#1a6b30">Snoop Handler</text>
+
+  <!-- Cross-node routing info -->
+  <rect x="615" y="140" width="425" height="36" rx="4" fill="#f8f9fa" stroke="#ccc" stroke-width="1"/>
+  <text x="827" y="155" text-anchor="middle" font-size="11" fill="#555">跨节点路由: 通过 EPBackend 静态注册表 _backendInstances</text>
+  <text x="827" y="169" text-anchor="middle" font-size="9" fill="#777">inter-node: handleRecall / handleInvalidate → 远端 EPBackend</text>
+
+  <!-- EPBackend → UBCCController -->
+  <line x1="210" y1="158" x2="235" y2="158" stroke="#6f42c1" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+  <!-- EPRNF → EPBackend -->
+  <line x1="470" y1="158" x2="410" y2="158" stroke="#28a745" stroke-width="1.5" marker-end="url(#arr-green)"/>
+
+  <!-- ============================================================ -->
+  <!-- Socket 0 -->
+  <!-- ============================================================ -->
+  <rect x="40" y="250" width="1020" height="220" rx="8" fill="#f4f9ff" stroke="#4a90d9" stroke-width="2"/>
+  <text x="60" y="275" font-size="13" font-weight="bold" fill="#2a5a8a">Socket 0</text>
+
+  <!-- ---- Row 1: CPU / Cache / Interconnect ---- -->
+  <rect x="60" y="290" width="90" height="36" rx="4" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1"/>
+  <text x="105" y="313.5" text-anchor="middle" font-size="11" fill="#2a5a8a">CPU</text>
+
+  <rect x="165" y="290" width="100" height="36" rx="4" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1"/>
+  <text x="215" y="313.5" text-anchor="middle" font-size="11" fill="#2a5a8a">L1 / L2</text>
+
+  <rect x="280" y="290" width="100" height="36" rx="4" fill="#d4edda" stroke="#28a745" stroke-width="1"/>
+  <text x="330" y="313.5" text-anchor="middle" font-size="11" fill="#1a6b30">Ruby / CHI</text>
+
+  <rect x="395" y="290" width="120" height="36" rx="4" fill="#d4edda" stroke="#28a745" stroke-width="1.5"/>
+  <text x="455" y="305" text-anchor="middle" font-size="11" font-weight="bold" fill="#1a6b30">HN-F</text>
+  <text x="455" y="319" text-anchor="middle" font-size="9" fill="#1a6b30">L3 + CHI Home Node</text>
+
+  <!-- Row 1 arrows -->
+  <line x1="150" y1="308" x2="165" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="265" y1="308" x2="280" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="380" y1="308" x2="395" y2="308" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ---- Row 2: EPSNF / MetaRNF / UBAdapter / UBIOModule ---- -->
+  <rect x="60" y="345" width="130" height="36" rx="4" fill="#d4edda" stroke="#28a745" stroke-width="1"/>
+  <text x="125" y="360" text-anchor="middle" font-size="10" font-weight="bold" fill="#1a6b30">EPSNF</text>
+  <text x="125" y="374" text-anchor="middle" font-size="8" fill="#1a6b30">DSM Data Server</text>
+
+  <rect x="205" y="345" width="130" height="36" rx="4" fill="#d1ecf1" stroke="#17a2b8" stroke-width="1"/>
+  <text x="270" y="360" text-anchor="middle" font-size="10" font-weight="bold" fill="#0c5460">MetaRNF</text>
+  <text x="270" y="374" text-anchor="middle" font-size="8" fill="#0c5460">Metadata B.S. I/O</text>
+
+  <rect x="350" y="345" width="130" height="36" rx="4" fill="#fff9e6" stroke="#ffc107" stroke-width="1"/>
+  <text x="415" y="360" text-anchor="middle" font-size="10" font-weight="bold" fill="#8a6d00">UBAdapter</text>
+  <text x="415" y="374" text-anchor="middle" font-size="8" fill="#8a6d00">Transport Facade</text>
+
+  <rect x="495" y="345" width="160" height="36" rx="4" fill="#f0e6ff" stroke="#6f42c1" stroke-width="1"/>
+  <text x="575" y="360" text-anchor="middle" font-size="10" font-weight="bold" fill="#6f42c1">UBIOModule</text>
+  <text x="575" y="374" text-anchor="middle" font-size="8" fill="#6f42c1">消息路由器</text>
+
+  <!-- ---- Row 3: DDR4 ---- -->
+  <rect x="60" y="400" width="460" height="40" rx="4" fill="#f8d7da" stroke="#dc3545" stroke-width="1.5"/>
+  <text x="290" y="417" text-anchor="middle" font-size="11" font-weight="bold" fill="#8a1a1a">DDR4 DRAM (MemCtrl + DDR4_2400_8x8)</text>
+  <text x="290" y="432" text-anchor="middle" font-size="9" fill="#8a1a1a">L_SNF (local) + DL_SNF (DSM-local) | PA addr range per-socket slice</text>
+
+  <!-- ====== Arrows within Socket ====== -->
+
+  <!-- HN-F → EPSNF (DSM ReadNoSnp/WriteNoSnp) -->
+  <line x1="445" y1="326" x2="445" y2="345" stroke="#28a745" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <text x="450" y="338" font-size="8" fill="#28a745">ReadNoSnp</text>
+
+  <!-- EPSNF → EPBackend (handleRemoteMiss) -->
+  <path d="M 135,345 L 135,176" stroke="#ffc107" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arr)"/>
+
+  <!-- MetaRNF → HN-F (metadata ops) -->
+  <line x1="300" y1="345" x2="395" y2="326" stroke="#17a2b8" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="355" y="340" font-size="7" fill="#17a2b8">RdOnce/WrUniq</text>
+
+  <!-- HN-F → DDR4 (via SNF) -->
+  <line x1="455" y1="326" x2="290" y2="400" stroke="#dc3545" stroke-width="1.5" marker-end="url(#arr-red)"/>
+  <text x="380" y="370" font-size="7" fill="#dc3545">SNF→MemCtrl</text>
+
+  <!-- MetaRNF → DDR4 (metadata RO/RW) -->
+  <path d="M 270,381 L 270,400" stroke="#17a2b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- UBAdapter → UBIOModule -->
+  <line x1="480" y1="363" x2="495" y2="363" stroke="#6f42c1" stroke-width="1.5" marker-end="url(#arr-purple)"/>
+
+  <!-- EPBackend → UBAdapter -->
+  <path d="M 135,176 L 135,230 L 415,230 L 415,345" stroke="#ffc107" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- HN-F → EPRNF (snoops: SnpCleanInvalid/SnpShared/SnpUnique) -->
+  <path d="M 455,290 L 455,230 L 530,230 L 530,176" stroke="#28a745" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arr-green)"/>
+  <text x="490" y="227" font-size="7" fill="#28a745">Snp</text>
+
+  <!-- EPRNF → HN-F (CHI response: ReadShared/CleanUnique/ReadUnique) -->
+  <path d="M 530,176 L 530,200 L 455,200 L 455,290" stroke="#28a745" stroke-width="1.5" marker-end="url(#arr-green)"/>
+  <text x="490" y="197" font-size="7" fill="#28a745">RdShared/CleanUnique</text>
+
+  <!-- ============================================================ -->
+  <!-- Node 1/N -->
+  <!-- ============================================================ -->
+  <rect x="40" y="490" width="1020" height="80" rx="8" fill="#fafafa" stroke="#999" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="60" y="515" font-size="13" font-weight="bold" fill="#555">Node 1 .. N (同构)</text>
+  <text x="60" y="535" font-size="11" fill="#777">每个 node: 独立 EPBackend + UBCCController + ResidentDir + EPRNF + 1 per-node 配 1~N socket</text>
+  <text x="60" y="553" font-size="11" fill="#777">跨节点通过 EPBackend::_backendInstances 全局注册表路由 Recall/Invalidation</text>
+
+  <!-- Inter-node link -->
+  <line x1="550" y1="490" x2="550" y2="470" stroke="#dc3545" stroke-width="2" stroke-dasharray="4,2"/>
+
+  <!-- ============================================================ -->
+  <!-- DDR4 detail panel -->
+  <!-- ============================================================ -->
+  <rect x="40" y="590" width="1020" height="85" rx="8" fill="#fff" stroke="#ddd" stroke-width="1.5"/>
+  <text x="60" y="615" font-size="13" font-weight="bold" fill="#333">DDR4 访问路径</text>
+  <text x="60" y="635" font-size="11" fill="#555">1. CHI 协议路径: HN-F → SNF → MemCtrl → DDR4 (正常 cache miss / metadata I/O)</text>
+  <text x="60" y="653" font-size="11" fill="#555">2. 功能访问路径: EPBackend → RubySystem::getPhysMem() → functionalAccess (grant 数据填充 / NCBWrData 写回)</text>
+  <text x="60" y="671" font-size="11" fill="#888">Router Range: [0x2000_0000_0000, 0x2000_0800_0000) per socket · Metadata: 16MB per socket · DSM: 128MB per node</text>
+
+  <!-- ============================================================ -->
+  <!-- Legend -->
+  <!-- ============================================================ -->
+  <rect x="40" y="695" width="1020" height="90" rx="8" fill="#fff" stroke="#ddd" stroke-width="1.5"/>
+  <text x="60" y="717" font-size="12" font-weight="bold" fill="#333">图例</text>
+
+  <rect x="60" y="730" width="22" height="14" rx="3" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1"/>
+  <text x="90" y="742" font-size="11" fill="#333">CPU / L1/L2 缓存</text>
+
+  <rect x="260" y="730" width="22" height="14" rx="3" fill="#d4edda" stroke="#28a745" stroke-width="1"/>
+  <text x="290" y="742" font-size="11" fill="#333">Ruby/CHI + HN-F + EPSNF + EPRNF</text>
+
+  <rect x="580" y="730" width="22" height="14" rx="3" fill="#fff9e6" stroke="#ffc107" stroke-width="1"/>
+  <text x="610" y="742" font-size="11" fill="#333">EPBackend / UBAdapter</text>
+
+  <rect x="60" y="755" width="22" height="14" rx="3" fill="#f5f0ff" stroke="#6f42c1" stroke-width="1"/>
+  <text x="90" y="767" font-size="11" fill="#333">UBCC / UBIOModule / ResidentDir</text>
+
+  <rect x="260" y="755" width="22" height="14" rx="3" fill="#f8d7da" stroke="#dc3545" stroke-width="1"/>
+  <text x="290" y="767" font-size="11" fill="#333">DDR4 / DRAM</text>
+
+  <rect x="420" y="755" width="22" height="14" rx="3" fill="#d1ecf1" stroke="#17a2b8" stroke-width="1"/>
+  <text x="450" y="767" font-size="11" fill="#333">MetaRNF (Metadata I/O)</text>
+
+  <line x1="600" y1="762" x2="640" y2="762" stroke="#dc3545" stroke-width="2" stroke-dasharray="4,2"/>
+  <text x="650" y="767" font-size="11" fill="#333">跨节点路由 / 交互</text>
+</svg>

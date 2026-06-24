@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 850" font-family="monospace">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#333"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#4a90d9"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#28a745"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#dc3545"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="850" fill="#fafafa" rx="12"/>
+  <text x="550" y="35" text-anchor="middle" font-size="20" font-weight="bold" fill="#111">UBCC Three-Layer Directory &amp; DRAM Backstore Architecture</text>
+
+  <!-- On-Chip SRAM Boundary -->
+  <rect x="30" y="80" width="1040" height="490" rx="12" fill="none" stroke="#28a745" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="50" y="105" font-size="14" font-weight="bold" fill="#28a745">On-Chip SRAM Cache Boundary (Authoritative State &amp; Fast Filtering)</text>
+
+  <!-- Incoming PA Lookup -->
+  <rect x="60" y="130" width="220" height="30" rx="4" fill="#eee" stroke="#333" stroke-width="1.5"/>
+  <text x="170" y="149" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">Lookup Physical Addr (PA)</text>
+
+  <!-- Bloom Filter (SRAM) -->
+  <rect x="60" y="180" width="460" height="120" rx="8" fill="#eafaf1" stroke="#28a745" stroke-width="1.5"/>
+  <text x="290" y="202" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a6b30">Bloom Filter (SRAM Negative Filter)</text>
+  <text x="290" y="222" text-anchor="middle" font-size="11" fill="#333">60KB Plain Bit-Vector (k=4 hash functions, 16 groups)</text>
+  <text x="290" y="240" text-anchor="middle" font-size="11" fill="#333">Grouped for parallel Reconstruction &amp; Page Directories</text>
+  <text x="290" y="258" text-anchor="middle" font-size="11" fill="#1a6b30">FPR ≈ 2.4% @ 65K entries (Bypasses ResidentDir on Miss)</text>
+
+  <!-- GroupIndex (SRAM) -->
+  <rect x="540" y="180" width="480" height="120" rx="8" fill="#fff9e6" stroke="#ffc107" stroke-width="1.5"/>
+  <text x="780" y="202" text-anchor="middle" font-size="13" font-weight="bold" fill="#8a6d00">GroupIndex (SRAM Directory Metadata)</text>
+  <text x="780" y="222" text-anchor="middle" font-size="11" fill="#333">4KB Page Directory (16 groups × 256B block size)</text>
+  <text x="780" y="240" text-anchor="middle" font-size="11" fill="#333">Tracks: live_count | dirty_count | stale_delete_count | insert_count</text>
+  <text x="780" y="258" text-anchor="middle" font-size="11" fill="#8a6d00">Includes 32B mini-BF for fast existence checking</text>
+
+  <!-- ResidentDir (SRAM) -->
+  <rect x="60" y="340" width="960" height="190" rx="8" fill="#e8f4fd" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="540" y="362" text-anchor="middle" font-size="14" font-weight="bold" fill="#2a5a8a">ResidentDir (SRAM) — THE AUTHORITATIVE DIRECTORY SOURCE</text>
+
+  <!-- Robin Hood Hash Table -->
+  <rect x="80" y="390" width="430" height="110" rx="4" fill="#f4f9ff" stroke="#4a90d9" stroke-width="1"/>
+  <text x="295" y="415" text-anchor="middle" font-size="12" font-weight="bold" fill="#2a5a8a">Robin Hood Hash Table (Fast Cache Line Check)</text>
+  <text x="295" y="438" text-anchor="middle" font-size="11" fill="#333">~65K entries × 7B Packed Key-Value Layout</text>
+  <text x="295" y="458" text-anchor="middle" font-size="11" fill="#555">PA (44b) → MESI (2b) | Sharers Mask (16b) | Epoch (24b)</text>
+  <text x="295" y="478" text-anchor="middle" font-size="10" fill="#777">Provides current coherence state &amp; sharer tracking on-chip</text>
+
+  <!-- Control & Eviction -->
+  <rect x="530" y="390" width="470" height="110" rx="4" fill="#f4f9ff" stroke="#4a90d9" stroke-width="1"/>
+  <text x="765" y="415" text-anchor="middle" font-size="12" font-weight="bold" fill="#2a5a8a">Eviction &amp; State Management</text>
+  <text x="765" y="438" text-anchor="middle" font-size="11" fill="#333">Tracks: fillPending | wbPending | residentDirty (per entry)</text>
+  <text x="765" y="458" text-anchor="middle" font-size="11" fill="#555">Policy: LRU age based victim selection on cache capacity limits</text>
+  <text x="765" y="478" text-anchor="middle" font-size="10" fill="#777">Writes back dirty entries to DRAM Backstore via MetaRNF proxies</text>
+
+  <!-- DRAM Backstore -->
+  <rect x="60" y="610" width="960" height="150" rx="8" fill="#fdf0f0" stroke="#dc3545" stroke-width="2"/>
+  <text x="540" y="632" text-anchor="middle" font-size="14" font-weight="bold" fill="#8a1a1a">DRAM Backstore (Off-Chip Memory via MetaRNF CHI ReadOnce/WriteUnique)</text>
+  <text x="540" y="648" text-anchor="middle" font-size="11" font-weight="bold" fill="#dc3545">SHADOW COPY ONLY — NEVER AUTHORITATIVE FOR COHERENCE COMMIT</text>
+
+  <!-- Pluggable Schemas -->
+  <rect x="80" y="670" width="430" height="70" rx="4" fill="#fffcfc" stroke="#dc3545" stroke-width="1"/>
+  <text x="295" y="695" text-anchor="middle" font-size="11" font-weight="bold" fill="#8a1a1a">Pluggable Storage Schemas</text>
+  <text x="295" y="715" text-anchor="middle" font-size="11" fill="#333">Schema A (Append-friendly log) / Schema C (Bucketized hash table)</text>
+
+  <!-- Page Format -->
+  <rect x="530" y="670" width="470" height="70" rx="4" fill="#fffcfc" stroke="#dc3545" stroke-width="1"/>
+  <text x="765" y="695" text-anchor="middle" font-size="11" font-weight="bold" fill="#8a1a1a">BackstorePage &amp; Entry Layout (256B page size)</text>
+  <text x="765" y="715" text-anchor="middle" font-size="11" fill="#333">24B Page Header + 19 × 12B CompactBackstoreEntry (Compact format)</text>
+
+  <!-- DATA FLOW PATHS (Arrows) -->
+
+  <!-- 1. Start lookup -> BF check -->
+  <line x1="170" y1="160" x2="170" y2="180" stroke="#4a90d9" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <!-- 1a. BF Miss (Negative filter) -> Direct DRAM Read -->
+  <path d="M 120,300 L 120,610" stroke="#dc3545" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
+  <rect x="125" y="315" width="280" height="20" rx="3" fill="#fff" stroke="#dc3545" stroke-width="0.5"/>
+  <text x="265" y="329" text-anchor="middle" font-size="10" font-weight="bold" fill="#dc3545">1a. BF Miss (0) -> Skip ResidentDir -> DRAM Read</text>
+
+  <!-- 1b. BF Hit -> ResidentDir Lookup -->
+  <path d="M 290,300 L 290,340" stroke="#28a745" stroke-width="2" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="300" y="325" font-size="10" font-weight="bold" fill="#28a745">1b. BF Hit (1)</text>
+
+  <!-- 2a. ResidentDir Hit (Authoritative MESI State found) -->
+  <path d="M 510,410 L 510,380 L 740,380" stroke="#28a745" stroke-width="2" fill="none" marker-end="url(#arrow-green)"/>
+  <rect x="520" y="368" width="210" height="20" rx="3" fill="#fff" stroke="#28a745" stroke-width="0.5"/>
+  <text x="625" y="382" text-anchor="middle" font-size="10" font-weight="bold" fill="#28a745">2a. ResidentDir Hit (Authoritative)</text>
+
+  <!-- 2b. ResidentDir Miss (BF False Positive) -> DRAM Read -->
+  <path d="M 430,530 L 430,610" stroke="#dc3545" stroke-width="2" fill="none" marker-end="url(#arrow-red)"/>
+  <rect x="435" y="555" width="310" height="20" rx="3" fill="#fff" stroke="#dc3545" stroke-width="0.5"/>
+  <text x="590" y="569" text-anchor="middle" font-size="10" font-weight="bold" fill="#dc3545">2b. ResidentDir Miss (BF False Positive) -> DRAM Read</text>
+
+  <!-- 3. Eviction writeback -->
+  <path d="M 800,530 L 800,610" stroke="#dc3545" stroke-width="2" fill="none" stroke-dasharray="4,2" marker-end="url(#arrow-red)"/>
+  <rect x="805" y="555" width="240" height="20" rx="3" fill="#fff" stroke="#dc3545" stroke-width="0.5"/>
+  <text x="925" y="569" text-anchor="middle" font-size="10" font-weight="bold" fill="#dc3545">3. LRU Victim Writeback -> DRAM Shadow</text>
+
+  <!-- Legend -->
+  <rect x="30" y="780" width="1040" height="50" rx="6" fill="#fff" stroke="#ddd" stroke-width="1.5"/>
+  <text x="50" y="802" font-size="11" font-weight="bold" fill="#333">Layer Roles:</text>
+  <text x="150" y="802" font-size="11" fill="#333">Bloom Filter (Negative Filter, bypasses lookup) | GroupIndex (Tracks counts &amp; mini-BF stats)</text>
+  <text x="150" y="818" font-size="11" fill="#333">ResidentDir (SRAM, authoritative on-chip state) | DRAM Backstore (Shadow memory copy, never authoritative)</text>
+</svg>
