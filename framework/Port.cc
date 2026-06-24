@@ -1,15 +1,21 @@
 #include "framework/Port.hh"
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 
 namespace framework {
 
 Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
            const std::string& endpoint, bool bind,
-           zmq::context_t& ctx, uint64_t syncWindow)
+           zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval)
     : _name(name), _moduleId(module_id), _portId(port_id),
-      _ctx(ctx), _syncWindow(syncWindow),
-      _lastSyncTick(0), _nextVisibleTick(0), _sendBufInUse(false)
+      _ctx(ctx),
+      _syncWindow(syncWindow),
+      _syncInterval(syncInterval > 0 ? syncInterval : syncWindow),
+      _lastSyncTs(0),
+      _pending(false), _pendingT(0),
+      _lastRxT(UINT64_MAX),    // no inbound bound yet; debug fallback=0
+      _sendBufInUse(false)
 {
     _socket = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
     try {
@@ -17,7 +23,7 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
         else      _socket->connect(endpoint);
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] %s(%s) failed: %s\n",
-                     _name.c_str(), bind?"bind":"connect",
+                     _name.c_str(), bind ? "bind" : "connect",
                      endpoint.c_str(), e.what());
     }
 }
@@ -51,45 +57,93 @@ Port::send(MemMessage* msg)
 }
 
 MemMessage*
-Port::recv(uint64_t visibleTick)
+Port::recv(uint64_t curT, ReceiveStatus* status)
 {
-    for (auto it = _deferred.begin(); it != _deferred.end(); ++it) {
-        if (it->ts <= visibleTick) {
-            static thread_local MemMessage r;
-            r = it->msg; _deferred.erase(it); return &r;
+    ReceiveStatus dummy;
+    ReceiveStatus& st = status ? *status : dummy;
+
+    // 1. Check pending future message
+    if (_pending) {
+        if (_pendingT <= curT) {
+            _lastRxT = std::max(_lastRxT, _pendingT);
+            _pending = false;
+            st = ReceiveStatus::kMessage;
+            static thread_local MemMessage result;
+            result = _pendingMsg;
+            return &result;
         }
+        st = ReceiveStatus::kPendingFuture;
+        return nullptr;
     }
-    // Direct non-blocking ZMQ receive — no internal poll
+
+    // 2. Pull from ZMQ (non-blocking)
     MemMessage tmp;
     try {
         zmq::message_t zmq_msg;
         auto r = _socket->recv(zmq_msg, zmq::recv_flags::dontwait);
-        if (!r.has_value()) return nullptr;
+        if (!r.has_value()) {
+            st = ReceiveStatus::kEmpty;
+            return nullptr;
+        }
         uint32_t sz = zmq_msg.size();
-        if (sz < kMemMessageHeaderSize || sz > sizeof(MemMessage)) return nullptr;
+        if (sz < kMemMessageHeaderSize || sz > sizeof(MemMessage)) {
+            st = ReceiveStatus::kEmpty;
+            return nullptr;
+        }
         std::memcpy(&tmp, zmq_msg.data(), sz);
-    } catch (const zmq::error_t&) { return nullptr; }
-
-    if (tmp.hdr.timestamp <= visibleTick) {
-        static thread_local MemMessage result; result = tmp; return &result;
+    } catch (const zmq::error_t&) {
+        st = ReceiveStatus::kEmpty;
+        return nullptr;
     }
-    _deferred.push_back({tmp.hdr.timestamp, tmp});
-    std::sort(_deferred.begin(), _deferred.end(),
-              [](auto& a, auto& b) { return a.ts < b.ts; });
-    return nullptr;
+
+    // 3. Update inbound time on every received message
+    _lastRxT = std::max(_lastRxT, (uint64_t)tmp.hdr.timestamp);
+
+    // 4. Sync messages: return as kSync; caller skips, but _lastRxT updated
+    if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
+        st = ReceiveStatus::kSync;
+        static thread_local MemMessage result;
+        result = tmp;
+        return &result;
+    }
+
+    // 5. Future data message → cache as pending (single slot)
+    if (tmp.hdr.timestamp > curT) {
+        _pending = true;
+        _pendingT = tmp.hdr.timestamp;
+        _pendingMsg = tmp;
+        st = ReceiveStatus::kPendingFuture;
+        return nullptr;
+    }
+
+    // 6. Ready data message
+    st = ReceiveStatus::kMessage;
+    static thread_local MemMessage result;
+    result = tmp;
+    return &result;
 }
 
 bool
 Port::emitSync(uint64_t curTick)
 {
-    if (curTick - _lastSyncTick < _syncWindow) return true;
+    // Throttle by _syncInterval (allow first sync unconditionally)
+    if (_lastSyncTs > 0 && curTick - _lastSyncTs < _syncInterval)
+        return true;
+
     MemMessage* buf = sendAllocateBuffer(curTick);
     if (!buf) return false;
     buf->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
     buf->hdr.size = sizeof(MemMessageHeader);
+    buf->hdr.dst_module = 0;
+    buf->hdr.dst_port = 0;
+
     bool ok = send(buf);
     _sendBufInUse = false;
-    if (ok) { _lastSyncTick = curTick; return true; }
+    if (ok) {
+        _lastSyncTs = curTick;
+        _lastRxT = std::max(_lastRxT, curTick);
+        return true;
+    }
     return false;
 }
 
@@ -100,13 +154,23 @@ synced_receive_lower_bound(Port** ports, int n, uint64_t tick)
     for (int i = 0; i < n; ++i) {
         Port* p = ports[i];
         if (!p) continue;
+
         p->emitSync(tick);
-        while (p->recv(tick)) {}
-        uint64_t b = p->nextVisibleTick();
+
+        // Drain all ready messages and syncs
+        MemMessage* m;
+        ReceiveStatus st;
+        while ((m = p->recv(tick, &st)) != nullptr) {
+            if (st == ReceiveStatus::kEmpty ||
+                st == ReceiveStatus::kPendingFuture) break;
+            // kSync and kMessage: consume (sync already updated _lastRxT)
+        }
+
+        uint64_t b = p->safeTs(tick);
         if (b < safe) safe = b;
-        p->advanceVisibleTick(tick);
     }
-    return (safe == UINT64_MAX) ? tick + 1 : safe;
+    if (safe == UINT64_MAX) return tick + 1;
+    return safe;
 }
 
 } // namespace framework

@@ -363,27 +363,24 @@ main(int argc, char **argv)
     bool aligned = false;
     bool done = false;
 
-    auto handleIncoming = [&](Port *srcPort, Port *replyPort, bool fromNetwork) {
-        if (!srcPort) {
-            return;
-        }
-        const uint64_t visible = ~0ULL;
-        MemMessage *m = srcPort->recv(visible);
-        while (m) {
+    auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork) {
+        if (!port) return;
+        ReceiveStatus st;
+        MemMessage *m = port->recv(tick, &st);
+        while (m && st == ReceiveStatus::kMessage) {
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
                 std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu\n", nid, m->hdr.timestamp);
                 done = true;
                 break;
             }
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::BARRIER_REACHED)) {
                 uint32_t mask = (uint32_t)m->hdr.req_id;
                 int src = m->hdr.src_module;
                 std::fprintf(stderr,"[ubio:%d] BARRIER_REACHED mask=0x%x src=%d\n", nid, mask, src);
-                // Forward to all other ubios via net, and count locally
                 static std::map<uint32_t, std::set<int>> barrierNodes;
                 barrierNodes[mask].insert(src);
                 if (netPort) {
@@ -406,13 +403,13 @@ main(int argc, char **argv)
                     }
                     barrierNodes[mask].clear();
                 }
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
             if (m->hdr.type != static_cast<uint32_t>(MemMessageType::COH_MSG)) {
                 std::fprintf(stderr, "[ubio:%d] drop MemMessage type=%u ts=%lu size=%u\n",
                              nid, m->hdr.type, m->hdr.timestamp, m->hdr.size);
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
 
@@ -420,10 +417,10 @@ main(int argc, char **argv)
             if (!coh) {
                 std::fprintf(stderr, "[ubio:%d] bad payload size=%u req_id=%lu\n",
                              nid, m->payloadLen(), m->hdr.req_id);
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
-            if (!aligned && m->hdr.timestamp > tick) {
+            if (!aligned) {
                 tick = m->hdr.timestamp;
                 aligned = true;
             }
@@ -434,35 +431,30 @@ main(int argc, char **argv)
                          m->hdr.src_module, m->hdr.dst_module);
 
             if (coh->h.dstNode != nid) {
-                // Route cross-node: forward via network
                 if (netPort) {
                     sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
                 } else {
                     std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
                                  nid, coherenceMsgTypeName(coh->h.type));
                 }
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
 
-            // dstNode == nid: process locally
-            // From network: process with UBCC, respond back via network
-            // From gem5: process with UBCC, respond back via gem5 port
             if (fromNetwork) {
-                // Message from net for this node: process+respond locally
                 CoherenceMessage response;
                 bool hasResponse = false;
                 if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
                     sendCoh(netPort, tick, coh->h.srcNode, 1, response);
                 }
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
 
             if (!isUbccIngress(coh->h.type)) {
                 std::fprintf(stderr, "[ubio:%d] drop unsupported local type=%s\n",
                              nid, coherenceMsgTypeName(coh->h.type));
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
 
@@ -471,35 +463,51 @@ main(int argc, char **argv)
             if (!handleUbccMessage(ubcc, nid, *coh, response, hasResponse)) {
                 std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
                              nid, coherenceMsgTypeName(coh->h.type));
-                m = srcPort->recv(visible);
+                m = port->recv(tick, &st);
                 continue;
             }
 
             if (hasResponse) {
                 Port *out = fromNetwork ? netPort : gem5Port;
-                uint32_t dstModule = fromNetwork ? coh->h.srcNode : nid;
-                uint32_t dstPort = fromNetwork ? 1 : 0;
-                sendCoh(out, tick, dstModule, dstPort, response);
+                sendCoh(out, tick, fromNetwork ? (uint32_t)coh->h.srcNode : (uint32_t)nid,
+                        fromNetwork ? 1U : 0U, response);
             }
 
-            m = srcPort->recv(visible);
+            m = port->recv(tick, &st);
         }
     };
 
     while (!done) {
-        handleIncoming(gem5Port, gem5Port, false);
-        handleIncoming(netPort, netPort, true);
+        // 1. Heartbeat: emitSync for all ports (even silent ones)
+        gem5Port->emitSync(tick);
+        if (netPort) netPort->emitSync(tick);
 
+        // 2. Drain all ready messages from each port
+        pollAndProcess(gem5Port, gem5Port, false);
+        pollAndProcess(netPort, netPort, true);
+
+        // 3. Advance local time via safeTs (min across all ports)
+        bool hadWork = false;
         if (aligned) {
-            gem5Port->emitSync(tick);
+            uint64_t minTs = gem5Port->safeTs(tick);
             if (netPort) {
-                netPort->emitSync(tick);
+                uint64_t netSafe = netPort->safeTs(tick);
+                if (netSafe < minTs) minTs = netSafe;
             }
-            ++tick;
+            if (minTs > tick) {
+                tick = minTs;
+                hadWork = true;
+            } else {
+                ++tick;
+            }
         } else {
             ++tick;
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+
+        // Standalone process: yield CPU when idle (no gem5 event loop)
+        if (!hadWork) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
     }
 
     return 0;
