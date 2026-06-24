@@ -398,20 +398,27 @@ main(int argc, char **argv)
                          m->hdr.src_module, m->hdr.dst_module);
 
             if (coh->h.dstNode != nid) {
+                // Route cross-node: forward via network
                 if (netPort) {
                     sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
-                    std::fprintf(stderr, "[ubio:%d] forward %s to net dstNode=%u\n",
-                                 nid, coherenceMsgTypeName(coh->h.type), coh->h.dstNode);
                 } else {
-                    std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net port)\n",
+                    std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
                                  nid, coherenceMsgTypeName(coh->h.type));
                 }
                 m = srcPort->recv(visible);
                 continue;
             }
 
-            if (fromNetwork && isGem5Ingress(coh->h.type)) {
-                sendCoh(gem5Port, tick, nid, 0, *coh);
+            // dstNode == nid: process locally
+            // From network: process with UBCC, respond back via network
+            // From gem5: process with UBCC, respond back via gem5 port
+            if (fromNetwork) {
+                // Message from net for this node: process+respond locally
+                CoherenceMessage response;
+                bool hasResponse = false;
+                if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
+                    sendCoh(netPort, tick, coh->h.srcNode, 1, response);
+                }
                 m = srcPort->recv(visible);
                 continue;
             }
