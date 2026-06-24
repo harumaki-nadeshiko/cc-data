@@ -10,7 +10,7 @@
 
 #include "base/types.hh"
 #include "mem/ruby/common/DataBlock.hh"
-#include "mem/ruby/protocol/chi/ep/EPBackend.hh"  // F3: GrantDataSource
+#include "mem/ruby/protocol/chi/ep/CoherenceMessage.hh"
 #include "mem/ruby/protocol/chi/ep/ResidentDir.hh"
 
 namespace gem5
@@ -21,7 +21,15 @@ namespace ruby
 
 class RubySystem;
 class UBIOModule;
-class EPBackend;
+
+class UBCCHostIf
+{
+  public:
+    virtual ~UBCCHostIf() = default;
+    virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
+    virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
+    virtual void hostIssueBackstoreDelete(uint64_t pa) = 0;
+};
 
 // Forward declarations for M5 outer protocol types.
 // These mirror the enums in EPBackend.hh but are used internally.
@@ -212,7 +220,7 @@ class UBCCController
 
     /** Set the local router for sending messages (e.g., UpgradeAckNotify). */
     void setRouter(UBIOModule *router) { _router = router; }
-    void setBackend(EPBackend *backend) { _backend = backend; }
+    void setHost(UBCCHostIf *host) { _host = host; }
 
     // ---- v4-dual-socket: Query Line Metadata (read-only snapshot) ----
     /**
@@ -581,7 +589,7 @@ class UBCCController
 
     /** Local UBIOModule *for sending messages (e.g., UpgradeAckNotify). */
     UBIOModule *_router = nullptr;
-    EPBackend *_backend = nullptr;
+    UBCCHostIf *_host = nullptr;
 
     // Q3: Estimated UBCC-to-remote-UBCC interconnect latency (ticks).
     // Controls how long pendingOp=3 blocks before grant is released.

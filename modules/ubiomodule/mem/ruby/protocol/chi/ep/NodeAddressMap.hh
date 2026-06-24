@@ -1,0 +1,6 @@
+#ifndef MODULES_UBIOMODULE_FORWARD_NODEADDRESSMAP_HH
+#define MODULES_UBIOMODULE_FORWARD_NODEADDRESSMAP_HH
+
+#include "modules/ubiomodule/NodeAddressMap.hh"
+
+#endif

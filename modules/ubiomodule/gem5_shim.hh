@@ -50,6 +50,10 @@ struct DataBlock {
     uint8_t data[64];
     DataBlock(int sz = 64) {}
     uint8_t getByte(int i) const { return (i >= 0 && i < 64) ? data[i] : 0; }
+    const uint8_t* getData(int off, int len) const {
+        (void)len;
+        return (off >= 0 && off < 64) ? (data + off) : data;
+    }
     void setData(const uint8_t* src, int off, int len) {
         for (int i = 0; i < len && off+i < 64; i++) data[off+i] = src[i];
     }

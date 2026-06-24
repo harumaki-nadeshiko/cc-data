@@ -10,7 +10,6 @@
 #include "debug/RubyEP.hh"
 #include "debug/UBInvariant.hh"
 #include "debug/UBLatency.hh"
-#include "mem/ruby/protocol/chi/ep/EPBackend.hh"
 #include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
 #include "mem/ruby/protocol/chi/ep/UBIOModule.hh"
 #include "mem/ruby/system/RubySystem.hh"
@@ -213,8 +212,8 @@ UBCCController::handleResidentMiss(
     pr.reqId = reqId;
     enqueueResidentWaiter(line_pa, pr);
 
-    if (_backend) {
-        _backend->issueBackstoreRead(line_pa);
+    if (_host) {
+        _host->hostIssueBackstoreRead(line_pa);
     }
     return ResidentAccessResult::Queued;
 }
@@ -283,8 +282,8 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
 void
 UBCCController::scheduleBackstoreWrite(uint64_t linePa)
 {
-    if (_backend) {
-        _backend->issueBackstoreWrite(linePa);
+    if (_host) {
+        _host->hostIssueBackstoreWrite(linePa);
     } else {
         onBackstoreWriteAck(linePa);
     }
@@ -293,8 +292,8 @@ UBCCController::scheduleBackstoreWrite(uint64_t linePa)
 void
 UBCCController::scheduleBackstoreDelete(uint64_t linePa)
 {
-    if (_backend) {
-        _backend->issueBackstoreDelete(linePa);
+    if (_host) {
+        _host->hostIssueBackstoreDelete(linePa);
     } else {
         onBackstoreDeleteAck(linePa, true);
     }
@@ -2793,4 +2792,3 @@ UBCCController::validateSharersCanonical(uint64_t pa) const
 
 } // namespace ruby
 } // namespace gem5
-

@@ -1,0 +1,6 @@
+#ifndef MODULES_UBIOMODULE_FORWARD_BACKSTORETYPES_HH
+#define MODULES_UBIOMODULE_FORWARD_BACKSTORETYPES_HH
+
+#include "modules/ubiomodule/BackstoreTypes.hh"
+
+#endif

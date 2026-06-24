@@ -13,6 +13,12 @@ namespace gem5
 namespace ruby
 {
 
+enum class GrantDataSource : uint8_t {
+    HomeMemory = 0,
+    RecallBuffer = 1,
+    NoData = 2,
+};
+
 // ---- Message Type Enumeration ----
 enum class CoherenceMessageType : uint16_t {
     ReadReq,
