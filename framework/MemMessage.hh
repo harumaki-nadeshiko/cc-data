@@ -13,6 +13,8 @@ enum class MemMessageType : uint32_t {
     CONTROL_SYNC    = 0,
     TERMINATE       = 1,
     COH_MSG         = 2,
+    BARRIER_REACHED = 3,
+    BARRIER_RELEASE = 4,
 };
 
 struct MemMessageHeader {
