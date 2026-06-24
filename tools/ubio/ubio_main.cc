@@ -375,18 +375,30 @@ main(int argc, char **argv)
             }
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::BARRIER_REACHED)) {
                 uint32_t mask = (uint32_t)m->hdr.req_id;
-                std::fprintf(stderr,"[ubio:%d] BARRIER_REACHED mask=0x%x\n", nid, mask);
-                // Count unique nodes that have reached barrier
-                static std::map<uint32_t, std::set<int>> barrier_nodes;
-                barrier_nodes[mask].insert(nid);
-                uint32_t expected = __builtin_popcount(mask);
-                if (barrier_nodes[mask].size() >= expected) {
-                    // All arrived: release barrier
-                    for (int node : barrier_nodes[mask]) {
-                        MemMessage* rel = sendAllocateBuffer ? port.sendAllocateBuffer(tick);
-                        // Send to each node via gem5 port
+                int src = m->hdr.src_module;
+                std::fprintf(stderr,"[ubio:%d] BARRIER_REACHED mask=0x%x src=%d\n", nid, mask, src);
+                // Forward to all other ubios via net, and count locally
+                static std::map<uint32_t, std::set<int>> barrierNodes;
+                barrierNodes[mask].insert(src);
+                if (netPort) {
+                    for (int i = 0; i < 4; ++i) {
+                        if (i != nid) {
+                            MemMessage* fwd = gem5Port->sendAllocateBuffer(m->hdr.timestamp);
+                            if (fwd) { *fwd = *m; fwd->hdr.dst_module = i; netPort->send(fwd); }
+                        }
                     }
-                    barrier_nodes[mask].clear();
+                }
+                uint32_t expected = __builtin_popcount(mask);
+                if (barrierNodes[mask].size() >= expected) {
+                    MemMessage* rel = gem5Port->sendAllocateBuffer(tick);
+                    if (rel) {
+                        rel->hdr.type = (uint32_t)MemMessageType::BARRIER_RELEASE;
+                        rel->hdr.req_id = mask;
+                        rel->hdr.size = sizeof(MemMessageHeader);
+                        gem5Port->send(rel);
+                        std::fprintf(stderr,"[ubio:%d] BARRIER_RELEASE mask=0x%x\n", nid, mask);
+                    }
+                    barrierNodes[mask].clear();
                 }
                 m = srcPort->recv(visible);
                 continue;
@@ -471,57 +483,6 @@ main(int argc, char **argv)
     while (!done) {
         handleIncoming(gem5Port, gem5Port, false);
         handleIncoming(netPort, netPort, true);
-
-        // Cross-process barrier coordinator
-        static std::map<uint32_t, std::set<int>> barrierNodes;
-        if (gem5Port) {
-            MemMessage* m = gem5Port->recv(~0ULL);
-            while (m) {
-                if (m->hdr.type == (uint32_t)MemMessageType::BARRIER_REACHED) {
-                    uint32_t mask = (uint32_t)m->hdr.req_id;
-                    int srcNode = m->hdr.src_module;
-                    barrierNodes[mask].insert(srcNode);
-                    // Forward to other ubios via networksim
-                    if (netPort) {
-                        for (int i = 0; i < 4; ++i) {
-                            if (i != nid) {
-                                MemMessage* fwd = gem5Port->sendAllocateBuffer(m->hdr.timestamp);
-                                if (fwd) { *fwd = *m; fwd->hdr.dst_module = i; netPort->send(fwd); }
-                            }
-                        }
-                    }
-                }
-                m = gem5Port->recv(~0ULL);
-            }
-        }
-        if (netPort) {
-            MemMessage* m = netPort->recv(~0ULL);
-            while (m) {
-                if (m->hdr.type == (uint32_t)MemMessageType::BARRIER_REACHED) {
-                    uint32_t mask = (uint32_t)m->hdr.req_id;
-                    int srcNode = m->hdr.src_module;
-                    barrierNodes[mask].insert(srcNode);
-                }
-                m = netPort->recv(~0ULL);
-            }
-        }
-        // Release barriers that are complete
-        for (auto it = barrierNodes.begin(); it != barrierNodes.end(); ) {
-            uint32_t mask = it->first;
-            uint32_t expected = __builtin_popcount(mask);
-            if (it->second.size() >= expected) {
-                if (gem5Port) {
-                    MemMessage* rel = gem5Port->sendAllocateBuffer(tick);
-                    if (rel) {
-                        rel->hdr.type = (uint32_t)MemMessageType::BARRIER_RELEASE;
-                        rel->hdr.req_id = mask;
-                        rel->hdr.size = sizeof(MemMessageHeader);
-                        gem5Port->send(rel);
-                    }
-                }
-                it = barrierNodes.erase(it);
-            } else { ++it; }
-        }
 
         if (aligned) {
             gem5Port->emitSync(tick);
