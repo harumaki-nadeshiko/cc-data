@@ -264,11 +264,17 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         return true;
       }
 
-      case CoherenceMessageType::RecallResp:
+      case CoherenceMessageType::RecallResp: {
+        bool dataReturned = (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0;
+        bool hasData = (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0;
+        gem5::ruby::DataBlock db(64);
+        if (hasData && dataReturned)
+            std::memcpy(db.data, msg.b.recallResp.data, 64);
         ubcc.processRecallResponse(msg.h.homeLinePa, msg.h.requesterNode,
-                                   (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0,
-                                   msg.h.epoch, msg.h.reqId);
+                                    dataReturned, msg.h.epoch, msg.h.reqId,
+                                    (hasData && dataReturned) ? &db : nullptr);
         return true;
+      }
 
       case CoherenceMessageType::InvalidateAck:
         ubcc.processInvalidationAck(msg.h.homeLinePa, msg.h.requesterNode,
