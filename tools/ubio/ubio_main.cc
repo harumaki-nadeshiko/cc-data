@@ -348,6 +348,7 @@ main(int argc, char **argv)
     }
 
     zmq::context_t ctx(1);
+    std::fprintf(stderr, "[UBIO-START] creating ports...\n"); fflush(stderr);
     Port *gem5Port = new Port("gem5", nid, 0, gem5Ep, gem5Bind, ctx, sw);
     Port *netPort = netEp.empty() ? nullptr :
         new Port("net", nid, 1, netEp, false, ctx, sw);
@@ -360,7 +361,6 @@ main(int argc, char **argv)
                  nid, gem5Ep.c_str(), netEp.empty() ? "<none>" : netEp.c_str(), gem5Bind);
 
     uint64_t tick = 0;
-    bool aligned = false;
     bool done = false;
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork) {
@@ -420,10 +420,6 @@ main(int argc, char **argv)
                 m = port->recv(tick, &st);
                 continue;
             }
-            if (!aligned) {
-                tick = m->hdr.timestamp;
-                aligned = true;
-            }
 
             std::fprintf(stderr, "[ubio:%d] %s recv %s reqId=%lu src=%u dst=%u\n",
                          nid, fromNetwork ? "net" : "gem5",
@@ -477,36 +473,33 @@ main(int argc, char **argv)
         }
     };
 
+    uint64_t loop_count = 0;
     while (!done) {
+        loop_count++;
+        if (loop_count % 10000 == 0) {
+            std::fprintf(stderr, "[UBIO-LOOP] tick=%lu loop=%lu\n", tick, loop_count);
+            fflush(stderr);
+        }
         // 1. Heartbeat: emitSync for all ports (even silent ones)
+        if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-PRE-EMIT] tick=%lu\n", tick); fflush(stderr); }
         gem5Port->emitSync(tick);
+        if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-POST-EMIT] tick=%lu\n", tick); fflush(stderr); }
         if (netPort) netPort->emitSync(tick);
 
         // 2. Drain all ready messages from each port
         pollAndProcess(gem5Port, gem5Port, false);
         pollAndProcess(netPort, netPort, true);
 
-        // 3. Advance local time via safeTs (min across all ports)
-        bool hadWork = false;
-        if (aligned) {
-            uint64_t minTs = gem5Port->safeTs(tick);
-            if (netPort) {
-                uint64_t netSafe = netPort->safeTs(tick);
-                if (netSafe < minTs) minTs = netSafe;
-            }
-            if (minTs > tick) {
-                tick = minTs;
-                hadWork = true;
-            } else {
-                ++tick;
-            }
+        // Always advance via safeTs (even before first message aligned)
+        uint64_t minTs = gem5Port->safeTs(tick);
+        if (netPort) {
+            uint64_t netSafe = netPort->safeTs(tick);
+            if (netSafe < minTs) minTs = netSafe;
+        }
+        if (minTs > tick) {
+            tick = minTs;
         } else {
             ++tick;
-        }
-
-        // Standalone process: yield CPU when idle (no gem5 event loop)
-        if (!hadWork) {
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
     }
 

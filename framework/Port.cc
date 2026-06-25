@@ -18,12 +18,15 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
       _sendBufInUse(false)
 {
     _socket = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
+    // Prevent indefinite blocking: send fails after 10ms if peer not ready
+    int sndtimeo = 10;
+    _socket->set(zmq::sockopt::sndtimeo, sndtimeo);
     try {
         if (bind) _socket->bind(endpoint);
         else      _socket->connect(endpoint);
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] %s(%s) failed: %s\n",
-                     _name.c_str(), bind ? "bind" : "connect",
+                     _name.c_str(), bind?"bind":"connect",
                      endpoint.c_str(), e.what());
     }
 }
@@ -53,7 +56,10 @@ Port::send(MemMessage* msg)
         std::memcpy(zmq_msg.data(), msg, msg->hdr.size);
         _socket->send(zmq_msg, zmq::send_flags::none);
         return true;
-    } catch (const zmq::error_t&) { return false; }
+    } catch (const zmq::error_t& e) {
+        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
+        return false;
+    }
 }
 
 MemMessage*
@@ -61,6 +67,15 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
 {
     ReceiveStatus dummy;
     ReceiveStatus& st = status ? *status : dummy;
+
+    // Debug: track recv calls
+    static int debug_count = 0;
+    debug_count++;
+    if (debug_count % 100000 == 0) {
+        std::fprintf(stderr, "[PORT-RECV-DBG] %s tick=%lu pending=%d lastRxT=%lu count=%d\n",
+                     _name.c_str(), curT, (int)_pending, _lastRxT, debug_count);
+        fflush(stderr);
+    }
 
     // 1. Check pending future message
     if (_pending) {
@@ -83,6 +98,7 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         auto r = _socket->recv(zmq_msg, zmq::recv_flags::dontwait);
         if (!r.has_value()) {
             st = ReceiveStatus::kEmpty;
+            if (debug_count < 5) { std::fprintf(stderr, "[PORT-RECV-EMPTY] %s tick=%lu\n", _name.c_str(), curT); fflush(stderr); }
             return nullptr;
         }
         uint32_t sz = zmq_msg.size();
@@ -91,6 +107,9 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
             return nullptr;
         }
         std::memcpy(&tmp, zmq_msg.data(), sz);
+        std::fprintf(stderr, "[PORT-RECV-GOT] %s tick=%lu msg_ts=%lu sz=%u type=%u\n",
+                     _name.c_str(), curT, tmp.hdr.timestamp, sz, tmp.hdr.type);
+        fflush(stderr);
     } catch (const zmq::error_t&) {
         st = ReceiveStatus::kEmpty;
         return nullptr;

@@ -65,6 +65,7 @@ compile_workloads() {
 
 # ── Start ubio processes ───────────────────────────────────────────
 start_ubio() {
+    # gem5 binds, ubio connects
     for nid in 0 1 2; do
         local ep="ipc:///tmp/ubio_n${nid}"
         local logdir="${LOG_BASE}/ubio_n${nid}"
