@@ -6,7 +6,7 @@
 namespace framework {
 
 Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
-           const std::string& endpoint, bool bind,
+           const std::string& endpoint, bool bindTx,
            zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval)
     : _name(name), _moduleId(module_id), _portId(port_id),
       _ctx(ctx),
@@ -14,24 +14,36 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
       _syncInterval(syncInterval > 0 ? syncInterval : syncWindow),
       _lastSyncTs(0),
       _pending(false), _pendingT(0),
-      _lastRxT(UINT64_MAX),    // no inbound bound yet; debug fallback=0
+      _lastRxT(UINT64_MAX),
       _sendBufInUse(false)
 {
-    _socket = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
-    // Prevent indefinite blocking: send fails after 10ms if peer not ready
+    std::string txEp = endpoint + "_tx";
+    std::string rxEp = endpoint + "_rx";
+
+    _txSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
+    _rxSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
+
     int sndtimeo = 10;
-    _socket->set(zmq::sockopt::sndtimeo, sndtimeo);
+    _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
+
     try {
-        if (bind) _socket->bind(endpoint);
-        else      _socket->connect(endpoint);
+        if (bindTx) {
+            _txSock->bind(txEp);
+            _rxSock->connect(rxEp);
+        } else {
+            _txSock->connect(txEp);
+            _rxSock->bind(rxEp);
+        }
     } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[Port %s] %s(%s) failed: %s\n",
-                     _name.c_str(), bind?"bind":"connect",
-                     endpoint.c_str(), e.what());
+        std::fprintf(stderr, "[Port %s] init(%s,%s) failed: %s\n",
+                     _name.c_str(), txEp.c_str(), rxEp.c_str(), e.what());
     }
 }
 
-Port::~Port() { if (_socket) _socket->close(); }
+Port::~Port() {
+    if (_txSock) _txSock->close();
+    if (_rxSock) _rxSock->close();
+}
 
 MemMessage*
 Port::sendAllocateBuffer(uint64_t timestamp)
@@ -54,12 +66,9 @@ Port::send(MemMessage* msg)
     try {
         zmq::message_t zmq_msg(msg->hdr.size);
         std::memcpy(zmq_msg.data(), msg, msg->hdr.size);
-        _socket->send(zmq_msg, zmq::send_flags::none);
+        _txSock->send(zmq_msg, zmq::send_flags::none);
         return true;
-    } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
-        return false;
-    }
+    } catch (const zmq::error_t&) { return false; }
 }
 
 MemMessage*
@@ -68,16 +77,6 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     ReceiveStatus dummy;
     ReceiveStatus& st = status ? *status : dummy;
 
-    // Debug: track recv calls
-    static int debug_count = 0;
-    debug_count++;
-    if (debug_count % 100000 == 0) {
-        std::fprintf(stderr, "[PORT-RECV-DBG] %s tick=%lu pending=%d lastRxT=%lu count=%d\n",
-                     _name.c_str(), curT, (int)_pending, _lastRxT, debug_count);
-        fflush(stderr);
-    }
-
-    // 1. Check pending future message
     if (_pending) {
         if (_pendingT <= curT) {
             _lastRxT = std::max(_lastRxT, _pendingT);
@@ -91,14 +90,12 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         return nullptr;
     }
 
-    // 2. Pull from ZMQ (non-blocking)
     MemMessage tmp;
     try {
         zmq::message_t zmq_msg;
-        auto r = _socket->recv(zmq_msg, zmq::recv_flags::dontwait);
+        auto r = _rxSock->recv(zmq_msg, zmq::recv_flags::dontwait);
         if (!r.has_value()) {
             st = ReceiveStatus::kEmpty;
-            if (debug_count < 5) { std::fprintf(stderr, "[PORT-RECV-EMPTY] %s tick=%lu\n", _name.c_str(), curT); fflush(stderr); }
             return nullptr;
         }
         uint32_t sz = zmq_msg.size();
@@ -107,18 +104,13 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
             return nullptr;
         }
         std::memcpy(&tmp, zmq_msg.data(), sz);
-        std::fprintf(stderr, "[PORT-RECV-GOT] %s tick=%lu msg_ts=%lu sz=%u type=%u\n",
-                     _name.c_str(), curT, tmp.hdr.timestamp, sz, tmp.hdr.type);
-        fflush(stderr);
     } catch (const zmq::error_t&) {
         st = ReceiveStatus::kEmpty;
         return nullptr;
     }
 
-    // 3. Update inbound time on every received message
     _lastRxT = std::max(_lastRxT, (uint64_t)tmp.hdr.timestamp);
 
-    // 4. Sync messages: return as kSync; caller skips, but _lastRxT updated
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
         st = ReceiveStatus::kSync;
         static thread_local MemMessage result;
@@ -126,7 +118,6 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         return &result;
     }
 
-    // 5. Future data message → cache as pending (single slot)
     if (tmp.hdr.timestamp > curT) {
         _pending = true;
         _pendingT = tmp.hdr.timestamp;
@@ -135,7 +126,6 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         return nullptr;
     }
 
-    // 6. Ready data message
     st = ReceiveStatus::kMessage;
     static thread_local MemMessage result;
     result = tmp;
@@ -145,7 +135,6 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
 bool
 Port::emitSync(uint64_t curTick)
 {
-    // Throttle by _syncInterval (allow first sync unconditionally)
     if (_lastSyncTs > 0 && curTick - _lastSyncTs < _syncInterval)
         return true;
 
@@ -173,18 +162,13 @@ synced_receive_lower_bound(Port** ports, int n, uint64_t tick)
     for (int i = 0; i < n; ++i) {
         Port* p = ports[i];
         if (!p) continue;
-
         p->emitSync(tick);
-
-        // Drain all ready messages and syncs
         MemMessage* m;
         ReceiveStatus st;
         while ((m = p->recv(tick, &st)) != nullptr) {
             if (st == ReceiveStatus::kEmpty ||
                 st == ReceiveStatus::kPendingFuture) break;
-            // kSync and kMessage: consume (sync already updated _lastRxT)
         }
-
         uint64_t b = p->safeTs(tick);
         if (b < safe) safe = b;
     }
