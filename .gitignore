@@ -13,4 +13,6 @@ tmp/
 tmp_logs/
 gem5_1/
 gem5_2/
+states/logs/
+/logs/
 states/
