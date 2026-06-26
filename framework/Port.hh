@@ -1,6 +1,7 @@
 #ifndef FRAMEWORK_PORT_HH
 #define FRAMEWORK_PORT_HH
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <zmq.hpp>
@@ -10,39 +11,67 @@
 namespace framework {
 
 enum class ReceiveStatus {
-    kMessage,
-    kEmpty,
-    kSync,
-    kPendingFuture,
+    kMessage,        // message ready, timestamp <= curT
+    kEmpty,          // no message available
+    kSync,           // sync control message (caller skips, _lastRxT updated)
+    kPendingFuture,  // future message cached, timestamp > curT
+};
+
+enum class PortState {
+    INIT,
+    RX_BOUND,
+    TX_CONNECTED,
+    HANDSHAKING,
+    READY,
+    PEER_LOST,
 };
 
 class Port
 {
   public:
     /**
-     * Full-duplex Port using TWO ZMQ PAIR sockets.
+     * Duplex Port — two separate ZMQ PAIR sockets (tx + rx).
      *
-     * @param name        Human-readable name
-     * @param module_id   Launcher-assigned module ID
-     * @param port_id     Port ID within this module
-     * @param endpoint    Base IPC endpoint (suffix _tx and _rx appended automatically)
-     * @param bind_tx     If true, we bind _tx (send) socket; peer connects
-     * @param ctx         ZMQ context
-     * @param syncWindow  Safety window for safeTs
-     * @param syncInterval Sync throttle; 0 = default to syncWindow
+     * This port binds its _rxSock to local_rx_endpoint for RECEIVING,
+     * and connects its _txSock to peer_rx_endpoint for SENDING.
      *
-     * TX channel: this side binds _tx, peer connects _tx (we send, peer recvs)
-     * RX channel: peer binds _rx, we connect _rx (peer sends, we recv)
+     * The peer's Port mirrors this: its local_rx_ep = our peer_rx_ep,
+     * its peer_rx_ep = our local_rx_ep.
+     *
+     * After bind/connect, a PORT_HELLO / PORT_HELLO_ACK handshake
+     * establishes the READY state before any data traffic.
      */
     Port(const std::string& name,
          uint32_t module_id, uint32_t port_id,
+         const std::string& local_rx_endpoint,
+         const std::string& peer_rx_endpoint,
+         zmq::context_t& ctx,
+         uint64_t syncWindow,
+         uint64_t syncInterval = 0);
+
+    // ---- Deprecated single-endpoint constructor (to be removed in Phase B) ----
+    Port(const std::string& name,
+         uint32_t module_id, uint32_t port_id,
          const std::string& endpoint,
-         bool bind_tx,
+         bool bind,
          zmq::context_t& ctx,
          uint64_t syncWindow,
          uint64_t syncInterval = 0);
 
     ~Port();
+
+    // ---- Handshake / lifecycle ----
+
+    /** Drive the internal handshake state machine. Call periodically until isReady(). */
+    void pollHandshake();
+
+    /** True once both PORT_HELLO and PORT_HELLO_ACK exchanged. */
+    bool isReady() const { return _state == PortState::READY; }
+
+    /** Force peer-lost state (used on timeout). */
+    void failClosed(const char* reason);
+
+    // ---- Data plane (allowed only in READY state) ----
 
     MemMessage* sendAllocateBuffer(uint64_t timestamp);
     bool send(MemMessage* msg);
@@ -65,26 +94,47 @@ class Port
     uint32_t moduleId() const { return _moduleId; }
     uint32_t portId() const { return _portId; }
 
+    // ---- deprecated wrappers ----
     uint64_t nextVisibleTick() const { return receiveTimestamp(); }
     void advanceVisibleTick(uint64_t t) {
         if (t > _lastRxT) _lastRxT = t;
     }
 
+    /** Expose state for launcher health checks. */
+    PortState state() const { return _state; }
+
   private:
+    void tryHandshakeStep();
+
+    void sendHello();       // send PORT_HELLO on tx
+    void sendHelloAck();    // send PORT_HELLO_ACK on tx
+    bool tryRecvHello();    // try recv PORT_HELLO on rx → reply ACK
+    bool tryRecvHelloAck(); // try recv PORT_HELLO_ACK on rx → READY
+    bool tryRecvControl();  // recv any control (hello/ack/terminate) on rx
+
     std::string _name;
     uint32_t _moduleId, _portId;
     zmq::context_t& _ctx;
 
-    // TX socket: we bind (_bindTx=true) → used for send
-    std::unique_ptr<zmq::socket_t> _txSock;
-    // RX socket: we connect (_bindTx=false → peer binds) → used for recv
-    std::unique_ptr<zmq::socket_t> _rxSock;
+    std::unique_ptr<zmq::socket_t> _txSock;  // send on this
+    std::unique_ptr<zmq::socket_t> _rxSock;  // recv on this
 
-    uint64_t _syncWindow, _syncInterval, _lastSyncTs;
+    PortState _state;
+
+    // Hello handshake
+    bool _helloSent, _helloRecvd, _ackSent, _ackRecvd;
+
+    uint64_t _syncWindow;
+    uint64_t _syncInterval;
+    uint64_t _lastSyncTs;
+
+    // Single-slot future message cache
     bool _pending;
     uint64_t _pendingT;
     MemMessage _pendingMsg;
+
     uint64_t _lastRxT;
+
     MemMessage _sendBuf;
     bool _sendBufInUse;
 };

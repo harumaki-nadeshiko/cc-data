@@ -1,6 +1,8 @@
 #ifndef MODULES_UBIOMODULE_GEM5_SHIM_HH
 #define MODULES_UBIOMODULE_GEM5_SHIM_HH
 
+#ifndef TRACING_ON  // Only for standalone ubio, skip in gem5 context
+
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -79,4 +81,5 @@ namespace gem5 { namespace ruby {
     extern Tick g_current_tick;
 } }
 
+#endif // TRACING_ON
 #endif // MODULES_UBIOMODULE_GEM5_SHIM_HH

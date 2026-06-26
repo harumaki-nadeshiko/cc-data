@@ -152,6 +152,10 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
             &recallNeeded, &recallOwnerNode,
             &dataSource, &authEpoch);
 
+        // BUSY — don't send poison ReadResp; caller will retry
+        if (static_cast<int>(grant) < 0)
+            return true;
+
         int pendingInvCount = ubcc.getPendingInvalidationCount(msg.h.homeLinePa);
         uint64_t pendingInvMask = ubcc.getPendingInvalidationMask(msg.h.homeLinePa);
         uint64_t committedEpoch = ubcc.getEpochForLine(msg.h.homeLinePa);
@@ -427,14 +431,19 @@ main(int argc, char **argv)
                          m->hdr.src_module, m->hdr.dst_module);
 
             if (coh->h.dstNode != nid) {
-                if (netPort) {
-                    sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
-                } else {
-                    std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
-                                 nid, coherenceMsgTypeName(coh->h.type));
+                // If this PA belongs to our local DSM, force local processing
+                // (fixes misrouted ClearReq etc. with wrong dstNode)
+                if (!ubcc.isDsmAddr(coh->h.homeLinePa)) {
+                    if (netPort) {
+                        sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
+                    } else {
+                        std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
+                                     nid, coherenceMsgTypeName(coh->h.type));
+                    }
+                    m = port->recv(tick, &st);
+                    continue;
                 }
-                m = port->recv(tick, &st);
-                continue;
+                // local DSM: fall through to normal processing
             }
 
             if (fromNetwork) {
@@ -442,6 +451,9 @@ main(int argc, char **argv)
                 bool hasResponse = false;
                 if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
                     sendCoh(netPort, tick, coh->h.srcNode, 1, response);
+                } else if (isGem5Ingress(coh->h.type)) {
+                    // Response from remote UBCC → forward to local gem5
+                    sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
                 }
                 m = port->recv(tick, &st);
                 continue;

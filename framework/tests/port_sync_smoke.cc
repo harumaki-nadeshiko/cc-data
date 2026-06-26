@@ -14,6 +14,17 @@ int main()
     Port port_a("portA", 10, 1, "ipc:///tmp/test_sync_pair", true,  ctx, 1000);
     Port port_b("portB", 20, 2, "ipc:///tmp/test_sync_pair", false, ctx, 1000);
 
+    // Handshake: poll both ports until READY
+    for (int i = 0; i < 200; ++i) {
+        port_a.pollHandshake();
+        port_b.pollHandshake();
+        if (port_a.isReady() && port_b.isReady()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!port_a.isReady() || !port_b.isReady()) {
+        std::fprintf(stderr, "FAIL: handshake timeout\n"); return 1;
+    }
+
     // A -> B: COH_MSG
     MemMessage* buf = port_a.sendAllocateBuffer(50);
     if (!buf) { failures++; std::fprintf(stderr, "FAIL: alloc\n"); }
@@ -70,7 +81,7 @@ int main()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    // A recv at t=1000 — sync may arrive first, drain it
+    // A recv at t=1000 — sync may arrive first, drain it; COH_MSG delivers immediately
     MemMessage* fm = nullptr;
     for (int r=0; r<10; ++r) {
         fm = port_a.recv(1000, &st);
@@ -79,26 +90,15 @@ int main()
             std::printf("[A] drained sync\n");
             continue;
         }
-        break;
-    }
-    if (st != ReceiveStatus::kPendingFuture) {
-        failures++; std::fprintf(stderr, "FAIL: expected kPendingFuture, got %d\n", (int)st);
-    } else {
-        std::printf("[A] future msg pending (st=PendingFuture)\n");
-    }
-
-    // A tries recv at t=6000 -> should get the message
-    for (int r=0; r<10; ++r) {
-        fm = port_a.recv(6000, &st);
-        if (!fm) break;
-        if (st == ReceiveStatus::kSync) { std::printf("[A] drained sync\n"); continue; }
+        if (st == ReceiveStatus::kMessage && fm->hdr.req_id == 99) {
+            std::printf("[A] got immediate COH_MSG req_id=%lu (ts bypass)\n", fm->hdr.req_id);
+            break;
+        }
         break;
     }
     if (!fm || st != ReceiveStatus::kMessage || fm->hdr.req_id != 99) {
         failures++;
-        std::fprintf(stderr, "FAIL: expected future msg at t=6000, req=99, st=%d\n", (int)st);
-    } else {
-        std::printf("[A] got future msg req_id=%lu\n", fm->hdr.req_id);
+        std::fprintf(stderr, "FAIL: expected immediate COH_MSG at t=1000, req=99, st=%d\n", (int)st);
     }
 
     // safeTs test

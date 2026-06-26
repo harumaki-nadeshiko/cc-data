@@ -23,8 +23,8 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 
 # ── Cleanup: kill everything ───────────────────────────────────────
 cleanup() {
-    local all_pids="$UBIO_PIDS $GEM5_PIDS"
-    [ -z "$all_pids" ] && return
+    local all_pids="$UBIO_PIDS $GEM5_PIDS $NSIM_PID"
+    [ -z "${all_pids// /}" ] && return
     echo "[cleanup] Terminating all processes..."
     for pid in $all_pids; do
         kill $pid 2>/dev/null || true
@@ -63,19 +63,58 @@ compile_workloads() {
     done
 }
 
-# ── Start ubio processes ───────────────────────────────────────────
-start_ubio() {
-    # gem5 binds, ubio connects
+# ── Start gem5 first, wait for Port bind, then ubio ─────────────────
+start_all() {
+    # Clean up stale IPC endpoints
+    rm -rf /tmp/ubio_n* /tmp/networksim_*
+
+    # Start networksim first (must bind before anyone connects)
+    local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
+    local NSIM_BIN="$ROOT_DIR/modules/networksim/networksim"
+    if [ -x "$NSIM_BIN" ]; then
+        echo "[launch] Starting networksim..."
+        "$NSIM_BIN" "$TOPO" &
+        NSIM_PID=$!
+        sleep 1
+    else
+        echo "[launch] WARNING: no networksim binary at $NSIM_BIN"
+    fi
+
+    # Start gem5 in background, wait for Port creation
+    echo "[launch] Starting gem5..."
+    UBIO_PORT_ENABLE=-1 "$GEM5_BIN" \
+        --outdir="${ROOT_DIR}/m5out/e2e_mp/tc${TC_NUM}" \
+        "$SCRIPT_DIR/test_e2e.py" --tc=${TC_NUM} \
+        >"${LOG_BASE}/gem5_tc${TC_NUM}/stdout.log" \
+        2>"${LOG_BASE}/gem5_tc${TC_NUM}/stderr.log" &
+    GEM5_PID=$!
+    
+    # Wait for gem5 to bind Port (STEP5 message)
+    echo "[launch] Waiting for gem5 to bind..."
+    local gem5_stdout="${LOG_BASE}/gem5_tc${TC_NUM}/stdout.log"
+    for i in $(seq 1 60); do
+        if grep -q "STEP5.*Port enabled" "$gem5_stdout" 2>/dev/null; then
+            echo "[launch] Gem5 Port bound after ${i}s"
+            break
+        fi
+        if ! kill -0 $GEM5_PID 2>/dev/null; then
+            echo "[launch] Gem5 exited early!"
+            return 1
+        fi
+        sleep 1
+    done
+    
+    # Now start ubio (connects to already-bound endpoints)
     for nid in 0 1 2; do
         local ep="ipc:///tmp/ubio_n${nid}"
+        local netep="ipc:///tmp/networksim_m${nid}_p1"
         local logdir="${LOG_BASE}/ubio_n${nid}"
         mkdir -p "$logdir"
-        "$UBIO_BIN" --gem5-ep="$ep" --node="$nid" \
+        "$UBIO_BIN" --gem5-ep="$ep" --net-ep="$netep" --node="$nid" \
             >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
         UBIO_PIDS="$UBIO_PIDS $!"
         echo "[launch] ubio n${nid} pid=$! log=$logdir"
     done
-    sleep 0.5
     echo "[launch] $(echo $UBIO_PIDS | wc -w) ubio processes running"
 }
 
@@ -101,6 +140,7 @@ watchdog() {
 # ── Run single TC ──────────────────────────────────────────────────
 run_tc() {
     local tc=$1
+    TC_NUM=$tc
     local logdir="${LOG_BASE}/gem5_tc${tc}"
     local outdir="${ROOT_DIR}/m5out/e2e_mp/tc${tc}"
     rm -rf "$outdir" "$logdir"
@@ -109,63 +149,41 @@ run_tc() {
     echo ""
     echo "=== TC${tc} (multi-process) ==="
 
+    start_all
+    local gem5_pid=$GEM5_PID
+
+    # Wait for gem5 with timeout
     local timeout_val=300
-
-    # Start gem5 in background
-    UBIO_PORT_ENABLE=-1 "$GEM5_BIN" \
-        --outdir="$outdir" \
-        "$SCRIPT_DIR/test_e2e.py" --tc=${tc} \
-        >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
-    local gem5_pid=$!
-    GEM5_PIDS="$gem5_pid"
-
-    echo "[gem5] pid=$gem5_pid log=$logdir"
-
-    # Start watchdog
-    watchdog $gem5_pid &
-    local wd_pid=$!
-
-    # Wait with timeout
     local waited=0
     local ec=0
     while kill -0 $gem5_pid 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
         if [ $waited -ge $timeout_val ]; then
-            echo "[gem5] TIMEOUT after ${timeout_val}s"
+            echo "  TIMEOUT after ${timeout_val}s"
             kill $gem5_pid 2>/dev/null || true
             ec=124
             break
         fi
     done
-
     if [ $ec -ne 124 ]; then
         wait $gem5_pid 2>/dev/null && ec=$? || ec=$?
     fi
-    kill $wd_pid 2>/dev/null || true
-    wait $wd_pid 2>/dev/null || true
 
     # Kill ubio after gem5 done
-    for pid in $UBIO_PIDS; do
-        kill $pid 2>/dev/null || true
-    done
+    for pid in $UBIO_PIDS; do kill $pid 2>/dev/null || true; done
     sleep 0.5
 
     # Parse result
     if grep -q "PASSED" "$logdir/stdout.log" 2>/dev/null; then
-        echo "  TC${tc} PASSED"
-        return 0
+        echo "  TC${tc} PASSED"; return 0
     elif grep -q "FAILED" "$logdir/stdout.log" 2>/dev/null; then
-        local reason=$(grep "FAILED" "$logdir/stdout.log" | head -1)
-        echo "  TC${tc} FAILED: $reason"
-        return 1
+        echo "  TC${tc} FAILED"; return 1
     else
         case $ec in
             0)   echo "  TC${tc} NO RESULT" ;;
-            124) echo "  TC${tc} TIMEOUT (${timeout_val}s)" ;;
-            *)   echo "  TC${tc} CRASHED (exit=$ec)"
-                 grep -E "panic|fatal|Aborted|assert" "$logdir/stderr.log" 2>/dev/null | head -3
-                 grep -E "panic|fatal|Aborted|assert" "$logdir/stdout.log" 2>/dev/null | head -3 ;;
+            124) echo "  TC${tc} TIMEOUT" ;;
+            *)   echo "  TC${tc} CRASHED (exit=$ec)" ;;
         esac
         return 1
     fi
@@ -179,7 +197,6 @@ mkdir -p "$LOG_BASE"
 
 compile_workloads
 compile_ubio
-start_ubio
 
 TC="${1:---all}"
 PASS=0; FAIL=0

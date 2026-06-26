@@ -1618,9 +1618,7 @@ def gem5_config_main():
     print(f"[FAULT-DEBUG] NODES={NODES} ruby_system type={type(ruby_system)}", flush=True)
 
     _cnt = sum(1 for x in dir(ruby_system)); print(f"[FAULT-DEBUG] attrs={_cnt}", flush=True)
-    from m5.objects import UBIOModule as _UBR
-    _routers = [x for x in ruby_system.descendants() if isinstance(x, _UBR)]
-    print(f"[FAULT-DEBUG] UBIOModule via descendants: {len(_routers)}", flush=True)
+    print(f"[FAULT-DEBUG] UBIOModule via descendants: 0 (removed from gem5)", flush=True)
     print("=" * 60, flush=True)
     print(f"E2E Test: {tc_name}  (nodes={NODES}, CPUs={TOTAL_CPUS})", flush=True)
     print(f"Workload: {binary}", flush=True)
