@@ -63,16 +63,24 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
       _lastRxT(UINT64_MAX),
       _sendBufInUse(false)
 {
-    // Deprecated: single PAIR socket, bi-directional on one endpoint.
+    // Deprecated: dual PAIR sockets for full-duplex IPC.
+    // bind=true: rx binds {ep}_rx, tx connects {ep}_tx
+    // bind=false: rx binds {ep}_tx, tx connects {ep}_rx
+    // This ensures: gem5.tx→{ep}_tx→ubio.rx  and  ubio.tx→{ep}_rx→gem5.rx
     _rxSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
-    _txSock = nullptr;  // send/recv share _rxSock
+    _txSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
 
     int sndtimeo = 10;
-    _rxSock->set(zmq::sockopt::sndtimeo, sndtimeo);
+    _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
 
     try {
-        if (bind) _rxSock->bind(endpoint);
-        else      _rxSock->connect(endpoint);
+        if (bind) {
+            _rxSock->bind(endpoint + "_rx");
+            _txSock->connect(endpoint + "_tx");
+        } else {
+            _rxSock->bind(endpoint + "_tx");
+            _txSock->connect(endpoint + "_rx");
+        }
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] %s(%s) failed: %s\n",
                      _name.c_str(), bind?"bind":"connect",
@@ -253,6 +261,9 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         zmq::message_t zmq_msg;
         auto r = _rxSock->recv(zmq_msg, zmq::recv_flags::dontwait);
         if (!r.has_value()) {
+            static int empty_ct = 0;
+            if (++empty_ct <= 3)
+                std::fprintf(stderr, "[PORT-RECV-EMPTY] %s tick=%lu\n", _name.c_str(), curT);
             st = ReceiveStatus::kEmpty;
             return nullptr;
         }
@@ -289,6 +300,12 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     st = ReceiveStatus::kMessage;
     static thread_local MemMessage result;
     result = tmp;
+    static int coh_ct = 0;
+    if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::COH_MSG)) {
+        if (++coh_ct <= 5)
+            std::fprintf(stderr, "[PORT-RECV-COH] %s tick=%lu msg_ts=%lu sz=%u\n",
+                         _name.c_str(), curT, tmp.hdr.timestamp, tmp.hdr.size);
+    }
     return &result;
 }
 

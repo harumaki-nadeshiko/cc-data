@@ -23,13 +23,13 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 
 # ── Cleanup: kill everything ───────────────────────────────────────
 cleanup() {
-    local all_pids="$UBIO_PIDS $GEM5_PIDS $NSIM_PID"
+    local all_pids="${UBIO_PIDS:-} ${GEM5_PIDS:-} ${NSIM_PID:-}"
     [ -z "${all_pids// /}" ] && return
     echo "[cleanup] Terminating all processes..."
-    for pid in $all_pids; do
+    for pid in ${all_pids}; do
         kill $pid 2>/dev/null || true
     done
-    for pid in $all_pids; do
+    for pid in ${all_pids}; do
         wait $pid 2>/dev/null || true
     done
     echo "[cleanup] Done"
@@ -42,7 +42,7 @@ compile_ubio() {
     for f in BackstoreSchemaA BackstoreSchemaC BackstoreOrganization BackstoreTypes; do
         [ -f "$MODULES_DIR/${f}.hh" ] && ln -sf "$MODULES_DIR/${f}.hh" "$EP_DIR/${f}.hh" 2>/dev/null
     done
-    local srcs="$MODULES_DIR/UBCCController.cc $MODULES_DIR/ResidentDir.cc $MODULES_DIR/BackstoreSchemaA.cc $MODULES_DIR/BackstoreSchemaC.cc"
+    local srcs="$MODULES_DIR/UBCCController.cc $MODULES_DIR/ResidentDir.cc $MODULES_DIR/BackstoreSchemaA.cc $MODULES_DIR/BackstoreSchemaC.cc $MODULES_DIR/NodeAddressMap.cc"
     g++ -std=c++17 -O2 \
         -I"$MODULES_DIR" -I"$MODULES_DIR/mem/ruby" \
         -I"$ROOT_DIR" -I"$ROOT_DIR/thirdparty/zeromq/include" \
@@ -73,7 +73,7 @@ start_all() {
     local NSIM_BIN="$ROOT_DIR/modules/networksim/networksim"
     if [ -x "$NSIM_BIN" ]; then
         echo "[launch] Starting networksim..."
-        "$NSIM_BIN" "$TOPO" &
+        "$NSIM_BIN" "$TOPO" >"${LOG_BASE}/nsim.log" 2>&1 &
         NSIM_PID=$!
         sleep 1
     else

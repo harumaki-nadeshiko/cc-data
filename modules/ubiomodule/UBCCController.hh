@@ -12,6 +12,7 @@
 #include "mem/ruby/common/DataBlock.hh"
 #include "mem/ruby/protocol/chi/ep/CoherenceMessage.hh"
 #include "mem/ruby/protocol/chi/ep/ResidentDir.hh"
+#include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
 
 namespace gem5
 {
@@ -29,6 +30,19 @@ class UBCCHostIf
     virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
     virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
     virtual void hostIssueBackstoreDelete(uint64_t pa) = 0;
+};
+
+/**
+ * Outbound sender for control messages initiated by UBCC.
+ * In standalone ubio, ubio_main injects an implementation that routes
+ * via gem5Port (local) or netPort (remote via networksim).
+ */
+class UBCCOutboundIf
+{
+  public:
+    virtual ~UBCCOutboundIf() = default;
+    virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
+    virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
 };
 
 // Forward declarations for M5 outer protocol types.
@@ -221,6 +235,7 @@ class UBCCController
     /** Set the local router for sending messages (e.g., UpgradeAckNotify). */
     void setRouter(UBIOModule *router) { _router = router; }
     void setHost(UBCCHostIf *host) { _host = host; }
+    void setOutbound(UBCCOutboundIf *outbound) { _outbound = outbound; }
 
     // ---- v4-dual-socket: Query Line Metadata (read-only snapshot) ----
     /**
@@ -590,6 +605,8 @@ class UBCCController
     /** Local UBIOModule *for sending messages (e.g., UpgradeAckNotify). */
     UBIOModule *_router = nullptr;
     UBCCHostIf *_host = nullptr;
+    UBCCOutboundIf *_outbound = nullptr;
+    NodeAddressMap _addrMap{3, 1, 128ULL * 1024 * 1024};
 
     // Q3: Estimated UBCC-to-remote-UBCC interconnect latency (ticks).
     // Controls how long pendingOp=3 blocks before grant is released.
@@ -771,6 +788,14 @@ class UBCCController
 
     // Generic invariant warning counter
     uint64_t _invariantWarnCount;
+
+    // ---- v4 fanout helpers (home UBCC direct invalidation) ----
+    bool fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
+                                 uint64_t committedEpoch, uint64_t reqId,
+                                 int requesterNode,
+                                 UBCC_OuterReqType reqType, bool writeIntent);
+    bool emitUpgradeAckNotify(int dstNode, uint64_t linePa,
+                              uint64_t reservedEpoch, uint64_t reqId);
 };
 
 } // namespace ruby

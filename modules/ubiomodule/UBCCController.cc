@@ -682,6 +682,11 @@ UBCCController::processOuterRequest(
                         if (outAuthEpoch) *outAuthEpoch = invOreq->baseEpoch;
                     }
                     _invalidationCount++;
+                    // Fanout InvalidateReq to all sharers
+                    fanoutInvalidateTargets(line_pa, otherSharers,
+                                             entry.epoch, reqId,
+                                             requesterNode,
+                                             reqType, writeIntent);
                     // Return BUSY — invalidation must complete before grant
                     return static_cast<UBCC_OuterGrantType>(-1);
                 } else {
@@ -2626,6 +2631,58 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
     if (qit->second.empty()) {
         _pendingRequesters.erase(qit);
     }
+}
+
+
+// ---- v4: Home UBCC direct fanout ----
+
+bool
+UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
+                                        uint64_t committedEpoch, uint64_t reqId,
+                                        int requesterNode,
+                                        UBCC_OuterReqType reqType, bool writeIntent)
+{
+    if (!_outbound) {
+        warn("UBCC node_id=%d: fanoutInvalidateTargets called with no outbound sender\n",
+             _nodeId);
+        return false;
+    }
+
+    const uint64_t offset = _addrMap.dsmOffset(linePa);
+    uint64_t remaining = targetMask;
+
+    while (remaining) {
+        int target = __builtin_ctzll(remaining);
+        remaining &= (remaining - 1);
+
+        CoherenceMessage msg;
+        msg.h.type = CoherenceMessageType::InvalidateReq;
+        msg.h.srcNode = _nodeId;
+        msg.h.srcSocket = _socketId;
+        msg.h.dstNode = target;
+        msg.h.dstSocket = _socketId;
+        msg.h.homeNode = _nodeId;
+        msg.h.homeSocket = _socketId;
+        msg.h.ingressSocket = _socketId;
+        msg.h.requesterNode = requesterNode;
+        msg.h.targetNode = target;
+        msg.h.homeLinePa = linePa;
+        msg.h.localLinePa = static_cast<uint64_t>(target) * _dsmSegSize + offset;
+        msg.h.epoch = committedEpoch;
+        msg.h.reqId = reqId;
+        msg.h.seqNum = 0;
+
+        printf("[UBCC-FANOUT] home=%d pa=0x%lx target=%d epoch=%lu reqId=%lu\n",
+               _nodeId, linePa, target, committedEpoch, reqId);
+
+        if (!_outbound->sendInvalidateReq(msg)) {
+            warn("UBCC node_id=%d: invalidate fanout failed target=%d\n",
+                 _nodeId, target);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 // ---- v4: Outstanding request API ----

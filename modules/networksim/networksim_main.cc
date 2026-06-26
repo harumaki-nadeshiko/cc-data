@@ -122,9 +122,16 @@ void NetworkSim::step()
     for (auto& kv : _ports) {
         Port* p = kv.second.get();
         p->emitSync(_tick);
+        static int rcv_ct = 0;
         while (MemMessage* m = p->recv(_tick)) {
             if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _done = true; return; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
+
+            if (++rcv_ct <= 5)
+                std::fprintf(stderr, "[NSIM-RECV] tick=%lu src=%u:%u dst=%u:%u type=%u sz=%u\n",
+                             _tick, m->hdr.src_module, m->hdr.src_port,
+                             m->hdr.dst_module, m->hdr.dst_port,
+                             m->hdr.type, m->hdr.size);
 
             int targetKey = findPortByModule(m->hdr.dst_module, m->hdr.dst_port);
             auto rit = _routes.find({m->hdr.src_module, m->hdr.src_port});
@@ -149,8 +156,22 @@ void NetworkSim::step()
             MemMessage* buf = it->second->sendAllocateBuffer(pf.msg.hdr.timestamp);
             if (buf) {
                 *buf = pf.msg;
+                static int fwd_ct = 0;
+                if (++fwd_ct <= 5)
+                    std::fprintf(stderr, "[NSIM-FWD] tick=%lu dst=%u:%u type=%u\n",
+                                 _tick, pf.dst_mod, pf.dst_port, pf.msg.hdr.type);
                 it->second->send(buf);
+            } else {
+                static int no_ct = 0;
+                if (++no_ct <= 3)
+                    std::fprintf(stderr, "[NSIM-NOBUF] tick=%lu dst=%u:%u\n",
+                                 _tick, pf.dst_mod, pf.dst_port);
             }
+        } else {
+            static int miss_ct = 0;
+            if (++miss_ct <= 3)
+                std::fprintf(stderr, "[NSIM-MISS] tick=%lu dst=%u:%u (no port)\n",
+                             _tick, pf.dst_mod, pf.dst_port);
         }
     }
 }

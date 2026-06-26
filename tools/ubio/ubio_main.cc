@@ -91,8 +91,35 @@ matchesNetEndpoint(const std::string &ep, int nid)
     return ep == ("ipc:///tmp/networksim_m" + std::to_string(nid) + "_p1");
 }
 
-struct UbioBackstoreHost : public UBCCHostIf {
-    explicit UbioBackstoreHost(UBCCController &ctrl) : ubcc(ctrl) {}
+struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+    UBCCController &ubcc;
+    Port *gem5Port;
+    Port *netPort;
+    int nodeId;
+    int socketId;
+    uint64_t &tickRef;
+    std::map<uint64_t, UBCCController::BackstoreEntry> store;
+
+    explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
+                               int nid, int sid, uint64_t &t)
+        : ubcc(ctrl), gem5Port(gport), netPort(nport),
+          nodeId(nid), socketId(sid), tickRef(t) {}
+
+    bool routeControlToTarget(const CoherenceMessage &msg) {
+        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
+            return sendCoh(gem5Port, tickRef, nodeId, msg.h.dstSocket, msg);
+        }
+        if (!netPort) { return false; }
+        return sendCoh(netPort, tickRef,
+                       static_cast<uint32_t>(msg.h.dstNode), 1, msg);
+    }
+
+    bool sendInvalidateReq(const CoherenceMessage &msg) override {
+        return routeControlToTarget(msg);
+    }
+    bool sendUpgradeAckNotify(const CoherenceMessage &msg) override {
+        return routeControlToTarget(msg);
+    }
 
     void hostIssueBackstoreRead(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
@@ -119,8 +146,6 @@ struct UbioBackstoreHost : public UBCCHostIf {
         ubcc.onBackstoreDeleteAck(pa, existed);
     }
 
-    UBCCController &ubcc;
-    std::map<uint64_t, UBCCController::BackstoreEntry> store;
 };
 
 bool
@@ -151,6 +176,10 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
             &grantVisibleTick, &sentinelVisibleTick,
             &recallNeeded, &recallOwnerNode,
             &dataSource, &authEpoch);
+
+        // BUSY - don"t send poison ReadResp; caller will retry
+        if (static_cast<int>(grant) < 0)
+            return true;
 
         // BUSY — don't send poison ReadResp; caller will retry
         if (static_cast<int>(grant) < 0)
@@ -357,21 +386,21 @@ main(int argc, char **argv)
     Port *netPort = netEp.empty() ? nullptr :
         new Port("net", nid, 1, netEp, false, ctx, sw);
 
-    UBCCController ubcc(nid, 0, nullptr);
-    UbioBackstoreHost host(ubcc);
-    ubcc.setHost(&host);
-
-    std::fprintf(stderr, "[ubio:%d] gem5=%s net=%s bind(gem5=%d net=0 connect)\n",
-                 nid, gem5Ep.c_str(), netEp.empty() ? "<none>" : netEp.c_str(), gem5Bind);
-
     uint64_t tick = 0;
+
+    UBCCController ubcc(nid, 0, nullptr);
+    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, 0, tick);
+    ubcc.setHost(&host);
+    ubcc.setOutbound(&host);
     bool done = false;
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork) {
         if (!port) return;
         ReceiveStatus st;
         MemMessage *m = port->recv(tick, &st);
+        int drain_cnt = 0;
         while (m && st == ReceiveStatus::kMessage) {
+            if (++drain_cnt > 200) break;  // prevent starvation of other ports
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
                 std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu\n", nid, m->hdr.timestamp);
                 done = true;
@@ -432,9 +461,10 @@ main(int argc, char **argv)
 
             if (coh->h.dstNode != nid) {
                 // If this PA belongs to our local DSM, force local processing
-                // (fixes misrouted ClearReq etc. with wrong dstNode)
                 if (!ubcc.isDsmAddr(coh->h.homeLinePa)) {
                     if (netPort) {
+                        std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d via net\n",
+                                     nid, coherenceMsgTypeName(coh->h.type), coh->h.dstNode);
                         sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
                     } else {
                         std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
@@ -443,14 +473,19 @@ main(int argc, char **argv)
                     m = port->recv(tick, &st);
                     continue;
                 }
-                // local DSM: fall through to normal processing
             }
 
             if (fromNetwork) {
                 CoherenceMessage response;
                 bool hasResponse = false;
                 if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
+                    std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back\n",
+                                 nid, coherenceMsgTypeName(response.h.type));
                     sendCoh(netPort, tick, coh->h.srcNode, 1, response);
+                } else if (isGem5Ingress(coh->h.type)) {
+                    std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
+                                 nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
+                    sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
                 } else if (isGem5Ingress(coh->h.type)) {
                     // Response from remote UBCC → forward to local gem5
                     sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
