@@ -390,12 +390,6 @@ UBCCController::processOuterRequest(
            _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
            requesterNode, baseEpoch, reqId);
 
-    static int gReqSeq = 0;
-    printf("[REQ-ORDER] UBCC n=%d req_seq=%d PA=0x%lx req=%s requester=%d\n",
-           _nodeId, ++gReqSeq, line_pa,
-           reqType == UBCC_OuterReqType::GlobalReadShared ? "RS" : "RU",
-           requesterNode);
-
     // Initialize M6 recall outputs and F3 dataSource output
     if (outRecallNeeded)   *outRecallNeeded = false;
     if (outRecallOwnerNode) *outRecallOwnerNode = -1;
@@ -725,10 +719,6 @@ UBCCController::processOuterRequest(
         case MESIState::G_E:
         case MESIState::G_M: {
             int existingOwner = DirEntry::ownerFromSharers(entry);
-            printf("[RECALL-CHK] UBCC n=%d PA=0x%lx state=%s owner=%d requester=%d req=%s\n",
-                   _nodeId, line_pa, mesiStateName(entry.state),
-                   existingOwner, requesterNode,
-                   reqType == UBCC_OuterReqType::GlobalReadShared ? "RS" : "RU");
 
             // v4: Check if there's an already-completed RECALL for this requester
             bool recallAlreadyDone = false;
@@ -857,8 +847,6 @@ UBCCController::processOuterRequest(
 
             if (existingOwner >= 0 && existingOwner != requesterNode
                 && !recallAlreadyDone) {
-                printf("[RECALL-DECIDE] UBCC n=%d PA=0x%lx owner=%d requester=%d recallAlreadyDone=%d\n",
-                       _nodeId, line_pa, existingOwner, requesterNode, recallAlreadyDone);
                 // v4: Recall needed — create RECALL + GRANT_HANDSHAKE
                 printf("[RECALL-CREATE] UBCC node=%d PA=0x%lx existingOwner=%d requester=%d\n",
                        _nodeId, line_pa, existingOwner, requesterNode);
