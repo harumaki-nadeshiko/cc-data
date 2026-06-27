@@ -35,7 +35,7 @@ int main(int argc, char **argv)
         for (volatile int _d = 0; _d < WAIT_NOPS; _d++) asm volatile("nop");
     }
 
-    sync_wait(0b011);
+    sync_wait(0b011, 4);
 
     if (node_id == 1) {
         uint32_t expected = 0x11223344;
@@ -46,7 +46,7 @@ int main(int argc, char **argv)
         if (!match) fail++;
     }
 
-    sync_wait(0b011);
+    sync_wait(0b011, 4);
     if (primary) emit_phase_done(node_id, fail ? "fail" : "done");
     _exit_program(fail ? 1 : 0);
     return 0;

@@ -46,9 +46,9 @@ static inline long _syscall1(long num, long a0)
  * No shared memory required — the barrier state lives inside gem5.
  **********************************************************************/
 
-static inline void sync_wait(unsigned int node_mask)
+static inline void sync_wait(unsigned int node_mask, unsigned int active_threads)
 {
-    _syscall1(SYS_SYNC_WAIT, (long)node_mask);
+    _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)active_threads, 0);
 }
 
 /* ── Integer formatting (no libc dependency) ───────────────────────── */

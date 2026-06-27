@@ -23,7 +23,7 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 
 # ── Cleanup: kill everything ───────────────────────────────────────
 cleanup() {
-    local all_pids="${UBIO_PIDS:-} ${GEM5_PIDS:-} ${NSIM_PID:-}"
+    local all_pids="${UBIO_PIDS:-} ${GEM5_PIDS:-} ${NSIM_PID:-} ${BARRIER_PID:-}"
     [ -z "${all_pids// /}" ] && return
     echo "[cleanup] Terminating all processes..."
     for pid in ${all_pids}; do
@@ -50,6 +50,17 @@ compile_ubio() {
         -L"$ROOT_DIR/thirdparty/zeromq/lib" -lzmq -lpthread -o "$UBIO_BIN" 2>/dev/null
     [ -x "$UBIO_BIN" ] || die "ubio build failed"
     echo "[build] ubio: $(ls -lh "$UBIO_BIN" | awk '{print $5}')"
+
+    # Compile BarrierManager
+    local BARRIER_BIN="$ROOT_DIR/modules/barrier/barrier_manager"
+    local barrier_src="$ROOT_DIR/tools/barrier/barrier_main.cc"
+    if [ -f "$barrier_src" ]; then
+        g++ -std=c++17 -O2 \
+            -I"$ROOT_DIR" -I"$ROOT_DIR/thirdparty/zeromq/include" \
+            "$barrier_src" "$ROOT_DIR/framework/Port.cc" \
+            -L"$ROOT_DIR/thirdparty/zeromq/lib" -lzmq -lpthread -o "$BARRIER_BIN" 2>/dev/null
+        [ -x "$BARRIER_BIN" ] && echo "[build] barrier: $(ls -lh "$BARRIER_BIN" | awk '{print $5}')"
+    fi
 }
 
 # ── Compile workloads ──────────────────────────────────────────────
@@ -66,7 +77,19 @@ compile_workloads() {
 # ── Start gem5 first, wait for Port bind, then ubio ─────────────────
 start_all() {
     # Clean up stale IPC endpoints
-    rm -rf /tmp/ubio_n* /tmp/networksim_*
+    rm -rf /tmp/ubio_n* /tmp/networksim_* /tmp/barrier_*
+
+    # Start BarrierManager first (must bind before UBAdapter connects)
+    local BARRIER_BIN="$ROOT_DIR/modules/barrier/barrier_manager"
+    local NUM_NODES=3
+    if [ -x "$BARRIER_BIN" ]; then
+        echo "[launch] Starting BarrierManager..."
+        "$BARRIER_BIN" "$NUM_NODES" >"${LOG_BASE}/barrier.log" 2>&1 &
+        BARRIER_PID=$!
+        sleep 1
+    else
+        echo "[launch] WARNING: no barriermanager binary at $BARRIER_BIN"
+    fi
 
     # Start networksim first (must bind before anyone connects)
     local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
