@@ -19,48 +19,35 @@ struct Link {
     uint64_t latency;
 };
 
-struct ForwardEntry {
-    int next_hop_mod;
-    int next_hop_port;
-    uint64_t latency;
+struct PendingFwd {
+    uint64_t readyTick;
+    MemMessage msg;
+    int dst_mod;
+    int dst_port;
 };
 
 class NetworkSim {
-public:
-    NetworkSim(zmq::context_t& ctx, const std::string& topoPath);
-    void step();
-    void run(int maxSteps = -1);
-    bool done() const { return _done; }
-
-private:
     zmq::context_t& _ctx;
-    std::map<int, std::unique_ptr<Port>> _ports;  // port_id → Port
     std::vector<Link> _links;
-    bool _done = false;
-    uint64_t _tick = 0;
-
-    // Forwarding: (src_mod, src_port) → list of possible next hops
-    std::map<std::pair<int,int>, std::vector<ForwardEntry>> _routes;
-
-    struct PendingFwd {
-        uint64_t readyTick;
-        MemMessage msg;
-        int dst_mod, dst_port;
-    };
+    std::map<int, std::unique_ptr<Port>> _ports;
+    std::map<std::pair<int,int>, std::vector<Link>> _routes;
     std::deque<PendingFwd> _fifo;
+    uint64_t _tick = 0;
+    bool _done = false;
+
+public:
+    NetworkSim(zmq::context_t& ctx, const std::string& topoPath)
+        : _ctx(ctx) { loadTopology(topoPath); buildPorts(); buildRoutes(); }
 
     void loadTopology(const std::string& path);
+    void buildPorts();
     void buildRoutes();
     int findPortByModule(int modId, int portId) const;
+    void step();
+    void run(int maxSteps = -1);
 };
 
-NetworkSim::NetworkSim(zmq::context_t& ctx, const std::string& topoPath)
-    : _ctx(ctx)
-{
-    loadTopology(topoPath);
-    buildRoutes();
-
-    // Create ports for all unique module/port endpoints appearing in links
+void NetworkSim::buildPorts() {
     std::set<int> portKeys;
     for (auto& l : _links) {
         portKeys.insert(l.src_mod * 1000 + l.src_port);
@@ -76,12 +63,10 @@ NetworkSim::NetworkSim(zmq::context_t& ctx, const std::string& topoPath)
     }
 }
 
-void NetworkSim::loadTopology(const std::string& path)
-{
+void NetworkSim::loadTopology(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) { std::fprintf(stderr,"[NetworkSim] bad topo %s\n",path.c_str()); return; }
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    // Parse: "links": [[src_mod,src_port,dst_mod,dst_port,lat], ...]
     size_t pos = json.find("\"links\"");
     if (pos == std::string::npos) return;
     pos = json.find('[', pos);
@@ -101,47 +86,28 @@ void NetworkSim::loadTopology(const std::string& path)
     std::printf("[NetworkSim] loaded %zu links\n", _links.size());
 }
 
-void NetworkSim::buildRoutes()
-{
+void NetworkSim::buildRoutes() {
     for (auto& l : _links) {
         _routes[{l.src_mod, l.src_port}].push_back({l.dst_mod, l.dst_port, l.latency});
         _routes[{l.dst_mod, l.dst_port}].push_back({l.src_mod, l.src_port, l.latency});
     }
 }
 
-int NetworkSim::findPortByModule(int modId, int portId) const
-{
+int NetworkSim::findPortByModule(int modId, int portId) const {
     return modId * 1000 + portId;
 }
 
-void NetworkSim::step()
-{
+void NetworkSim::step() {
     _tick++;
 
-    // 防止单端口持续高压流量导致本 tick 一直卡在 recv，
-    // 从而永远进不到 FIFO 出队/转发阶段。
-    constexpr int kRecvBudgetPerPortPerTick = 256;
-
-    // 1. Receive from all ports, enqueue into FIFO with latency
+    int totalRecv = 0, totalFwd = 0;
     for (auto& kv : _ports) {
         Port* p = kv.second.get();
         p->emitSync(_tick);
-        static int rcv_ct = 0;
-        int drained = 0;
-        while (drained < kRecvBudgetPerPortPerTick) {
-            MemMessage* m = p->recv(_tick);
-            if (!m) {
-                break;
-            }
-            drained++;
+        while (MemMessage* m = p->recv(_tick)) {
             if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _done = true; return; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
-
-            if (++rcv_ct <= 5)
-                std::fprintf(stderr, "[NSIM-RECV] tick=%lu src=%u:%u dst=%u:%u type=%u sz=%u\n",
-                             _tick, m->hdr.src_module, m->hdr.src_port,
-                             m->hdr.dst_module, m->hdr.dst_port,
-                             m->hdr.type, m->hdr.size);
+            totalRecv++;
 
             int targetKey = findPortByModule(m->hdr.dst_module, m->hdr.dst_port);
             auto rit = _routes.find({m->hdr.src_module, m->hdr.src_port});
@@ -150,35 +116,21 @@ void NetworkSim::step()
 
             uint64_t readyTick = _tick + lat;
             PendingFwd pf{readyTick, *m, m->hdr.dst_module, m->hdr.dst_port};
-            // Insert in FIFO order by readyTick
             auto ins = _fifo.begin();
             while (ins != _fifo.end() && ins->readyTick <= readyTick) ++ins;
             _fifo.insert(ins, pf);
         }
-
-        if (drained == kRecvBudgetPerPortPerTick) {
-            static int budget_hit_ct = 0;
-            if (++budget_hit_ct <= 8) {
-                std::fprintf(stderr,
-                             "[NSIM-BUDGET] tick=%lu port=%d drain=%d (recv capped)\n",
-                             _tick, kv.first, drained);
-            }
-        }
     }
 
-    // 2. Forward ready packets from FIFO
     while (!_fifo.empty() && _fifo.front().readyTick <= _tick) {
         auto pf = _fifo.front(); _fifo.pop_front();
+        totalFwd++;
         int targetKey = findPortByModule(pf.dst_mod, pf.dst_port);
         auto it = _ports.find(targetKey);
         if (it != _ports.end()) {
             MemMessage* buf = it->second->sendAllocateBuffer(pf.msg.hdr.timestamp);
             if (buf) {
                 *buf = pf.msg;
-                static int fwd_ct = 0;
-                if (++fwd_ct <= 5)
-                    std::fprintf(stderr, "[NSIM-FWD] tick=%lu dst=%u:%u type=%u\n",
-                                 _tick, pf.dst_mod, pf.dst_port, pf.msg.hdr.type);
                 it->second->send(buf);
             } else {
                 static int no_ct = 0;
@@ -193,17 +145,22 @@ void NetworkSim::step()
                              _tick, pf.dst_mod, pf.dst_port);
         }
     }
+
+    if (totalRecv > 0 || totalFwd > 0 || _fifo.size() > 500) {
+        static int stat_ct = 0;
+        if (++stat_ct <= 30 || _fifo.size() > 10000)
+            std::fprintf(stderr, "[NSIM-STAT] tick=%lu recv=%d fwd=%d fifo=%zu\n",
+                         _tick, totalRecv, totalFwd, _fifo.size());
+    }
 }
 
-void NetworkSim::run(int maxSteps)
-{
+void NetworkSim::run(int maxSteps) {
     int s = 0;
     while (!_done && (maxSteps < 0 || s < maxSteps)) { step(); s++; }
     std::printf("[NetworkSim] done after %d steps\n", s);
 }
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr,"usage: networksim <topology.json>\n"); return 1; }
     zmq::context_t ctx(1);
     NetworkSim nsim(ctx, argv[1]);

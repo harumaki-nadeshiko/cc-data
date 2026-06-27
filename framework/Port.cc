@@ -64,20 +64,23 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
       _sendBufInUse(false)
 {
     // Deprecated: dual PAIR sockets for full-duplex IPC.
-    // bind=true: rx binds {ep}_rx, tx connects {ep}_tx
-    // bind=false: rx binds {ep}_tx, tx connects {ep}_rx
-    // This ensures: gem5.tx→{ep}_tx→ubio.rx  and  ubio.tx→{ep}_rx→gem5.rx
     _rxSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
     _txSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
 
     int sndtimeo = 10;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
+    _txSock->set(zmq::sockopt::immediate, 1);
+    _rxSock->set(zmq::sockopt::immediate, 1);
 
     try {
         if (bind) {
+            std::fprintf(stderr, "[Port %s] BIND rx=%s_rx  tx.connect=%s_tx\n",
+                         _name.c_str(), endpoint.c_str(), endpoint.c_str());
             _rxSock->bind(endpoint + "_rx");
             _txSock->connect(endpoint + "_tx");
         } else {
+            std::fprintf(stderr, "[Port %s] CONNECT mode: rx.bind=%s_tx  tx.connect=%s_rx\n",
+                         _name.c_str(), endpoint.c_str(), endpoint.c_str());
             _rxSock->bind(endpoint + "_tx");
             _txSock->connect(endpoint + "_rx");
         }
@@ -216,13 +219,19 @@ Port::send(MemMessage* msg)
     if (!msg || !_sendBufInUse) return false;
     _sendBufInUse = false;
     auto& sock = _txSock ? *_txSock : *_rxSock;  // deprecated: share rx for tx
+    if (!_txSock) {
+        static int warned = 0;
+        if (++warned <= 3)
+            std::fprintf(stderr, "[PORT-SEND-WARN] %s: _txSock is null, fallback to _rxSock\n", _name.c_str());
+    }
     try {
         zmq::message_t zmq_msg(msg->hdr.size);
         std::memcpy(zmq_msg.data(), msg, msg->hdr.size);
         sock.send(zmq_msg, zmq::send_flags::none);
         return true;
     } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
+        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s (errno=%d)\n",
+                     _name.c_str(), e.what(), zmq_errno());
         return false;
     }
 }
