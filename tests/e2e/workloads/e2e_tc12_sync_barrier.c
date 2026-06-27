@@ -1,9 +1,9 @@
 /* E2E-TC12: sync_wait barrier correctness — 10 iterations × 3 segments.
  *
  * Each iteration:
- *   Segment 1: each node emits [SYNC] marker, then sync_wait(0b111)
- *   Segment 2: each node emits [SYNC] marker, then sync_wait(0b111)
- *   Segment 3: each node emits [SYNC] marker, then sync_wait(0b111)
+ *   Segment 1: each node emits [SYNC] marker, then sync_wait(0b111, 1)
+ *   Segment 2: each node emits [SYNC] marker, then sync_wait(0b111, 1)
+ *   Segment 3: each node emits [SYNC] marker, then sync_wait(0b111, 1)
  *
  * If the barrier is correct, all segment-1 outputs appear before any
  * segment-2 output, all segment-2 before segment-3, and all of
@@ -51,7 +51,7 @@ int main(int argc, char **argv)
         for (int seg = 1; seg <= SEGMENTS; seg++) {
             uint32_t val = any_hash((uint32_t)iter, (uint32_t)seg) % 3;
             emit_sync_marker(node_id, iter, seg, val);
-            sync_wait(0b111);
+            sync_wait(0b111, 1);
         }
     }
 

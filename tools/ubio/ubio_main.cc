@@ -423,8 +423,9 @@ main(int argc, char **argv)
                 if (netPort) {
                     for (int i = 0; i < 4; ++i) {
                         if (i != nid) {
-                            MemMessage* fwd = gem5Port->sendAllocateBuffer(m->hdr.timestamp);
+                            MemMessage* fwd = netPort->sendAllocateBuffer(m->hdr.timestamp);
                             if (fwd) { *fwd = *m; fwd->hdr.dst_module = i; netPort->send(fwd); }
+                            else { std::fprintf(stderr,"[ubio:%d] BARRIER-FWD-FAIL to=%d\n", nid, i); }
                         }
                     }
                 }
