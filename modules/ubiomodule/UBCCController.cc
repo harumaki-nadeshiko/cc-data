@@ -1072,6 +1072,8 @@ UBCCController::initiateRecall(uint64_t line_pa, DirEntry &entry,
             "ownerNode=%d requester=%d state=%s dirty=%d\n",
             _nodeId, line_pa, DirEntry::ownerFromSharers(entry), requesterNode,
             mesiStateName(entry.state), DirEntry::protoDirty(entry));
+    printf("[RECALL-TRACE-A] UBCC n=%d initiateRecall PA=0x%lx owner=%d requester=%d\n",
+           _nodeId, line_pa, DirEntry::ownerFromSharers(entry), requesterNode);
 
     return true;
 }

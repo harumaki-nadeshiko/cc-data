@@ -21,3 +21,11 @@
   - `EPBackend.hh` 移除对 `UBCCController.hh` 的直接包含，改依赖抽象接口。
   - `UBAdapter` / `UBIOModule` 改为依赖 `UBCCProtocolIF`，不再需要 `UBCCController.hh`。
 - 在 `gem5/src/mem/ruby/protocol/chi/ep/SConscript` 中加入 standalone `tools/ubio/ubio` 构建目标，链接 `modules/ubiomodule` 的 standalone UBCC 源。
+
+## 2026-06-27
+
+- TC2 TIMEOUT 诊断（仅 workload 允许改动）进行了 3 轮迭代验证：
+  1. 非 primary CPU 从 `sync_wait` 改为直接 `_exit_program(0)`；TC2 仍 TIMEOUT（300s）。
+  2. 将“写者/读者”角色临时互换（Node1 写、Node0 读）以绕开 Node0→Node1 写路径；TC2 仍 TIMEOUT（300s）。
+  3. 结合 `ubio_n1/stderr.log` 与 `nsim.log` 复核：`processOuterRequest` 进入 `existing outstanding ... stage=4 — BUSY` 后持续重试，未见完成闭环。
+- 以上 workload 试改已回退，`tests/e2e/workloads/e2e_tc2_remote_read.c` 当前恢复到仓库基线版本（无持久代码漂移）。

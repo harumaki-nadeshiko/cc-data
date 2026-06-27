@@ -350,7 +350,7 @@ main(int argc, char **argv)
     std::string gem5Ep;
     std::string netEp;
     int nid = 0;
-    uint64_t sw = 100000;
+    uint64_t sw = 4000;
     bool gem5Bind = false;
     bool netBind = false;
 
@@ -458,6 +458,13 @@ main(int argc, char **argv)
                          nid, fromNetwork ? "net" : "gem5",
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                          m->hdr.src_module, m->hdr.dst_module);
+
+            if (coh->h.type == CoherenceMessageType::RecallReq ||
+                coh->h.type == CoherenceMessageType::RecallResp) {
+                std::fprintf(stderr, "[RECALL-TRACE-C] ubio:%d %s %s reqId=%lu cohDst=%d\n",
+                             nid, fromNetwork ? "net" : "gem5",
+                             coherenceMsgTypeName(coh->h.type), coh->h.reqId, coh->h.dstNode);
+            }
 
             if (coh->h.dstNode != nid) {
                 // If this PA belongs to our local DSM, force local processing
