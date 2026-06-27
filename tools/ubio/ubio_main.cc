@@ -68,11 +68,32 @@ bool
 sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
         const CoherenceMessage &msg)
 {
+    if (msg.h.type == CoherenceMessageType::ClearReq ||
+        msg.h.type == CoherenceMessageType::ClearResp) {
+        std::fprintf(stderr,
+                     "[UBIO-CLEAR] send type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d routeModule=%u routePort=%u tick=%lu\n",
+                     coherenceMsgTypeName(msg.h.type),
+                     msg.h.reqId, msg.h.homeLinePa,
+                     msg.h.srcNode, msg.h.dstNode,
+                     dstModule, dstPort, tick);
+    }
     if (!port) {
+        if (msg.h.type == CoherenceMessageType::ReadReq) {
+            std::fprintf(stderr,
+                         "[UBIO-RR-SEND] sendCoh ret=false reason=no_port reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+                         dstModule, dstPort, tick);
+        }
         return false;
     }
     MemMessage *buf = port->sendAllocateBuffer(tick);
     if (!buf) {
+        if (msg.h.type == CoherenceMessageType::ReadReq) {
+            std::fprintf(stderr,
+                         "[UBIO-RR-SEND] sendCoh ret=false reason=sendAllocateBuffer_null reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+                         dstModule, dstPort, tick);
+        }
         return false;
     }
     buf->hdr.type = static_cast<uint32_t>(MemMessageType::COH_MSG);
@@ -80,9 +101,24 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
     buf->hdr.dst_port = dstPort;
     buf->hdr.req_id = msg.h.reqId;
     if (!buf->setPayload(msg)) {
+        if (msg.h.type == CoherenceMessageType::ReadReq) {
+            std::fprintf(stderr,
+                         "[UBIO-RR-SEND] sendCoh ret=false reason=setPayload_fail reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+                         dstModule, dstPort, tick);
+        }
         return false;
     }
-    return port->send(buf);
+    bool ok = port->send(buf);
+    if (msg.h.type == CoherenceMessageType::ReadReq) {
+        std::fprintf(stderr,
+                     "[UBIO-RR-SEND] sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                     ok ? "true" : "false",
+                     ok ? "ok" : "port_send_fail",
+                     msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+                     dstModule, dstPort, tick);
+    }
+    return ok;
 }
 
 bool
@@ -288,6 +324,10 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
       }
 
       case CoherenceMessageType::ClearReq: {
+        std::fprintf(stderr,
+                     "[UBIO-CLEAR] ubcc-enter nid=%d type=ClearReq reqId=%lu pa=0x%lx srcNode=%d dstNode=%d epoch=%lu\n",
+                     nid, msg.h.reqId, msg.h.homeLinePa,
+                     msg.h.srcNode, msg.h.dstNode, msg.h.epoch);
         bool accepted = ubcc.processClear(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
         response.h.type = CoherenceMessageType::ClearResp;
@@ -297,6 +337,10 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
         response.b.clearResp.accepted = accepted;
+        std::fprintf(stderr,
+                     "[UBIO-CLEAR] ubcc-exit nid=%d type=ClearResp reqId=%lu pa=0x%lx accepted=%d dstNode=%d\n",
+                     nid, msg.h.reqId, msg.h.homeLinePa,
+                     accepted ? 1 : 0, response.h.dstNode);
         hasResponse = true;
         return true;
       }
@@ -355,40 +399,26 @@ main(int argc, char **argv)
     std::string netEp;
     int nid = 0;
     uint64_t sw = 1000;
-    bool gem5Bind = false;
-    bool netBind = false;
 
     for (int i = 1; i < argc; ++i) {
-        if (!std::strncmp(argv[i], "--gem5-ep=", 10)) gem5Ep = argv[i] + 10;
-        else if (!std::strncmp(argv[i], "--net-ep=", 9)) netEp = argv[i] + 9;
-        else if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
+        if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
         else if (!std::strncmp(argv[i], "--sync=", 7)) sw = std::strtoull(argv[i] + 7, nullptr, 10);
-        else if (!std::strcmp(argv[i], "--gem5-bind")) gem5Bind = true;
-        else if (!std::strcmp(argv[i], "--net-bind")) netBind = true;
     }
 
-    if (gem5Ep.empty()) {
-        std::fprintf(stderr, "need --gem5-ep\n");
+    if (nid < 0 || nid > 31) {
+        std::fprintf(stderr, "[ubio:%d] ERROR: need --node=\n", nid);
         return 1;
-    }
-    if (netBind) {
-        std::fprintf(stderr,
-                     "[ubio:%d] ERROR: --net-bind 已废弃；networksim 必须 bind，ubio 必须 connect\n",
-                     nid);
-        return 2;
-    }
-    if (!netEp.empty() && !matchesNetEndpoint(netEp, nid)) {
-        std::fprintf(stderr,
-                     "[ubio:%d] ERROR: --net-ep 必须匹配 ipc:///tmp/networksim_m%d_p1，当前=%s\n",
-                     nid, nid, netEp.c_str());
-        return 3;
     }
 
     zmq::context_t ctx(1);
     std::fprintf(stderr, "[UBIO-START] creating ports...\n"); fflush(stderr);
-    Port *gem5Port = new Port("gem5", nid, 0, gem5Ep, gem5Bind, ctx, sw);
-    Port *netPort = netEp.empty() ? nullptr :
-        new Port("net", nid, 1, netEp, false, ctx, sw);
+    std::string base = "/workspace/gem5/shared_ipc/ipc";
+    std::string gem5Rx = base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
+    std::string gem5Tx = base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
+    Port *gem5Port = new Port("gem5", nid, 0, "ipc://" + gem5Rx, "ipc://" + gem5Tx, ctx, sw);
+    std::string netRx = base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
+    std::string netTx = base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
+    Port *netPort = new Port("net", nid, 1, "ipc://" + netRx, "ipc://" + netTx, ctx, sw);
 
     uint64_t tick = 0;
 
@@ -464,6 +494,17 @@ main(int argc, char **argv)
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                          m->hdr.src_module, m->hdr.dst_module);
 
+            if (coh->h.type == CoherenceMessageType::ClearReq ||
+                coh->h.type == CoherenceMessageType::ClearResp) {
+                std::fprintf(stderr,
+                             "[UBIO-CLEAR] recv nid=%d from=%s type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d requester=%d epoch=%lu\n",
+                             nid, fromNetwork ? "net" : "gem5",
+                             coherenceMsgTypeName(coh->h.type),
+                             coh->h.reqId, coh->h.homeLinePa,
+                             coh->h.srcNode, coh->h.dstNode,
+                             coh->h.requesterNode, coh->h.epoch);
+            }
+
             if (coh->h.type == CoherenceMessageType::RecallReq ||
                 coh->h.type == CoherenceMessageType::RecallResp) {
                 std::fprintf(stderr, "[RECALL-TRACE-C] ubio:%d %s %s reqId=%lu cohDst=%d\n",
@@ -471,16 +512,44 @@ main(int argc, char **argv)
                              coherenceMsgTypeName(coh->h.type), coh->h.reqId, coh->h.dstNode);
             }
 
+            if (coh->h.type == CoherenceMessageType::ReadReq) {
+                std::fprintf(stderr,
+                             "[UBIO-RR-PATH] reqId=%lu from=%s srcNode=%d dstNode=%d nid=%d enter_dstNode_check=%s homeLinePa=0x%lx\n",
+                             coh->h.reqId, fromNetwork ? "net" : "gem5",
+                             coh->h.srcNode, coh->h.dstNode, nid,
+                             (coh->h.dstNode != nid) ? "true" : "false",
+                             coh->h.homeLinePa);
+            }
+
             if (coh->h.dstNode != nid) {
                 // If this PA belongs to our local DSM, force local processing
-                if (!ubcc.isDsmAddr(coh->h.homeLinePa)) {
+                bool isDsm = ubcc.isDsmAddr(coh->h.homeLinePa);
+                if (coh->h.type == CoherenceMessageType::ReadReq) {
+                    std::fprintf(stderr,
+                                 "[UBIO-RR-PATH] reqId=%lu dstNode!=nid true, isDsmAddr=%s -> pass_non_dsm_check=%s homeLinePa=0x%lx\n",
+                                 coh->h.reqId,
+                                 isDsm ? "true" : "false",
+                                 (!isDsm) ? "true" : "false",
+                                 coh->h.homeLinePa);
+                }
+                if (!isDsm) {
                     if (netPort) {
                         std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d via net\n",
                                      nid, coherenceMsgTypeName(coh->h.type), coh->h.dstNode);
-                        sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
+                        bool sent = sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
+                        if (coh->h.type == CoherenceMessageType::ReadReq) {
+                            std::fprintf(stderr,
+                                         "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=true sendCoh_ret=%s dstNode=%d\n",
+                                         coh->h.reqId, sent ? "true" : "false", coh->h.dstNode);
+                        }
                     } else {
                         std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
                                      nid, coherenceMsgTypeName(coh->h.type));
+                        if (coh->h.type == CoherenceMessageType::ReadReq) {
+                            std::fprintf(stderr,
+                                         "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=false reason=no_netPort\n",
+                                         coh->h.reqId);
+                        }
                     }
                     m = port->recv(tick, &st);
                     continue;

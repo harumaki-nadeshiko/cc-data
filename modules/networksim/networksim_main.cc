@@ -56,10 +56,12 @@ void NetworkSim::buildPorts() {
     for (int key : portKeys) {
         int mod = key / 1000;
         int portId = key % 1000;
-        std::string ep = "ipc:///tmp/networksim_m" + std::to_string(mod)
-                       + "_p" + std::to_string(portId);
+        std::string base = "/workspace/gem5/shared_ipc/ipc";
+        std::string rx = base + "_ubio_" + std::to_string(mod) + "_to_networksim_m" + std::to_string(mod);
+        std::string tx = base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
         _ports[key] = std::make_unique<Port>(
-            "nsim_p" + std::to_string(key), mod, portId, ep, true, _ctx, 1000);
+            "nsim_p" + std::to_string(key), mod, portId,
+            "ipc://" + rx, "ipc://" + tx, _ctx, 1000);
     }
 }
 

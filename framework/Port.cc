@@ -24,12 +24,13 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
     _txSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
     _rxSock = std::make_unique<zmq::socket_t>(_ctx, zmq::socket_type::pair);
 
-    int sndtimeo = 10;
+     int sndtimeo = 10;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
+    _txSock->set(zmq::sockopt::immediate, 1);
+    _rxSock->set(zmq::sockopt::immediate, 1);
 
     try {
         _rxSock->bind(local_rx_endpoint);
-        _state = PortState::RX_BOUND;
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] rx bind(%s) failed: %s\n",
                      _name.c_str(), local_rx_endpoint.c_str(), e.what());
@@ -38,14 +39,15 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
 
     try {
         _txSock->connect(peer_rx_endpoint);
-        _state = PortState::TX_CONNECTED;
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] tx connect(%s) failed: %s\n",
                      _name.c_str(), peer_rx_endpoint.c_str(), e.what());
         return;
     }
 
-    _state = PortState::HANDSHAKING;
+    _state = PortState::READY;
+    std::fprintf(stderr, "[Port %s] rx=%s tx->%s\n",
+                 _name.c_str(), local_rx_endpoint.c_str(), peer_rx_endpoint.c_str());
 }
 
 // ── Deprecated single-endpoint constructor ──────────────────────────

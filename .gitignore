@@ -16,3 +16,4 @@ gem5_2/
 states/logs/
 /logs/
 states/
+/shared_ipc/

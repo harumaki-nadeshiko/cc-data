@@ -2053,6 +2053,9 @@ UBCCController::processClear(
     uint64_t line_pa, int srcNode,
     uint64_t epoch, uint64_t reqId)
 {
+    std::fprintf(stderr,
+                 "[UBCC-CLEAR] enter home=%d pa=0x%lx srcNode=%d epoch=%lu reqId=%lu\n",
+                 _nodeId, line_pa, srcNode, epoch, reqId);
     epoch = normalizeEpoch(epoch);
     appendTmpLog(
         "ubcc_clear.log",
@@ -2077,12 +2080,18 @@ UBCCController::processClear(
                 "UBCC node_id=%d: tombstone replay PA=0x%lx "
                 "epoch=%lu reqId=%lu accepted=%d\n",
                 _nodeId, line_pa, epoch, reqId, tsAccepted);
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] tombstone-replay home=%d pa=0x%lx epoch=%lu reqId=%lu accepted=%d\n",
+                     _nodeId, line_pa, epoch, reqId, tsAccepted ? 1 : 0);
         return tsAccepted;
     }
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
         // Stale Clear for unknown line — log and drop (§3.5)
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=unknown_line epoch=%lu reqId=%lu\n",
+                     _nodeId, line_pa, epoch, reqId);
         warn("UBCC node_id=%d: stale Clear for unknown PA=0x%lx — dropped\n",
              _nodeId, line_pa);
         return false;
@@ -2107,6 +2116,9 @@ UBCCController::processClear(
         printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
                "reason=no_grant_handshake\n",
                _nodeId, line_pa, srcNode);
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=no_grant_handshake epoch=%lu reqId=%lu\n",
+                     _nodeId, line_pa, epoch, reqId);
         warn("UBCC node_id=%d: processClear PA=0x%lx "
              "no GRANT_HANDSHAKE outstanding — dropped\n",
              _nodeId, line_pa);
@@ -2121,6 +2133,9 @@ UBCCController::processClear(
                "reason=epoch_mismatch ostBase=%lu clear=%lu\n",
                _nodeId, line_pa, srcNode,
                normalizeEpoch(ost->baseEpoch), epoch);
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=epoch_mismatch ostBase=%lu clear=%lu reqId=%lu\n",
+                     _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch, reqId);
         warn("UBCC node_id=%d: processClear PA=0x%lx "
               "epoch mismatch: ost_base=%lu clear=%lu — dropping, "
               "retiring stale GRANT_HANDSHAKE\n",
@@ -2137,6 +2152,9 @@ UBCCController::processClear(
         printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
                "reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
                _nodeId, line_pa, srcNode, ost->reqId, reqId);
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
+                     _nodeId, line_pa, ost->reqId, reqId);
         warn("UBCC node_id=%d: processClear PA=0x%lx "
              "reqId mismatch: ost=%lu clear=%lu — dropped\n",
              _nodeId, line_pa, ost->reqId, reqId);
@@ -2148,9 +2166,12 @@ UBCCController::processClear(
         printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
                "reason=requester_mismatch ostRequester=%d\n",
                _nodeId, line_pa, srcNode, ost->requesterNode);
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=requester_mismatch ostRequester=%d srcNode=%d reqId=%lu\n",
+                     _nodeId, line_pa, ost->requesterNode, srcNode, reqId);
         warn("UBCC node_id=%d: processClear PA=0x%lx "
-             "requesterNode mismatch: ost=%d clear=%d — dropped\n",
-             _nodeId, line_pa, ost->requesterNode, srcNode);
+              "requesterNode mismatch: ost=%d clear=%d — dropped\n",
+              _nodeId, line_pa, ost->requesterNode, srcNode);
         return false;
     }
 
@@ -2160,9 +2181,12 @@ UBCCController::processClear(
         printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
                "reason=stage_mismatch stage=%d\n",
                _nodeId, line_pa, srcNode, static_cast<int>(ost->stage));
+        std::fprintf(stderr,
+                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=stage_mismatch stage=%d reqId=%lu\n",
+                     _nodeId, line_pa, static_cast<int>(ost->stage), reqId);
         warn("UBCC node_id=%d: processClear PA=0x%lx "
-             "stage mismatch: expected WAITING_CLEAR got %d — dropped\n",
-             _nodeId, line_pa, static_cast<int>(ost->stage));
+              "stage mismatch: expected WAITING_CLEAR got %d — dropped\n",
+              _nodeId, line_pa, static_cast<int>(ost->stage));
         return false;
     }
 
@@ -2205,6 +2229,10 @@ UBCCController::processClear(
            "requester=%d state=%s\n",
            line_pa, epoch, reqId, srcNode,
            mesiStateName(entry.state));
+    std::fprintf(stderr,
+                 "[UBCC-CLEAR] accept home=%d pa=0x%lx srcNode=%d epoch=%lu reqId=%lu newState=%s\n",
+                 _nodeId, line_pa, srcNode, epoch, reqId,
+                 mesiStateName(entry.state));
 
     return true;
 }

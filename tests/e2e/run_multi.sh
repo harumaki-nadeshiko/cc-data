@@ -77,7 +77,8 @@ compile_workloads() {
 # ── Start gem5 first, wait for Port bind, then ubio ─────────────────
 start_all() {
     # Clean up stale IPC endpoints
-    rm -rf /tmp/ubio_n* /tmp/networksim_* /tmp/barrier_*
+    rm -rf /tmp/ubio_n* /tmp/networksim_* /tmp/barrier_* /workspace/gem5/shared_ipc/ipc_* 2>/dev/null
+    mkdir -p /workspace/gem5/shared_ipc
 
     # Start BarrierManager first (must bind before UBAdapter connects)
     local BARRIER_BIN="$ROOT_DIR/modules/barrier/barrier_manager"
@@ -129,11 +130,9 @@ start_all() {
     
     # Now start ubio (connects to already-bound endpoints)
     for nid in 0 1 2; do
-        local ep="ipc:///tmp/ubio_n${nid}"
-        local netep="ipc:///tmp/networksim_m${nid}_p1"
         local logdir="${LOG_BASE}/ubio_n${nid}"
         mkdir -p "$logdir"
-        "$UBIO_BIN" --gem5-ep="$ep" --net-ep="$netep" --node="$nid" \
+        "$UBIO_BIN" --node="$nid" \
             >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
         UBIO_PIDS="$UBIO_PIDS $!"
         echo "[launch] ubio n${nid} pid=$! log=$logdir"

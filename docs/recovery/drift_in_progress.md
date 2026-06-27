@@ -36,3 +36,45 @@
   - 现象：`nsim` 日志仅见 `[NSIM-RECV]`，几乎不出现 `[NSIM-FWD]`；`ubio_n1` 无 `net recv`。
   - 根因：`while (p->recv())` 无上限，单端口持续有包时会长期停留在接收阶段，导致同一 tick 的 FIFO 出队/转发阶段得不到执行。
   - 修复：为每个端口每 tick 增加接收预算 `kRecvBudgetPerPortPerTick=256`，超预算后进入下一阶段并打点 `[NSIM-BUDGET]`。
+
+- UBIO ReadReq 转发链路诊断增强（仅加日志，无逻辑改动）：
+  - 文件：`tools/ubio/ubio_main.cc`
+  - 在 `pollAndProcess` 增加 `[UBIO-RR-PATH]` 日志，明确区分：
+    1) 是否进入 `dstNode != nid`；
+    2) `isDsmAddr` 判定结果及 `!isDsmAddr` 检查是否通过；
+    3) 调用 `sendCoh` 后返回 true/false；
+    4) `netPort` 为空时的分支。
+  - 在 `sendCoh` 增加 `[UBIO-RR-SEND]` 日志，明确失败原因：
+    - `sendAllocateBuffer` 返回 null；
+    - `port->send` 失败；
+    - 以及 `no_port`/`setPayload_fail` 辅助信息。
+
+- TC2 Clear 全链路诊断增强（仅加 `fprintf(stderr, ...)`，无逻辑改动）：
+  - `gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc`
+    - 在 `EPBackend::sendClear()` 增加 `[CLEAR-SEND]`，打印 `pa/homeNode/epoch/reqId`。
+  - `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc`
+    - 在 `sendClearReq()` 增加 `[CLEAR-ADAPTER]`，打印 `transportSend` 返回值。
+    - 在 `recvFromRouter(ReadResp)` 增加 stderr 版 `[ADAPTER-GOT-RESP]`（用于判定 grant 抵达 N0）。
+    - 在 `recvFromRouter(ClearResp)` 与 `handleResponse(ClearResp)` 增加 `[CLEAR-RESP]`。
+  - `tools/ubio/ubio_main.cc`
+    - 在 `sendCoh()` 对 `ClearReq/ClearResp` 增加 `[UBIO-CLEAR] send`。
+    - 在 `pollAndProcess()` 对 `ClearReq/ClearResp` 增加 `[UBIO-CLEAR] recv`。
+    - 在 `handleUbccMessage(ClearReq)` 增加 `[UBIO-CLEAR] ubcc-enter/ubcc-exit`。
+  - `modules/ubiomodule/UBCCController.cc`
+    - 在 `processClear()` 增加 `[UBCC-CLEAR]` 入口、各类 drop 原因、accept 结果日志。
+
+- UBAdapter request/response 接口异步化（本次仅限定文件改动）：
+  - 文件：`gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.hh`
+    - 将 `sendWritebackReq/sendEvictReq/sendUpgradeReq/sendUpgradeDoneReq` 返回类型从 `bool` 改为 `int`。
+  - 文件：`gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc`
+    - 将 `sendWritebackReq/sendEvictReq/sendUpgradeReq/sendUpgradeDoneReq/sendQueryLineMetaReq` 按 `sendReadReq/sendClearReq` 模式改为：
+      1) 先查 `_lastResponse` 缓存；
+      2) 发送后在 `_port` 路径返回 `-2`（pending）并 `scheduleResponseCheck()`；
+      3) 非 `_port` 路径保留 `transportRecv` 同步兜底；
+      4) 统一 `-1` 表示错误，`0/1` 表示拒绝/接受（或查询 found/not-found）。
+  - 文件：`gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc`
+    - 适配以上接口，新增 `-2` 分支处理与诊断日志：
+      - Writeback/Evict：区分 `pending` 与 `accepted`，避免把 pending 直接当 hard-fail；
+      - Upgrade：`-2` 时打印 `[EP-UPGRADE-PENDING]` 并返回 `false` 等待上层重试；
+      - UpgradeDone：`-2` 时打印 `[EP-UPGDONE-PENDING]`，返回 pending-success 语义；
+      - QueryLineMeta：在 `handleWriteback/sendHomeWritebackNotify` 中识别 `-2` 并打印 pending 诊断。
