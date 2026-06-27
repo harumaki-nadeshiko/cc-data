@@ -354,7 +354,7 @@ main(int argc, char **argv)
     std::string gem5Ep;
     std::string netEp;
     int nid = 0;
-    uint64_t sw = 4000;
+    uint64_t sw = 1000;
     bool gem5Bind = false;
     bool netBind = false;
 

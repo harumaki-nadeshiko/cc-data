@@ -72,7 +72,7 @@ NetworkSim::NetworkSim(zmq::context_t& ctx, const std::string& topoPath)
         std::string ep = "ipc:///tmp/networksim_m" + std::to_string(mod)
                        + "_p" + std::to_string(portId);
         _ports[key] = std::make_unique<Port>(
-            "nsim_p" + std::to_string(key), mod, portId, ep, true, _ctx, 4000);
+            "nsim_p" + std::to_string(key), mod, portId, ep, true, _ctx, 1000);
     }
 }
 
