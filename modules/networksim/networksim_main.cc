@@ -118,12 +118,22 @@ void NetworkSim::step()
 {
     _tick++;
 
+    // 防止单端口持续高压流量导致本 tick 一直卡在 recv，
+    // 从而永远进不到 FIFO 出队/转发阶段。
+    constexpr int kRecvBudgetPerPortPerTick = 256;
+
     // 1. Receive from all ports, enqueue into FIFO with latency
     for (auto& kv : _ports) {
         Port* p = kv.second.get();
         p->emitSync(_tick);
         static int rcv_ct = 0;
-        while (MemMessage* m = p->recv(_tick)) {
+        int drained = 0;
+        while (drained < kRecvBudgetPerPortPerTick) {
+            MemMessage* m = p->recv(_tick);
+            if (!m) {
+                break;
+            }
+            drained++;
             if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _done = true; return; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
 
@@ -144,6 +154,15 @@ void NetworkSim::step()
             auto ins = _fifo.begin();
             while (ins != _fifo.end() && ins->readyTick <= readyTick) ++ins;
             _fifo.insert(ins, pf);
+        }
+
+        if (drained == kRecvBudgetPerPortPerTick) {
+            static int budget_hit_ct = 0;
+            if (++budget_hit_ct <= 8) {
+                std::fprintf(stderr,
+                             "[NSIM-BUDGET] tick=%lu port=%d drain=%d (recv capped)\n",
+                             _tick, kv.first, drained);
+            }
         }
     }
 

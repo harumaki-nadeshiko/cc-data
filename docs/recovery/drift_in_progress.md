@@ -29,3 +29,10 @@
   2. 将“写者/读者”角色临时互换（Node1 写、Node0 读）以绕开 Node0→Node1 写路径；TC2 仍 TIMEOUT（300s）。
   3. 结合 `ubio_n1/stderr.log` 与 `nsim.log` 复核：`processOuterRequest` 进入 `existing outstanding ... stage=4 — BUSY` 后持续重试，未见完成闭环。
 - 以上 workload 试改已回退，`tests/e2e/workloads/e2e_tc2_remote_read.c` 当前恢复到仓库基线版本（无持久代码漂移）。
+
+## 2026-06-28
+
+- TC2 链路挂起诊断新增：定位 `modules/networksim/networksim_main.cc` 的 `NetworkSim::step()` 在高压输入下存在“无限 drain”风险。
+  - 现象：`nsim` 日志仅见 `[NSIM-RECV]`，几乎不出现 `[NSIM-FWD]`；`ubio_n1` 无 `net recv`。
+  - 根因：`while (p->recv())` 无上限，单端口持续有包时会长期停留在接收阶段，导致同一 tick 的 FIFO 出队/转发阶段得不到执行。
+  - 修复：为每个端口每 tick 增加接收预算 `kRecvBudgetPerPortPerTick=256`，超预算后进入下一阶段并打点 `[NSIM-BUDGET]`。
