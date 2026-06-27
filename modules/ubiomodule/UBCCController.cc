@@ -460,8 +460,8 @@ UBCCController::processOuterRequest(
                             "UBCC node_id=%d: replayArmed hit PA=0x%lx "
                             "requester=%d reqId=%lu intended=%s — granting\n",
                             _nodeId, line_pa, requesterNode, reqId,
-                            mesiStateName(existing->intendedState));
-                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                             mesiStateName(existing->intendedState));
+                    if (outDataSource) *outDataSource = existing->dataSource;
                     if (outGrantVisibleTick) *outGrantVisibleTick = curTick();
                     if (outSentinelVisibleTick) *outSentinelVisibleTick = curTick();
                     if (outRecallNeeded) *outRecallNeeded = false;
@@ -847,41 +847,42 @@ UBCCController::processOuterRequest(
 
             if (existingOwner >= 0 && existingOwner != requesterNode
                 && !recallAlreadyDone) {
-                // v4: Recall needed — create RECALL + GRANT_HANDSHAKE
+                // v4: Recall needed — create outstanding FIRST, then send RecallReq
                 printf("[RECALL-CREATE] UBCC node=%d PA=0x%lx existingOwner=%d requester=%d\n",
                        _nodeId, line_pa, existingOwner, requesterNode);
-                bool recallStarted = initiateRecall(
-                    line_pa, entry, reqType, writeIntent, requesterNode);
 
-                DPRINTF(RubyEP,
-                        "UBCC node_id=%d: v4 recall initiated PA=0x%lx "
-                        "existingOwner=%d requester=%d recallStarted=%d\n",
-                        _nodeId, line_pa, existingOwner,
-                        requesterNode, recallStarted);
-
-                if (recallStarted) {
-                    _recallCount++;
-                    if (outRecallNeeded) *outRecallNeeded = true;
-                    if (outRecallOwnerNode) *outRecallOwnerNode = existingOwner;
-                    // F3: Data source for recall path is RecallBuffer
-                    if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-
-                    // Create RECALL outstanding
-                    OutstandingRequest *recallOreq = createOutstanding(
-                        line_pa, OpType::RECALL, requesterNode, existingOwner);
-                    if (recallOreq) {
-                        recallOreq->reservedEpoch = reservedEpoch;
-                        recallOreq->reqId = reqId;
-                        recallOreq->baseEpoch = baseEpoch;
-                        recallOreq->stage = OpStage::WAITING_TARGET_RESP;
-                        recallOreq->reqType = reqType;
-                        recallOreq->writeIntent = writeIntent;
-                        recallOreq->dataSource = GrantDataSource::RecallBuffer;
-                        if (outAuthEpoch) *outAuthEpoch = recallOreq->baseEpoch;
-                    }
-                    // Return BUSY — recall must complete before grant
+                OutstandingRequest *recallOreq = createOutstanding(
+                    line_pa, OpType::RECALL, requesterNode, existingOwner);
+                if (!recallOreq) {
+                    warn("UBCC node_id=%d: failed to create RECALL outstanding "
+                         "PA=0x%lx requester=%d owner=%d\n",
+                         _nodeId, line_pa, requesterNode, existingOwner);
                     return static_cast<UBCC_OuterGrantType>(-1);
                 }
+
+                recallOreq->reservedEpoch = reservedEpoch;
+                recallOreq->reqId = reqId;
+                recallOreq->baseEpoch = baseEpoch;
+                recallOreq->stage = OpStage::WAITING_TARGET_RESP;
+                recallOreq->reqType = reqType;
+                recallOreq->writeIntent = writeIntent;
+                recallOreq->dataSource = GrantDataSource::RecallBuffer;
+
+                if (!initiateRecall(line_pa, entry, *recallOreq)) {
+                    warn("UBCC node_id=%d: initiateRecall failed PA=0x%lx — "
+                         "removing outstanding\n",
+                         _nodeId, line_pa);
+                    removeOutstanding(line_pa);
+                    return static_cast<UBCC_OuterGrantType>(-1);
+                }
+
+                _recallCount++;
+                if (outRecallNeeded) *outRecallNeeded = true;
+                if (outRecallOwnerNode) *outRecallOwnerNode = existingOwner;
+                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                if (outAuthEpoch) *outAuthEpoch = recallOreq->baseEpoch;
+
+                return static_cast<UBCC_OuterGrantType>(-1);
             }
 
             // Same owner or no recall — immediate grant
@@ -1062,18 +1063,57 @@ UBCCController::getUbccDirFieldsExtendedForTest(uint64_t line_pa,
 // ---- M6: Recall Management ----
 
 bool
-UBCCController::initiateRecall(uint64_t line_pa, DirEntry &entry,
-    UBCC_OuterReqType reqType, bool writeIntent, int requesterNode)
+UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
+                               const OutstandingRequest &recallOreq)
 {
-    // v4: OutstandingRequest handles all recall state.
-    // DirEntry remains unmodified until Clear/UpgradeDone.
-    DPRINTF(RubyEP,
-            "UBCC node_id=%d: initiateRecall PA=0x%lx "
-            "ownerNode=%d requester=%d state=%s dirty=%d\n",
-            _nodeId, line_pa, DirEntry::ownerFromSharers(entry), requesterNode,
-            mesiStateName(entry.state), DirEntry::protoDirty(entry));
+    if (!_outbound) {
+        warn("UBCC node_id=%d: initiateRecall called with no outbound sender\n",
+             _nodeId);
+        return false;
+    }
+
+    const int ownerNode = (recallOreq.targetNode >= 0)
+        ? recallOreq.targetNode
+        : DirEntry::ownerFromSharers(entry);
+    if (ownerNode < 0 || ownerNode >= 64) {
+        warn("UBCC node_id=%d: initiateRecall invalid ownerNode=%d PA=0x%lx\n",
+             _nodeId, ownerNode, line_pa);
+        return false;
+    }
+
+    const uint64_t offset = _addrMap.dsmOffset(line_pa);
+
+    CoherenceMessage msg;
+    msg.h.type = CoherenceMessageType::RecallReq;
+    msg.h.srcNode = _nodeId;
+    msg.h.srcSocket = _socketId;
+    msg.h.dstNode = ownerNode;
+    msg.h.dstSocket = _socketId;
+    msg.h.homeNode = _nodeId;
+    msg.h.homeSocket = _socketId;
+    msg.h.ingressSocket = _socketId;
+    msg.h.requesterNode = recallOreq.requesterNode;
+    msg.h.targetNode = ownerNode;
+    msg.h.homeLinePa = line_pa;
+    msg.h.localLinePa = _addrMap.buildDsmPA(ownerNode, _nodeId, offset);
+    msg.h.epoch = entry.epoch;
+    msg.h.reqId = recallOreq.reqId;
+    msg.h.seqNum = 0;
+    msg.h.enqueueTick = curTick();
+    msg.h.readyTick = curTick();
+
+    if (recallOreq.reqType == UBCC_OuterReqType::GlobalReadShared)
+        msg.h.flags |= static_cast<uint32_t>(CFLAG_IS_READ_RECALL);
+    msg.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+
     printf("[RECALL-TRACE-A] UBCC n=%d initiateRecall PA=0x%lx owner=%d requester=%d\n",
-           _nodeId, line_pa, DirEntry::ownerFromSharers(entry), requesterNode);
+           _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
+
+    if (!_outbound->sendRecallReq(msg)) {
+        warn("UBCC node_id=%d: sendRecallReq failed PA=0x%lx owner=%d requester=%d\n",
+             _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
+        return false;
+    }
 
     return true;
 }
@@ -1092,90 +1132,104 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
         DPRINTF(RubyEP,
-                "UBCC node_id=%d: processRecallResponse PA=0x%lx "
-                "entry not found\n", _nodeId, line_pa);
+                "UBCC node_id=%d: processRecallResponse PA=0x%lx entry not found\n",
+                _nodeId, line_pa);
         return false;
     }
 
-    // v4: Half-range epoch check
     if (!checkEpochForLine(line_pa, responseEpoch)) {
         DPRINTF(RubyEP,
                 "UBCC node_id=%d: processRecallResponse PA=0x%lx "
-                "STALE epoch: response=%lu directory=%lu — REJECTED\n",
-                _nodeId, line_pa, responseEpoch, entry.epoch);
+                "STALE epoch — REJECTED\n",
+                _nodeId, line_pa);
         _staleRejectedCount++;
         return false;
     }
 
-    // v4: Verify pending recall via OutstandingRequest
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost || ost->opType != OpType::RECALL) {
-        printf("[RECALL-DIAG] UBCC node_id=%d PA=0x%lx no RECALL outstanding: "
-               "ost=%p opType=%d\n",
-               _nodeId, line_pa, (void*)ost,
-               ost ? (int)ost->opType : -1);
+        printf("[RECALL-DIAG] UBCC node_id=%d PA=0x%lx no RECALL outstanding\n",
+               _nodeId, line_pa);
         return false;
     }
 
-    // Verify the recall target matches
     if (ost->targetNode >= 0 && ost->targetNode != ownerNode) {
-        warn("UBCC node_id=%d: recall owner mismatch PA=0x%lx "
-             "expected=%d got=%d — rejecting\n",
+        warn("UBCC node_id=%d: recall owner mismatch PA=0x%lx expected=%d got=%d\n",
              _nodeId, line_pa, ost->targetNode, ownerNode);
         return false;
     }
 
-    // Verify reqId matches
     if (ost->reqId != 0 && ost->reqId != reqId) {
-        warn("UBCC node_id=%d: recall reqId mismatch PA=0x%lx "
-             "expected=%lu got=%lu — rejecting\n",
+        warn("UBCC node_id=%d: recall reqId mismatch PA=0x%lx expected=%lu got=%lu\n",
              _nodeId, line_pa, ost->reqId, reqId);
         return false;
     }
 
-    int requesterNode = ost->requesterNode;
-    UBCC_OuterReqType reqType = ost->reqType;
-    bool writeIntent = ost->writeIntent;
+    if (ost->recallBarrierDone)
+        return true;
 
-    DPRINTF(RubyEP,
-            "UBCC node_id=%d: processRecallResponse PA=0x%lx "
-            "ownerNode=%d dataReceived=%d requester=%d reqType=%d "
-            "prevState=%s dirty=%d\n",
-            _nodeId, line_pa, ownerNode, dataReceived,
-            requesterNode, static_cast<int>(reqType),
-            mesiStateName(entry.state), DirEntry::protoDirty(entry));
-
-    // v4: Release recall barrier (P6 — duplicate guard)
-    if (ost->recallBarrierDone) {
-        return true;  // idempotent: already processed
-    }
     ost->recallBarrierDone = true;
-    ost->stage = OpStage::DONE;
     ost->respTick = curTick();
     ost->dataValid = dataReceived;
 
-    // F2: Preserve terminal tuple for GRANT_HANDSHAKE creation on retry:
-    // (linePa, requesterNode, baseEpoch, reservedEpoch, reqId, opType=RECALL)
-    // All fields except stage/dataValid/recallBarrierDone/respTick already
-    // hold their terminal values and MUST NOT be mutated further.
-
-    // F2: Store actual recall data in outstanding's dataBuf for later
-    // transfer to GRANT_HANDSHAKE when it's created.
     if (dataBlk && dataReceived) {
         memcpy(ost->dataBuf, dataBlk->getData(0, 64), 64);
         ost->dataValid = true;
     }
 
-    // v4: The directory transition occurs ONLY when the GRANT_HANDSHAKE
-    // Clear arrives. Here we only release the recall barrier.
-    _recallResponseCount++;
+    const OutstandingRequest recallDone = *ost;
+    const int requesterNode = recallDone.requesterNode;
+    const UBCC_OuterReqType reqType = recallDone.reqType;
+    const bool writeIntent = recallDone.writeIntent;
 
-    DPRINTF(RubyEP,
-            "UBCC node_id=%d: recall barrier released PA=0x%lx "
-            "state=%s ownerNode=%d (DirEntry NOT modified — "
-            "waiting for Clear to commit intended result)\n",
-            _nodeId, line_pa,
-            mesiStateName(entry.state), DirEntry::ownerFromSharers(entry));
+    removeOutstanding(line_pa);
+
+    OutstandingRequest *grantOst = createOutstanding(
+        line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1);
+    if (!grantOst) {
+        fatal("UBCC node_id=%d: failed to create GRANT_HANDSHAKE after "
+              "RecallResp PA=0x%lx requester=%d\n",
+              _nodeId, line_pa, requesterNode);
+    }
+
+    grantOst->reservedEpoch = recallDone.reservedEpoch;
+    grantOst->reqId = recallDone.reqId;
+    grantOst->baseEpoch = recallDone.baseEpoch;
+    grantOst->reqType = recallDone.reqType;
+    grantOst->writeIntent = recallDone.writeIntent;
+    grantOst->stage = OpStage::WAITING_CLEAR;
+    grantOst->recallBarrierDone = true;
+    grantOst->replayArmed = true;
+    grantOst->dataValid = recallDone.dataValid;
+    grantOst->dataSource = recallDone.dataValid
+        ? GrantDataSource::RecallBuffer
+        : GrantDataSource::HomeMemory;
+
+    if (recallDone.dataValid) {
+        memcpy(grantOst->dataBuf, recallDone.dataBuf, 64);
+    }
+
+    if (reqType == UBCC_OuterReqType::GlobalReadShared) {
+        grantOst->intendedState = MESIState::G_S;
+        grantOst->intendedSharersMask = (1ULL << requesterNode);
+        if (ownerNode >= 0)
+            grantOst->intendedSharersMask |= (1ULL << ownerNode);
+        grantOst->intendedOwnerNode = -1;
+        grantOst->intendedDirty = false;
+    } else {
+        grantOst->intendedState = writeIntent ? MESIState::G_M : MESIState::G_E;
+        grantOst->intendedSharersMask = 0;
+        grantOst->intendedOwnerNode = requesterNode;
+        grantOst->intendedDirty = writeIntent;
+    }
+
+    _recallResponseCount++;
+    printf("[RECALL-TO-GRANT] home=%d pa=0x%lx requester=%d owner=%d intended=%s "
+           "baseEpoch=%lu reservedEpoch=%lu reqId=%lu dataSource=%d\n",
+           _nodeId, line_pa, requesterNode, ownerNode,
+           mesiStateName(grantOst->intendedState),
+           grantOst->baseEpoch, grantOst->reservedEpoch, grantOst->reqId,
+           static_cast<int>(grantOst->dataSource));
 
     return true;
 }

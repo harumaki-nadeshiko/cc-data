@@ -41,6 +41,7 @@ class UBCCOutboundIf
 {
   public:
     virtual ~UBCCOutboundIf() = default;
+    virtual bool sendRecallReq(const CoherenceMessage &msg) = 0;
     virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
 };
@@ -695,9 +696,8 @@ class UBCCController
      * Initiate a recall of the current owner.
      * Marks the line busy and records pending context in OutstandingRequest.
      */
-    bool initiateRecall(uint64_t line_pa, DirEntry &entry,
-                        UBCC_OuterReqType reqType, bool writeIntent,
-                        int requesterNode);
+    bool initiateRecall(uint64_t line_pa, const DirEntry &entry,
+                         const OutstandingRequest &recallOreq);
 
     // ---- v4 private helpers ----
     /**
@@ -794,6 +794,9 @@ class UBCCController
                                  uint64_t committedEpoch, uint64_t reqId,
                                  int requesterNode,
                                  UBCC_OuterReqType reqType, bool writeIntent);
+    bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
+                              uint64_t committedEpoch, uint64_t reqId,
+                              int requesterNode);
     bool emitUpgradeAckNotify(int dstNode, uint64_t linePa,
                               uint64_t reservedEpoch, uint64_t reqId);
 };

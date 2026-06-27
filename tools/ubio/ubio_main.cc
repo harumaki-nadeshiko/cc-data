@@ -114,6 +114,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                        static_cast<uint32_t>(msg.h.dstNode), 1, msg);
     }
 
+    bool sendRecallReq(const CoherenceMessage &msg) override {
+        return routeControlToTarget(msg);
+    }
+
     bool sendInvalidateReq(const CoherenceMessage &msg) override {
         return routeControlToTarget(msg);
     }
