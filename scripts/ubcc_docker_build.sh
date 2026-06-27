@@ -19,4 +19,4 @@ docker build \
   --build-arg no_proxy="$NO_PROXY_ARG" \
   -t "$IMAGE_TAG" \
   -f "$REPO_ROOT/docker/ubcc-dev.Dockerfile" \
-  "$REPO_ROOT/.mold-build-context"
+  "$REPO_ROOT"

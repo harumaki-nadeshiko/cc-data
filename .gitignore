@@ -16,5 +16,3 @@ gem5_2/
 states/logs/
 /logs/
 states/
-.mold-build-context/modules/barrier/barrier_manager
-modules/networksim/networksim

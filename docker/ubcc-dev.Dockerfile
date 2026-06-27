@@ -43,18 +43,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     scons \
     swig \
     xz-utils \
-    zlib1g-dev
-
-RUN apt-get install -y --no-install-recommends valgrind
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid ${HOST_GID} builder && \
     useradd --uid ${HOST_UID} --gid ${HOST_GID} --create-home --shell /bin/bash builder && \
     mkdir -p /workspace /ccache && \
     chown -R builder:builder /workspace /ccache /home/builder
-
-COPY mold-2.34.0-x86_64-linux/bin/mold /usr/local/bin/mold
-COPY mold-2.34.0-x86_64-linux/lib/mold/mold-wrapper.so /usr/local/lib/mold-wrapper.so
-COPY ld /usr/bin/ld
 
 USER builder
 WORKDIR /workspace
