@@ -413,11 +413,9 @@ main(int argc, char **argv)
     std::string gem5Ep;
     std::string netEp;
     int nid = 0;
-    uint64_t sw = 1000;
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
-        else if (!std::strncmp(argv[i], "--sync=", 7)) sw = std::strtoull(argv[i] + 7, nullptr, 10);
     }
 
     if (nid < 0 || nid > 31) {
@@ -430,10 +428,10 @@ main(int argc, char **argv)
     std::string base = "/workspace/gem5/shared_ipc/ipc";
     std::string gem5Rx = base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
     std::string gem5Tx = base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
-    Port *gem5Port = new Port("gem5", nid, 0, "ipc://" + gem5Rx, "ipc://" + gem5Tx, ctx, sw, sw, 1000);
+    Port *gem5Port = new Port("gem5", nid, 0, "ipc://" + gem5Rx, "ipc://" + gem5Tx, ctx);
     std::string netRx = base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
     std::string netTx = base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
-    Port *netPort = new Port("net", nid, 1, "ipc://" + netRx, "ipc://" + netTx, ctx, sw, sw, 1000);
+    Port *netPort = new Port("net", nid, 1, "ipc://" + netRx, "ipc://" + netTx, ctx);
     std::fprintf(stderr,
                  "[UBIO-IPC] nid=%d gem5.rx=ipc://%s gem5.tx=ipc://%s net.rx=ipc://%s net.tx=ipc://%s\n",
                  nid,

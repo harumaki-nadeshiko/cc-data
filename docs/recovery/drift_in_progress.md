@@ -87,6 +87,10 @@
   - `pollAndProcess()`：在 `TRACE-4`（net->gem5）后增加 `[TRACE-4-SEND]`，打印 `sendCoh` 返回值与路由字段（`dstModule/dstPort`）。
   - `main()` 启动阶段新增 `[UBIO-IPC]`，统一打印 `gem5/net` 的 `rx/tx` IPC endpoint，便于核对双方命名是否匹配。
 
+- TC2 跨进程时钟同步修复：
+  - `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.{hh,cc}` 增加 `startup()` 中的周期性 sync/poll 事件启动，确保 gem5 node0/1/2 从仿真开始就持续发送 CONTROL_SYNC。
+  - `framework/Port.cc` 修正 future message 处理：对未来时间戳的普通消息统一缓存，避免本地时钟未追上前提前消费 COH_MSG。
+
 ## 2026-06-28: Async completion TODO (C)
 
 Following one-shot paths also need pending completion closure (same pattern as A/B):

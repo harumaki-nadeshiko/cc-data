@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     for (int n = 0; n < numNodes; n++) {
         std::string ep = "ipc:///tmp/barrier_m" + std::to_string(n) + "_p1";
         ports.push_back(std::make_unique<Port>(
-            "barrier_n" + std::to_string(n), n, 1, ep, true, ctx, 1000, 1000, 1000));
+            "barrier_n" + std::to_string(n), n, 1, ep, true, ctx));
     }
 
     std::map<uint32_t, BarrierState> barriers;

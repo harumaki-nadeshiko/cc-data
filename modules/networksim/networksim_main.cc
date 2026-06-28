@@ -61,7 +61,7 @@ void NetworkSim::buildPorts() {
         std::string tx = base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
         _ports[key] = std::make_unique<Port>(
             "nsim_p" + std::to_string(key), mod, portId,
-            "ipc://" + rx, "ipc://" + tx, _ctx, 1000, 1000, 1000);
+            "ipc://" + rx, "ipc://" + tx, _ctx);
     }
 }
 

@@ -17,3 +17,4 @@ states/logs/
 /logs/
 states/
 /shared_ipc/
+docs/all.cpp
