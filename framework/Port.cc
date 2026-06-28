@@ -256,9 +256,12 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
 
     if (_pending) {
         if (_pendingT <= curT) {
-            _lastRxT = std::max(_lastRxT, _pendingT);
+            _lastRxT = _pendingT;
             _pending = false;
-            st = ReceiveStatus::kMessage;
+            st = (_pendingMsg.hdr.type ==
+                  static_cast<uint32_t>(MemMessageType::CONTROL_SYNC))
+                     ? ReceiveStatus::kSync
+                     : ReceiveStatus::kMessage;
             static thread_local MemMessage result;
             result = _pendingMsg;
             return &result;
@@ -289,7 +292,7 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         return nullptr;
     }
 
-    _lastRxT = std::max(_lastRxT, (uint64_t)tmp.hdr.timestamp);
+    _lastRxT = (uint64_t)tmp.hdr.timestamp;
 
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
         st = ReceiveStatus::kSync;
