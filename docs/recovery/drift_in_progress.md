@@ -78,3 +78,23 @@
       - Upgrade：`-2` 时打印 `[EP-UPGRADE-PENDING]` 并返回 `false` 等待上层重试；
       - UpgradeDone：`-2` 时打印 `[EP-UPGDONE-PENDING]`，返回 pending-success 语义；
       - QueryLineMeta：在 `handleWriteback/sendHomeWritebackNotify` 中识别 `-2` 并打印 pending 诊断。
+
+- TC2 ReadResp 最后一跳诊断增强（仅加 `fprintf`，无逻辑改动）：
+  - 文件：`tools/ubio/ubio_main.cc`
+  - `sendCoh()`：将 `[UBIO-RR-SEND]` 打点范围从仅 `ReadReq` 扩展到 `ReadReq/ReadResp`，并新增 `sendAllocateBuffer` 指针日志：
+    - `alloc ptr=%p`（用于判断是否 `nullptr`）
+    - `sendCoh ret=true/false reason=ok/port_send_fail`
+  - `pollAndProcess()`：在 `TRACE-4`（net->gem5）后增加 `[TRACE-4-SEND]`，打印 `sendCoh` 返回值与路由字段（`dstModule/dstPort`）。
+  - `main()` 启动阶段新增 `[UBIO-IPC]`，统一打印 `gem5/net` 的 `rx/tx` IPC endpoint，便于核对双方命名是否匹配。
+
+## 2026-06-28: Async completion TODO (C)
+
+Following one-shot paths also need pending completion closure (same pattern as A/B):
+
+| Method | Caller | Missing |
+|--------|--------|---------|
+| `notifyLocalWriteUpgrade` | EPRNF | `sendUpgradeReq` returns -2 → caller treats as rejected |
+| `sendUpgradeDone` | EPBackend | `-2` treated as accepted, no completion tracking |
+| `handleEvict` | EPSNF | same as writeback: pending treated as success path |
+
+All need: three-state return, pending queue, retry in wakeup.

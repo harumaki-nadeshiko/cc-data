@@ -68,6 +68,9 @@ bool
 sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
         const CoherenceMessage &msg)
 {
+    const bool traceReadPath =
+        (msg.h.type == CoherenceMessageType::ReadReq) ||
+        (msg.h.type == CoherenceMessageType::ReadResp);
     if (msg.h.type == CoherenceMessageType::ClearReq ||
         msg.h.type == CoherenceMessageType::ClearResp) {
         std::fprintf(stderr,
@@ -78,19 +81,29 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
                      dstModule, dstPort, tick);
     }
     if (!port) {
-        if (msg.h.type == CoherenceMessageType::ReadReq) {
+        if (traceReadPath) {
             std::fprintf(stderr,
-                         "[UBIO-RR-SEND] sendCoh ret=false reason=no_port reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=no_port reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule, dstPort, tick);
         }
         return false;
     }
     MemMessage *buf = port->sendAllocateBuffer(tick);
+    if (traceReadPath) {
+        std::fprintf(stderr,
+                     "[UBIO-RR-SEND] type=%s alloc ptr=%p reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                     coherenceMsgTypeName(msg.h.type),
+                     static_cast<void*>(buf),
+                     msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+                     dstModule, dstPort, tick);
+    }
     if (!buf) {
-        if (msg.h.type == CoherenceMessageType::ReadReq) {
+        if (traceReadPath) {
             std::fprintf(stderr,
-                         "[UBIO-RR-SEND] sendCoh ret=false reason=sendAllocateBuffer_null reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=sendAllocateBuffer_null reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule, dstPort, tick);
         }
@@ -101,18 +114,20 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
     buf->hdr.dst_port = dstPort;
     buf->hdr.req_id = msg.h.reqId;
     if (!buf->setPayload(msg)) {
-        if (msg.h.type == CoherenceMessageType::ReadReq) {
+        if (traceReadPath) {
             std::fprintf(stderr,
-                         "[UBIO-RR-SEND] sendCoh ret=false reason=setPayload_fail reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=setPayload_fail reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                         coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule, dstPort, tick);
         }
         return false;
     }
     bool ok = port->send(buf);
-    if (msg.h.type == CoherenceMessageType::ReadReq) {
+    if (traceReadPath) {
         std::fprintf(stderr,
-                     "[UBIO-RR-SEND] sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                     "[UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
+                     coherenceMsgTypeName(msg.h.type),
                      ok ? "true" : "false",
                      ok ? "ok" : "port_send_fail",
                      msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
@@ -419,6 +434,11 @@ main(int argc, char **argv)
     std::string netRx = base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
     std::string netTx = base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
     Port *netPort = new Port("net", nid, 1, "ipc://" + netRx, "ipc://" + netTx, ctx, sw);
+    std::fprintf(stderr,
+                 "[UBIO-IPC] nid=%d gem5.rx=ipc://%s gem5.tx=ipc://%s net.rx=ipc://%s net.tx=ipc://%s\n",
+                 nid,
+                 gem5Rx.c_str(), gem5Tx.c_str(),
+                 netRx.c_str(), netTx.c_str());
 
     uint64_t tick = 0;
 
@@ -566,7 +586,12 @@ main(int argc, char **argv)
                 } else if (isGem5Ingress(coh->h.type)) {
                     std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
                                  nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
-                    sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
+                    bool sentToGem5 = sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
+                    std::fprintf(stderr,
+                                 "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
+                                 nid, sentToGem5 ? "true" : "false",
+                                 coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                 coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
                 } else if (isGem5Ingress(coh->h.type)) {
                     // Response from remote UBCC → forward to local gem5
                     sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
