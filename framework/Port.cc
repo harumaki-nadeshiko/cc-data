@@ -9,13 +9,15 @@ namespace framework {
 Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
            const std::string& local_rx_endpoint,
            const std::string& peer_rx_endpoint,
-           zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval)
+           zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval,
+           uint64_t linkLatency)
     : _name(name), _moduleId(module_id), _portId(port_id),
       _ctx(ctx),
       _state(PortState::INIT),
       _helloSent(false), _helloRecvd(false), _ackSent(false), _ackRecvd(false),
       _syncWindow(syncWindow),
       _syncInterval(syncInterval > 0 ? syncInterval : syncWindow),
+      _linkLatency(linkLatency),
       _lastSyncTs(0),
       _pending(false), _pendingT(0),
       _lastRxT(UINT64_MAX),
@@ -26,8 +28,6 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
 
      int sndtimeo = 10;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
-    _txSock->set(zmq::sockopt::immediate, 1);
-    _rxSock->set(zmq::sockopt::immediate, 1);
 
     try {
         _rxSock->bind(local_rx_endpoint);
@@ -53,13 +53,15 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
 // ── Deprecated single-endpoint constructor ──────────────────────────
 Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
            const std::string& endpoint, bool bind,
-           zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval)
+           zmq::context_t& ctx, uint64_t syncWindow, uint64_t syncInterval,
+           uint64_t linkLatency)
     : _name(name), _moduleId(module_id), _portId(port_id),
       _ctx(ctx),
       _state(PortState::READY),  // deprecated: no handshake
       _helloSent(true), _helloRecvd(true), _ackSent(true), _ackRecvd(true),
       _syncWindow(syncWindow),
       _syncInterval(syncInterval > 0 ? syncInterval : syncWindow),
+      _linkLatency(linkLatency),
       _lastSyncTs(0),
       _pending(false), _pendingT(0),
       _lastRxT(UINT64_MAX),
@@ -71,8 +73,6 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
 
     int sndtimeo = 10;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
-    _txSock->set(zmq::sockopt::immediate, 1);
-    _rxSock->set(zmq::sockopt::immediate, 1);
 
     try {
         if (bind) {
@@ -202,7 +202,7 @@ Port::sendAllocateBuffer(uint64_t timestamp)
 {
     if (_sendBufInUse) return nullptr;
     _sendBuf.clear();
-    _sendBuf.hdr.timestamp = timestamp;
+    _sendBuf.hdr.timestamp = timestamp + _linkLatency;
     _sendBuf.hdr.src_module = _moduleId;
     _sendBuf.hdr.src_port = _portId;
     _sendBuf.hdr.size = sizeof(MemMessageHeader);
@@ -295,6 +295,7 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     _lastRxT = (uint64_t)tmp.hdr.timestamp;
 
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
+        _lastSyncTs = std::max(_lastSyncTs, (uint64_t)tmp.hdr.timestamp);
         st = ReceiveStatus::kSync;
         static thread_local MemMessage result;
         result = tmp;
@@ -317,7 +318,7 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     static int coh_ct = 0;
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::COH_MSG)) {
         if (++coh_ct <= 5)
-            std::fprintf(stderr, "[PORT-RECV-COH] %s tick=%lu msg_ts=%lu sz=%u\n",
+            std::fprintf(stderr, "[PORT-RECV-COH] %s curT=%lu msg_ts=%lu sz=%u\n",
                          _name.c_str(), curT, tmp.hdr.timestamp, tmp.hdr.size);
     }
     return &result;

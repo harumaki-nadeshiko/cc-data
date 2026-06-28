@@ -61,7 +61,7 @@ void NetworkSim::buildPorts() {
         std::string tx = base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
         _ports[key] = std::make_unique<Port>(
             "nsim_p" + std::to_string(key), mod, portId,
-            "ipc://" + rx, "ipc://" + tx, _ctx, 1000);
+            "ipc://" + rx, "ipc://" + tx, _ctx, 1000, 1000, 1000);
     }
 }
 
@@ -90,8 +90,8 @@ void NetworkSim::loadTopology(const std::string& path) {
 
 void NetworkSim::buildRoutes() {
     for (auto& l : _links) {
-        _routes[{l.src_mod, l.src_port}].push_back({l.dst_mod, l.dst_port, l.latency});
-        _routes[{l.dst_mod, l.dst_port}].push_back({l.src_mod, l.src_port, l.latency});
+        _routes[{l.src_mod, l.src_port}].push_back(Link{0, 0, l.dst_mod, l.dst_port, l.latency});
+        _routes[{l.dst_mod, l.dst_port}].push_back(Link{0, 0, l.src_mod, l.src_port, l.latency});
     }
 }
 
@@ -130,9 +130,11 @@ void NetworkSim::step() {
         int targetKey = findPortByModule(pf.dst_mod, pf.dst_port);
         auto it = _ports.find(targetKey);
         if (it != _ports.end()) {
-            MemMessage* buf = it->second->sendAllocateBuffer(pf.msg.hdr.timestamp);
+            MemMessage* buf = it->second->sendAllocateBuffer(_tick);
             if (buf) {
+                uint64_t ts = buf->hdr.timestamp;
                 *buf = pf.msg;
+                buf->hdr.timestamp = ts;
                 it->second->send(buf);
             } else {
                 static int no_ct = 0;
@@ -158,7 +160,19 @@ void NetworkSim::step() {
 
 void NetworkSim::run(int maxSteps) {
     int s = 0;
-    while (!_done && (maxSteps < 0 || s < maxSteps)) { step(); s++; }
+    while (!_done && (maxSteps < 0 || s < maxSteps)) {
+        step();
+        s++;
+
+        uint64_t minTs = UINT64_MAX;
+        for (auto& kv : _ports) {
+            uint64_t b = kv.second->safeTs(_tick);
+            if (b < minTs) minTs = b;
+        }
+        if (minTs > _tick) {
+            _tick = minTs;
+        }
+    }
     std::printf("[NetworkSim] done after %d steps\n", s);
 }
 

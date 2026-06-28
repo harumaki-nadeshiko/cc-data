@@ -40,6 +40,9 @@ class Port
      *
      * After bind/connect, a PORT_HELLO / PORT_HELLO_ACK handshake
      * establishes the READY state before any data traffic.
+     *
+     * @param linkLatency  per-message latency (ticks) added to timestamp
+     *                     in sendAllocateBuffer. Models the one-way link delay.
      */
     Port(const std::string& name,
          uint32_t module_id, uint32_t port_id,
@@ -47,7 +50,8 @@ class Port
          const std::string& peer_rx_endpoint,
          zmq::context_t& ctx,
          uint64_t syncWindow,
-         uint64_t syncInterval = 0);
+         uint64_t syncInterval = 0,
+         uint64_t linkLatency = 0);
 
     // ---- Deprecated single-endpoint constructor (to be removed in Phase B) ----
     Port(const std::string& name,
@@ -56,7 +60,8 @@ class Port
          bool bind,
          zmq::context_t& ctx,
          uint64_t syncWindow,
-         uint64_t syncInterval = 0);
+         uint64_t syncInterval = 0,
+         uint64_t linkLatency = 0);
 
     ~Port();
 
@@ -126,6 +131,7 @@ class Port
 
     uint64_t _syncWindow;
     uint64_t _syncInterval;
+    uint64_t _linkLatency;
     uint64_t _lastSyncTs;
 
     // Single-slot future message cache
