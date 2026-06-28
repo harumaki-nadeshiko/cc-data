@@ -650,7 +650,11 @@ main(int argc, char **argv)
         if (minTs > tick) {
             tick = minTs;
         } else {
-            ++tick;
+            // Bounded by a peer: do NOT drift forward with ++tick (that let the
+            // native side crawl billions of ticks ahead of gem5, skewing message
+            // timestamps into gem5's far future). Yield and re-poll instead, so
+            // we stay clock-locked to the slowest peer.
+            std::this_thread::yield();
         }
     }
 

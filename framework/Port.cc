@@ -27,6 +27,17 @@ Port::Port(const std::string& name, uint32_t module_id, uint32_t port_id,
     int sndtimeo = 10;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
 
+    // Unbounded high-water marks (0 = no limit). Otherwise a transient backlog
+    // of heartbeat/CONTROL_SYNC traffic can fill the default 1000-deep queue and
+    // make send() block up to sndtimeo (10 ms) — and our send() ignores the
+    // EAGAIN result, so it would be SILENTLY dropped. That 10 ms-per-message
+    // stall is what throttled the clock leapfrog. Must be set before bind/connect.
+    int hwm = 0;
+    _txSock->set(zmq::sockopt::sndhwm, hwm);
+    _txSock->set(zmq::sockopt::rcvhwm, hwm);
+    _rxSock->set(zmq::sockopt::sndhwm, hwm);
+    _rxSock->set(zmq::sockopt::rcvhwm, hwm);
+
     try {
         _rxSock->bind(local_rx_endpoint);
     } catch (const zmq::error_t& e) {
@@ -201,7 +212,12 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
                  tmp.hdr.dst_module, tmp.hdr.dst_port, curT);
 
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
-        _lastSyncTs = std::max(_lastSyncTs, (uint64_t)tmp.hdr.timestamp);
+        // _lastRxT was already updated above (line: _lastRxT = timestamp), which
+        // is what receiveTimestamp()/safeTs() consume. Do NOT advance
+        // _lastSyncTs from a *received* sync: _lastSyncTs is our OWN heartbeat
+        // clock (the safeTs window base) and must only be set by emitSync().
+        // Mixing the peer's timestamp in here distorts the sync window and the
+        // emitSync rate-limit. Matches reference docs/all.cpp.
         st = ReceiveStatus::kSync;
         static thread_local MemMessage result;
         result = tmp;
@@ -227,7 +243,18 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
 bool
 Port::emitSync(uint64_t curTick)
 {
-    if (_lastSyncTs > 0 && curTick - _lastSyncTs < _syncInterval)
+    // Heartbeat rate-limit MUST be at the link-latency granularity, NOT the
+    // (much larger) syncInterval. Two peers advance toward each other in steps
+    // of ~linkLatency (each side's CONTROL_SYNC carries ts = curTick +
+    // linkLatency, which caps how far the other may advance). If we only re-emit
+    // every syncInterval (=10x linkLatency), then once two clocks fall into
+    // lockstep they both go silent after ~linkLatency of progress and neither
+    // can lift the other's safeTs — a mutual stall (observed: gem5 node frozen
+    // hot-spinning while its idle ubio peer was pinned 1 linkLatency behind).
+    // Emitting every linkLatency keeps the leapfrog alive. curTick stays frozen
+    // during a stall, so curTick-_lastSyncTs==0 < _linkLatency still prevents
+    // flooding while we busy-wait.
+    if (_lastSyncTs > 0 && curTick - _lastSyncTs < _linkLatency)
         return true;
 
     MemMessage* buf = sendAllocateBuffer(curTick);
@@ -240,8 +267,13 @@ Port::emitSync(uint64_t curTick)
     bool ok = send(buf);
     _sendBufInUse = false;
     if (ok) {
+        // NOTE: Only update _lastSyncTs (our own last heartbeat time).
+        // Do NOT touch _lastRxT here: _lastRxT tracks the *peer's* latest
+        // timestamp and feeds receiveTimestamp()/safeTs(). Bumping it with our
+        // own curTick made receiveTimestamp() return curTick, which pinned
+        // safeTs() to curTick forever and froze the simulation (mutual clock
+        // deadlock). Matches reference TimeSync::emitSync in docs/all.cpp.
         _lastSyncTs = curTick;
-        _lastRxT = std::max(_lastRxT, curTick);
         return true;
     }
     return false;

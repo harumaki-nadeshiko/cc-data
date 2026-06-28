@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <thread>
 #include <sstream>
 #include <zmq.hpp>
 
@@ -71,8 +72,11 @@ void NetworkSim::loadTopology(const std::string& path) {
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     size_t pos = json.find("\"links\"");
     if (pos == std::string::npos) return;
-    pos = json.find('[', pos);
-    size_t end = json.find(']', pos);
+    pos = json.find('[', pos);          // opening '[' of the links array
+    size_t end = json.rfind(']');       // closing ']' of the links array (NOT
+                                        // the first inner link's ']' — that bug
+                                        // dropped every link after the first,
+                                        // so mod2 never got a port/route).
     std::string arr = json.substr(pos+1, end-pos-1);
     std::istringstream iss(arr);
     std::string triple;
@@ -100,8 +104,8 @@ int NetworkSim::findPortByModule(int modId, int portId) const {
 }
 
 void NetworkSim::step() {
-    _tick++;
-
+    // NOTE: no unconditional _tick++ here. Advancing the clock is decided in
+    // run() strictly from safeTs, so nsim never drifts ahead of its peers.
     int totalRecv = 0, totalFwd = 0;
     for (auto& kv : _ports) {
         Port* p = kv.second.get();
@@ -171,6 +175,10 @@ void NetworkSim::run(int maxSteps) {
         }
         if (minTs > _tick) {
             _tick = minTs;
+        } else {
+            // Bounded by a peer: wait instead of drifting forward, so nsim stays
+            // clock-locked to the slowest peer (no ++tick skew).
+            std::this_thread::yield();
         }
     }
     std::printf("[NetworkSim] done after %d steps\n", s);

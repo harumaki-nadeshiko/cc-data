@@ -11,7 +11,16 @@
 namespace framework {
 
 static constexpr uint64_t kDefaultSyncInterval = 100000;
-static constexpr uint64_t kDefaultLinkLatency  = 10000;
+// linkLatency is BOTH the per-hop message delay AND the lockstep "leapfrog"
+// step: two peers advancing toward each other move in increments of
+// linkLatency (each CONTROL_SYNC promises ts = curTick + linkLatency). The
+// heartbeat rate-limit is also linkLatency. Keeping linkLatency == syncInterval
+// means (a) the rate-limit never blocks a leapfrog step (no lockstep stall),
+// (b) the sync traffic stays at the syncInterval cadence (no 10x flood that
+// previously overran the ZMQ buffers and stalled the idle node), and (c) steps
+// are large enough that the clock advances quickly. Round-trip stays well under
+// the EPSNF retry window (~8 hops * 1e5 = 8e5 << 1.6e6).
+static constexpr uint64_t kDefaultLinkLatency  = 100000;
 
 enum class ReceiveStatus {
     kMessage,
@@ -55,9 +64,15 @@ class Port
     uint64_t receiveTimestamp() const { return _pending ? _pendingT : _lastRxT; }
 
     uint64_t safeTs(uint64_t curT) const {
+        uint64_t rxt = receiveTimestamp();
+        // PLAN 1: before we have ever heard from the peer (rxt == sentinel
+        // UINT64_MAX), do NOT free-run — park at curT until the first sync
+        // arrives. gem5 emits its first heartbeat at tick 0, breaking symmetry.
+        // After that, advance to min(peer's latest ts, ownLastSync + window).
+        if (rxt == ~static_cast<uint64_t>(0))
+            return curT;
         uint64_t base = (_lastSyncTs > 0) ? _lastSyncTs : curT;
         uint64_t syncBound = base + _syncInterval;
-        uint64_t rxt = receiveTimestamp();
         return (rxt < syncBound) ? rxt : syncBound;
     }
 
