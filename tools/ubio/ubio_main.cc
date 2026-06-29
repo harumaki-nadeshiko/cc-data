@@ -550,7 +550,16 @@ main(int argc, char **argv)
                                  (!isDsm) ? "true" : "false",
                                  coh->h.homeLinePa);
                 }
-                if (!isDsm) {
+                if (!isDsm || !isUbccIngress(coh->h.type)) {
+                    // Forward cross-node. The isDsm "force local" only applies to
+                    // UBCC-ingress requests (ReadReq/Writeback/Upgrade/...) whose
+                    // PA determines local ownership. Transit control messages
+                    // (InvalidateReq/RecallReq/UpgradeAckNotify/...Resp — anything
+                    // not isUbccIngress) are point-to-point: route by dstNode
+                    // even if homeLinePa happens to fall in our DSM range.
+                    // (Without this, an InvalidateReq from gem5 to a remote
+                    // sharer was dropped as "unsupported local type" and the
+                    // upgrade's invalidation acks never came back → deadlock.)
                     if (netPort) {
                         std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d via net\n",
                                      nid, coherenceMsgTypeName(coh->h.type), coh->h.dstNode);

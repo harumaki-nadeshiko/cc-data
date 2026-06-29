@@ -1424,9 +1424,14 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                    line_pa, ost->requesterNode, ost->upgradeAckMask, ost->upgradeTargetMask);
 
             // Notify the requester that OuterUpgradeAck(true) is ready.
-            // Route through router (message-based) instead of direct EPBackend call.
-            if (!_router) {
-                fatal("UBCC node_id=%d: router required for UpgradeAckNotify "
+            // Route through the outbound interface (message-based) — the ubio
+            // process wires this to UbioBackstoreHost which forwards to the
+            // requester via the network/gem5 port. (Previously this used a
+            // separate _router pointer that was never set in ubio_main, causing
+            // a PANIC and leaving the upgrade pending forever → TC3/8/10/11
+            // deadlock.)
+            if (!_outbound) {
+                fatal("UBCC node_id=%d: outbound required for UpgradeAckNotify "
                       "PA=0x%lx requester=%d\n",
                       _nodeId, line_pa, ost->requesterNode);
             }
@@ -1444,7 +1449,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             notifyMsg.h.seqNum = 0;
             notifyMsg.h.enqueueTick = curTick();
             notifyMsg.h.readyTick = curTick();
-            _router->sendMessage(notifyMsg);
+            _outbound->sendUpgradeAckNotify(notifyMsg);
 
             // TENTATIVE: if Done arrived early (upgradeDoneArrived), auto-commit now
             if (ost->upgradeDoneArrived) {

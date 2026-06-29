@@ -52,7 +52,12 @@ static inline void _sync_wait2(unsigned int node_mask, unsigned int active_threa
 }
 static inline void _sync_wait1(unsigned int node_mask)
 {
-    _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)4, 0);
+    /* Single-arg sync_wait(mask): exactly ONE primary thread per node arrives
+     * (all these workloads exit non-primary CPUs). The barrier expects
+     * popcount(mask) * activeThreads threads, so activeThreads must be 1, not 4
+     * — the old hard-coded 4 made the barrier wait for popcount*4 arrivals that
+     * never come, hanging TC3/4/5/6/7/8/10/11. */
+    _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)1, 0);
 }
 #define _sync_wait_dispatch(_1, _2, NAME, ...) NAME
 #define sync_wait(...) _sync_wait_dispatch(__VA_ARGS__, _sync_wait2, _sync_wait1)(__VA_ARGS__)
