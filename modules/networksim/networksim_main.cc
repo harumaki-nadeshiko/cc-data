@@ -11,7 +11,6 @@
 #include <fstream>
 #include <thread>
 #include <sstream>
-#include <zmq.hpp>
 
 using namespace framework;
 
@@ -28,7 +27,6 @@ struct PendingFwd {
 };
 
 class NetworkSim {
-    zmq::context_t& _ctx;
     std::vector<Link> _links;
     std::map<int, std::unique_ptr<Port>> _ports;
     std::map<std::pair<int,int>, std::vector<Link>> _routes;
@@ -37,8 +35,8 @@ class NetworkSim {
     bool _done = false;
 
 public:
-    NetworkSim(zmq::context_t& ctx, const std::string& topoPath)
-        : _ctx(ctx) { loadTopology(topoPath); buildPorts(); buildRoutes(); }
+    NetworkSim(const std::string& topoPath)
+    { loadTopology(topoPath); buildPorts(); buildRoutes(); }
 
     void loadTopology(const std::string& path);
     void buildPorts();
@@ -56,13 +54,13 @@ void NetworkSim::buildPorts() {
     }
     for (int key : portKeys) {
         int mod = key / 1000;
-        int portId = key % 1000;
-        std::string base = "/workspace/gem5/shared_ipc/ipc";
-        std::string rx = base + "_ubio_" + std::to_string(mod) + "_to_networksim_m" + std::to_string(mod);
-        std::string tx = base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
-        _ports[key] = std::make_unique<Port>(
-            "nsim_p" + std::to_string(key), mod, portId,
-            "ipc://" + rx, "ipc://" + tx, _ctx);
+        framework::PortParams pp = framework::PortEnvLoader::nsimUbioPort(mod);
+        auto p = std::make_unique<Port>();
+        if (!p->init(pp)) {
+            std::fprintf(stderr, "[NetworkSim] port init failed mod=%d\n", mod);
+            return;
+        }
+        _ports[key] = std::move(p);
     }
 }
 
@@ -134,12 +132,13 @@ void NetworkSim::step() {
         int targetKey = findPortByModule(pf.dst_mod, pf.dst_port);
         auto it = _ports.find(targetKey);
         if (it != _ports.end()) {
-            MemMessage* buf = it->second->sendAllocateBuffer(_tick);
-            if (buf) {
+            framework::TxHandle* fh = it->second->allocateSendBuffer(_tick);
+            if (fh) {
+                MemMessage* buf = fh->buffer();
                 uint64_t ts = buf->hdr.timestamp;
                 *buf = pf.msg;
                 buf->hdr.timestamp = ts;
-                it->second->send(buf);
+                fh->send();
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)
@@ -186,8 +185,7 @@ void NetworkSim::run(int maxSteps) {
 
 int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr,"usage: networksim <topology.json>\n"); return 1; }
-    zmq::context_t ctx(1);
-    NetworkSim nsim(ctx, argv[1]);
+    NetworkSim nsim(argv[1]);
     nsim.run();
     return 0;
 }

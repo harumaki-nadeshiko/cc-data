@@ -1,25 +1,23 @@
 #ifndef FRAMEWORK_PORT_HH
 #define FRAMEWORK_PORT_HH
 
-#include <deque>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <zmq.hpp>
 
 #include "framework/MemMessage.hh"
+
+// Forward-declare ZMQ types so Port's public header does not expose zmq.hpp to
+// consumers (gem5 / ubio / nsim / barrier). The full zmq.hpp is only included in
+// Port.cc.
+namespace zmq {
+class context_t;
+class socket_t;
+}
 
 namespace framework {
 
 static constexpr uint64_t kDefaultSyncInterval = 100000;
-// linkLatency is BOTH the per-hop message delay AND the lockstep "leapfrog"
-// step: two peers advancing toward each other move in increments of
-// linkLatency (each CONTROL_SYNC promises ts = curTick + linkLatency). The
-// heartbeat rate-limit is also linkLatency. Keeping linkLatency == syncInterval
-// means (a) the rate-limit never blocks a leapfrog step (no lockstep stall),
-// (b) the sync traffic stays at the syncInterval cadence (no 10x flood that
-// previously overran the ZMQ buffers and stalled the idle node), and (c) steps
-// are large enough that the clock advances quickly. Round-trip stays well under
-// the EPSNF retry window (~8 hops * 1e5 = 8e5 << 1.6e6).
 static constexpr uint64_t kDefaultLinkLatency  = 100000;
 
 enum class ReceiveStatus {
@@ -29,99 +27,119 @@ enum class ReceiveStatus {
     kPendingFuture,
 };
 
-enum class PortState { INIT, RX_BOUND, TX_CONNECTED, HANDSHAKING, READY, PEER_LOST };
+enum class PortState { INIT, READY, TERMINATING, CLOSED, PEER_LOST };
+
+// Static identity of a port (loaded by PortEnvLoader).
+struct PortParams {
+    std::string name;
+    uint32_t moduleId = 0;
+    uint32_t portId   = 0;
+    std::string localRxEndpoint;   // complete ipc:// URL
+    std::string peerRxEndpoint;    // complete ipc:// URL
+};
+
+// Runtime tunables (not part of static identity).
+struct PortRuntime {
+    uint64_t syncInterval = kDefaultSyncInterval;
+    uint64_t linkLatency  = kDefaultLinkLatency;
+};
+
+// ---- Explicit (non-RAII) send handle ----
+// A TxHandle owns the single send slot of a Port until send() or cancel() is
+// called. It must NOT be held across an event/wakeup boundary. Failing to
+// release it before the next allocateSendBuffer is a programming error (the
+// next allocate returns nullptr). Destruction does NOT auto-cancel.
+class TxHandle {
+  public:
+    TxHandle() = default;
+    MemMessage* buffer();   // access the buffer to fill
+    bool send();            // commit; handle becomes invalid
+    void cancel();          // abandon; handle becomes invalid
+    bool valid() const { return _port != nullptr; }
+  private:
+    friend class Port;
+    TxHandle(class Port* p) : _port(p) {}
+    class Port* _port = nullptr;
+};
 
 class Port
 {
   public:
-    Port(const std::string& name,
-         uint32_t module_id, uint32_t port_id,
-         const std::string& local_rx_endpoint,
-         const std::string& peer_rx_endpoint,
-         zmq::context_t& ctx,
-         uint64_t syncInterval = kDefaultSyncInterval,
-         uint64_t linkLatency  = kDefaultLinkLatency);
-
-    // ---- Deprecated single-endpoint constructor ----
-    Port(const std::string& name,
-         uint32_t module_id, uint32_t port_id,
-         const std::string& endpoint,
-         bool bind,
-         zmq::context_t& ctx,
-         uint64_t syncInterval = kDefaultSyncInterval,
-         uint64_t linkLatency  = kDefaultLinkLatency);
-
+    Port();
     ~Port();
 
-    void pollHandshake();
+    Port(const Port&) = delete;
+    Port& operator=(const Port&) = delete;
+
+    // One-shot init; transitions INIT -> READY. Returns false on bind/connect
+    // failure (state -> CLOSED). Not reusable.
+    bool init(const PortParams& params, const PortRuntime& runtime = PortRuntime());
+
+    // Best-effort TERMINATE to peer, then immediate local cleanup -> CLOSED.
+    void terminate();
+    // Local cleanup only (no message). -> CLOSED.
+    void closeLocal();
+
     bool isReady() const { return _state == PortState::READY; }
+    PortState state() const { return _state; }
     void failClosed(const char* reason);
 
-    MemMessage* sendAllocateBuffer(uint64_t timestamp);
-    bool send(MemMessage* msg);
+    // ---- Data plane ----
+    // Allocate the send buffer for a message stamped at `timestamp`. Returns a
+    // TxHandle (valid until send/cancel) or nullptr if the slot is busy.
+    TxHandle* allocateSendBuffer(uint64_t timestamp);
     MemMessage* recv(uint64_t curT, ReceiveStatus* status = nullptr);
 
-    uint64_t receiveTimestamp() const { return _pending ? _pendingT : _lastRxT; }
-
-    uint64_t safeTs(uint64_t curT) const {
-        uint64_t rxt = receiveTimestamp();
-        // PLAN 1: before we have ever heard from the peer (rxt == sentinel
-        // UINT64_MAX), do NOT free-run — park at curT until the first sync
-        // arrives. gem5 emits its first heartbeat at tick 0, breaking symmetry.
-        // After that, advance to min(peer's latest ts, ownLastSync + window).
-        if (rxt == ~static_cast<uint64_t>(0))
-            return curT;
-        uint64_t base = (_lastSyncTs > 0) ? _lastSyncTs : curT;
-        uint64_t syncBound = base + _syncInterval;
-        return (rxt < syncBound) ? rxt : syncBound;
-    }
-
+    uint64_t receiveTimestamp() const;
+    uint64_t safeTs(uint64_t curT) const;
     bool emitSync(uint64_t curTick);
 
     uint32_t moduleId() const { return _moduleId; }
     uint32_t portId() const { return _portId; }
     uint64_t syncInterval() const { return _syncInterval; }
-
-    // ---- deprecated wrappers ----
-    uint64_t nextVisibleTick() const { return receiveTimestamp(); }
-    void advanceVisibleTick(uint64_t t) { if (t > _lastRxT) _lastRxT = t; }
-
-    PortState state() const { return _state; }
+    const std::string& name() const { return _name; }
 
   private:
-    void tryHandshakeStep();
-    void sendHello();
-    void sendHelloAck();
-    bool tryRecvHello();
-    bool tryRecvHelloAck();
-    bool tryRecvControl();
+    friend class TxHandle;
+    void releaseSendSlot();
+    bool doSend();  // internal: send _sendBuf (called by TxHandle::send)
 
     std::string _name;
-    uint32_t _moduleId, _portId;
-    zmq::context_t& _ctx;
+    uint32_t _moduleId = 0, _portId = 0;
+    PortState _state = PortState::INIT;
 
-    std::unique_ptr<zmq::socket_t> _txSock;
-    std::unique_ptr<zmq::socket_t> _rxSock;
+    std::unique_ptr<zmq::context_t> _ctx;
+    std::unique_ptr<zmq::socket_t>  _txSock;
+    std::unique_ptr<zmq::socket_t>  _rxSock;
 
-    PortState _state;
+    uint64_t _syncInterval = kDefaultSyncInterval;
+    uint64_t _linkLatency  = kDefaultLinkLatency;
+    uint64_t _lastSyncTs   = 0;
 
-    // Hello handshake
-    bool _helloSent, _helloRecvd, _ackSent, _ackRecvd;
-
-    uint64_t _syncInterval;
-    uint64_t _linkLatency;
-    uint64_t _lastSyncTs;
-
-    bool _pending;
-    uint64_t _pendingT;
+    bool _pending = false;
+    uint64_t _pendingT = 0;
     MemMessage _pendingMsg;
-    uint64_t _lastRxT;
+    uint64_t _lastRxT = static_cast<uint64_t>(~0ULL);
 
     MemMessage _sendBuf;
-    bool _sendBufInUse;
+    bool _sendBufInUse = false;
+    TxHandle _txHandle{this};
 };
 
-uint64_t synced_receive_lower_bound(Port** ports, int n, uint64_t tick);
+// Per-port environment/config loader. Encapsulates the endpoint naming so each
+// process does not re-implement the ipc:// URL assembly.
+struct PortEnvLoader {
+    // ubio <-> gem5 pair (per node n).
+    //   ubio's gem5 port:   rx = ..._gem5_n_to_ubio_n,  tx = ..._ubio_n_to_gem5_n
+    //   gem5's ubio port:   rx = ..._ubio_n_to_gem5_n,  tx = ..._gem5_n_to_ubio_n
+    static PortParams ubioGem5Port(int nid, bool isUbio);
+    static PortParams gem5UbioPort(int nid);
+    // ubio <-> nsim pair (per module m).
+    static PortParams ubioNetPort(int nid);
+    static PortParams nsimUbioPort(int mod);
+    // barrier (single endpoint, bind side).
+    static PortParams barrierPort(int n);
+};
 
 } // namespace framework
-#endif
+#endif // FRAMEWORK_PORT_HH

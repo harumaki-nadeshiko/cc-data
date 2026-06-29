@@ -7,7 +7,6 @@
 #include <map>
 #include <set>
 #include <vector>
-#include <zmq.hpp>
 
 #include "framework/Port.hh"
 
@@ -29,12 +28,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    zmq::context_t ctx(1);
     std::vector<std::unique_ptr<Port>> ports;
     for (int n = 0; n < numNodes; n++) {
-        std::string ep = "ipc:///tmp/barrier_m" + std::to_string(n) + "_p1";
-        ports.push_back(std::make_unique<Port>(
-            "barrier_n" + std::to_string(n), n, 1, ep, true, ctx));
+        framework::PortParams pp = framework::PortEnvLoader::barrierPort(n);
+        auto p = std::make_unique<Port>();
+        if (!p->init(pp)) {
+            std::fprintf(stderr, "barrier port init failed n=%d\n", n);
+            return 1;
+        }
+        ports.push_back(std::move(p));
     }
 
     std::map<uint32_t, BarrierState> barriers;
@@ -69,14 +71,15 @@ int main(int argc, char **argv) {
                         // Broadcast BARRIER_RELEASE to all nodes in the mask
                         for (uint32_t ni = 0; ni < (uint32_t)numNodes; ni++) {
                             if (mask & (1u << ni)) {
-                                MemMessage *rel = p->sendAllocateBuffer(tick);
-                                if (rel) {
+                                framework::TxHandle* rh = ports[ni]->allocateSendBuffer(tick);
+                                if (rh) {
+                                    MemMessage *rel = rh->buffer();
                                     rel->hdr.type = static_cast<uint32_t>(MemMessageType::BARRIER_RELEASE);
                                     rel->hdr.req_id = mask;
                                     rel->hdr.src_module = 0;
                                     rel->hdr.dst_module = ni;
                                     rel->hdr.size = sizeof(MemMessageHeader);
-                                    ports[ni]->send(rel);
+                                    rh->send();
                                 }
                             }
                         }

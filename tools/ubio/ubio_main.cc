@@ -16,7 +16,6 @@
 #include <cstring>
 #include <map>
 #include <thread>
-#include <zmq.hpp>
 
 using namespace framework;
 using namespace gem5::ruby;
@@ -90,7 +89,8 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
         }
         return false;
     }
-    MemMessage *buf = port->sendAllocateBuffer(tick);
+    framework::TxHandle *h = port->allocateSendBuffer(tick);
+    MemMessage *buf = h ? h->buffer() : nullptr;
     if (traceReadPath) {
         std::fprintf(stderr,
                      "[UBIO-RR-SEND] type=%s alloc ptr=%p reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
@@ -121,9 +121,10 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule, dstPort, tick);
         }
+        h->cancel();
         return false;
     }
-    bool ok = port->send(buf);
+    bool ok = h->send();
     if (traceReadPath) {
         std::fprintf(stderr,
                      "[UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u dstPort=%u tick=%lu\n",
@@ -423,17 +424,20 @@ main(int argc, char **argv)
         return 1;
     }
 
-    zmq::context_t ctx(1);
     std::fprintf(stderr, "[UBIO-START] creating ports...\n"); fflush(stderr);
-    std::string base = "/workspace/gem5/shared_ipc/ipc";
-    std::string gem5Rx = base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-    std::string gem5Tx = base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
-    Port *gem5Port = new Port("gem5", nid, 0, "ipc://" + gem5Rx, "ipc://" + gem5Tx, ctx);
-    std::string netRx = base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-    std::string netTx = base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
-    Port *netPort = new Port("net", nid, 1, "ipc://" + netRx, "ipc://" + netTx, ctx);
+    framework::PortParams gem5Pp = framework::PortEnvLoader::ubioGem5Port(nid, true);
+    framework::PortParams netPp = framework::PortEnvLoader::ubioNetPort(nid);
+    Port *gem5Port = new Port();
+    Port *netPort = new Port();
+    if (!gem5Port->init(gem5Pp) || !netPort->init(netPp)) {
+        std::fprintf(stderr, "[ubio:%d] port init failed\n", nid);
+        gem5Port->closeLocal(); netPort->closeLocal();
+        return 1;
+    }
+    std::string gem5Rx = gem5Pp.localRxEndpoint, gem5Tx = gem5Pp.peerRxEndpoint;
+    std::string netRx = netPp.localRxEndpoint, netTx = netPp.peerRxEndpoint;
     std::fprintf(stderr,
-                 "[UBIO-IPC] nid=%d gem5.rx=ipc://%s gem5.tx=ipc://%s net.rx=ipc://%s net.tx=ipc://%s\n",
+                 "[UBIO-IPC] nid=%d gem5.rx=%s gem5.tx=%s net.rx=%s net.tx=%s\n",
                  nid,
                  gem5Rx.c_str(), gem5Tx.c_str(),
                  netRx.c_str(), netTx.c_str());
@@ -471,20 +475,21 @@ main(int argc, char **argv)
                 if (netPort) {
                     for (int i = 0; i < 4; ++i) {
                         if (i != nid) {
-                            MemMessage* fwd = netPort->sendAllocateBuffer(m->hdr.timestamp);
-                            if (fwd) { *fwd = *m; fwd->hdr.dst_module = i; netPort->send(fwd); }
+                            framework::TxHandle* fh = netPort->allocateSendBuffer(m->hdr.timestamp);
+                            if (fh) { MemMessage* fwd = fh->buffer(); *fwd = *m; fwd->hdr.dst_module = i; fh->send(); }
                             else { std::fprintf(stderr,"[ubio:%d] BARRIER-FWD-FAIL to=%d\n", nid, i); }
                         }
                     }
                 }
                 uint32_t expected = __builtin_popcount(mask);
                 if (barrierNodes[mask].size() >= expected) {
-                    MemMessage* rel = gem5Port->sendAllocateBuffer(tick);
-                    if (rel) {
+                    framework::TxHandle* rh = gem5Port->allocateSendBuffer(tick);
+                    if (rh) {
+                        MemMessage* rel = rh->buffer();
                         rel->hdr.type = (uint32_t)MemMessageType::BARRIER_RELEASE;
                         rel->hdr.req_id = mask;
                         rel->hdr.size = sizeof(MemMessageHeader);
-                        gem5Port->send(rel);
+                        rh->send();
                         std::fprintf(stderr,"[ubio:%d] BARRIER_RELEASE mask=0x%x\n", nid, mask);
                     }
                     barrierNodes[mask].clear();

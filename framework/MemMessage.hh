@@ -30,6 +30,13 @@ struct MemMessageHeader {
     uint64_t req_id;        // txn matching ID
 };
 
+// Payload for MemMessageType::TERMINATE (best-effort shutdown notice).
+struct TerminatePayload {
+    uint32_t reason;    // 0=normal exit, 1=error, 2=peer_lost
+    uint32_t exit_code;
+    uint32_t sender;    // module id of the sender
+};
+
 static_assert(sizeof(MemMessageHeader) == kMemMessageHeaderSize,
               "MemMessageHeader must be exactly 40 bytes");
 

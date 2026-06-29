@@ -9,7 +9,9 @@ shopt -s nullglob 2>/dev/null || true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GEM5_BIN="$ROOT_DIR/gem5/build/ARM/gem5.opt"
-UBIO_BIN="/tmp/ubio.elf"
+UBIO_BIN="$ROOT_DIR/build/bin/ubio"
+NSIM_BIN="$ROOT_DIR/build/bin/networksim"
+BARRIER_BIN="$ROOT_DIR/build/bin/barrier_manager"
 WORKLOAD_DIR="$SCRIPT_DIR/workloads"
 MODULES_DIR="$ROOT_DIR/modules/ubiomodule"
 EP_DIR="$MODULES_DIR/mem/ruby/protocol/chi/ep"
@@ -36,31 +38,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Build ubio ─────────────────────────────────────────────────────
-compile_ubio() {
-    echo "[build] Compiling ubio..."
-    for f in BackstoreSchemaA BackstoreSchemaC BackstoreOrganization BackstoreTypes; do
-        [ -f "$MODULES_DIR/${f}.hh" ] && ln -sf "$MODULES_DIR/${f}.hh" "$EP_DIR/${f}.hh" 2>/dev/null
-    done
-    local srcs="$MODULES_DIR/UBCCController.cc $MODULES_DIR/ResidentDir.cc $MODULES_DIR/BackstoreSchemaA.cc $MODULES_DIR/BackstoreSchemaC.cc $MODULES_DIR/NodeAddressMap.cc"
-    g++ -std=c++17 -O2 \
-        -I"$MODULES_DIR" -I"$MODULES_DIR/mem/ruby" \
-        -I"$ROOT_DIR" -I"$ROOT_DIR/thirdparty/zeromq/include" \
-        "$ROOT_DIR/tools/ubio/ubio_main.cc" "$ROOT_DIR/framework/Port.cc" $srcs \
-        -L"$ROOT_DIR/thirdparty/zeromq/lib" -lzmq -lpthread -o "$UBIO_BIN" 2>/dev/null
-    [ -x "$UBIO_BIN" ] || die "ubio build failed"
-    echo "[build] ubio: $(ls -lh "$UBIO_BIN" | awk '{print $5}')"
-
-    # Compile BarrierManager
-    local BARRIER_BIN="$ROOT_DIR/modules/barrier/barrier_manager"
-    local barrier_src="$ROOT_DIR/tools/barrier/barrier_main.cc"
-    if [ -f "$barrier_src" ]; then
-        g++ -std=c++17 -O2 \
-            -I"$ROOT_DIR" -I"$ROOT_DIR/thirdparty/zeromq/include" \
-            "$barrier_src" "$ROOT_DIR/framework/Port.cc" \
-            -L"$ROOT_DIR/thirdparty/zeromq/lib" -lzmq -lpthread -o "$BARRIER_BIN" 2>/dev/null
-        [ -x "$BARRIER_BIN" ] && echo "[build] barrier: $(ls -lh "$BARRIER_BIN" | awk '{print $5}')"
+# ── Ensure native binaries exist (built by scripts/build_all.sh) ────
+ensure_tools() {
+    local missing=""
+    [ -x "$UBIO_BIN" ]      || missing="$missing ubio"
+    [ -x "$NSIM_BIN" ]      || missing="$missing networksim"
+    [ -x "$BARRIER_BIN" ]   || missing="$missing barrier_manager"
+    if [ -n "$missing" ]; then
+        echo "FATAL: missing native binaries:$missing" >&2
+        echo "请先运行: scripts/build_framework.sh && scripts/build_all.sh" >&2
+        exit 1
     fi
+    echo "[tools] ubio/nsim/barrier OK (build/bin/)"
 }
 
 # ── Compile workloads ──────────────────────────────────────────────
@@ -81,7 +70,6 @@ start_all() {
     mkdir -p /workspace/gem5/shared_ipc
 
     # Start BarrierManager first (must bind before UBAdapter connects)
-    local BARRIER_BIN="$ROOT_DIR/modules/barrier/barrier_manager"
     local NUM_NODES=3
     if [ -x "$BARRIER_BIN" ]; then
         echo "[launch] Starting BarrierManager..."
@@ -94,7 +82,6 @@ start_all() {
 
     # Start networksim first (must bind before anyone connects)
     local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
-    local NSIM_BIN="$ROOT_DIR/modules/networksim/networksim"
     if [ -x "$NSIM_BIN" ]; then
         echo "[launch] Starting networksim..."
         "$NSIM_BIN" "$TOPO" >"${LOG_BASE}/nsim.log" 2>&1 &
@@ -218,7 +205,7 @@ echo "Log base:  $LOG_BASE"
 mkdir -p "$LOG_BASE"
 
 compile_workloads
-compile_ubio
+ensure_tools
 
 TC="${1:---all}"
 PASS=0; FAIL=0
