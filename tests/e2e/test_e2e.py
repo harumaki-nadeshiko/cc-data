@@ -1604,15 +1604,9 @@ def gem5_config_main():
         49: ["tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1"],
     }
     _fault_cfg_line = None
-    if _args.tc in _fault_tc_configs:
-        from m5.objects import UBIOModule as _UBR
-        _found = []
-        for _r in ruby_system.descendants():
-            if isinstance(_r, _UBR):
-                _r.fault_rules = _fault_tc_configs[_args.tc]
-                _found.append(f"{_r.node_id}.{_r.socket_id}")
-        _fault_cfg_line = f"[E2E-FAULT] TC{_args.tc}: applied fault rules to routers: {_found}"
-        print(_fault_cfg_line, flush=True)
+    # UBIOModule fault injection was removed when UBIOModule was decoupled from
+    # gem5. The fault TC configs (47-49) are retained for future re-wiring via
+    # the ubio process.
 
     m5.instantiate()
     print(f"[FAULT-DEBUG] NODES={NODES} ruby_system type={type(ruby_system)}", flush=True)
