@@ -208,6 +208,14 @@ applyUbioFault(const CoherenceMessage &coh, int nid)
     return copies;
 }
 
+// Socket-plane addressing: each (node, socket) pair is a distinct ubio process
+// = network module. Global module id encodes both. With num_sockets=1 this
+// degenerates to gid == node (legacy per-node behavior).
+static int g_numSockets = 1;
+static inline uint32_t gidOf(int node, int socket) {
+    return static_cast<uint32_t>(node * g_numSockets + socket);
+}
+
 bool
 sendCoh(Port *port, uint64_t tick, uint32_t dstModule, uint32_t dstPort,
         const CoherenceMessage &msg)
@@ -307,8 +315,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return sendCoh(gem5Port, tickRef, nodeId, msg.h.dstSocket, msg);
         }
         if (!netPort) { return false; }
+        // Route to the target (node, socket) plane via its global module id.
         return sendCoh(netPort, tickRef,
-                       static_cast<uint32_t>(msg.h.dstNode), 1, msg);
+                       gidOf(msg.h.dstNode, msg.h.dstSocket), 1, msg);
     }
 
     bool sendRecallReq(const CoherenceMessage &msg) override {
@@ -559,9 +568,11 @@ main(int argc, char **argv)
     std::string gem5Ep;
     std::string netEp;
     int nid = 0;
+    int sid = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
+        if (!std::strncmp(argv[i], "--socket=", 9)) sid = std::atoi(argv[i] + 9);
     }
 
     if (nid < 0 || nid > 31) {
@@ -569,11 +580,26 @@ main(int argc, char **argv)
         return 1;
     }
 
+    // Socket-plane model: this ubio process is the home directory + router for
+    // exactly one (node, socket) plane. num_sockets comes from the environment
+    // so the global module id gid=node*K+socket matches gem5/nsim addressing.
+    if (const char *e = std::getenv("UBCC_NUM_SOCKETS")) {
+        int v = std::atoi(e);
+        if (v >= 1 && v <= 8) g_numSockets = v;
+    }
+    if (sid < 0 || sid >= g_numSockets) {
+        std::fprintf(stderr, "[ubio:%d] ERROR: --socket=%d out of range [0,%d)\n",
+                     nid, sid, g_numSockets);
+        return 1;
+    }
+    int gid = static_cast<int>(gidOf(nid, sid));
+
     parseFaultRulesEnv();
 
-    std::fprintf(stderr, "[UBIO-START] creating ports...\n"); fflush(stderr);
-    framework::PortParams gem5Pp = framework::PortEnvLoader::ubioGem5Port(nid, true);
-    framework::PortParams netPp = framework::PortEnvLoader::ubioNetPort(nid);
+    std::fprintf(stderr, "[UBIO-START] node=%d socket=%d gid=%d creating ports...\n",
+                 nid, sid, gid); fflush(stderr);
+    framework::PortParams gem5Pp = framework::PortEnvLoader::ubioGem5Port(gid, true);
+    framework::PortParams netPp = framework::PortEnvLoader::ubioNetPort(gid);
     Port *gem5Port = new Port();
     Port *netPort = new Port();
     if (!gem5Port->init(gem5Pp) || !netPort->init(netPp)) {
@@ -591,8 +617,8 @@ main(int argc, char **argv)
 
     uint64_t tick = 0;
 
-    UBCCController ubcc(nid, 0, nullptr);
-    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, 0, tick);
+    UBCCController ubcc(nid, sid, nullptr);
+    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
     bool done = false;
@@ -621,6 +647,9 @@ main(int argc, char **argv)
                 barrierNodes[mask].insert(src);
                 // Only forward barriers that arrived from the LOCAL gem5 — not
                 // ones forwarded by other ubios (avoids broadcast storm).
+                // Barriers are per-NODE and flow through the socket-0 plane only
+                // (gem5 emits BARRIER_REACHED via its socket-0 UBAdapter). Forward
+                // to every other node's plane-0 ubio (gid = j*K + 0).
                 if (netPort && !fromNetwork) {
                     const char *nn = getenv("UBCC_NUM_NODES");
                     int numNodes = nn ? atoi(nn) : 3;
@@ -631,7 +660,7 @@ main(int argc, char **argv)
                             if (fh) {
                                 MemMessage* fwd = fh->buffer(); *fwd = *m;
                                 fwd->hdr.timestamp = tick;  // immediate delivery
-                                fwd->hdr.dst_module = i;
+                                fwd->hdr.dst_module = gidOf(i, 0);
                                 fwd->hdr.dst_port = 1;  // nsim routes to ubio net port (portId=1)
                                 fh->send();
                             }
@@ -724,8 +753,8 @@ main(int argc, char **argv)
                              coh->h.homeLinePa);
             }
 
-            if (coh->h.dstNode != nid) {
-                // If this PA belongs to our local DSM, force local processing
+            if (coh->h.dstNode != nid || coh->h.dstSocket != sid) {
+                // If this PA belongs to our local DSM plane, force local processing
                 bool isDsm = ubcc.isDsmAddr(coh->h.homeLinePa);
                 if (coh->h.type == CoherenceMessageType::ReadReq) {
                     std::fprintf(stderr,
@@ -746,9 +775,11 @@ main(int argc, char **argv)
                     // sharer was dropped as "unsupported local type" and the
                     // upgrade's invalidation acks never came back → deadlock.)
                     if (netPort) {
-                        std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d via net\n",
-                                     nid, coherenceMsgTypeName(coh->h.type), coh->h.dstNode);
-                        bool sent = sendCoh(netPort, tick, coh->h.dstNode, 1, *coh);
+                        std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d:%d via net\n",
+                                     nid, coherenceMsgTypeName(coh->h.type),
+                                     coh->h.dstNode, coh->h.dstSocket);
+                        bool sent = sendCoh(netPort, tick,
+                                            gidOf(coh->h.dstNode, coh->h.dstSocket), 1, *coh);
                         if (coh->h.type == CoherenceMessageType::ReadReq) {
                             std::fprintf(stderr,
                                          "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=true sendCoh_ret=%s dstNode=%d\n",
@@ -775,9 +806,12 @@ main(int argc, char **argv)
                     CoherenceMessage response;
                     bool hasResponse = false;
                     if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
-                        std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back\n",
-                                     nid, coherenceMsgTypeName(response.h.type));
-                        sendCoh(netPort, tick, coh->h.srcNode, 1, response);
+                        std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back to %d:%d\n",
+                                     nid, coherenceMsgTypeName(response.h.type),
+                                     coh->h.srcNode, coh->h.srcSocket);
+                        // Response returns to the requester's (node, socket) plane.
+                        sendCoh(netPort, tick,
+                                gidOf(coh->h.srcNode, coh->h.srcSocket), 1, response);
                     } else if (isGem5Ingress(coh->h.type)) {
                         std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
                                      nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);

@@ -93,22 +93,20 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // Hardcoded prototype constants: num_nodes=3, segSize=128MB, NODE_ADDR_SHIFT=40
     constexpr uint64_t kSegSize = 128ULL * 1024 * 1024;
     constexpr int kNodeAddrShift = 40;
-    // v4-dual-socket: a node owns ONE contiguous DSM segment per socket. In the
-    // split arch this UBCC instance represents the whole node (one ubio/node),
-    // so isDsmAddr() must span ALL of the node's sockets, not just socket 0.
-    // Otherwise a request for this node's socket-1 segment is wrongly rejected
-    // as "non-home-DSM". num_sockets comes from UBCC_NUM_SOCKETS (default 1).
+    // Socket-plane model: this UBCC instance is the home directory for exactly
+    // ONE (node, socket) plane, owning the single DSM segment DSM(node, socket).
+    // num_sockets (from UBCC_NUM_SOCKETS) is needed only to locate that segment
+    // within the per-node layout; the covered range is a single segment.
     int kNumSockets = 1;
     if (const char *e = std::getenv("UBCC_NUM_SOCKETS")) {
         int v = std::atoi(e);
         if (v >= 1 && v <= 8) kNumSockets = v;
     }
     uint64_t nodeBase = static_cast<uint64_t>(node_id) << kNodeAddrShift;
-    // DSM base = phy_base + 2*seg + (node_id * numSockets + socket0) * seg,
-    // spanning numSockets contiguous segments for this node.
+    // DSM base = phy_base + 2*seg + (node_id * numSockets + socket_id) * seg.
     _dsmLocalBase = nodeBase + 2 * kSegSize
                     + (node_id * kNumSockets + socket_id) * kSegSize;
-    _dsmSegSize = static_cast<uint64_t>(kNumSockets) * kSegSize;
+    _dsmSegSize = kSegSize;
     DPRINTF(RubyEP,
             "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
             "dsmBase=0x%lx dsmSize=0x%lx\n",

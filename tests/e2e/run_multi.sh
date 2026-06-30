@@ -104,8 +104,24 @@ start_all() {
     sleep 1
 
     # 2) networksim (must bind before anyone connects)
-    local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
-    echo "[launch] networksim..."
+    # Socket-plane topology: each (node, socket) pair is a network module with
+    # global id gid = node*NUM_SOCKETS + socket. nsim is a crossbar (routes by
+    # dst_module), so a full mesh among all gids (port 1) suffices for
+    # connectivity; latency is uniform here (NUMA refinement is a later step).
+    local TOPO="${LOG_BASE}/topo.json"
+    local NMOD=$((NUM_NODES * NUM_SOCKETS))
+    {
+        printf '{"links": ['
+        local first=1 a b
+        for a in $(seq 0 $((NMOD - 1))); do
+            for b in $(seq $((a + 1)) $((NMOD - 1))); do
+                [ $first -eq 1 ] && first=0 || printf ','
+                printf '\n  [%d, 1, %d, 1, 100000]' "$a" "$b"
+            done
+        done
+        printf '\n]}\n'
+    } > "$TOPO"
+    echo "[launch] networksim (modules=$NMOD: ${NUM_NODES} nodes x ${NUM_SOCKETS} sockets)..."
     "$NSIM_BIN" "$TOPO" >"${LOG_BASE}/nsim.log" 2>&1 &
     NSIM_PID=$!
     sleep 1
@@ -134,7 +150,8 @@ start_all() {
         local gout_log="${LOG_BASE}/gem5_tc${TC_NUM}_node${nid}/stdout.log"
         local bound=0
         for i in $(seq 1 90); do
-            if grep -q "STEP5.*Port enabled" "$gout_log" 2>/dev/null; then
+            # Each node binds one Port per socket; wait for all NUM_SOCKETS.
+            if [ "$(grep -c "STEP5.*Port enabled" "$gout_log" 2>/dev/null)" -ge "$NUM_SOCKETS" ]; then
                 bound=1; break
             fi
             # if this node's gem5 died early, abort
@@ -148,25 +165,29 @@ start_all() {
             || { echo "[launch] node=$nid bind TIMEOUT"; return 1; }
     done
 
-    # 4) Start N ubio processes (connect to already-bound gem5 endpoints)
+    # 4) Start N*K ubio processes — one per (node, socket) plane. Each is the
+    #    home directory + router for DSM(node, socket); gid = node*K + socket.
     local fault_rules
     fault_rules=$(fault_rules_for_tc "$TC_NUM")
     [ -n "$fault_rules" ] && echo "[launch] fault rules (TC${TC_NUM}): $fault_rules"
     UBIO_PIDS=""
     for nid in $(seq 0 $((NUM_NODES - 1))); do
-        local logdir="${LOG_BASE}/ubio_n${nid}"
-        mkdir -p "$logdir"
-        # ubio's UBCCController must agree with gem5 on the DSM address layout,
-        # which is parameterized by node/socket counts. Without UBCC_NUM_SOCKETS
-        # the home UBCC computes a single-socket range and rejects this node's
-        # socket-1 segment as "non-home-DSM" (dual-socket TC panic).
-        UBCC_NUM_NODES="$NUM_NODES" UBCC_NUM_SOCKETS="$NUM_SOCKETS" \
-        UBIO_FAULT_RULES="$fault_rules" "$UBIO_BIN" --node="$nid" \
-            >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
-        UBIO_PIDS="$UBIO_PIDS $!"
+        for sid in $(seq 0 $((NUM_SOCKETS - 1))); do
+            local logdir="${LOG_BASE}/ubio_n${nid}_s${sid}"
+            mkdir -p "$logdir"
+            # UBCC_NUM_SOCKETS lets ubio compute gid=node*K+socket (must match
+            # gem5/nsim addressing); --socket selects which DSM plane this ubio
+            # is the home directory for.
+            UBCC_NUM_NODES="$NUM_NODES" UBCC_NUM_SOCKETS="$NUM_SOCKETS" \
+            UBIO_FAULT_RULES="$fault_rules" \
+            "$UBIO_BIN" --node="$nid" --socket="$sid" \
+                >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
+            UBIO_PIDS="$UBIO_PIDS $!"
+        done
     done
-    echo "[launch] $(echo $UBIO_PIDS | wc -w) ubio + $NUM_NODES gem5 running"
-    echo "[launch] total processes: $((2 * NUM_NODES + 2)) (expected 2N+2)"
+    local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
+    echo "[launch] $n_ubio ubio (${NUM_NODES}x${NUM_SOCKETS}) + $NUM_NODES gem5 running"
+    echo "[launch] total processes: $((NUM_NODES * NUM_SOCKETS + NUM_NODES + 2)) (N*K ubio + N gem5 + nsim + barrier)"
 }
 
 # ── Run single TC ──────────────────────────────────────────────────
@@ -232,10 +253,12 @@ run_tc() {
     done
 
     # Collect ubio logs so the verifier can see [UBFAULT] fault-injection
-    # evidence (fault injection now lives in the ubio process, not gem5).
+    # evidence (fault injection lives in the ubio processes, one per plane).
     local faultlogs=()
     for nid in $(seq 0 $((NUM_NODES - 1))); do
-        faultlogs+=("${LOG_BASE}/ubio_n${nid}/stderr.log")
+        for sid in $(seq 0 $((NUM_SOCKETS - 1))); do
+            faultlogs+=("${LOG_BASE}/ubio_n${nid}_s${sid}/stderr.log")
+        done
     done
 
     local vlog="${LOG_BASE}/verify_tc${tc}.log"
