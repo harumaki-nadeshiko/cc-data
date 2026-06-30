@@ -1253,6 +1253,13 @@ def gem5_config_main():
     _parser = _ap.ArgumentParser()
     _parser.add_argument("--tc", type=int, default=0)
     _parser.add_argument("--all", action="store_true")
+    # Multi-process split: this gem5 process owns exactly one node.
+    #   --node-id N   : build/run only node N (default -1 = all nodes, legacy)
+    #   --num-nodes K : total nodes in the system (default from DEFAULT_N)
+    #   --num-sockets S: sockets per node (overrides per-TC default if given)
+    _parser.add_argument("--node-id", type=int, default=-1)
+    _parser.add_argument("--num-nodes", type=int, default=0)
+    _parser.add_argument("--num-sockets", type=int, default=0)
     _args, _ = _parser.parse_known_args()
 
     if _args.tc in TESTCASES:
@@ -1263,11 +1270,23 @@ def gem5_config_main():
         print(f"ERROR: invalid --tc={_args.tc}. Must be 1-46.", flush=True)
         sys.exit(1)
 
-    # Dual-socket tests: TC32~TC35 + TC39 force 2 sockets.
-    if _args.tc in (32, 33, 34, 35, 39):
+    # Number of sockets: explicit --num-sockets wins; else per-TC default.
+    if _args.num_sockets > 0:
+        os.environ["UBCC_NUM_SOCKETS"] = str(_args.num_sockets)
+    elif _args.tc in (32, 33, 34, 35, 39):
+        # Dual-socket tests: TC32~TC35 + TC39 force 2 sockets.
         os.environ["UBCC_NUM_SOCKETS"] = "2"
     else:
         os.environ["UBCC_NUM_SOCKETS"] = "1"
+
+    # Multi-process split configuration -> env for create_ubcc_system.
+    _local_node = _args.node_id
+    os.environ["UBCC_LOCAL_NODE"] = str(_local_node)
+    if _args.num_nodes > 0:
+        os.environ["UBCC_NUM_NODES"] = str(_args.num_nodes)
+    # When this process owns a single node, only that node's UBAdapter
+    # should bind its Port (UBIO_PORT_ENABLE = node id). -1 = all nodes.
+    os.environ["UBIO_PORT_ENABLE"] = str(_local_node)
 
     binary = compile_workload(tc_name)
     if not binary:
@@ -1293,8 +1312,15 @@ def gem5_config_main():
 
     chi_module.create_system = create_ubcc_system
 
-    NODES = DEFAULT_N
-    TOTAL_CPUS = NODES * DEFAULT_L * DEFAULT_D
+    # Total nodes in the system (may be overridden for >3-node configs).
+    NODES = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
+    CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
+    # In split mode this process builds CPUs only for its own node.
+    if _local_node < 0:
+        BUILD_NODES = list(range(NODES))
+    else:
+        BUILD_NODES = [_local_node]
+    TOTAL_CPUS = len(BUILD_NODES) * CPUS_PER_NODE
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
@@ -1325,15 +1351,19 @@ def gem5_config_main():
     system.workload = SEWorkload.init_compatible(binary)
 
     for i, cpu in enumerate(cpus):
-        node_id = i // (DEFAULT_L * DEFAULT_D)
+        # Map this process's CPU to its global (node_id, global_cpu_index).
+        # In split mode `cpus` holds only the local node's CPUs, so the
+        # global node/cpu identity must be reconstructed from BUILD_NODES.
+        node_id = BUILD_NODES[i // CPUS_PER_NODE]
+        global_cpu_index = node_id * CPUS_PER_NODE + (i % CPUS_PER_NODE)
         # Q2: phys_pool_id selects which MemPool to allocate from.
         # Pool 0,1,2 cover [0,1,2]TiB + 256MiB (node LP+UE ranges).
         # Each process allocates stack/heap from its own node's pool,
         # ensuring the PA is within the node's address space.
-        proc = Process(pid=100 + i, phys_pool_id=node_id)
+        proc = Process(pid=100 + global_cpu_index, phys_pool_id=node_id)
         proc.executable = binary
         proc.cwd = os.getcwd()
-        proc.cmd = [binary, str(node_id), str(i)]
+        proc.cmd = [binary, str(node_id), str(global_cpu_index)]
         # Q2 FIX: Redirect workload stdout/stderr to files in outdir
         # so the harness can parse [READ_VAL] markers.
         # Default "cout"/"cerr" map to simulator terminal (not files).
@@ -1418,7 +1448,11 @@ def gem5_config_main():
     # SimpleMemory.  Must cover ALL nodes' address spaces (up to
     # Node2 base + 5*SEG ≈ 2.2 TB) so that self-tests and grant-data
     # population can functional-read any PA.
-    _max_pa = (NODES - 1) * (1 << 40) + 5 * DEFAULT_SEG_SIZE
+    # Per-node window = (2 + N*S) DSM/private segments + 16MB metadata.
+    _num_sockets_cfg = int(os.environ.get("UBCC_NUM_SOCKETS", "1"))
+    _segs_per_node = 2 + NODES * _num_sockets_cfg
+    _node_window = _segs_per_node * DEFAULT_SEG_SIZE + 16 * 1024 * 1024
+    _max_pa = (NODES - 1) * (1 << 40) + _node_window
     system.mem_ranges = [AddrRange(0, size=_max_pa)]
 
     # ── Create Ruby system ─────────────────────────────────────────
@@ -1489,7 +1523,8 @@ def gem5_config_main():
     _NODE_ADDR_SHIFT = 40
     _CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
 
-    # Per-node physical page counters (start at 1 MiB offset)
+    # Per-node physical page counters (start at 1 MiB offset).
+    # Build for ALL global nodes so split-mode (local node != 0) is covered.
     _node_pa = {}
     for _nid in range(NODES):
         _node_pa[_nid] = (_nid << _NODE_ADDR_SHIFT) + 0x100000
@@ -1520,9 +1555,11 @@ def gem5_config_main():
 
     _total_pages = 0
 
-    # Map binary segments: each CPU gets its own copy in its node's PA space
+    # Map binary segments: each CPU gets its own copy in its node's PA space.
+    # In split mode, cpus holds only the local node's CPUs, so the global
+    # node identity comes from BUILD_NODES (not the raw cpu index).
     for _cpu_idx, _cpu in enumerate(cpus):
-        _node_id = _cpu_idx // _CPUS_PER_NODE
+        _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
         for _proc in _cpu.workload:
             if _proc is None:
                 continue
@@ -1628,6 +1665,36 @@ def gem5_config_main():
     exit_event = m5.simulate()
     cause = exit_event.getCause()
     print(f"SIM_CAUSE={cause}", flush=True)
+
+    # ── Split mode: this process owns a single node; it does NOT have the
+    #    other nodes' outputs, so verification happens in the orchestrator
+    #    (run_multi.sh) after all per-node gem5 processes finish. Here we
+    #    just flush our own simout and exit cleanly. ───────────────────
+    if _local_node >= 0:
+        my_simout = os.path.join(m5.options.outdir, f"simout_n{_local_node}")
+        nlines = 0
+        if os.path.exists(my_simout):
+            with open(my_simout) as _f:
+                nlines = sum(1 for _ in _f)
+        print(f">>> NODE{_local_node} SIM DONE (cause={cause}, "
+              f"simout_lines={nlines}) <<<", flush=True)
+        # Multi-process split: explicitly run gem5 exit callbacks BEFORE exiting
+        # so the UBAdapter's registered Port::terminate() fires and notifies
+        # ubio that this node is done. A bare sys.exit(0) does not reliably
+        # trigger gem5's atexit-based doExitCleanup in the embedded interpreter,
+        # which would leave ubio's gem5-side clock frozen and stall every other
+        # still-running node. See UBAdapter::init registerExitCallback.
+        sys.stderr.write(f"[NODE{_local_node}] calling doExitCleanup...\n")
+        sys.stderr.flush()
+        try:
+            import _m5.core as _m5core
+            _m5core.doExitCleanup()
+            sys.stderr.write(f"[NODE{_local_node}] doExitCleanup returned\n")
+            sys.stderr.flush()
+        except Exception as _e:
+            sys.stderr.write(f"[NODE{_local_node}] doExitCleanup failed: {_e}\n")
+            sys.stderr.flush()
+        sys.exit(0)
 
     # ── Collect output ─────────────────────────────────────────────
     raw_lines = []
@@ -1764,10 +1831,80 @@ def runner_main():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  SPLIT-MODE VERIFY (orchestrator aggregation)
+# ═══════════════════════════════════════════════════════════════════
+
+def verify_split_main():
+    """Aggregate per-node simout files from a multi-process split run and
+    apply verify_testcase, exactly as the single-process path did.
+
+    Usage:
+      test_e2e.py --verify-split --tc N --simout F1 [F2 ...]
+    """
+    import argparse as _ap
+    p = _ap.ArgumentParser()
+    p.add_argument("--verify-split", action="store_true")
+    p.add_argument("--tc", type=int, required=True)
+    p.add_argument("--simout", nargs="+", default=[],
+                   help="per-node simout files to aggregate")
+    p.add_argument("--fault-log", nargs="*", default=[],
+                   help="ubio stderr logs to scan for [UBFAULT] evidence")
+    args = p.parse_args()
+
+    raw_lines = []
+    found = 0
+    for path in args.simout:
+        if os.path.exists(path):
+            found += 1
+            with open(path) as f:
+                raw_lines.extend(line.rstrip("\n") for line in f)
+    expected = len(args.simout)
+
+    # Pull fault-injection evidence ([UBFAULT]) from the ubio logs so the
+    # fault TCs (47-49) can validate that a fault was actually injected.
+    for path in args.fault_log:
+        if os.path.exists(path):
+            with open(path, errors="replace") as f:
+                for line in f:
+                    if "[UBFAULT]" in line:
+                        raw_lines.append(line.rstrip("\n"))
+    print(f"[verify-split] TC{args.tc}: aggregated {found}/{expected} "
+          f"simout files, {len(raw_lines)} lines", flush=True)
+
+    # Missing per-node simout means a node likely crashed/aborted before
+    # flushing output. This must be treated as FAIL in split-mode verify.
+    if found != expected:
+        print((f"  TC{args.tc} FAILED: missing simout files "
+               f"({found}/{expected})"), flush=True)
+        print(f">>> TC{args.tc} FAILED <<<", flush=True)
+        sys.exit(1)
+
+    # TC9 is an expected-fatal page-fault case validated by process exit,
+    # not by simout content.
+    if args.tc == 9:
+        print(">>> TC9 PASSED <<<", flush=True)
+        sys.exit(0)
+
+    reads = parse_read_vals(raw_lines)
+    passed, msg, failures = verify_testcase(args.tc, reads, raw_lines)
+    print(f"  {msg}", flush=True)
+    for f in failures:
+        print(f"    MISMATCH: {f['raw']}", flush=True)
+    if passed:
+        print(f">>> TC{args.tc} PASSED <<<", flush=True)
+    else:
+        print(f">>> TC{args.tc} FAILED <<<", flush=True)
+    sys.exit(0 if passed else 1)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__m5_main__":
     gem5_config_main()
 elif __name__ == "__main__":
-    runner_main()
+    if "--verify-split" in sys.argv:
+        verify_split_main()
+    else:
+        runner_main()

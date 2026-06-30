@@ -44,10 +44,51 @@ static inline long _syscall1(long num, long a0)
  * When all expected threads arrive, all are activated simultaneously.
  *
  * No shared memory required — the barrier state lives inside gem5.
+ *
+ * Multi-process split: dsm_store() is a non-blocking str instruction.
+ * TimingSimpleCPU continues to the next instruction immediately, and the
+ * retry-load loop exits via L1 store-to-load forwarding — BEFORE the
+ * coherence ReadReq reaches the home UBCC. Without a settle delay, the
+ * barrier fires while the store's coherence transaction is still in
+ * flight, and in split mode the reader node's ReadReq (with an earlier
+ * virtual timestamp) reaches home first, getting zero-filled data.
+ *
+ * coherence_settle() burns ~20M ticks of NOPs so the Ruby pipeline can
+ * complete the ReadReq → grant round-trip (~10.4M ticks measured) before
+ * the barrier suspends the thread.
  **********************************************************************/
+
+static inline void coherence_settle(void)
+{
+    /* Burn ~40M ticks so the Ruby pipeline can drain the ReadReq→grant
+     * round-trip before the barrier suspends the thread.
+     *
+     * NOTE: data CORRECTNESS for multi-writer/recall is now guaranteed by the
+     * home-side _lineDataCache (UBCC serves recalled dirty bytes on later G_S
+     * grants), so this settle only needs to cover in-flight pipeline latency,
+     * not the full multi-hop recall chain. A large settle (was 1500×1500≈2B
+     * ticks) made split-mode lockstep clock advancement crawl and hang TCs
+     * with many barriers (e.g. TC11). 200×100=20K iters × ~2000 ticks ≈ 40M. */
+    asm volatile(
+        "mov x0, #0\n"
+        "mov x1, #200\n"
+        "1:\n"
+        "mov x2, #0\n"
+        "2:\n"
+        "nop\n"
+        "add x2, x2, #1\n"
+        "cmp x2, #100\n"
+        "blt 2b\n"
+        "add x0, x0, #1\n"
+        "cmp x0, x1\n"
+        "blt 1b\n"
+        : : : "x0", "x1", "x2", "memory"
+    );
+}
 
 static inline void _sync_wait2(unsigned int node_mask, unsigned int active_threads)
 {
+    coherence_settle();
     _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)active_threads, 0);
 }
 static inline void _sync_wait1(unsigned int node_mask)
@@ -57,6 +98,7 @@ static inline void _sync_wait1(unsigned int node_mask)
      * popcount(mask) * activeThreads threads, so activeThreads must be 1, not 4
      * — the old hard-coded 4 made the barrier wait for popcount*4 arrivals that
      * never come, hanging TC3/4/5/6/7/8/10/11. */
+    coherence_settle();
     _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)1, 0);
 }
 #define _sync_wait_dispatch(_1, _2, NAME, ...) NAME

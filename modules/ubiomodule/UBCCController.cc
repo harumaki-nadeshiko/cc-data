@@ -93,12 +93,22 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // Hardcoded prototype constants: num_nodes=3, segSize=128MB, NODE_ADDR_SHIFT=40
     constexpr uint64_t kSegSize = 128ULL * 1024 * 1024;
     constexpr int kNodeAddrShift = 40;
-    constexpr int kNumSockets = 1; // v4-dual-socket: default single socket
+    // v4-dual-socket: a node owns ONE contiguous DSM segment per socket. In the
+    // split arch this UBCC instance represents the whole node (one ubio/node),
+    // so isDsmAddr() must span ALL of the node's sockets, not just socket 0.
+    // Otherwise a request for this node's socket-1 segment is wrongly rejected
+    // as "non-home-DSM". num_sockets comes from UBCC_NUM_SOCKETS (default 1).
+    int kNumSockets = 1;
+    if (const char *e = std::getenv("UBCC_NUM_SOCKETS")) {
+        int v = std::atoi(e);
+        if (v >= 1 && v <= 8) kNumSockets = v;
+    }
     uint64_t nodeBase = static_cast<uint64_t>(node_id) << kNodeAddrShift;
-    // DSM base = phy_base + 2*seg + (node_id * numSockets + socket_id) * seg
+    // DSM base = phy_base + 2*seg + (node_id * numSockets + socket0) * seg,
+    // spanning numSockets contiguous segments for this node.
     _dsmLocalBase = nodeBase + 2 * kSegSize
                     + (node_id * kNumSockets + socket_id) * kSegSize;
-    _dsmSegSize = kSegSize;
+    _dsmSegSize = static_cast<uint64_t>(kNumSockets) * kSegSize;
     DPRINTF(RubyEP,
             "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
             "dsmBase=0x%lx dsmSize=0x%lx\n",
@@ -631,8 +641,16 @@ UBCCController::processOuterRequest(
                     oreq->intendedSharersMask = entry.sharersMask | (1ULL << requesterNode);
                     oreq->intendedOwnerNode = -1;
                     oreq->intendedDirty = false;
-                    oreq->dataSource = GrantDataSource::HomeMemory;
-                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                    auto cacheIt = _lineDataCache.find(line_pa);
+                    if (cacheIt != _lineDataCache.end()) {
+                        oreq->dataValid = true;
+                        memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
+                        oreq->dataSource = GrantDataSource::RecallBuffer;
+                        if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                    } else {
+                        oreq->dataSource = GrantDataSource::HomeMemory;
+                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                    }
                     if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                 }
             } else {
@@ -2331,6 +2349,16 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
     }
     entry.epoch = normalizeEpoch(ost.reservedEpoch);
     entry.residentDirty = true;
+
+    // Persist recall-sourced payload at home so later shared grants from G_S
+    // can return real line data in split-mode (instead of stale HomeMemory).
+    if (ost.dataValid) {
+        std::array<uint8_t, 64> cached{};
+        memcpy(cached.data(), ost.dataBuf, 64);
+        _lineDataCache[ost.linePa] = cached;
+    } else if (entry.state == MESIState::G_I) {
+        _lineDataCache.erase(ost.linePa);
+    }
 
     panic_if((entry.state == MESIState::G_E || entry.state == MESIState::G_M) &&
              __builtin_popcountll(entry.sharersMask) != 1,

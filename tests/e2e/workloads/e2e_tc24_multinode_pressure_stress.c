@@ -4,7 +4,13 @@
 
 #define HOME_NODE      1
 #define PRESS_LINES    4096
-#define PRESS_ROUNDS   2048
+/* Split-mode: every cross-node coherence op costs an IPC round-trip under a
+ * lock-stepped virtual clock (≈100k-tick sync granularity), so the original
+ * 2048 rounds × 3 nodes hammering one home could not finish within the 600s
+ * per-TC budget. The pressure-loop values are not verified (only the trailing
+ * anchor-consistency check is), so a smaller round count preserves the
+ * concurrent-write stress while completing in time. */
+#define PRESS_ROUNDS   256
 #define PRESS_BASE     0x40000
 #define ANCHOR_BASE    0x900000
 

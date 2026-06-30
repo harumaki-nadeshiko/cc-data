@@ -15,7 +15,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <string>
 #include <thread>
+#include <vector>
 
 using namespace framework;
 using namespace gem5::ruby;
@@ -61,6 +63,149 @@ isGem5Ingress(CoherenceMessageType t)
       default:
         return false;
     }
+}
+
+// ── Debug fault injection (ubio-side, multi-process split) ──────────
+// Re-wires the fault injection that previously lived in gem5's UBIOModule
+// (removed during decoupling). Rules are passed via the UBIO_FAULT_RULES env
+// var, one or more rules separated by ';'. Each rule:
+//   name:type:src:dst:pa:action[:delayTicks[:matchCount]]
+// action ∈ {drop, dup, delay}. Matching messages emit a [UBFAULT] marker that
+// the split-mode verifier scans for as fault evidence.
+enum class UbioFaultAction { Drop, Duplicate, Delay };
+
+struct UbioFaultRule {
+    std::string name;
+    CoherenceMessageType matchType = CoherenceMessageType::ReadReq;
+    bool matchAnyType = false;          // matchType==ReadReq used as wildcard
+    int matchSrc = -1;
+    int matchDst = -1;
+    uint64_t matchPa = 0;
+    UbioFaultAction action = UbioFaultAction::Duplicate;
+    uint64_t delayTicks = 0;
+    int matchCount = 0;                 // 0 = unlimited
+    int firedCount = 0;
+};
+
+CoherenceMessageType
+parseMsgTypeName(const std::string &s)
+{
+    static const std::map<std::string, CoherenceMessageType> m = {
+        {"ReadReq", CoherenceMessageType::ReadReq},
+        {"ReadResp", CoherenceMessageType::ReadResp},
+        {"RecallReq", CoherenceMessageType::RecallReq},
+        {"RecallResp", CoherenceMessageType::RecallResp},
+        {"InvalidateReq", CoherenceMessageType::InvalidateReq},
+        {"InvalidateAck", CoherenceMessageType::InvalidateAck},
+        {"WritebackReq", CoherenceMessageType::WritebackReq},
+        {"WritebackResp", CoherenceMessageType::WritebackResp},
+        {"EvictReq", CoherenceMessageType::EvictReq},
+        {"EvictResp", CoherenceMessageType::EvictResp},
+        {"UpgradeReq", CoherenceMessageType::UpgradeReq},
+        {"UpgradeResp", CoherenceMessageType::UpgradeResp},
+        {"UpgradeDoneReq", CoherenceMessageType::UpgradeDoneReq},
+        {"UpgradeDoneResp", CoherenceMessageType::UpgradeDoneResp},
+        {"ClearReq", CoherenceMessageType::ClearReq},
+        {"ClearResp", CoherenceMessageType::ClearResp},
+        {"UpgradeAckNotify", CoherenceMessageType::UpgradeAckNotify},
+    };
+    auto it = m.find(s);
+    return it != m.end() ? it->second : CoherenceMessageType::ReadReq;
+}
+
+std::vector<UbioFaultRule> g_faultRules;
+
+void
+parseFaultRulesEnv()
+{
+    const char *env = std::getenv("UBIO_FAULT_RULES");
+    if (!env || !env[0]) return;
+    std::string all(env);
+    size_t start = 0;
+    while (start < all.size()) {
+        size_t semi = all.find(';', start);
+        std::string rule_str = all.substr(start, semi == std::string::npos
+                                          ? std::string::npos : semi - start);
+        start = (semi == std::string::npos) ? all.size() : semi + 1;
+        if (rule_str.empty()) continue;
+
+        std::vector<std::string> parts;
+        size_t pos = 0, next = 0;
+        while ((next = rule_str.find(':', pos)) != std::string::npos) {
+            parts.push_back(rule_str.substr(pos, next - pos));
+            pos = next + 1;
+        }
+        parts.push_back(rule_str.substr(pos));
+        if (parts.size() < 6) {
+            std::fprintf(stderr, "[UBFAULT] malformed rule '%s' — skipping\n",
+                         rule_str.c_str());
+            continue;
+        }
+        UbioFaultRule r;
+        r.name = parts[0];
+        r.matchType = parseMsgTypeName(parts[1]);
+        r.matchAnyType = (parts[1] == "*" || parts[1] == "any");
+        r.matchSrc = parts[2].empty() ? -1 : std::stoi(parts[2]);
+        r.matchDst = parts[3].empty() ? -1 : std::stoi(parts[3]);
+        r.matchPa = parts[4].empty() ? 0 : std::stoull(parts[4], nullptr, 0);
+        const std::string &a = parts[5];
+        if (a == "drop" || a == "Drop") r.action = UbioFaultAction::Drop;
+        else if (a == "delay" || a == "Delay") {
+            r.action = UbioFaultAction::Delay;
+            r.delayTicks = (parts.size() > 6 && !parts[6].empty())
+                           ? std::stoull(parts[6]) : 1000;
+        } else r.action = UbioFaultAction::Duplicate;  // dup default
+        if (parts.size() > 7 && !parts[7].empty())
+            r.matchCount = std::stoi(parts[7]);
+        g_faultRules.push_back(r);
+        std::fprintf(stderr, "[UBFAULT] loaded rule '%s' type=%s src=%d dst=%d "
+                     "action=%d count=%d\n", r.name.c_str(), parts[1].c_str(),
+                     r.matchSrc, r.matchDst, (int)r.action, r.matchCount);
+    }
+}
+
+// Returns number of times the message should be processed:
+//   0 = drop, 1 = normal, 2 = duplicate. Emits [UBFAULT] on a match.
+int
+applyUbioFault(const CoherenceMessage &coh, int nid)
+{
+    if (g_faultRules.empty()) return 1;
+    int copies = 1;
+    for (auto &r : g_faultRules) {
+        if (r.matchCount > 0 && r.firedCount >= r.matchCount) continue;
+        if (!r.matchAnyType && r.matchType != coh.h.type) continue;
+        if (r.matchSrc >= 0 && r.matchSrc != (int)coh.h.srcNode) continue;
+        if (r.matchDst >= 0 && r.matchDst != (int)coh.h.dstNode) continue;
+        if (r.matchPa != 0 && r.matchPa != coh.h.homeLinePa) continue;
+        r.firedCount++;
+        const char *tn = coherenceMsgTypeName(coh.h.type);
+        switch (r.action) {
+          case UbioFaultAction::Drop:
+            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Drop "
+                         "type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
+                         nid, r.name.c_str(), tn, coh.h.srcNode, coh.h.dstNode,
+                         coh.h.homeLinePa, coh.h.reqId);
+            copies = 0;
+            break;
+          case UbioFaultAction::Duplicate:
+            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Duplicate "
+                         "type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
+                         nid, r.name.c_str(), tn, coh.h.srcNode, coh.h.dstNode,
+                         coh.h.homeLinePa, coh.h.reqId);
+            copies = 2;
+            break;
+          case UbioFaultAction::Delay:
+            // Deferred enqueue not implemented in split mode; emit evidence and
+            // pass through (the value still converges).
+            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Delay "
+                         "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
+                         nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
+                         coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
+            copies = 1;
+            break;
+        }
+    }
+    return copies;
 }
 
 bool
@@ -424,6 +569,8 @@ main(int argc, char **argv)
         return 1;
     }
 
+    parseFaultRulesEnv();
+
     std::fprintf(stderr, "[UBIO-START] creating ports...\n"); fflush(stderr);
     framework::PortParams gem5Pp = framework::PortEnvLoader::ubioGem5Port(nid, true);
     framework::PortParams netPp = framework::PortEnvLoader::ubioNetPort(nid);
@@ -472,20 +619,38 @@ main(int argc, char **argv)
                 std::fprintf(stderr,"[ubio:%d] BARRIER_REACHED mask=0x%x src=%d\n", nid, mask, src);
                 static std::map<uint32_t, std::set<int>> barrierNodes;
                 barrierNodes[mask].insert(src);
-                if (netPort) {
-                    for (int i = 0; i < 4; ++i) {
+                // Only forward barriers that arrived from the LOCAL gem5 — not
+                // ones forwarded by other ubios (avoids broadcast storm).
+                if (netPort && !fromNetwork) {
+                    const char *nn = getenv("UBCC_NUM_NODES");
+                    int numNodes = nn ? atoi(nn) : 3;
+                    if (numNodes < 1) numNodes = 3;
+                    for (int i = 0; i < numNodes; ++i) {
                         if (i != nid) {
                             framework::TxHandle* fh = netPort->allocateSendBuffer(m->hdr.timestamp);
-                            if (fh) { MemMessage* fwd = fh->buffer(); *fwd = *m; fwd->hdr.dst_module = i; fh->send(); }
+                            if (fh) {
+                                MemMessage* fwd = fh->buffer(); *fwd = *m;
+                                fwd->hdr.timestamp = tick;  // immediate delivery
+                                fwd->hdr.dst_module = i;
+                                fwd->hdr.dst_port = 1;  // nsim routes to ubio net port (portId=1)
+                                fh->send();
+                            }
                             else { std::fprintf(stderr,"[ubio:%d] BARRIER-FWD-FAIL to=%d\n", nid, i); }
                         }
                     }
                 }
                 uint32_t expected = __builtin_popcount(mask);
                 if (barrierNodes[mask].size() >= expected) {
+                    // Use tick (not tick+linkLatency) so the RELEASE is
+                    // deliverable immediately even when clocks are deep into
+                    // the billions.  allocateSendBuffer would set timestamp =
+                    // tick + linkLatency, which may be > the peer's curT if
+                    // it is at the same tick, causing Port::recv to queue it
+                    // as _pending and delaying delivery indefinitely.
                     framework::TxHandle* rh = gem5Port->allocateSendBuffer(tick);
                     if (rh) {
                         MemMessage* rel = rh->buffer();
+                        rel->hdr.timestamp = tick;
                         rel->hdr.type = (uint32_t)MemMessageType::BARRIER_RELEASE;
                         rel->hdr.req_id = mask;
                         rel->hdr.size = sizeof(MemMessageHeader);
@@ -516,6 +681,21 @@ main(int argc, char **argv)
                          nid, fromNetwork ? "net" : "gem5",
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                          m->hdr.src_module, m->hdr.dst_module);
+
+            // Debug fault injection: evaluate rules against this message.
+            // copies: 0 = drop (skip processing+forwarding), 1 = normal,
+            // 2 = duplicate (process/forward twice). Only fire on the node the
+            // message is destined for, matching the original UBIOModule's
+            // per-node semantics.
+            int faultCopies = 1;
+            if (!g_faultRules.empty() && (int)coh->h.dstNode == nid) {
+                faultCopies = applyUbioFault(*coh, nid);
+                if (faultCopies == 0) {
+                    // Dropped — neither processed nor forwarded.
+                    m = port->recv(tick, &st);
+                    continue;
+                }
+            }
 
             if (coh->h.type == CoherenceMessageType::ClearReq ||
                 coh->h.type == CoherenceMessageType::ClearResp) {
@@ -589,24 +769,25 @@ main(int argc, char **argv)
             }
 
             if (fromNetwork) {
-                CoherenceMessage response;
-                bool hasResponse = false;
-                if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
-                    std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back\n",
-                                 nid, coherenceMsgTypeName(response.h.type));
-                    sendCoh(netPort, tick, coh->h.srcNode, 1, response);
-                } else if (isGem5Ingress(coh->h.type)) {
-                    std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
-                                 nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
-                    bool sentToGem5 = sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
-                    std::fprintf(stderr,
-                                 "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
-                                 nid, sentToGem5 ? "true" : "false",
-                                 coherenceMsgTypeName(coh->h.type), coh->h.reqId,
-                                 coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
-                } else if (isGem5Ingress(coh->h.type)) {
-                    // Response from remote UBCC → forward to local gem5
-                    sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
+                // faultCopies==2 (Duplicate) delivers the message to the home
+                // UBCC twice, exercising idempotent ack / tombstone-replay paths.
+                for (int rep = 0; rep < faultCopies; ++rep) {
+                    CoherenceMessage response;
+                    bool hasResponse = false;
+                    if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
+                        std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back\n",
+                                     nid, coherenceMsgTypeName(response.h.type));
+                        sendCoh(netPort, tick, coh->h.srcNode, 1, response);
+                    } else if (isGem5Ingress(coh->h.type)) {
+                        std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
+                                     nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
+                        bool sentToGem5 = sendCoh(gem5Port, tick, coh->h.srcNode, coh->h.srcSocket, *coh);
+                        std::fprintf(stderr,
+                                     "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
+                                     nid, sentToGem5 ? "true" : "false",
+                                     coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                     coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
+                    }
                 }
                 m = port->recv(tick, &st);
                 continue;
@@ -619,29 +800,30 @@ main(int argc, char **argv)
                 continue;
             }
 
-            CoherenceMessage response;
-            bool hasResponse = false;
-            if (!handleUbccMessage(ubcc, nid, *coh, response, hasResponse)) {
-                std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
-                             nid, coherenceMsgTypeName(coh->h.type));
-                m = port->recv(tick, &st);
-                continue;
-            }
-
-            if (hasResponse) {
-                Port *out = fromNetwork ? netPort : gem5Port;
-                sendCoh(out, tick, fromNetwork ? (uint32_t)coh->h.srcNode : (uint32_t)nid,
-                        fromNetwork ? 1U : 0U, response);
+            for (int rep = 0; rep < faultCopies; ++rep) {
+                CoherenceMessage response;
+                bool hasResponse = false;
+                if (!handleUbccMessage(ubcc, nid, *coh, response, hasResponse)) {
+                    std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
+                                 nid, coherenceMsgTypeName(coh->h.type));
+                    break;
+                }
+                if (hasResponse) {
+                    Port *out = fromNetwork ? netPort : gem5Port;
+                    sendCoh(out, tick, fromNetwork ? (uint32_t)coh->h.srcNode : (uint32_t)nid,
+                            fromNetwork ? 1U : 0U, response);
+                }
             }
 
             m = port->recv(tick, &st);
         }
     };
 
+    bool ubioDebug = []{ const char* e = std::getenv("EP_DEBUG_PORT"); return e && e[0]=='1'; }();
     uint64_t loop_count = 0;
     while (!done) {
         loop_count++;
-        if (loop_count % 10000 == 0) {
+        if (ubioDebug && loop_count % 1000000 == 0) {
             std::fprintf(stderr, "[UBIO-LOOP] tick=%lu loop=%lu\n", tick, loop_count);
             fflush(stderr);
         }
@@ -664,6 +846,19 @@ main(int argc, char **argv)
         if (minTs > tick) {
             tick = minTs;
         } else {
+            // Multi-process split liveness: if we are clock-bounded but the
+            // local gem5 node has gone silent for a while, it has finished its
+            // workload and exited (possibly without a clean TERMINATE). Mark
+            // its port done so safeTs() stops treating its frozen clock as a
+            // constraint; we then keep advancing on the network side and keep
+            // serving this node's home directory for the remaining nodes.
+            static const uint64_t kPeerStaleMs = 5000;
+            if (gem5Port->peerStaleMs(kPeerStaleMs)) {
+                std::fprintf(stderr,
+                    "[ubio:%d] gem5 peer stale > %lums -> marking done\n",
+                    nid, (unsigned long)kPeerStaleMs);
+                gem5Port->markPeerDone("gem5 node finished (stale sync)");
+            }
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message
             // timestamps into gem5's far future). Yield and re-poll instead, so

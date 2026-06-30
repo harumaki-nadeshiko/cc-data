@@ -13,7 +13,7 @@ class NodeAddressMap
 {
   public:
     static constexpr int NODE_ADDR_SHIFT = 40;
-    static constexpr int MAX_NODES = 3;
+    static constexpr int MAX_NODES = 16;
     static constexpr int DEFAULT_NUM_SOCKETS = 1;
 
     NodeAddressMap(int num_nodes, int num_sockets = DEFAULT_NUM_SOCKETS,

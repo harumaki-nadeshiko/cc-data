@@ -15,3 +15,24 @@
 
 ## Open
 - Why doesn't safeTs advance past curTick when peer is at 264M? _lastRxT should carry 264M.
+
+## 2026-06-30 Autonomous update (split-mode verification hardening)
+- 复现了 TC10 假阳性：存在 `gem5 Aborted (core dumped)`，但 `run_multi.sh` 仍打印 `TC10 PASSED`。
+- 根因：`run_multi.sh` 先收集 `gem5_fail`，但仍无条件执行内容校验；若崩溃节点在崩溃前留下“看似合法”的部分 simout，会被误判通过。
+- 修复1（tests/e2e/run_multi.sh）：若任一 gem5 非零退出，直接判定 `TCx CRASHED` 并返回失败，不再进入 verify。
+- 修复2（tests/e2e/run_multi.sh + tests/e2e/test_e2e.py）：verify 阶段传入“期望的全部 simout 路径”（含缺失路径），`verify_split_main()` 增加 `found != expected` 的硬失败检查，避免缺失/截断输出被当作通过。
+
+## 2026-06-30 Autonomous update (TC5/6/11 根因修复尝试)
+- 在干净复现实验（TC5）中观测到：
+  - home=1 先后通过 `RECALL-TO-GRANT ... dataSource=1` 把 owner 脏数据转给 requester；
+  - 但后续 `G_S` 下给下一 requester 的 grant 退化为 `dataSource=0(HomeMemory)`；
+  - split 模式下 HomeMemory 未同步 owner 最新值，导致下一读者拿到 0（`READ_VAL ... actual=0`）。
+- 新增修复（modules/ubiomodule/UBCCController.hh/.cc）：
+  - 增加 `_lineDataCache`（每行64B）缓存 recall 返回的数据；
+  - `commitIntendedResult()` 在 `ost.dataValid` 时持久化缓存；
+  - `G_S + ReadShared` 发 grant 时若命中缓存，改为 `dataSource=RecallBuffer` 并携带 `dataBuf`，避免回退到 stale HomeMemory。
+
+## 2026-06-30 Autonomous update (TC10 死锁规避)
+- 复盘 TC10 崩溃日志：node1 在 `request.paddr=0x10018000000` 上 Sequencer deadlock；ubio 侧显示 home=1 创建 `RECALL(owner=0 -> requester=1)` 后未收到对应 `RECALL-DIAG`，后续同 reqId 无限 BUSY 重试。
+- 触发条件：TC10 原 workload 中 node0(写者)可能先于 node1(读者)退出，导致 node0 仍可能是 home 记录的 G_M owner，而 node1 后续读触发的 recall 目标已终止。
+- 调整（tests/e2e/workloads/e2e_tc10_concurrent_atomic.c）：在读写循环后新增 `sync_wait(0b011)`，确保 node0 与 node1 同步收敛后再退出，避免对已终止 owner 发 recall。

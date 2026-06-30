@@ -1,6 +1,7 @@
 #ifndef __MEM_RUBY_PROTOCOL_CHI_EP_UBCCCONTROLLER_HH__
 #define __MEM_RUBY_PROTOCOL_CHI_EP_UBCCCONTROLLER_HH__
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -635,6 +636,11 @@ class UBCCController
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
     std::set<uint64_t> _evictionPendingRemoval;
+
+    // Split-mode data persistence: when a line transitions through recall
+    // (owner -> requester), cache the recalled 64B payload at home so that
+    // later shared grants can carry correct data instead of stale HomeMemory.
+    std::map<uint64_t, std::array<uint8_t, 64>> _lineDataCache;
 
     // ---- v4: Tombstone window (configurable, default 100000 ticks) ----
     Tick _tombstoneWindowW = 100000;

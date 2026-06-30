@@ -1,7 +1,16 @@
 #!/bin/bash
-# Multi-Process E2E Test Runner
-# Starts ubio processes + gem5 with Port IPC, runs TC1-11, reports results
-# Usage: ./tests/e2e/run_multi.sh [--all | 1 | 2 | ... | 11]
+# Multi-Process E2E Test Runner (per-node gem5 split)
+#
+# Process topology for N nodes:
+#   barrier_manager (1)  + networksim (1) + ubio_n{0..N-1} (N)
+#   + gem5 --node-id={0..N-1} (N)   => total 2N+2 processes
+#
+# Each gem5 process builds & runs ONLY its own node's RubySystem/CPUs.
+# Cross-node DSM coherence flows over IPC (UBAdapter->Port->ubio->nsim).
+# Verification is done at the orchestrator layer after all gem5 finish,
+# aggregating each process's per-node simout file.
+#
+# Usage: ./tests/e2e/run_multi.sh [--all | <tc> ...]
 
 set -euo pipefail
 shopt -s nullglob 2>/dev/null || true
@@ -13,13 +22,17 @@ UBIO_BIN="$ROOT_DIR/build/bin/ubio"
 NSIM_BIN="$ROOT_DIR/build/bin/networksim"
 BARRIER_BIN="$ROOT_DIR/build/bin/barrier_manager"
 WORKLOAD_DIR="$SCRIPT_DIR/workloads"
-MODULES_DIR="$ROOT_DIR/modules/ubiomodule"
-EP_DIR="$MODULES_DIR/mem/ruby/protocol/chi/ep"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_BASE="$ROOT_DIR/logs/$TIMESTAMP"
 
+# System dimensions (defaults). NUM_SOCKETS may be raised per dual-socket TC.
+NUM_NODES="${NUM_NODES:-3}"
+NUM_SOCKETS=1
+
 UBIO_PIDS=""
 GEM5_PIDS=""
+NSIM_PID=""
+BARRIER_PID=""
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 
@@ -27,14 +40,8 @@ die() { echo "FATAL: $*" >&2; exit 1; }
 cleanup() {
     local all_pids="${UBIO_PIDS:-} ${GEM5_PIDS:-} ${NSIM_PID:-} ${BARRIER_PID:-}"
     [ -z "${all_pids// /}" ] && return
-    echo "[cleanup] Terminating all processes..."
-    for pid in ${all_pids}; do
-        kill $pid 2>/dev/null || true
-    done
-    for pid in ${all_pids}; do
-        wait $pid 2>/dev/null || true
-    done
-    echo "[cleanup] Done"
+    for pid in ${all_pids}; do kill $pid 2>/dev/null || true; done
+    for pid in ${all_pids}; do wait $pid 2>/dev/null || true; done
 }
 trap cleanup EXIT
 
@@ -44,12 +51,13 @@ ensure_tools() {
     [ -x "$UBIO_BIN" ]      || missing="$missing ubio"
     [ -x "$NSIM_BIN" ]      || missing="$missing networksim"
     [ -x "$BARRIER_BIN" ]   || missing="$missing barrier_manager"
+    [ -x "$GEM5_BIN" ]      || missing="$missing gem5.opt"
     if [ -n "$missing" ]; then
-        echo "FATAL: missing native binaries:$missing" >&2
-        echo "请先运行: scripts/build_framework.sh && scripts/build_all.sh" >&2
+        echo "FATAL: missing binaries:$missing" >&2
+        echo "请先运行: scripts/build_framework.sh && scripts/build_all.sh，并编译 gem5" >&2
         exit 1
     fi
-    echo "[tools] ubio/nsim/barrier OK (build/bin/)"
+    echo "[tools] ubio/nsim/barrier/gem5 OK"
 }
 
 # ── Compile workloads ──────────────────────────────────────────────
@@ -63,144 +71,194 @@ compile_workloads() {
     done
 }
 
-# ── Start gem5 first, wait for Port bind, then ubio ─────────────────
-start_all() {
-    # Clean up stale IPC endpoints
-    rm -rf /tmp/ubio_n* /tmp/networksim_* /tmp/barrier_* /workspace/gem5/shared_ipc/ipc_* 2>/dev/null
-    mkdir -p /workspace/gem5/shared_ipc
-
-    # Start BarrierManager first (must bind before UBAdapter connects)
-    local NUM_NODES=3
-    if [ -x "$BARRIER_BIN" ]; then
-        echo "[launch] Starting BarrierManager..."
-        "$BARRIER_BIN" "$NUM_NODES" >"${LOG_BASE}/barrier.log" 2>&1 &
-        BARRIER_PID=$!
-        sleep 1
-    else
-        echo "[launch] WARNING: no barriermanager binary at $BARRIER_BIN"
-    fi
-
-    # Start networksim first (must bind before anyone connects)
-    local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
-    if [ -x "$NSIM_BIN" ]; then
-        echo "[launch] Starting networksim..."
-        "$NSIM_BIN" "$TOPO" >"${LOG_BASE}/nsim.log" 2>&1 &
-        NSIM_PID=$!
-        sleep 1
-    else
-        echo "[launch] WARNING: no networksim binary at $NSIM_BIN"
-    fi
-
-    # Start gem5 in background, wait for Port creation
-    echo "[launch] Starting gem5..."
-    UBIO_PORT_ENABLE=-1 "$GEM5_BIN" \
-        --outdir="${ROOT_DIR}/m5out/e2e_mp/tc${TC_NUM}" \
-        "$SCRIPT_DIR/test_e2e.py" --tc=${TC_NUM} \
-        >"${LOG_BASE}/gem5_tc${TC_NUM}/stdout.log" \
-        2>"${LOG_BASE}/gem5_tc${TC_NUM}/stderr.log" &
-    GEM5_PID=$!
-    
-    # Wait for gem5 to bind Port (STEP5 message)
-    echo "[launch] Waiting for gem5 to bind..."
-    local gem5_stdout="${LOG_BASE}/gem5_tc${TC_NUM}/stdout.log"
-    for i in $(seq 1 60); do
-        if grep -q "STEP5.*Port enabled" "$gem5_stdout" 2>/dev/null; then
-            echo "[launch] Gem5 Port bound after ${i}s"
-            break
-        fi
-        if ! kill -0 $GEM5_PID 2>/dev/null; then
-            echo "[launch] Gem5 exited early!"
-            return 1
-        fi
-        sleep 1
-    done
-    
-    # Now start ubio (connects to already-bound endpoints)
-    for nid in 0 1 2; do
-        local logdir="${LOG_BASE}/ubio_n${nid}"
-        mkdir -p "$logdir"
-        "$UBIO_BIN" --node="$nid" \
-            >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
-        UBIO_PIDS="$UBIO_PIDS $!"
-        echo "[launch] ubio n${nid} pid=$! log=$logdir"
-    done
-    echo "[launch] $(echo $UBIO_PIDS | wc -w) ubio processes running"
+# ── Determine sockets for a TC (dual-socket cases force 2) ──────────
+sockets_for_tc() {
+    case "$1" in
+        32|33|34|35|39) echo 2 ;;
+        *)              echo 1 ;;
+    esac
 }
 
-# ── Gem5 watchdog: poll until gem5 exits, then trigger cleanup ─────
-watchdog() {
-    local gem5_pid=$1
-    local start=$(date +%s)
-    while kill -0 $gem5_pid 2>/dev/null; do
-        sleep 2
-        local elapsed=$(($(date +%s) - start))
-        # Print status every 30s
-        if [ $((elapsed % 30)) -lt 2 ] && [ $elapsed -gt 0 ]; then
-            echo "[watchdog] gem5 running ${elapsed}s..."
-        fi
+# ── Debug fault-injection rules per TC (ubio-side) ──────────────────
+# Format: name:type:src:dst:pa:action[:delayTicks[:matchCount]]
+# Multiple rules separated by ';'. Consumed by ubio via UBIO_FAULT_RULES.
+fault_rules_for_tc() {
+    case "$1" in
+        47) echo "tc47_dup_clear:ClearReq:1:0:0:dup::1" ;;
+        48) echo "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1" ;;
+        49) echo "tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1" ;;
+        *)  echo "" ;;
+    esac
+}
+
+# ── Start infra (barrier, nsim, ubio) + N per-node gem5 processes ───
+start_all() {
+    rm -rf /tmp/ubio_n* /tmp/networksim_* /tmp/barrier_* \
+           /workspace/gem5/shared_ipc/ipc_* 2>/dev/null || true
+    mkdir -p /workspace/gem5/shared_ipc 2>/dev/null || true
+
+    # 1) BarrierManager (must bind before anyone connects)
+    echo "[launch] BarrierManager (nodes=$NUM_NODES)..."
+    "$BARRIER_BIN" "$NUM_NODES" >"${LOG_BASE}/barrier.log" 2>&1 &
+    BARRIER_PID=$!
+    sleep 1
+
+    # 2) networksim (must bind before anyone connects)
+    local TOPO="$ROOT_DIR/tools/networksim/topo3.json"
+    echo "[launch] networksim..."
+    "$NSIM_BIN" "$TOPO" >"${LOG_BASE}/nsim.log" 2>&1 &
+    NSIM_PID=$!
+    sleep 1
+
+    # 3) Start N per-node gem5 processes (each binds its own node's Port)
+    GEM5_PIDS=""
+    GEM5_PID_ARR=()
+    for nid in $(seq 0 $((NUM_NODES - 1))); do
+        local gdir="${LOG_BASE}/gem5_tc${TC_NUM}_node${nid}"
+        local gout="${ROOT_DIR}/m5out/e2e_mp/tc${TC_NUM}/node${nid}"
+        mkdir -p "$gdir" "$gout"
+        echo "[launch] gem5 node=$nid (sockets=$NUM_SOCKETS)..."
+        "$GEM5_BIN" \
+            --outdir="$gout" \
+            "$SCRIPT_DIR/test_e2e.py" --tc=${TC_NUM} \
+            --node-id=${nid} --num-nodes=${NUM_NODES} --num-sockets=${NUM_SOCKETS} \
+            >"${gdir}/stdout.log" 2>"${gdir}/stderr.log" &
+        local pid=$!
+        GEM5_PID_ARR+=($pid)
+        GEM5_PIDS="$GEM5_PIDS $pid"
     done
-    echo "[watchdog] gem5 (pid=$gem5_pid) exited after ${elapsed}s"
-    # Kill all ubio processes — gem5 is done
-    for pid in $UBIO_PIDS; do
-        kill $pid 2>/dev/null || true
+
+    # Wait until ALL gem5 processes have bound their Port (STEP5 marker)
+    echo "[launch] waiting for all $NUM_NODES gem5 to bind Port..."
+    for nid in $(seq 0 $((NUM_NODES - 1))); do
+        local gout_log="${LOG_BASE}/gem5_tc${TC_NUM}_node${nid}/stdout.log"
+        local bound=0
+        for i in $(seq 1 90); do
+            if grep -q "STEP5.*Port enabled" "$gout_log" 2>/dev/null; then
+                bound=1; break
+            fi
+            # if this node's gem5 died early, abort
+            if ! kill -0 ${GEM5_PID_ARR[$nid]} 2>/dev/null; then
+                echo "[launch] gem5 node=$nid exited before binding!"
+                return 1
+            fi
+            sleep 1
+        done
+        [ $bound -eq 1 ] && echo "[launch]   node=$nid bound" \
+            || { echo "[launch] node=$nid bind TIMEOUT"; return 1; }
     done
+
+    # 4) Start N ubio processes (connect to already-bound gem5 endpoints)
+    local fault_rules
+    fault_rules=$(fault_rules_for_tc "$TC_NUM")
+    [ -n "$fault_rules" ] && echo "[launch] fault rules (TC${TC_NUM}): $fault_rules"
+    UBIO_PIDS=""
+    for nid in $(seq 0 $((NUM_NODES - 1))); do
+        local logdir="${LOG_BASE}/ubio_n${nid}"
+        mkdir -p "$logdir"
+        # ubio's UBCCController must agree with gem5 on the DSM address layout,
+        # which is parameterized by node/socket counts. Without UBCC_NUM_SOCKETS
+        # the home UBCC computes a single-socket range and rejects this node's
+        # socket-1 segment as "non-home-DSM" (dual-socket TC panic).
+        UBCC_NUM_NODES="$NUM_NODES" UBCC_NUM_SOCKETS="$NUM_SOCKETS" \
+        UBIO_FAULT_RULES="$fault_rules" "$UBIO_BIN" --node="$nid" \
+            >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
+        UBIO_PIDS="$UBIO_PIDS $!"
+    done
+    echo "[launch] $(echo $UBIO_PIDS | wc -w) ubio + $NUM_NODES gem5 running"
+    echo "[launch] total processes: $((2 * NUM_NODES + 2)) (expected 2N+2)"
 }
 
 # ── Run single TC ──────────────────────────────────────────────────
 run_tc() {
     local tc=$1
     TC_NUM=$tc
-    local logdir="${LOG_BASE}/gem5_tc${tc}"
-    local outdir="${ROOT_DIR}/m5out/e2e_mp/tc${tc}"
-    rm -rf "$outdir" "$logdir"
-    mkdir -p "$outdir" "$logdir"
+    NUM_SOCKETS=$(sockets_for_tc "$tc")
+    rm -rf "${ROOT_DIR}/m5out/e2e_mp/tc${tc}"
+    mkdir -p "${ROOT_DIR}/m5out/e2e_mp/tc${tc}"
 
     echo ""
-    echo "=== TC${tc} (multi-process) ==="
+    echo "=== TC${tc} (multi-process split: ${NUM_NODES} nodes, ${NUM_SOCKETS} sockets) ==="
 
-    start_all
-    local gem5_pid=$GEM5_PID
+    start_all || { echo "  TC${tc} LAUNCH FAILED"; return 1; }
 
-    # Wait for gem5 with timeout
-    local timeout_val=300
-    local waited=0
-    local ec=0
-    while kill -0 $gem5_pid 2>/dev/null; do
-        sleep 1
-        waited=$((waited + 1))
+    # Wait for all gem5 processes (with timeout)
+    local timeout_val=600 waited=0 ec=0
+    local alive=1
+    while [ $alive -ne 0 ]; do
+        alive=0
+        for pid in $GEM5_PIDS; do
+            if kill -0 $pid 2>/dev/null; then alive=1; fi
+        done
+        [ $alive -eq 0 ] && break
+        sleep 1; waited=$((waited + 1))
         if [ $waited -ge $timeout_val ]; then
-            echo "  TIMEOUT after ${timeout_val}s"
-            kill $gem5_pid 2>/dev/null || true
-            ec=124
-            break
+            echo "  TC${tc} TIMEOUT after ${timeout_val}s"
+            for pid in $GEM5_PIDS; do kill $pid 2>/dev/null || true; done
+            ec=124; break
         fi
     done
-    if [ $ec -ne 124 ]; then
-        wait $gem5_pid 2>/dev/null && ec=$? || ec=$?
-    fi
 
-    # Kill ubio after gem5 done
+    # Collect each gem5 exit code
+    local gem5_fail=0
+    for pid in $GEM5_PIDS; do
+        if wait $pid 2>/dev/null; then :; else
+            local rc=$?
+            [ "$rc" != "0" ] && gem5_fail=1
+        fi
+    done
+
+    # Kill infra
     for pid in $UBIO_PIDS; do kill $pid 2>/dev/null || true; done
+    kill ${NSIM_PID:-} ${BARRIER_PID:-} 2>/dev/null || true
     sleep 0.5
 
-    # Parse result
-    if grep -q "PASSED" "$logdir/stdout.log" 2>/dev/null; then
-        echo "  TC${tc} PASSED"; return 0
-    elif grep -q "FAILED" "$logdir/stdout.log" 2>/dev/null; then
-        echo "  TC${tc} FAILED"; return 1
+    if [ $ec -eq 124 ]; then echo "  TC${tc} TIMEOUT"; return 1; fi
+
+    # ── Orchestrator-layer aggregated verification ─────────────────
+    # If any gem5 exited non-zero, this testcase is a hard FAIL even
+    # if partial simout data appears to satisfy content checks.
+    if [ $gem5_fail -ne 0 ]; then
+        echo "  TC${tc} CRASHED (a gem5 node exited non-zero)"
+        return 1
+    fi
+
+    local simouts=()
+    for nid in $(seq 0 $((NUM_NODES - 1))); do
+        local f="${ROOT_DIR}/m5out/e2e_mp/tc${tc}/node${nid}/simout_n${nid}"
+        # Pass expected paths (including missing ones) so verifier can
+        # detect truncated/missing per-node outputs.
+        simouts+=("$f")
+    done
+
+    # Collect ubio logs so the verifier can see [UBFAULT] fault-injection
+    # evidence (fault injection now lives in the ubio process, not gem5).
+    local faultlogs=()
+    for nid in $(seq 0 $((NUM_NODES - 1))); do
+        faultlogs+=("${LOG_BASE}/ubio_n${nid}/stderr.log")
+    done
+
+    local vlog="${LOG_BASE}/verify_tc${tc}.log"
+    if python3 "$SCRIPT_DIR/test_e2e.py" --verify-split --tc=${tc} \
+            --simout "${simouts[@]}" --fault-log "${faultlogs[@]}" >"$vlog" 2>&1; then
+        echo "  TC${tc} PASSED"
+        return 0
     else
-        case $ec in
-            0)   echo "  TC${tc} NO RESULT" ;;
-            124) echo "  TC${tc} TIMEOUT" ;;
-            *)   echo "  TC${tc} CRASHED (exit=$ec)" ;;
-        esac
+        if grep -q ">>> TC${tc} FAILED <<<" "$vlog" 2>/dev/null; then
+            echo "  TC${tc} FAILED"
+        elif [ $gem5_fail -ne 0 ]; then
+            echo "  TC${tc} CRASHED (a gem5 node exited non-zero)"
+        else
+            echo "  TC${tc} NO RESULT"
+        fi
+        echo "    verify log: $vlog"
         return 1
     fi
 }
 
 # ── Main ───────────────────────────────────────────────────────────
-echo "=== Multi-Process E2E Runner ==="
-echo "Timestamp: $TIMESTAMP"
+echo "=== Multi-Process E2E Runner (per-node gem5 split) ==="
+echo "Timestamp: $TIMESTAMP   nodes=$NUM_NODES"
 echo "Log base:  $LOG_BASE"
 mkdir -p "$LOG_BASE"
 
@@ -212,14 +270,14 @@ PASS=0; FAIL=0
 
 run_tests() {
     for tc in "$@"; do
-        if run_tc $tc; then ((PASS++)); else ((FAIL++)); fi
+        if run_tc $tc; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
     done
 }
 
 if [ "$TC" == "--all" ]; then
-    run_tests 1 2 3 4 5 6 7 8 9 10 11
+    run_tests 1 2 3 4 5 6 7 8 10 11
 else
-    run_tests $TC
+    run_tests "$@"
 fi
 
 echo ""

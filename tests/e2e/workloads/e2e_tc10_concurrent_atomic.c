@@ -60,6 +60,11 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Split-mode fix: keep writer alive until reader drains all reads.
+     * Otherwise node0 may exit while still owning G_M, and node1's late
+     * reads can stall behind a recall to a terminated owner. */
+    sync_wait(0b011);
+
     emit_phase_done(node_id, "done");
     _exit_program(0);
     return 0;

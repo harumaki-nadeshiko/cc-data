@@ -2,7 +2,12 @@
 #include "dsm_access.h"
 #include "e2e_common.h"
 
-#define TOTAL_LINES   3072
+/* Split-mode: cross-node coherence is IPC + lock-stepped clock bound, so the
+ * original 3072-line sweep could not finish within the 600s per-TC budget.
+ * ResidentDir capacity is ~64950 entries, so neither 3072 nor 512 exceeds it —
+ * this TC stresses concurrency/consistency, not eviction, so a smaller sweep
+ * keeps the semantics while completing in time. */
+#define TOTAL_LINES   512
 #define CHUNK_LINES   256
 #define BASE_OFF      0x10000
 

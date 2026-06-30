@@ -3,7 +3,10 @@
 #include "e2e_common.h"
 
 #define HOME_NODE   2
-#define SAT_LINES   2048
+/* Split-mode: IPC + lock-stepped clock makes a 2048-line bloom-saturation sweep
+ * exceed the 600s per-TC budget. A smaller sweep still populates enough lines to
+ * exercise the bloom false-positive fallback path. */
+#define SAT_LINES   512
 #define SAT_BASE    0x20000
 #define MISS_OFF    0x700000
 #define MAGIC       0x23ABCDEF

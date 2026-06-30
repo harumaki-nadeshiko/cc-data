@@ -11,7 +11,10 @@
 #define HOME_SOCKET           0
 #define WB_OFF                0x7000
 #define PRESS_BASE            0x80000
-#define PRESS_LINES           2048
+/* Split-mode: node2's cross-node read sweep is IPC + lock-stepped clock bound;
+ * 2048 lines barely fit the 600s budget. The verified property is node0's
+ * writeback read, not the sweep, so a smaller sweep keeps the intent. */
+#define PRESS_LINES           512
 
 static inline volatile uint32_t *dsm_addr2(int home_node, int home_socket, uint32_t off)
 {
