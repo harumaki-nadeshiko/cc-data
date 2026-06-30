@@ -2784,7 +2784,14 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
         msg.h.requesterNode = requesterNode;
         msg.h.targetNode = target;
         msg.h.homeLinePa = linePa;
-        msg.h.localLinePa = static_cast<uint64_t>(target) * _dsmSegSize + offset;
+        // Compute the target sharer's LOCAL view of this home line using the
+        // same layout gem5 uses (NodeAddressMap::buildDsmPA), so the sharer's
+        // EPBackend can match it against its _requesterLines key and L1 line.
+        // The old formula (target*_dsmSegSize + offset) omitted nodeBase(target)
+        // and the home-segment offset, producing e.g. 0x700000 instead of
+        // 0x20700000 — the invalidation then missed the requester's bookkeeping,
+        // leaving a stale R_S entry so the next read returned stale data (TC23/41).
+        msg.h.localLinePa = _addrMap.buildDsmPA(target, _nodeId, offset, _socketId);
         msg.h.epoch = committedEpoch;
         msg.h.reqId = reqId;
         msg.h.seqNum = 0;

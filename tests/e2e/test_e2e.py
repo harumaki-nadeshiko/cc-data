@@ -592,16 +592,23 @@ def verify_tc27(reads, lines):
             wraps = max(wraps, int(m.group(4)))
     if wraps < 1:
         return False, 'TC27 FAILED: no wrap evidence marker (wraps<1)', []
-    final_exp = 0x27000000 | (1024 - 1)
+    # Derive the expected final value from the workload's own emitted expected
+    # field (it computes 0x27000000 | (WR_ROUNDS-1)) instead of hardcoding the
+    # round count — keeps the check valid if WR_ROUNDS is tuned for split mode.
     node_last = {}
+    node_exp = {}
     for r in reads:
         if r['home'] == 0:
             node_last[r['node']] = int(r['actual'], 16)
+            if r.get('expected') is not None:
+                node_exp[r['node']] = int(r['expected'], 16)
     if len(node_last) < 3:
         return False, f'TC27 FAILED: missing final reads from all nodes ({node_last})', []
-    bad = {n: v for n, v in node_last.items() if v != final_exp}
+    final_exp = max(node_exp.values()) if node_exp else (0x27000000 | (128 - 1))
+    bad = {n: hex(v) for n, v in node_last.items() if v != final_exp}
     if bad:
-        return False, f'TC27 FAILED: final value mismatch after churn: {bad}', []
+        return False, (f'TC27 FAILED: final value mismatch after churn '
+                       f'(expected {hex(final_exp)}): {bad}'), []
     return True, f'TC27 PASSED: wrap marker seen (wraps={wraps}) and final value converged', []
 
 

@@ -4,7 +4,11 @@
 
 #define HOME_NODE    0
 #define OFF          0x300
-#define WR_ROUNDS    1024
+/* Split-mode: each round is a full ownership-churn coherence cycle over IPC +
+ * lock-stepped clock; 1024 rounds far exceeds the 600s budget. The software
+ * epoch wrap only needs ~3 rounds (37*rounds > 100), and protocol ownership
+ * churn is well-exercised at 128 rounds, so this preserves the test intent. */
+#define WR_ROUNDS    128
 #define EPOCH_BITS   24
 
 static inline void emit_epoch_wrap_marker(int node_id,
