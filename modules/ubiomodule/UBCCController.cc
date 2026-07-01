@@ -6,10 +6,7 @@
 #include <sstream>
 
 #include "base/logging.hh"
-#include "debug/RubyCHIGeneric.hh"
-#include "debug/RubyEP.hh"
-#include "debug/UBInvariant.hh"
-#include "debug/UBLatency.hh"
+#include "framework/Log.hh"
 #include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
 #include "mem/ruby/protocol/chi/ep/UBIOModule.hh"
 #include "mem/ruby/system/RubySystem.hh"
@@ -112,7 +109,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // The default member initializer assumes num_sockets=1 (single-socket
     // legacy); for dual-socket we must override it here.
     _addrMap = NodeAddressMap(3, kNumSockets, kSegSize);
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
             "dsmBase=0x%lx dsmSize=0x%lx numSockets=%d\n",
             _nodeId, _socketId, _epochBits, _dsmLocalBase, _dsmSegSize,
@@ -394,7 +391,7 @@ UBCCController::processOuterRequest(
 {
     baseEpoch = normalizeEpoch(baseEpoch);
 
-    DPRINTF(RubyCHIGeneric,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processOuterRequest PA=0x%lx req=%d write=%d "
             "requesterNode=%d baseEpoch=%lu reqId=%lu\n",
             _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
@@ -470,7 +467,7 @@ UBCCController::processOuterRequest(
                     existing->reqType == reqType &&
                     existing->writeIntent == writeIntent) {
                     // Retry hit on replay-armed grant — return the grant
-                    DPRINTF(RubyEP,
+                    framework::LogInfo("UBCC",
                             "UBCC node_id=%d: replayArmed hit PA=0x%lx "
                             "requester=%d reqId=%lu intended=%s — granting\n",
                             _nodeId, line_pa, requesterNode, reqId,
@@ -483,7 +480,7 @@ UBCCController::processOuterRequest(
                     if (outAuthEpoch) *outAuthEpoch = existing->baseEpoch;
                     return grantTypeFromIntended(existing->intendedState);
                 }
-                DPRINTF(RubyEP,
+                framework::LogInfo("UBCC",
                         "UBCC node_id=%d: existing outstanding PA=0x%lx "
                         "same requester=%d opType=%d stage=%d — BUSY\n",
                         _nodeId, line_pa, requesterNode,
@@ -548,7 +545,7 @@ UBCCController::processOuterRequest(
     bool tsAccepted = false;
     if (checkTombstone(line_pa, baseEpoch, reqId, tsAccepted)) {
         // Already committed — return idempotent grant
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: tombstone HIT for PA=0x%lx — idempotent grant\n",
                 _nodeId, line_pa);
         Tick now = curTick();
@@ -802,7 +799,7 @@ UBCCController::processOuterRequest(
                           "after removing DONE RECALL PA=0x%lx\n",
                           _nodeId, line_pa);
                 }
-                DPRINTF(RubyEP,
+                framework::LogInfo("UBCC",
                         "UBCC node_id=%d: RECALL→GRANT_HANDSHAKE transition "
                         "PA=0x%lx requester=%d intended=%s dataSource=RecallBuffer (NEW object)\n",
                         _nodeId, line_pa, requesterNode,
@@ -955,7 +952,7 @@ UBCCController::processOuterRequest(
     // v4: §4.1.3 — SHALL NOT modify committed DirEntry here.
     // Committed DirEntry stays as-is until matching Clear is accepted.
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: v4 grant decision PA=0x%lx "
             "prev=%s intended_state=%s grant=%d reservedEpoch=%lu "
             "(committed DirEntry NOT modified)\n",
@@ -980,7 +977,7 @@ UBCCController::processOuterRequest(
 
     // v4-latency: log OUTSTANDING state change
     if (oreq) {
-        DPRINTF(UBLatency,
+        framework::LogInfo("UBCC-latency",
                 "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=OUTSTANDING\n",
                 curTick(), _nodeId, _socketId, line_pa,
                 mesiStateName(prevState),
@@ -1153,14 +1150,14 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
            _nodeId, line_pa, ownerNode, responseEpoch, reqId);
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processRecallResponse PA=0x%lx entry not found\n",
                 _nodeId, line_pa);
         return false;
     }
 
     if (!checkEpochForLine(line_pa, responseEpoch)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processRecallResponse PA=0x%lx "
                 "STALE epoch — REJECTED\n",
                 _nodeId, line_pa);
@@ -1312,7 +1309,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "entry not found\n", _nodeId, line_pa);
         return false;
@@ -1320,7 +1317,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
     // v4: Half-range epoch check
     if (!checkEpochForLine(line_pa, responseEpoch)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "STALE epoch: response=%lu directory=%lu — REJECTED\n",
                 _nodeId, line_pa, responseEpoch, entry.epoch);
@@ -1332,7 +1329,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost) {
         // Already completed — idempotent
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "no outstanding — idempotent\n",
                 _nodeId, line_pa);
@@ -1346,7 +1343,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
     if (!isInvalidatePath && !isUpgradePath) {
         // Wrong op type or stage — idempotent
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "opType=%d stage=%d — not applicable, idempotent\n",
                 _nodeId, line_pa,
@@ -1360,7 +1357,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
     uint64_t &effAckMask = isUpgradePath ? ost->upgradeAckMask : ost->ackMask;
 
     if (!(effTargetMask & nodeBit)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "ackNode=%d not in targetMask=0x%lx\n",
                 _nodeId, line_pa, ackNode, effTargetMask);
@@ -1368,7 +1365,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
     }
 
     if (effAckMask & nodeBit) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
                 "duplicate ack from node %d — ignoring\n",
                 _nodeId, line_pa, ackNode);
@@ -1402,7 +1399,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             line_pa, ackNode, ost->pendingAckCount, ost->ackMask);
     }
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: invalidation ack PA=0x%lx ackNode=%d op=%s "
             "remaining=%d ackMask=0x%lx targetMask=0x%lx\n",
             _nodeId, line_pa, ackNode,
@@ -1424,7 +1421,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                                      : (ost->pendingAckCount == 0);
 
     if (allAcksDone) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: all invalidations complete PA=0x%lx\n",
                 _nodeId, line_pa);
         printf("[UBCC-INV-DONE] home=%d pa=0x%lx op=%s requester=%d "
@@ -1610,7 +1607,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 {
     epochVal = normalizeEpoch(epochVal);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processWriteback PA=0x%lx "
             "requesterNode=%d epoch=%lu keepAsClean=%d\n",
             _nodeId, line_pa, requesterNode, epochVal, keepAsClean);
@@ -1627,7 +1624,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 
     // v4: Outstanding-aware BUSY check (§4.6.2)
     if (isLineBusy(line_pa)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processWriteback PA=0x%lx "
                 "line busy (outstanding active) — BUSY/RETRY\n",
                 _nodeId, line_pa);
@@ -1636,7 +1633,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 
     // ---- M7: Stale epoch check ----
     if (!checkEpochForLine(line_pa, epochVal)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processWriteback PA=0x%lx "
                 "STALE epoch: msg=%lu directory=%lu — REJECTED\n",
                 _nodeId, line_pa, epochVal, entry.epoch);
@@ -1649,7 +1646,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     // Reject if the requesting node is not the current owner.
     int ownerNode = DirEntry::ownerFromSharers(entry);
     if (ownerNode >= 0 && ownerNode != requesterNode) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processWriteback PA=0x%lx "
                 "OWNER MISMATCH: requesterNode=%d != ownerNode=%d — REJECTED\n",
                 _nodeId, line_pa, requesterNode, ownerNode);
@@ -1675,7 +1672,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 
     _writebackCount++;
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processWriteback PA=0x%lx complete "
              "newState=%s ownerNode=%d dirty=%d\n",
              _nodeId, line_pa, mesiStateName(entry.state),
@@ -1738,7 +1735,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 {
     epochVal = normalizeEpoch(epochVal);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processEvict PA=0x%lx "
             "evictingNode=%d epoch=%lu\n",
             _nodeId, line_pa, evictingNode, epochVal);
@@ -1753,7 +1750,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // ---- M7: Stale epoch check ----
     if (!checkEpochForLine(line_pa, epochVal)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processEvict PA=0x%lx "
                 "STALE epoch: msg=%lu directory=%lu — REJECTED\n",
                 _nodeId, line_pa, epochVal, entry.epoch);
@@ -1763,7 +1760,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // Phase 2: Line busy check unified to OutstandingRequest-aware
     if (isLineBusy(line_pa)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processEvict PA=0x%lx "
                 "line busy — rejected\n",
                 _nodeId, line_pa);
@@ -1790,7 +1787,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
         // Only clean owners (G_E) can evict without writeback.
         // Dirty owners (G_M) must writeback first.
         if (DirEntry::protoDirty(entry)) {
-            DPRINTF(RubyEP,
+            framework::LogInfo("UBCC",
                     "UBCC node_id=%d: processEvict PA=0x%lx "
                     "dirty owner evict not allowed — must writeback first\n",
                     _nodeId, line_pa);
@@ -1802,7 +1799,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // ---- M7 P0-3: Reject evict if node is neither owner nor sharer ----
     if (!removedFromSharer && !removedFromOwner) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processEvict PA=0x%lx "
                 "evictingNode=%d is neither owner (ownerNode=%d) nor sharer "
                 "(sharersMask=0x%lx) — REJECTED\n",
@@ -1831,7 +1828,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     entry.residentDirty = true;
     _evictCount++;
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processEvict PA=0x%lx complete "
             "removedSharer=%d removedOwner=%d newState=%s "
              "sharersMask=0x%lx ownerNode=%d\n",
@@ -1862,7 +1859,7 @@ UBCCController::processOuterUpgradeReq(
     if (outNotSharer)
         *outNotSharer = false;
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processOuterUpgradeReq PA=0x%lx "
             "requesterNode=%d epoch=%lu reqId=%lu desiredPerm=%d\n",
             _nodeId, line_pa, requesterNode, epoch, reqId, desiredPerm);
@@ -1879,7 +1876,7 @@ UBCCController::processOuterUpgradeReq(
     if (requesterNode >= 0) {
         uint64_t reqBit = (1ULL << requesterNode);
         if (!(entry.sharersMask & reqBit)) {
-            DPRINTF(RubyEP,
+            framework::LogInfo("UBCC",
                     "UBCC node_id=%d: upgrade rejected — "
                     "requesterNode=%d not in sharersMask=0x%lx\n",
                     _nodeId, line_pa, requesterNode, entry.sharersMask);
@@ -1893,7 +1890,7 @@ UBCCController::processOuterUpgradeReq(
 
     // Check existing outstanding — if any, reject
     if (findOutstanding(line_pa)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade rejected — "
                 "existing outstanding for PA=0x%lx\n",
                 _nodeId, line_pa);
@@ -1911,7 +1908,7 @@ UBCCController::processOuterUpgradeReq(
     OutstandingRequest *oreq = createOutstanding(
         line_pa, OpType::UPGRADE_PENDING, requesterNode, -1);
     if (!oreq) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade rejected — "
                 "failed to create outstanding for PA=0x%lx\n",
                 _nodeId, line_pa);
@@ -1948,7 +1945,7 @@ UBCCController::processOuterUpgradeReq(
                "targetMask=0x%lx pendingAckCount=%d\n",
                line_pa, requesterNode, targetMask, oreq->upgradePendingAckCount);
 
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade accepted pending PA=0x%lx "
                 "reservedEpoch=%lu reqId=%lu targetMask=0x%lx — "
                 "waiting for invalidation acks before Ack(true)\n",
@@ -1965,7 +1962,7 @@ UBCCController::processOuterUpgradeReq(
                "targetMask=0 (no other sharers)\n",
                line_pa, requesterNode);
 
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade accepted immediate PA=0x%lx "
                 "reservedEpoch=%lu reqId=%lu — no other sharers, Ack(true) now\n",
                 _nodeId, line_pa, reservedEpoch, reqId);
@@ -1983,14 +1980,14 @@ UBCCController::processOuterUpgradeDone(
 {
     epoch = normalizeEpoch(epoch);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
             "requesterNode=%d epoch=%lu reqId=%lu\n",
             _nodeId, line_pa, requesterNode, epoch, reqId);
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
                 "entry not found\n", _nodeId, line_pa);
         return false;
@@ -1999,7 +1996,7 @@ UBCCController::processOuterUpgradeDone(
     // Verify UPGRADE_PENDING outstanding
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost || ost->opType != OpType::UPGRADE_PENDING) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
                 "no UPGRADE_PENDING outstanding\n", _nodeId, line_pa);
         return false;
@@ -2025,7 +2022,7 @@ UBCCController::processOuterUpgradeDone(
                "cachedEpoch=%lu cachedReqId=%lu\n",
                line_pa, requesterNode, epoch, reqId);
 
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: UpgradeDone TENTATIVE cached PA=0x%lx "
                 "requester=%d — waiting for remaining acks\n",
                 _nodeId, line_pa, requesterNode);
@@ -2034,7 +2031,7 @@ UBCCController::processOuterUpgradeDone(
     }
 
     if (ost->stage != OpStage::WAITING_LOCAL_DONE) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
                 "wrong stage=%d — rejecting\n",
                 _nodeId, line_pa, static_cast<int>(ost->stage));
@@ -2043,7 +2040,7 @@ UBCCController::processOuterUpgradeDone(
 
     // upgrade_invalidate_fix: only commit when WAITING_LOCAL_DONE and accepted
     if (!ost->accepted) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
                 "not yet accepted — rejecting\n",
                 _nodeId, line_pa);
@@ -2067,7 +2064,7 @@ UBCCController::processOuterUpgradeDone(
     printf("[UBCC-UPGRADE-COMMIT] pa=0x%lx owner=%d reservedEpoch=%lu\n",
            line_pa, intendedOwner, reservedEp);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: upgrade committed PA=0x%lx "
             "newState=%s owner=%d epoch=%lu\n",
             _nodeId, line_pa, mesiStateName(entry.state),
@@ -2096,7 +2093,7 @@ UBCCController::processClear(
         "[CLEAR] pa=0x%lx epoch=%lu reqId=%lu\n",
         line_pa, epoch, reqId);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: processClear PA=0x%lx "
             "srcNode=%d epoch=%lu reqId=%lu\n",
             _nodeId, line_pa, srcNode, epoch, reqId);
@@ -2106,11 +2103,11 @@ UBCCController::processClear(
     if (checkTombstone(line_pa, epoch, reqId, tsAccepted)) {
         // UBInvariant: log tombstone replay (warning-level)
         _tombstoneReplayCount++;
-        DPRINTF(UBInvariant,
+        framework::LogInfo("UBCC-invariant",
                 "[UBINV-INFO] tombstone replay #%lu PA=0x%lx "
                 "epoch=%lu reqId=%lu accepted=%d\n",
                 _tombstoneReplayCount, line_pa, epoch, reqId, tsAccepted);
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d: tombstone replay PA=0x%lx "
                 "epoch=%lu reqId=%lu accepted=%d\n",
                 _nodeId, line_pa, epoch, reqId, tsAccepted);
@@ -2236,7 +2233,7 @@ UBCCController::processClear(
     validateSharersCanonical(line_pa);
 
     // v4-latency: log COMMIT state change
-    DPRINTF(UBLatency,
+    framework::LogInfo("UBCC-latency",
             "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=COMMIT\n",
             curTick(), _nodeId, _socketId, line_pa,
             mesiStateName(oldState),
@@ -2337,7 +2334,7 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
     cnt++;
     if (cnt > 1) {
         _invariantWarnCount++;
-        DPRINTF(UBInvariant,
+        framework::LogInfo("UBCC-invariant",
                 "[UBINV-WARN] double-commit #%u PA=0x%lx cnt=%d\n",
                 _invariantWarnCount, ost.linePa, cnt);
         warn("[UBINV] double-commit PA=0x%lx cnt=%d (warn #%u)\n",
@@ -2376,7 +2373,7 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
              "UBCC canonical assert failed PA=0x%lx state=%d sharers=0x%lx",
              ost.linePa, static_cast<int>(entry.state), entry.sharersMask);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: commitIntendedResult PA=0x%lx "
             "state=%s owner=%d sharers=0x%lx dirty=%d epoch=%lu\n",
             _nodeId, ost.linePa,
@@ -2403,7 +2400,7 @@ UBCCController::retireToTombstone(const OutstandingRequest &ost, bool accepted)
     // doesn't clobber earlier tombstones within window W.
     _tombstones[ost.linePa].push_back(ts);
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: retireToTombstone PA=0x%lx "
             "baseEpoch=%lu reservedEpoch=%lu reqId=%lu expireTick=%lu depth=%zu\n",
             _nodeId, ost.linePa, ost.baseEpoch, ost.reservedEpoch, ost.reqId,
@@ -2411,7 +2408,7 @@ UBCCController::retireToTombstone(const OutstandingRequest &ost, bool accepted)
             _tombstones[ost.linePa].size());
 
     // v4-latency: log RETIRE state change
-    DPRINTF(UBLatency,
+    framework::LogInfo("UBCC-latency",
             "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=RETIRE\n",
             curTick(), _nodeId, _socketId, ost.linePa,
             mesiStateName(ost.intendedState),
@@ -2434,7 +2431,7 @@ UBCCController::checkTombstone(uint64_t linePa, uint64_t epoch, uint64_t reqId,
     for (auto &ts : it->second) {
         if (ts.epoch == epoch && ts.reqId == reqId) {
             outAccepted = ts.accepted;
-            DPRINTF(RubyEP,
+            framework::LogInfo("UBCC",
                     "UBCC node_id=%d: checkTombstone HIT PA=0x%lx "
                     "epoch=%lu reqId=%lu accepted=%d\n",
                     _nodeId, linePa, epoch, reqId, ts.accepted);
@@ -2452,7 +2449,7 @@ UBCCController::cleanupTombstones()
         auto &deq = it->second;
         // Remove expired entries from the front (FIFO push order)
         while (!deq.empty() && deq.front().expireTick <= now) {
-            DPRINTF(RubyEP,
+            framework::LogInfo("UBCC",
                     "UBCC node_id=%d: tombstone expired PA=0x%lx "
                     "epoch=%lu reqId=%lu\n",
                     _nodeId, deq.front().linePa,
@@ -2488,7 +2485,7 @@ UBCCController::cleanupExpiredRecallIfNeeded(uint64_t linePa,
     if (!ost || !isExpiredRecall(*ost))
         return false;
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBCC node_id=%d: expired RECALL cleanup PA=0x%lx stage=%d "
             "age=%lu replayWaiters=%d\n",
             _nodeId, linePa, static_cast<int>(ost->stage),
@@ -2909,7 +2906,7 @@ UBCCController::processHomeWritebackNotify(uint64_t homePa, uint64_t notifyEpoch
 
     DirEntry entry;
     if (!_directory.lookup(homePa, entry)) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d socket=%d: HomeWritebackNotify PA=0x%lx "
                 "no directory entry — ignored\n",
                 _nodeId, _socketId, homePa);
@@ -2917,7 +2914,7 @@ UBCCController::processHomeWritebackNotify(uint64_t homePa, uint64_t notifyEpoch
     }
 
     if (entry.state == MESIState::G_I) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBCC node_id=%d socket=%d: HomeWritebackNotify PA=0x%lx "
                 "already G_I — ignored\n",
                 _nodeId, _socketId, homePa);

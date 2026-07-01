@@ -17,6 +17,7 @@ CXXFLAGS="-std=c++17 -O2 -Wall -pthread -I$ROOT -I$FW -I$ZMQ_INC"
 
 # Compile framework sources
 g++ $CXXFLAGS -c "$FW/Port.cc" -o "$OUT/obj/Port.o"
+g++ $CXXFLAGS -c "$FW/Log.cc" -o "$OUT/obj/Log.o"
 
 # (ZMQChannel.cc is legacy/unused at runtime but kept in the archive for compat;
 #  compile only if present)
@@ -29,6 +30,7 @@ ar rcs "$OUT/lib/libframework.a" "$OUT/obj"/*.o
 # Install public headers
 cp "$FW/Port.hh" "$OUT/include/framework/Port.hh"
 cp "$FW/MemMessage.hh" "$OUT/include/framework/MemMessage.hh"
+cp "$FW/Log.hh" "$OUT/include/framework/Log.hh"
 
 cat > "$OUT/manifest.txt" <<EOF
 libframework.a

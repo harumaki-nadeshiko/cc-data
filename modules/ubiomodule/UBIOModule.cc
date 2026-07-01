@@ -4,8 +4,7 @@
 #include <cstdio>
 
 #include "base/logging.hh"
-#include "debug/RubyEP.hh"
-#include "debug/UBLatency.hh"
+#include "framework/Log.hh"
 #include "mem/ruby/protocol/chi/ep/UBAdapter.hh"
 #include "mem/ruby/protocol/chi/ep/UBCCController.hh"
 #include "sim/cur_tick.hh"
@@ -41,7 +40,7 @@ UBIOModule::UBIOModule(const Params &p)
       _drainEvent([this]{ drainReadyQueues(); }, name() + ".drainEvent")
 {
     registerRouter(_nodeId, _socketId, this);
-    DPRINTF(RubyEP, "UBIOModule node=%d socket=%d created, defaultLatency=%lu\n",
+    framework::LogInfo("UBCC", "UBIOModule node=%d socket=%d created, defaultLatency=%lu\n",
             _nodeId, _socketId, _defaultLatency);
 
     // Parse fault rules from SimObject params (debug-only)
@@ -96,7 +95,7 @@ UBIOModule::getOrCreateQueue(int srcNode, int srcSocket,
 void
 UBIOModule::sendMessage(const CoherenceMessage &msg, Tick forcedLatency)
 {
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBIOModule node=%d socket=%d: sendMessage %s src=(%d,%d) dst=(%d,%d)\n",
             _nodeId, _socketId, coherenceMsgTypeName(msg.h.type),
             msg.h.srcNode, msg.h.srcSocket, msg.h.dstNode, msg.h.dstSocket);
@@ -133,7 +132,7 @@ UBIOModule::sendMessage(const CoherenceMessage &msg, Tick forcedLatency)
     q->enqueue(msg, curTick(), lat);
 #endif
 
-    DPRINTF(UBLatency,
+    framework::LogInfo("UBCC-latency",
             "[UBLAT] tick=%lu src=%d,%d dst=%d,%d type=%s pa=0x%lx epoch=%lu reqId=%lu action=ENQUEUE\n",
             curTick(), msg.h.srcNode, msg.h.srcSocket, msg.h.dstNode, msg.h.dstSocket,
             coherenceMsgTypeName(msg.h.type), msg.h.homeLinePa, msg.h.epoch, msg.h.reqId);
@@ -162,18 +161,18 @@ UBIOModule::drainReadyQueues()
                 drained++;
                 progress = true;
 
-                DPRINTF(RubyEP,
+                framework::LogInfo("UBCC",
                         "UBIOModule node=%d: draining %s src=%d dst=%d\n",
                         _nodeId, coherenceMsgTypeName(msg.h.type),
                         msg.h.srcNode, msg.h.dstNode);
-                DPRINTF(UBLatency,
+                framework::LogInfo("UBCC-latency",
                         "[UBLAT] tick=%lu src=%d,%d dst=%d,%d type=%s pa=0x%lx epoch=%lu reqId=%lu action=DEQUEUE\n",
                         now, msg.h.srcNode, msg.h.srcSocket, msg.h.dstNode, msg.h.dstSocket,
                         coherenceMsgTypeName(msg.h.type), msg.h.homeLinePa, msg.h.epoch, msg.h.reqId);
 
                 if (msg.h.dstNode == _nodeId && msg.h.dstSocket == _socketId) {
                     // Local delivery — route to UBCC or Adapter
-                    DPRINTF(UBLatency,
+                    framework::LogInfo("UBCC-latency",
                             "[UBLAT] tick=%lu src=%d,%d dst=%d,%d type=%s pa=0x%lx epoch=%lu reqId=%lu action=DELIVER\n",
                             now, msg.h.srcNode, msg.h.srcSocket, msg.h.dstNode, msg.h.dstSocket,
                             coherenceMsgTypeName(msg.h.type), msg.h.homeLinePa, msg.h.epoch, msg.h.reqId);
@@ -203,7 +202,7 @@ UBIOModule::drainReadyQueues()
                                         _nodeId, _socketId,
                                         msg.h.srcNode, msg.h.srcSocket);
                                     revQ->enqueue(response, now, 0);
-                                    DPRINTF(UBLatency,
+                                    framework::LogInfo("UBCC-latency",
                                             "[UBLAT] tick=%lu src=%d,%d dst=%d,%d type=%s pa=0x%lx epoch=%lu reqId=%lu action=ENQUEUE\n",
                                             now, _nodeId, _socketId, msg.h.srcNode, msg.h.srcSocket,
                                             coherenceMsgTypeName(response.h.type), response.h.homeLinePa,
@@ -237,7 +236,7 @@ UBIOModule::drainReadyQueues()
                     }
                 } else {
                     // Remote delivery — find destination router by (node,socket)
-                    DPRINTF(RubyEP,
+                    framework::LogInfo("UBCC",
                             "UBIOModule node=%d socket=%d: remote delivery to (node=%d,socket=%d)\n",
                             _nodeId, _socketId, msg.h.dstNode, msg.h.dstSocket);
                     UBIOModule *dstRouter = getRouter(msg.h.dstNode, msg.h.dstSocket);
@@ -258,7 +257,7 @@ UBIOModule::drainReadyQueues()
         if (kv.second->size() > 0) { hasPending = true; break; }
     }
     if (drained >= maxDrainPerWakeup || hasPending) {
-        DPRINTF(RubyEP,
+        framework::LogInfo("UBCC",
                 "UBIOModule node=%d: max drain reached (%d) or pending, "
                 "scheduling next drain\n",
                 _nodeId, maxDrainPerWakeup);
@@ -277,7 +276,7 @@ UBIOModule::deliverToUbcc(const CoherenceMessage &msg, CoherenceMessage &respons
         return;
     }
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBIOModule node=%d socket=%d: deliverToUbcc type=%s\n",
             _nodeId, _socketId, coherenceMsgTypeName(msg.h.type));
 
@@ -540,7 +539,7 @@ UBIOModule::deliverToAdapter(const CoherenceMessage &msg)
         return;
     }
 
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBIOModule node=%d socket=%d: deliverToAdapter type=%s\n",
             _nodeId, _socketId, coherenceMsgTypeName(msg.h.type));
 
@@ -632,7 +631,7 @@ void
 UBIOModule::addFaultRule(const DebugFaultRule &rule)
 {
     _faultRules.push_back(rule);
-    DPRINTF(RubyEP,
+    framework::LogInfo("UBCC",
             "UBIOModule node=%d socket=%d: added fault rule '%s' "
             "type=%s action=%d\n",
             _nodeId, _socketId, rule.name.c_str(),

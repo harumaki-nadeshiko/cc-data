@@ -1,7 +1,7 @@
 CXXFLAGS = -std=c++17 -Wall -pthread -I.. -I../thirdparty/zeromq/include
 LDFLAGS  = -L../thirdparty/zeromq/lib -lzmq -pthread
 
-OBJS = ZMQChannel.o Port.o
+OBJS = ZMQChannel.o Port.o Log.o
 
 all: libframework.a port_sync_smoke
 
