@@ -1855,9 +1855,12 @@ bool
 UBCCController::processOuterUpgradeReq(
     uint64_t line_pa, int requesterNode,
     uint64_t epoch, uint64_t reqId,
-    int desiredPerm, UBCC_UpgradeCause cause)
+    int desiredPerm, UBCC_UpgradeCause cause,
+    bool* outNotSharer)
 {
     epoch = normalizeEpoch(epoch);
+    if (outNotSharer)
+        *outNotSharer = false;
 
     DPRINTF(RubyEP,
             "UBCC node_id=%d: processOuterUpgradeReq PA=0x%lx "
@@ -1880,6 +1883,10 @@ UBCCController::processOuterUpgradeReq(
                     "UBCC node_id=%d: upgrade rejected — "
                     "requesterNode=%d not in sharersMask=0x%lx\n",
                     _nodeId, line_pa, requesterNode, entry.sharersMask);
+            // PERMANENT reject: requester was invalidated (lost the race). It
+            // must abandon and re-fetch via ReadUnique instead of retrying.
+            if (outNotSharer)
+                *outNotSharer = true;
             return false;
         }
     }

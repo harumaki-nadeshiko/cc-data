@@ -326,10 +326,18 @@ class UBCCController
      * @param cause           Upgrade cause
      * @return                true if accepted (Ack with accepted=true), false otherwise
      */
+    // Returns true if the upgrade was accepted. On rejection (returns false),
+    // *outNotSharer (if provided) distinguishes the two reject kinds:
+    //   true  = PERMANENT reject: requester is no longer a committed sharer
+    //           (it lost a dual-upgrade race and was invalidated). The requester
+    //           must abandon the upgrade and re-fetch via ReadUnique (I->M).
+    //   false = TEMPORARY reject: another op is outstanding for this line; the
+    //           requester should retry the upgrade once the home drains.
     bool processOuterUpgradeReq(
         uint64_t line_pa, int requesterNode,
         uint64_t epoch, uint64_t reqId,
-        int desiredPerm, UBCC_UpgradeCause cause);
+        int desiredPerm, UBCC_UpgradeCause cause,
+        bool* outNotSharer = nullptr);
 
     /**
      * Process an OuterUpgradeDone from a requester that completed local upgrade.

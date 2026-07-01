@@ -400,10 +400,11 @@ UBIOModule::deliverToUbcc(const CoherenceMessage &msg, CoherenceMessage &respons
                     ? UBCC_UpgradeCause::LocalCleanUnique
                     : UBCC_UpgradeCause::LocalStoreUpgrade;
 
+            bool notSharer = false;
             bool accepted = _localUbcc->processOuterUpgradeReq(
                 msg.h.homeLinePa, msg.h.requesterNode,
                 msg.h.epoch, msg.h.reqId,
-                msg.b.upgradeReq.desiredPerm, ubccCause);
+                msg.b.upgradeReq.desiredPerm, ubccCause, &notSharer);
 
             uint64_t targetMask = _localUbcc->getUpgradePendingTargetMask(
                 msg.h.homeLinePa);
@@ -416,8 +417,11 @@ UBIOModule::deliverToUbcc(const CoherenceMessage &msg, CoherenceMessage &respons
             response.h.homeLinePa = msg.h.homeLinePa;
             response.h.epoch = msg.h.epoch;
             response.h.reqId = msg.h.reqId;
+            // CFLAG_BUSY on reject => PERMANENT (notSharer: abandon+ReadUnique);
+            // absent => TEMPORARY (retry once home drains).
             response.h.flags = accepted
-                ? static_cast<uint32_t>(CFLAG_ACCEPTED) : 0;
+                ? static_cast<uint32_t>(CFLAG_ACCEPTED)
+                : (notSharer ? static_cast<uint32_t>(CFLAG_BUSY) : 0);
             response.b.upgradeResp.upgradeTargetMask = targetMask;
             response.b.upgradeResp.committedEpoch =
                 _localUbcc->getEpochForLine(msg.h.homeLinePa);

@@ -460,17 +460,24 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
       }
 
       case CoherenceMessageType::UpgradeReq: {
+        bool notSharer = false;
         bool accepted = ubcc.processOuterUpgradeReq(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId,
             msg.b.upgradeReq.desiredPerm,
-            static_cast<UBCC_UpgradeCause>(msg.b.upgradeReq.cause));
+            static_cast<UBCC_UpgradeCause>(msg.b.upgradeReq.cause),
+            &notSharer);
         response.h.type = CoherenceMessageType::UpgradeResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
-        response.h.flags = accepted ? static_cast<uint32_t>(CFLAG_ACCEPTED) : 0;
+        // CFLAG_ACCEPTED => granted. On reject, CFLAG_BUSY distinguishes a
+        // PERMANENT reject (notSharer: requester lost the race, must abandon +
+        // ReadUnique) from a TEMPORARY reject (retry once home drains).
+        response.h.flags = accepted
+            ? static_cast<uint32_t>(CFLAG_ACCEPTED)
+            : (notSharer ? static_cast<uint32_t>(CFLAG_BUSY) : 0);
         response.b.upgradeResp.upgradeTargetMask =
             ubcc.getUpgradePendingTargetMask(msg.h.homeLinePa);
         response.b.upgradeResp.committedEpoch =
@@ -521,7 +528,12 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         gem5::ruby::DataBlock db(64);
         if (hasData && dataReturned)
             std::memcpy(db.data, msg.b.recallResp.data, 64);
-        ubcc.processRecallResponse(msg.h.homeLinePa, msg.h.requesterNode,
+        // processRecallResponse expects ownerNode = the node that held the dirty
+        // copy and responded. RecallResp.h.srcNode is the responder (owner).
+        // Previously this passed msg.h.requesterNode (the Read requester), which
+        // mismatched ost->targetNode in the recall validity check, leaving the
+        // RECALL outstanding forever and blocking all future upgrades (TC16).
+        ubcc.processRecallResponse(msg.h.homeLinePa, msg.h.srcNode,
                                     dataReturned, msg.h.epoch, msg.h.reqId,
                                     (hasData && dataReturned) ? &db : nullptr);
         return true;
