@@ -8,15 +8,13 @@
 #include <utility>
 #include <vector>
 
-#include "mem/ruby/protocol/chi/ep/CoherenceMessage.hh"
-#include "mem/ruby/protocol/chi/ep/CoherenceMessageQueue.hh"
-#include "params/UBIOModule.hh"
-#include "sim/eventq.hh"
-#include "sim/sim_object.hh"
+#include "CoherenceMessage.hh"
+#include "CoherenceMessageQueue.hh"
+#include "gem5_shim.hh"
 
-namespace gem5
+namespace cc
 {
-namespace ruby
+namespace glob
 {
 
 class UBCCController;
@@ -60,19 +58,18 @@ struct DebugFaultRule {
  * and delivers the message to the destination UBCC or local UBAdapter.
  * v4-dual-socket: registry and queue keys expanded to include socketId.
  */
-class UBIOModule : public SimObject
+class UBIOModule : public cc::SimObject
 {
   public:
     using RouterKey = std::pair<int,int>; // (nodeId, socketId)
     using QueueKey = std::pair<int,int>;  // (srcNode|srcSocket, dstNode|dstSocket)
                                           // packed as: key.first  = (srcNode<<16)|srcSocket
-                                          //            key.second = (dstNode<<16)|dstSocket
+                                           //            key.second = (dstNode<<16)|dstSocket
 
-    PARAMS(UBIOModule);
-    UBIOModule(const Params &p);
+    UBIOModule();
     ~UBIOModule();
 
-    void init() override;
+    void init();
 
     /** Parse fault rule strings from Params and populate internal rule table. */
     void parseFaultRules(const std::vector<std::string> &rules);
@@ -141,7 +138,7 @@ class UBIOModule : public SimObject
     std::map<QueueKey, CoherenceMessageQueue*> _pairQueues;
 
     /** Event for deferred queue drain. */
-    EventFunctionWrapper _drainEvent;
+    struct DrainStub { int _dummy; } _drainEvent;
 
     /** Drain all ready messages from all queues. */
     void drainReadyQueues();
@@ -160,7 +157,7 @@ class UBIOModule : public SimObject
     static std::map<RouterKey, UBIOModule *> _routers;
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_UBROUTER_HH__

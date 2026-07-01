@@ -1,4 +1,4 @@
-#include "mem/ruby/protocol/chi/ep/ResidentDir.hh"
+#include "ResidentDir.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -6,10 +6,10 @@
 
 #include "modules/ubiomodule/gem5_shim.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 namespace
@@ -670,5 +670,5 @@ ResidentDir::clear()
     bloomClear();
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc

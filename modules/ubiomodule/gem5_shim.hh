@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <string>
 
-namespace gem5 {
+namespace cc {
 
 using Tick = uint64_t;
 using Addr = uint64_t;
@@ -20,10 +20,9 @@ using Cycles = uint64_t;
 
 inline Tick curTick() { return 0; }
 
-} // namespace gem5
+} // namespace cc
 
-// Debug/logging macros (DPRINTF replaced by framework::LogInfo in Phase 1.1;
-// these remain for compat until all callsites are migrated)
+// Debug/logging macros
 #define panic(fmt, ...) do { \
     std::fprintf(stderr, "PANIC: " fmt "\n", ##__VA_ARGS__); \
     std::abort(); \
@@ -39,32 +38,26 @@ inline Tick curTick() { return 0; }
 #define warn(fmt, ...) \
     std::fprintf(stderr, "WARN: " fmt "\n", ##__VA_ARGS__)
 
-// Forward declarations
-namespace gem5 { namespace ruby {
-class RubySystem;
-class EPBackend;
-class UBRouter;
-class MetaRNFController;
-} }
+namespace cc { namespace glob {
 
-// DataBlock stub
-namespace gem5 { namespace ruby {
+class RubySystem {};
+
 struct DataBlock {
     uint8_t data[64];
     DataBlock(int sz = 64) { (void)sz; }
     uint8_t getByte(int i) const { return (i >= 0 && i < 64) ? data[i] : 0; }
     const uint8_t* getData(int off, int len) const {
-        (void)len;
-        return (off >= 0 && off < 64) ? (data + off) : data;
+        (void)len; return (off >= 0 && off < 64) ? (data + off) : data;
     }
     void setData(const uint8_t* src, int off, int len) {
         for (int i = 0; i < len && off+i < 64; i++) data[off+i] = src[i];
     }
 };
-} }
+
+} } // namespace cc::glob
 
 // SimObject stub
-namespace gem5 {
+namespace cc {
 class SimObject {
 public:
     virtual ~SimObject() = default;
@@ -72,9 +65,9 @@ public:
         static std::string s = "UBIOModule"; return s;
     }
 };
-}
+} // namespace cc
 
-#define PARAMS(name)     // placeholder
+#define PARAMS(name)
 #define PARAMS_VECTOR(name) PARAMS(name)
 
 #endif // !TRACING_ON

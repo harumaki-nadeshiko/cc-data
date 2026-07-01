@@ -6,12 +6,13 @@
 #include <cstring>
 #include <string>
 
-#include "base/types.hh"
+namespace cc
+{
+namespace glob
+{
 
-namespace gem5
-{
-namespace ruby
-{
+using Tick = uint64_t;
+using Addr = uint64_t;
 
 enum class GrantDataSource : uint8_t {
     HomeMemory = 0,
@@ -276,7 +277,7 @@ ubMsgToString(const CoherenceMessage &msg)
     return std::string(buf);
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_UBMSG_HH__

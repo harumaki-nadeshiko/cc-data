@@ -1,4 +1,4 @@
-#include "mem/ruby/protocol/chi/ep/UBCCController.hh"
+#include "UBCCController.hh"
 
 #include <cstdio>
 #include <cstring>
@@ -6,13 +6,13 @@
 #include <sstream>
 
 #include "framework/Log.hh"
-#include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
-#include "mem/ruby/protocol/chi/ep/UBIOModule.hh"
+#include "NodeAddressMap.hh"
+#include "UBIOModule.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 namespace
@@ -1455,7 +1455,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             notifyMsg.h.epoch = ost->reservedEpoch;
             notifyMsg.h.reqId = ost->reqId;
             notifyMsg.h.flags =
-                static_cast<uint32_t>(gem5::ruby::CFLAG_ACCEPTED);
+                static_cast<uint32_t>(cc::glob::CFLAG_ACCEPTED);
             notifyMsg.h.seqNum = 0;
             notifyMsg.h.enqueueTick = curTick();
             notifyMsg.h.readyTick = curTick();
@@ -2970,5 +2970,5 @@ UBCCController::validateSharersCanonical(uint64_t pa) const
         panic("[UBInv] PA=0x%lx G_E/G_M with non-one-hot sharers 0x%lx", pa, entry.sharersMask);
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc

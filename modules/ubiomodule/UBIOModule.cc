@@ -1,15 +1,15 @@
-#include "mem/ruby/protocol/chi/ep/UBIOModule.hh"
+#include "UBIOModule.hh"
 
 #include <cstring>
 #include <cstdio>
 
 #include "framework/Log.hh"
-#include "mem/ruby/protocol/chi/ep/UBAdapter.hh"
-#include "mem/ruby/protocol/chi/ep/UBCCController.hh"
+#include "UBAdapter.hh"
+#include "UBCCController.hh"
 
-namespace gem5
+namespace cc
 {
-namespace ruby
+namespace glob
 {
 
 // ---- Static registry ----
@@ -28,11 +28,10 @@ void UBIOModule::registerRouter(int nodeId, int socketId, UBIOModule *router)
 
 // ---- Constructor / Destructor ----
 
-UBIOModule::UBIOModule(const Params &p)
-    : SimObject(p),
-      _nodeId(p.node_id),
-      _socketId(p.socket_id),
-      _defaultLatency(p.ub_msg_latency),
+UBIOModule::UBIOModule()
+    : _nodeId(0),
+      _socketId(0),
+      _defaultLatency(1000),
       _drainEvent([this]{ drainReadyQueues(); }, name() + ".drainEvent")
 {
     registerRouter(_nodeId, _socketId, this);
@@ -55,7 +54,7 @@ UBIOModule::~UBIOModule()
 void
 UBIOModule::init()
 {
-    SimObject::init();
+    cc::SimObject::init();
 }
 
 // ---- Queue management ----
@@ -709,5 +708,5 @@ UBIOModule::delayedEnqueue(CoherenceMessage msg, CoherenceMessageQueue *q, Tick 
     drainReadyQueues();
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc

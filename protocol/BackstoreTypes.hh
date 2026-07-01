@@ -4,10 +4,10 @@
 #include <cstdint>
 #include <cstring>
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 enum class UBCCMESIState : uint8_t {
@@ -232,7 +232,7 @@ inline void unpack(uint64_t expectedPa, const uint8_t in[CompactEntryBytes],
 
 } // namespace CompactCodec
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_BACKSTORETYPES_HH__

@@ -6,10 +6,10 @@
 
 #include "BackstoreTypes.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 /**
@@ -117,7 +117,7 @@ class BackstoreOrganization
     virtual const char* name() const = 0;
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_BACKSTOREORGANIZATION_HH__

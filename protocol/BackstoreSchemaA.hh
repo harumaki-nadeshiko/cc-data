@@ -3,10 +3,10 @@
 
 #include "BackstoreOrganization.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 /**
@@ -69,7 +69,7 @@ class BackstoreSchemaA : public BackstoreOrganization
     int findEntryOffset(const BackstorePage& page, uint64_t pa) const;
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_BACKSTORESCHEMAA_HH__

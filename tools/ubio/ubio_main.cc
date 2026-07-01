@@ -21,7 +21,7 @@
 #include <vector>
 
 using namespace framework;
-using namespace gem5::ruby;
+using namespace cc::glob;
 
 namespace
 {
@@ -372,8 +372,8 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
                 ? UBCC_OuterReqType::GlobalReadUnique
                 : UBCC_OuterReqType::GlobalReadShared;
 
-        gem5::Tick grantVisibleTick = 0;
-        gem5::Tick sentinelVisibleTick = 0;
+        cc::Tick grantVisibleTick = 0;
+        cc::Tick sentinelVisibleTick = 0;
         bool recallNeeded = false;
         int recallOwnerNode = -1;
         GrantDataSource dataSource = GrantDataSource::HomeMemory;
@@ -398,7 +398,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         int pendingInvCount = ubcc.getPendingInvalidationCount(msg.h.homeLinePa);
         uint64_t pendingInvMask = ubcc.getPendingInvalidationMask(msg.h.homeLinePa);
         uint64_t committedEpoch = ubcc.getEpochForLine(msg.h.homeLinePa);
-        gem5::ruby::DataBlock grantData(64);
+        cc::glob::DataBlock grantData(64);
         bool hasGrantData =
             (dataSource == GrantDataSource::RecallBuffer) &&
             ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData);
@@ -525,7 +525,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
       case CoherenceMessageType::RecallResp: {
         bool dataReturned = (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0;
         bool hasData = (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0;
-        gem5::ruby::DataBlock db(64);
+        cc::glob::DataBlock db(64);
         if (hasData && dataReturned)
             std::memcpy(db.data, msg.b.recallResp.data, 64);
         // processRecallResponse expects ownerNode = the node that held the dirty

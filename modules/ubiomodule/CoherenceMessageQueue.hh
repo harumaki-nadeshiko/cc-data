@@ -5,12 +5,12 @@
 #include <deque>
 #include <functional>
 
-#include "base/types.hh"
-#include "mem/ruby/protocol/chi/ep/CoherenceMessage.hh"
+#include <cstdint>
+#include "CoherenceMessage.hh"
 
-namespace gem5
+namespace cc
 {
-namespace ruby
+namespace glob
 {
 
 /**
@@ -118,7 +118,7 @@ CoherenceMessageQueue::processAll(Tick now, std::function<void(const CoherenceMe
     }
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_UBMSGQUEUE_HH__

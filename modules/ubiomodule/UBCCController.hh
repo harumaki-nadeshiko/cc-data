@@ -9,19 +9,19 @@
 #include <set>
 #include <string>
 
-#include "base/types.hh"
-#include "mem/ruby/common/DataBlock.hh"
-#include "mem/ruby/protocol/chi/ep/CoherenceMessage.hh"
-#include "mem/ruby/protocol/chi/ep/ResidentDir.hh"
-#include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
+#include "modules/ubiomodule/gem5_shim.hh"
+#include "DataBlock.hh"
+#include "CoherenceMessage.hh"
+#include "ResidentDir.hh"
+#include "NodeAddressMap.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
-class RubySystem;
+class RubySystem;  // forward (see gem5_shim.hh for cc::glob::RubySystem)
 class UBIOModule;
 
 class UBCCHostIf
@@ -816,7 +816,7 @@ class UBCCController
                               uint64_t reservedEpoch, uint64_t reqId);
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_UBCCCONTROLLER_HH__

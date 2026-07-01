@@ -5,12 +5,12 @@
 #include <cstdint>
 #include <vector>
 
-#include "mem/ruby/protocol/chi/ep/BackstoreTypes.hh"
+#include "BackstoreTypes.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 struct UBCCDirEntry {
@@ -138,7 +138,7 @@ class ResidentDir
     static constexpr double kReconstructStaleThreshold = 0.25;
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_RESIDENTDIR_HH__

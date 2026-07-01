@@ -3,10 +3,10 @@
 
 #include <cstdint>
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 class NodeAddressMap
@@ -79,7 +79,7 @@ class NodeAddressMap
     uint64_t _segSize;
 };
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_NODEADDRESSMAP_HH__

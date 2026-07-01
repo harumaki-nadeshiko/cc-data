@@ -1,9 +1,9 @@
-#include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
+#include "NodeAddressMap.hh"
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 NodeAddressMap::NodeAddressMap(int num_nodes, int num_sockets, uint64_t seg_size)
@@ -13,5 +13,5 @@ NodeAddressMap::NodeAddressMap(int num_nodes, int num_sockets, uint64_t seg_size
 {
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc

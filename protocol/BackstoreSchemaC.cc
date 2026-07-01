@@ -2,10 +2,10 @@
 
 #include <cstring>
 
-namespace gem5
+namespace cc
 {
 
-namespace ruby
+namespace glob
 {
 
 namespace
@@ -225,5 +225,5 @@ BackstoreSchemaC::findEntryOffset(const BackstorePage& page, uint64_t pa) const
     return -1;
 }
 
-} // namespace ruby
-} // namespace gem5
+} // namespace glob
+} // namespace cc
