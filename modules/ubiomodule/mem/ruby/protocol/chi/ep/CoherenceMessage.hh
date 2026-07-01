@@ -1,6 +1,1 @@
-#ifndef MODULES_UBIOMODULE_FORWARD_COHERENCEMESSAGE_HH
-#define MODULES_UBIOMODULE_FORWARD_COHERENCEMESSAGE_HH
-
-#include "modules/ubiomodule/CoherenceMessage.hh"
-
-#endif
+#include "protocol/CoherenceMessage.hh"
