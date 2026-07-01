@@ -226,7 +226,8 @@ class UBCCController
                    RubySystem *ruby_system = nullptr,
                    uint32_t epoch_bits = 64,
                    uint32_t resident_bf_bytes = ResidentDir::DefaultBloomBytes,
-                   uint32_t resident_force_entries = 0);
+                   uint32_t resident_force_entries = 0,
+                   int num_sockets = 1);
     ~UBCCController();
 
     int nodeId() const { return _nodeId; }

@@ -628,7 +628,8 @@ main(int argc, char **argv)
 
     uint64_t tick = 0;
 
-    UBCCController ubcc(nid, sid, nullptr);
+    UBCCController ubcc(nid, sid, nullptr, 64,
+                         ResidentDir::DefaultBloomBytes, 0, g_numSockets);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);

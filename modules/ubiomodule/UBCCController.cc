@@ -57,7 +57,8 @@ UBCCController::UBCCController(int node_id, int socket_id,
                                RubySystem *ruby_system,
                                uint32_t epoch_bits,
                                uint32_t resident_bf_bytes,
-                               uint32_t resident_force_entries)
+                               uint32_t resident_force_entries,
+                               int num_sockets)
   : _nodeId(node_id),
     _socketId(socket_id),
     _interconnectLatency(200),
@@ -87,15 +88,8 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // Hardcoded prototype constants: num_nodes=3, segSize=128MB, NODE_ADDR_SHIFT=40
     constexpr uint64_t kSegSize = 128ULL * 1024 * 1024;
     constexpr int kNodeAddrShift = 40;
-    // Socket-plane model: this UBCC instance is the home directory for exactly
-    // ONE (node, socket) plane, owning the single DSM segment DSM(node, socket).
-    // num_sockets (from UBCC_NUM_SOCKETS) is needed only to locate that segment
-    // within the per-node layout; the covered range is a single segment.
-    int kNumSockets = 1;
-    if (const char *e = std::getenv("UBCC_NUM_SOCKETS")) {
-        int v = std::atoi(e);
-        if (v >= 1 && v <= 8) kNumSockets = v;
-    }
+    // Socket-plane model: num_sockets from constructor parameter.
+    int kNumSockets = num_sockets;
     uint64_t nodeBase = static_cast<uint64_t>(node_id) << kNodeAddrShift;
     // DSM base = phy_base + 2*seg + (node_id * numSockets + socket_id) * seg.
     _dsmLocalBase = nodeBase + 2 * kSegSize
