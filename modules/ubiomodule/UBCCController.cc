@@ -107,10 +107,16 @@ UBCCController::UBCCController(int node_id, int socket_id,
     _dsmLocalBase = nodeBase + 2 * kSegSize
                     + (node_id * kNumSockets + socket_id) * kSegSize;
     _dsmSegSize = kSegSize;
+    // v4-dual-socket: rebuild the address map with the actual num_sockets so
+    // buildDsmPA()/homeSocket() use the correct per-(node,socket) plane layout.
+    // The default member initializer assumes num_sockets=1 (single-socket
+    // legacy); for dual-socket we must override it here.
+    _addrMap = NodeAddressMap(3, kNumSockets, kSegSize);
     DPRINTF(RubyEP,
             "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
-            "dsmBase=0x%lx dsmSize=0x%lx\n",
-            _nodeId, _socketId, _epochBits, _dsmLocalBase, _dsmSegSize);
+            "dsmBase=0x%lx dsmSize=0x%lx numSockets=%d\n",
+            _nodeId, _socketId, _epochBits, _dsmLocalBase, _dsmSegSize,
+            kNumSockets);
 
     registerInstance(node_id, socket_id, this);
 }
@@ -1111,7 +1117,7 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
     msg.h.requesterNode = recallOreq.requesterNode;
     msg.h.targetNode = ownerNode;
     msg.h.homeLinePa = line_pa;
-    msg.h.localLinePa = _addrMap.buildDsmPA(ownerNode, _nodeId, offset);
+    msg.h.localLinePa = _addrMap.buildDsmPA(ownerNode, _nodeId, offset, _socketId);
     msg.h.epoch = entry.epoch;
     msg.h.reqId = recallOreq.reqId;
     msg.h.seqNum = 0;

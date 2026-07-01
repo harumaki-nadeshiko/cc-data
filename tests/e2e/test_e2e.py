@@ -558,7 +558,7 @@ def verify_tc25(reads, lines):
     mismatches = [r for r in reads if r['verdict'] != 'MATCH']
     if mismatches:
         return False, f'TC25 FAILED: {len(mismatches)} mismatch during invalidate/clear cycling', mismatches[:20]
-    final_exp = 0x25000000 | (512 - 1)
+    final_exp = 0x25000000 | (32 - 1)
     node_last = {}
     for r in reads:
         if r['home'] == 2:

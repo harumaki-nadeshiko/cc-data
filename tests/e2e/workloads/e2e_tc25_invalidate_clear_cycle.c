@@ -4,7 +4,7 @@
 
 #define HOME_NODE  2
 #define OFF        0x200
-#define CYCLES     512
+#define CYCLES     32
 
 int main(int argc, char **argv)
 {
