@@ -3,13 +3,9 @@
 #include <cstring>
 #include <cstdio>
 
-#include "base/logging.hh"
 #include "framework/Log.hh"
 #include "mem/ruby/protocol/chi/ep/UBAdapter.hh"
 #include "mem/ruby/protocol/chi/ep/UBCCController.hh"
-#include "sim/cur_tick.hh"
-
-#include <cstdio>
 
 namespace gem5
 {

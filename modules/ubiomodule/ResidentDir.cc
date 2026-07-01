@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-#include "base/logging.hh"
+#include "modules/ubiomodule/gem5_shim.hh"
 
 namespace gem5
 {

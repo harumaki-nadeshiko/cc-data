@@ -5,12 +5,9 @@
 #include <cstdarg>
 #include <sstream>
 
-#include "base/logging.hh"
 #include "framework/Log.hh"
 #include "mem/ruby/protocol/chi/ep/NodeAddressMap.hh"
 #include "mem/ruby/protocol/chi/ep/UBIOModule.hh"
-#include "mem/ruby/system/RubySystem.hh"
-#include "sim/cur_tick.hh"
 
 namespace gem5
 {
