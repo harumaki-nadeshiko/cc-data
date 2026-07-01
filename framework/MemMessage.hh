@@ -15,8 +15,6 @@ enum class MemMessageType : uint32_t {
     COH_MSG         = 2,
     BARRIER_REACHED = 3,
     BARRIER_RELEASE = 4,
-    PORT_HELLO      = 5,
-    PORT_HELLO_ACK  = 6,
 };
 
 struct MemMessageHeader {

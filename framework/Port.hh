@@ -99,17 +99,6 @@ class Port
     uint64_t syncInterval() const { return _syncInterval; }
     const std::string& name() const { return _name; }
 
-    // Multi-process split liveness: returns true if no message (sync or data)
-    // has been received from the peer for at least `thresholdMs` wall-clock
-    // milliseconds. Used by the native modules (ubio/nsim) to detect a gem5
-    // node that finished its workload and exited without a clean TERMINATE, so
-    // its frozen virtual clock does not stall the still-running nodes. When a
-    // stale peer is detected the caller invokes failClosed(), after which
-    // safeTs() returns UINT64_MAX (no longer a clock constraint).
-    bool peerStaleMs(uint64_t thresholdMs) const;
-    // Mark this port's peer as gone (clock no longer a constraint).
-    void markPeerDone(const char* reason) { failClosed(reason); }
-
   private:
     friend class TxHandle;
     void releaseSendSlot();
@@ -131,12 +120,6 @@ class Port
     uint64_t _pendingT = 0;
     MemMessage _pendingMsg;
     uint64_t _lastRxT = static_cast<uint64_t>(~0ULL);
-
-    // Wall-clock (steady_clock) timestamp of the last message received from the
-    // peer, in milliseconds since init. 0 = nothing received yet. Used by
-    // peerStaleMs() for multi-process liveness detection.
-    uint64_t _lastRxWallMs = 0;
-    uint64_t _initWallMs = 0;
 
     MemMessage _sendBuf;
     bool _sendBufInUse = false;

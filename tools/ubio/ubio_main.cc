@@ -890,19 +890,6 @@ main(int argc, char **argv)
         if (minTs > tick) {
             tick = minTs;
         } else {
-            // Multi-process split liveness: if we are clock-bounded but the
-            // local gem5 node has gone silent for a while, it has finished its
-            // workload and exited (possibly without a clean TERMINATE). Mark
-            // its port done so safeTs() stops treating its frozen clock as a
-            // constraint; we then keep advancing on the network side and keep
-            // serving this node's home directory for the remaining nodes.
-            static const uint64_t kPeerStaleMs = 5000;
-            if (gem5Port->peerStaleMs(kPeerStaleMs)) {
-                std::fprintf(stderr,
-                    "[ubio:%d] gem5 peer stale > %lums -> marking done\n",
-                    nid, (unsigned long)kPeerStaleMs);
-                gem5Port->markPeerDone("gem5 node finished (stale sync)");
-            }
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message
             // timestamps into gem5's far future). Yield and re-poll instead, so

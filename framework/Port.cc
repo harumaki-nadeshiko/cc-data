@@ -1,17 +1,10 @@
 #include "framework/Port.hh"
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <zmq.hpp>
 
 namespace framework {
-
-static inline uint64_t nowWallMs() {
-    using namespace std::chrono;
-    return (uint64_t)duration_cast<milliseconds>(
-               steady_clock::now().time_since_epoch()).count();
-}
 
 // Per-message PORT-SEND/PORT-RECV traces fire on every sync (every ~linkLatency
 // ticks) and generate multi-GB logs that exhaust the disk. Gate them behind
@@ -93,20 +86,10 @@ Port::init(const PortParams& params, const PortRuntime& runtime)
         _txSock.reset();  // bind-only; send via _rxSock
     }
     _state = PortState::READY;
-    _initWallMs = nowWallMs();
-    _lastRxWallMs = 0;  // nothing received yet
     std::fprintf(stderr, "[Port %s] rx=%s tx->%s\n",
                  _name.c_str(), params.localRxEndpoint.c_str(),
                  params.peerRxEndpoint.c_str());
     return true;
-}
-
-bool Port::peerStaleMs(uint64_t thresholdMs) const {
-    if (_state != PortState::READY) return false;  // already closed/lost
-    uint64_t now = nowWallMs();
-    // Reference point: last receipt, or init time if nothing received yet.
-    uint64_t ref = (_lastRxWallMs > 0) ? _lastRxWallMs : _initWallMs;
-    return (now - ref) >= thresholdMs;
 }
 
 void Port::failClosed(const char* reason) {
@@ -246,7 +229,6 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     } catch (const zmq::error_t&) { st = ReceiveStatus::kEmpty; return nullptr; }
 
     _lastRxT = (uint64_t)tmp.hdr.timestamp;
-    _lastRxWallMs = nowWallMs();  // liveness: peer is alive
     if (portDebugEnabled())
         std::fprintf(stderr, "[PORT-RECV] %s type=%u ts=%lu src=%u:%u dst=%u:%u curT=%lu\n",
                      _name.c_str(), tmp.hdr.type, tmp.hdr.timestamp,
