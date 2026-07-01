@@ -36,3 +36,12 @@
 - 复盘 TC10 崩溃日志：node1 在 `request.paddr=0x10018000000` 上 Sequencer deadlock；ubio 侧显示 home=1 创建 `RECALL(owner=0 -> requester=1)` 后未收到对应 `RECALL-DIAG`，后续同 reqId 无限 BUSY 重试。
 - 触发条件：TC10 原 workload 中 node0(写者)可能先于 node1(读者)退出，导致 node0 仍可能是 home 记录的 G_M owner，而 node1 后续读触发的 recall 目标已终止。
 - 调整（tests/e2e/workloads/e2e_tc10_concurrent_atomic.c）：在读写循环后新增 `sync_wait(0b011)`，确保 node0 与 node1 同步收敛后再退出，避免对已终止 owner 发 recall。
+
+## 2026-07-01 Autonomous update (TC16 CleanUnique stale 降级一致性修复)
+- 复现：TC16 在 node1 崩溃，`panic: Runtime Error at CHI-cache-funcs.sm:1213`（`assert(tbe.dataMaybeDirtyUpstream == false)`）。
+- 定位：`CHI-cache-actions.sm:CheckUpgrade_FromCU` 的 stale 分支把 `tbe.updateDirOnCompAck := false`，导致后续 `Finish_CleanUnique` 设定 `requestorToBeExclusiveOwner` 后，CompAck 阶段目录不更新 owner；最终出现 `dir_sharers>0 && dir_ownerExists==false && dataMaybeDirtyUpstream==true`，触发 makeFinalState 断言。
+- 修复（仅 stale 门控）：在 `CheckUpgrade_FromCU` stale 分支中移除对 `updateDirOnCompAck` 的强制清零，保留常规 CompAck 目录更新通路；非 stale CleanUnique 路径不变。
+- 验证：
+  - 编译通过（`build/ARM/gem5.opt` 重新生成成功）。
+  - `tests/e2e/run_multi.sh 16` 通过（`TC16 PASSED`）。
+  - 日志无 panic/assert/deadlock；`node0/node1/node2` 均出现 `AFTER_WR`，最终 read 一致（`a0a0`/`b0b0` 单一收敛值，本次为 `b0b0`）。
