@@ -117,11 +117,9 @@ parseMsgTypeName(const std::string &s)
 std::vector<UbioFaultRule> g_faultRules;
 
 void
-parseFaultRulesEnv()
+parseFaultRules(const std::string &all)
 {
-    const char *env = std::getenv("UBIO_FAULT_RULES");
-    if (!env || !env[0]) return;
-    std::string all(env);
+    if (all.empty()) return;
     size_t start = 0;
     while (start < all.size()) {
         size_t semi = all.find(';', start);
@@ -213,6 +211,7 @@ applyUbioFault(const CoherenceMessage &coh, int nid)
 // = network module. Global module id encodes both. With num_sockets=1 this
 // degenerates to gid == node (legacy per-node behavior).
 static int g_numSockets = 1;
+static int g_numNodes = 3;
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -586,6 +585,12 @@ main(int argc, char **argv)
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
         if (!std::strncmp(argv[i], "--socket=", 9)) sid = std::atoi(argv[i] + 9);
+        if (!std::strncmp(argv[i], "--num-sockets=", 14)) g_numSockets = std::atoi(argv[i] + 14);
+        if (!std::strncmp(argv[i], "--num-nodes=", 12)) g_numNodes = std::atoi(argv[i] + 12);
+        if (!std::strncmp(argv[i], "--fault-rules=", 14)) {
+            const char *rules = argv[i] + 14;
+            parseFaultRules(rules);
+        }
     }
 
     if (nid < 0 || nid > 31) {
@@ -594,20 +599,13 @@ main(int argc, char **argv)
     }
 
     // Socket-plane model: this ubio process is the home directory + router for
-    // exactly one (node, socket) plane. num_sockets comes from the environment
-    // so the global module id gid=node*K+socket matches gem5/nsim addressing.
-    if (const char *e = std::getenv("UBCC_NUM_SOCKETS")) {
-        int v = std::atoi(e);
-        if (v >= 1 && v <= 8) g_numSockets = v;
-    }
+    // exactly one (node, socket) plane. num_sockets from --num-sockets arg.
     if (sid < 0 || sid >= g_numSockets) {
         std::fprintf(stderr, "[ubio:%d] ERROR: --socket=%d out of range [0,%d)\n",
                      nid, sid, g_numSockets);
         return 1;
     }
     int gid = static_cast<int>(gidOf(nid, sid));
-
-    parseFaultRulesEnv();
 
     std::fprintf(stderr, "[UBIO-START] node=%d socket=%d gid=%d creating ports...\n",
                  nid, sid, gid); fflush(stderr);
@@ -664,8 +662,7 @@ main(int argc, char **argv)
                 // (gem5 emits BARRIER_REACHED via its socket-0 UBAdapter). Forward
                 // to every other node's plane-0 ubio (gid = j*K + 0).
                 if (netPort && !fromNetwork) {
-                    const char *nn = getenv("UBCC_NUM_NODES");
-                    int numNodes = nn ? atoi(nn) : 3;
+                    int numNodes = g_numNodes;
                     if (numNodes < 1) numNodes = 3;
                     for (int i = 0; i < numNodes; ++i) {
                         if (i != nid) {

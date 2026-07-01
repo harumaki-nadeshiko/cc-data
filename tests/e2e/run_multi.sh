@@ -175,12 +175,11 @@ start_all() {
         for sid in $(seq 0 $((NUM_SOCKETS - 1))); do
             local logdir="${LOG_BASE}/ubio_n${nid}_s${sid}"
             mkdir -p "$logdir"
-            # UBCC_NUM_SOCKETS lets ubio compute gid=node*K+socket (must match
-            # gem5/nsim addressing); --socket selects which DSM plane this ubio
-            # is the home directory for.
-            UBCC_NUM_NODES="$NUM_NODES" UBCC_NUM_SOCKETS="$NUM_SOCKETS" \
-            UBIO_FAULT_RULES="$fault_rules" \
+            # --num-sockets and --num-nodes tell ubio the global plane layout;
+            # --socket selects which DSM plane this ubio is the home directory for.
             "$UBIO_BIN" --node="$nid" --socket="$sid" \
+                --num-sockets="$NUM_SOCKETS" --num-nodes="$NUM_NODES" \
+                ${fault_rules:+--fault-rules="$fault_rules"} \
                 >"$logdir/stdout.log" 2>"$logdir/stderr.log" &
             UBIO_PIDS="$UBIO_PIDS $!"
         done
