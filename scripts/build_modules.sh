@@ -10,11 +10,11 @@ LDFLAGS="-L$ROOT/thirdparty/zeromq/lib -lzmq -lpthread"
 PSRC="$ROOT/framework/Port.cc"
 echo "[build] ubio"
 SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/NodeAddressMap.cc"
-g++ $CXXFLAGS $ROOT/tools/ubio/ubio_main.cc $PSRC $SRCS $LDFLAGS -o /tmp/ubio.elf
+g++ $CXXFLAGS $MOD/ubio_main.cc $PSRC $SRCS $LDFLAGS -o /tmp/ubio.elf
 echo "[build] networksim"
 g++ $CXXFLAGS $ROOT/modules/networksim/networksim_main.cc $PSRC $LDFLAGS -o "$ROOT/modules/networksim/networksim"
 echo "[build] barrier_manager"
 mkdir -p "$ROOT/modules/barrier"
-g++ $CXXFLAGS $ROOT/tools/barrier/barrier_main.cc $PSRC $LDFLAGS -o "$ROOT/modules/barrier/barrier_manager"
+g++ $CXXFLAGS $ROOT/modules/barrier/barrier_main.cc $PSRC $LDFLAGS -o "$ROOT/modules/barrier/barrier_manager"
 echo "[build] done"
 ls -lh /tmp/ubio.elf "$ROOT/modules/networksim/networksim" "$ROOT/modules/barrier/barrier_manager"

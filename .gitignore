@@ -18,3 +18,12 @@ states/logs/
 states/
 /shared_ipc/
 docs/all.cpp
+
+# Native module build artifacts (ELF binaries; sources live under modules/)
+modules/barrier/barrier_manager
+modules/networksim/networksim
+modules/networksim/netsim
+tools/networksim/netsim
+tools/ubio/ubio
+tools/ubio/ubio_main
+tools/ubio/test_peer

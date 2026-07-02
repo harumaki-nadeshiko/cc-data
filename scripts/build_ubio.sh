@@ -19,5 +19,5 @@ LDFLAGS="-L$ZMQ_LIB -lzmq -lpthread"
 
 SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/NodeAddressMap.cc"
 
-g++ $CXXFLAGS "$ROOT/tools/ubio/ubio_main.cc" $SRCS "$FW_LIB" $LDFLAGS -o "$OUT/ubio"
+g++ $CXXFLAGS "$MOD/ubio_main.cc" $SRCS "$FW_LIB" $LDFLAGS -o "$OUT/ubio"
 echo "[build_ubio] $(ls -lh "$OUT/ubio" | awk '{print $5}') -> $OUT/ubio"

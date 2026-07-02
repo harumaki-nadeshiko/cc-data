@@ -15,5 +15,5 @@ mkdir -p "$OUT"
 CXXFLAGS="-std=c++17 -O2 -Wall -pthread -I$FW_INC -I$ROOT -I$ZMQ_INC"
 LDFLAGS="-L$ZMQ_LIB -lzmq -lpthread"
 
-g++ $CXXFLAGS "$ROOT/tools/barrier/barrier_main.cc" "$FW_LIB" $LDFLAGS -o "$OUT/barrier_manager"
+g++ $CXXFLAGS "$ROOT/modules/barrier/barrier_main.cc" "$FW_LIB" $LDFLAGS -o "$OUT/barrier_manager"
 echo "[build_barrier] $(ls -lh "$OUT/barrier_manager" | awk '{print $5}') -> $OUT/barrier_manager"
