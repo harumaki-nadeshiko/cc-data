@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <zmq.hpp>
 
 namespace framework {
@@ -16,24 +17,6 @@ static inline bool portDebugEnabled() {
         v = (e && e[0] == '1') ? 1 : 0;
     }
     return v != 0;
-}
-
-// ── TxHandle ────────────────────────────────────────────────────────
-MemMessage* TxHandle::buffer() {
-    if (!_port) return nullptr;
-    return &_port->_sendBuf;
-}
-bool TxHandle::send() {
-    if (!_port) return false;
-    bool ok = _port->doSend();
-    _port->releaseSendSlot();
-    _port = nullptr;
-    return ok;
-}
-void TxHandle::cancel() {
-    if (!_port) { return; }
-    _port->releaseSendSlot();
-    _port = nullptr;
 }
 
 // ── Port ────────────────────────────────────────────────────────────
@@ -109,10 +92,6 @@ void Port::terminate() {
     if (_state != PortState::READY) { closeLocal(); return; }
     _state = PortState::TERMINATING;
     // best-effort TERMINATE notice
-    if (_txSock && _sendBufInUse) {
-        // a send is mid-fill; cancel it first
-        releaseSendSlot();
-    }
     if (_txSock) {
         try {
             MemMessage m;
@@ -126,8 +105,6 @@ void Port::terminate() {
     }
     closeLocal();
 }
-
-void Port::releaseSendSlot() { _sendBufInUse = false; }
 
 uint64_t Port::receiveTimestamp() const { return _pending ? _pendingT : _lastRxT; }
 
@@ -156,38 +133,44 @@ uint64_t Port::safeTs(uint64_t curT) const {
 
 // ── Data plane ──────────────────────────────────────────────────────
 
-TxHandle*
+MemMessage*
 Port::allocateSendBuffer(uint64_t timestamp)
 {
-    if (_state != PortState::READY || _sendBufInUse) return nullptr;
-    _sendBuf.clear();
-    _sendBuf.hdr.timestamp = timestamp + _linkLatency;
-    _sendBuf.hdr.sourceId = _moduleId;
-    _sendBuf.hdr.size = sizeof(MemMessageHeader);
-    _sendBufInUse = true;
-    _txHandle = TxHandle(this);
-    return &_txHandle;
+    if (_state != PortState::READY) return nullptr;
+    MemMessage* msg = new (std::nothrow) MemMessage();
+    if (!msg) return nullptr;
+    msg->clear();
+    msg->hdr.timestamp = timestamp + _linkLatency;
+    msg->hdr.sourceId = _moduleId;
+    msg->hdr.size = sizeof(MemMessageHeader);
+    return msg;
 }
 
 bool
-Port::doSend()  // private helper invoked by TxHandle::send
+Port::send(MemMessage* msg)
 {
-    if (_state == PortState::PEER_LOST) return false;
-    if (_state != PortState::READY) return false;
-    auto& sock = _txSock ? *_txSock : *_rxSock;
-    try {
-        zmq::message_t z(_sendBuf.hdr.size);
-        std::memcpy(z.data(), &_sendBuf, _sendBuf.hdr.size);
-        if (portDebugEnabled())
-            std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u\n",
-                         _name.c_str(), _sendBuf.hdr.type, _sendBuf.hdr.timestamp,
-                         _sendBuf.hdr.targetId);
-        sock.send(z, zmq::send_flags::none);
-        return true;
-    } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
+    if (!msg) return false;
+    if (_state == PortState::PEER_LOST || _state != PortState::READY) {
+        delete msg;
         return false;
     }
+    bool ok = false;
+    auto& sock = _txSock ? *_txSock : *_rxSock;
+    try {
+        zmq::message_t z(msg->hdr.size);
+        std::memcpy(z.data(), msg, msg->hdr.size);
+        if (portDebugEnabled())
+            std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u\n",
+                         _name.c_str(), msg->hdr.type, msg->hdr.timestamp,
+                         msg->hdr.targetId);
+        sock.send(z, zmq::send_flags::none);
+        ok = true;
+    } catch (const zmq::error_t& e) {
+        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
+        ok = false;
+    }
+    delete msg;
+    return ok;
 }
 
 MemMessage*
@@ -260,14 +243,11 @@ Port::emitSync(uint64_t curTick)
 {
     if (_lastSyncTs > 0 && curTick - _lastSyncTs < _linkLatency)
         return true;
-    TxHandle* h = allocateSendBuffer(curTick);
-    if (!h) return false;
-    MemMessage* buf = h->buffer();
-    buf->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
-    buf->hdr.size = sizeof(MemMessageHeader);
-    bool ok = h->send();
-    // send() releases the slot; if it failed the slot is already released.
-    if (ok) { _lastSyncTs = curTick; return true; }
+    MemMessage* msg = allocateSendBuffer(curTick);
+    if (!msg) return false;
+    msg->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
+    msg->hdr.size = sizeof(MemMessageHeader);
+    if (send(msg)) { _lastSyncTs = curTick; return true; }
     return false;
 }
 

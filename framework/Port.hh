@@ -44,24 +44,6 @@ struct PortRuntime {
     uint64_t linkLatency  = kDefaultLinkLatency;
 };
 
-// ---- Explicit (non-RAII) send handle ----
-// A TxHandle owns the single send slot of a Port until send() or cancel() is
-// called. It must NOT be held across an event/wakeup boundary. Failing to
-// release it before the next allocateSendBuffer is a programming error (the
-// next allocate returns nullptr). Destruction does NOT auto-cancel.
-class TxHandle {
-  public:
-    TxHandle() = default;
-    MemMessage* buffer();   // access the buffer to fill
-    bool send();            // commit; handle becomes invalid
-    void cancel();          // abandon; handle becomes invalid
-    bool valid() const { return _port != nullptr; }
-  private:
-    friend class Port;
-    TxHandle(class Port* p) : _port(p) {}
-    class Port* _port = nullptr;
-};
-
 class Port
 {
   public:
@@ -85,9 +67,15 @@ class Port
     void failClosed(const char* reason);
 
     // ---- Data plane ----
-    // Allocate the send buffer for a message stamped at `timestamp`. Returns a
-    // TxHandle (valid until send/cancel) or nullptr if the slot is busy.
-    TxHandle* allocateSendBuffer(uint64_t timestamp);
+    // Allocate a NEW transport packet stamped at `timestamp` (hdr.timestamp =
+    // ts + linkLatency, sourceId, size preset). Returns a heap MemMessage* the
+    // caller fills. Ownership passes to send(); if the caller decides NOT to
+    // send, it must delete the returned pointer itself. Returns nullptr only on
+    // allocation failure.
+    MemMessage* allocateSendBuffer(uint64_t timestamp);
+    // Send `msg` (memcpy into a zmq message) and DELETE msg (takes ownership,
+    // deletes on both success and failure). Returns false on transport failure.
+    bool send(MemMessage* msg);
     MemMessage* recv(uint64_t curT, ReceiveStatus* status = nullptr);
 
     uint64_t receiveTimestamp() const;
@@ -100,10 +88,6 @@ class Port
     const std::string& name() const { return _name; }
 
   private:
-    friend class TxHandle;
-    void releaseSendSlot();
-    bool doSend();  // internal: send _sendBuf (called by TxHandle::send)
-
     std::string _name;
     uint32_t _moduleId = 0, _portId = 0;
     PortState _state = PortState::INIT;
@@ -125,10 +109,6 @@ class Port
     // until the peer's first sync raises _lastRxT. This matches the reference
     // framework and needs no special-case branch in safeTs().
     uint64_t _lastRxT = 0;
-
-    MemMessage _sendBuf;
-    bool _sendBufInUse = false;
-    TxHandle _txHandle{this};
 };
 
 // Per-port environment/config loader. Encapsulates the endpoint naming so each

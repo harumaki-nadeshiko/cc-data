@@ -132,13 +132,12 @@ void NetworkSim::step() {
         totalFwd++;
         auto it = _ports.find(pf.dst_mod);
         if (it != _ports.end()) {
-            framework::TxHandle* fh = it->second->allocateSendBuffer(_tick);
-            if (fh) {
-                MemMessage* buf = fh->buffer();
+            framework::MemMessage* buf = it->second->allocateSendBuffer(_tick);
+            if (buf) {
                 uint64_t ts = buf->hdr.timestamp;
                 *buf = pf.msg;
                 buf->hdr.timestamp = ts;
-                fh->send();
+                it->second->send(buf);
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)

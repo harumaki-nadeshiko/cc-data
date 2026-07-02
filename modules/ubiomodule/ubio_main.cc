@@ -241,8 +241,7 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         }
         return false;
     }
-    framework::TxHandle *h = port->allocateSendBuffer(tick);
-    MemMessage *buf = h ? h->buffer() : nullptr;
+    framework::MemMessage *buf = port->allocateSendBuffer(tick);
     if (traceReadPath) {
         std::fprintf(stderr,
                      "[UBIO-RR-SEND] type=%s alloc ptr=%p reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
@@ -272,10 +271,10 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule,  tick);
         }
-        h->cancel();
+        delete buf;
         return false;
     }
-    bool ok = h->send();
+    bool ok = port->send(buf);
     if (traceReadPath) {
         std::fprintf(stderr,
                      "[UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
@@ -679,12 +678,12 @@ main(int argc, char **argv)
                     if (numNodes < 1) numNodes = 3;
                     for (int i = 0; i < numNodes; ++i) {
                         if (i != nid) {
-                            framework::TxHandle* fh = netPort->allocateSendBuffer(m->hdr.timestamp);
-                            if (fh) {
-                                MemMessage* fwd = fh->buffer(); *fwd = *m;
+                            framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
+                            if (fwd) {
+                                *fwd = *m;
                                 fwd->hdr.timestamp = tick;  // immediate delivery
                                 fwd->hdr.targetId = gidOf(i, 0);
-                                fh->send();
+                                netPort->send(fwd);
                             }
                             else { std::fprintf(stderr,"[ubio:%d] BARRIER-FWD-FAIL to=%d\n", nid, i); }
                         }
@@ -695,16 +694,15 @@ main(int argc, char **argv)
                     // Use tick (not tick+linkLatency) so the release is
                     // deliverable immediately even when clocks are deep into the
                     // billions (see allocateSendBuffer's +linkLatency stamping).
-                    framework::TxHandle* rh = gem5Port->allocateSendBuffer(tick);
-                    if (rh) {
-                        MemMessage* rel = rh->buffer();
+                    framework::MemMessage* rel = gem5Port->allocateSendBuffer(tick);
+                    if (rel) {
                         rel->hdr.timestamp = tick;
                         rel->hdr.type = (uint32_t)MemMessageType::PAYLOAD;
                         CoherenceMessage rmsg;
                         rmsg.h.type = CoherenceMessageType::BarrierRelease;
                         rmsg.b.barrier.mask = mask;
                         rel->setPayload(rmsg);
-                        rh->send();
+                        gem5Port->send(rel);
                         std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
                     }
                     barrierNodes[mask].clear();

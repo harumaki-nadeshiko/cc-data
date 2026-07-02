@@ -84,17 +84,16 @@ int main(int argc, char **argv) {
                         // Broadcast BarrierRelease to all nodes in the mask
                         for (uint32_t ni = 0; ni < (uint32_t)numNodes; ni++) {
                             if (mask & (1u << ni)) {
-                                framework::TxHandle* rh = ports[ni]->allocateSendBuffer(tick);
-                                if (rh) {
-                                    MemMessage *rel = rh->buffer();
-                                    rel->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
-                                    rel->hdr.sourceId = 0;
-                                    rel->hdr.targetId = ni;
+                                framework::MemMessage* buf = ports[ni]->allocateSendBuffer(tick);
+                                if (buf) {
+                                    buf->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
+                                    buf->hdr.sourceId = 0;
+                                    buf->hdr.targetId = ni;
                                     CoherenceMessage rmsg;
                                     rmsg.h.type = CoherenceMessageType::BarrierRelease;
                                     rmsg.b.barrier.mask = mask;
-                                    rel->setPayload(rmsg);
-                                    rh->send();
+                                    buf->setPayload(rmsg);
+                                    ports[ni]->send(buf);
                                 }
                             }
                         }
