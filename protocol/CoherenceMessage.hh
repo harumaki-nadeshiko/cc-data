@@ -42,6 +42,8 @@ enum class CoherenceMessageType : uint16_t {
     QueryLineMetaReq,        // v4-dual-socket: EPBackend queries UBCC for epoch/owner
     QueryLineMetaResp,       // v4-dual-socket: UBCC response
     HomeWritebackNotify,     // v4-dual-socket: HN-F completes DDR4 writeback
+    BarrierReached,          // cross-node barrier: a node has arrived (mask in body)
+    BarrierRelease,          // cross-node barrier: release the nodes in the mask
 };
 
 // ---- Message Flags ----
@@ -195,6 +197,15 @@ struct UBUpgradeAckNotifyBody {
     /* no extra fields — header-only notification */  // v4-P0 fix: FV-9 gap
 };
 
+// Cross-node barrier control (BarrierReached / BarrierRelease). The arriving /
+// released node id travels in the header's srcNode field; `mask` is the set of
+// participating nodes. Carried as a PAYLOAD CoherenceMessage so the transport
+// layer (MemMessageType) only needs PAYLOAD/TERMINATE/CONTROL_SYNC.
+struct UBBarrierBody {
+    uint32_t mask;
+    UBBarrierBody() : mask(0) {}
+};
+
 union CoherenceMessageBody {
     UBReadReqBody readReq;
     UBReadRespBody readResp;
@@ -216,6 +227,7 @@ union CoherenceMessageBody {
     UBQueryLineMetaRespBody queryLineMetaResp;
     UBHomeWritebackNotifyBody homeWritebackNotify;
     UBUpgradeAckNotifyBody upgradeAckNotify;  // v4-P0 fix: FV-9 gap
+    UBBarrierBody barrier;                    // BarrierReached / BarrierRelease
 
     CoherenceMessageBody() {} // value-initialized by CoherenceMessage default ctor
 };
@@ -253,6 +265,8 @@ coherenceMsgTypeName(CoherenceMessageType t)
         case CoherenceMessageType::QueryLineMetaReq:  return "QueryLineMetaReq";
         case CoherenceMessageType::QueryLineMetaResp: return "QueryLineMetaResp";
         case CoherenceMessageType::HomeWritebackNotify: return "HomeWritebackNotify";
+        case CoherenceMessageType::BarrierReached:   return "BarrierReached";
+        case CoherenceMessageType::BarrierRelease:   return "BarrierRelease";
         default:                           return "Unknown";
     }
 }

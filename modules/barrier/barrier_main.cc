@@ -9,8 +9,11 @@
 #include <vector>
 
 #include "framework/Port.hh"
+#include "modules/ubiomodule/CoherenceMessage.hh"
 
 using namespace framework;
+using cc::glob::CoherenceMessage;
+using cc::glob::CoherenceMessageType;
 
 struct BarrierState {
     uint32_t mask;
@@ -52,10 +55,20 @@ int main(int argc, char **argv) {
             ReceiveStatus st;
             MemMessage *m = p->recv(tick, &st);
             while (m && st == ReceiveStatus::kMessage) {
+                // CONTROL_SYNC arrives as an ordinary kMessage; skip it so it
+                // does not count as barrier activity.
+                if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
+                    m = p->recv(tick, &st);
+                    continue;
+                }
                 any = true;
-                if (m->hdr.type == static_cast<uint32_t>(MemMessageType::BARRIER_REACHED)) {
-                    uint32_t mask = static_cast<uint32_t>(m->hdr.req_id);
-                    uint32_t nodeId = m->hdr.sourceId;
+                // Barrier control is now a PAYLOAD CoherenceMessage (BarrierReached).
+                const CoherenceMessage *bc =
+                    (m->hdr.type == static_cast<uint32_t>(MemMessageType::PAYLOAD))
+                        ? m->getPayload<CoherenceMessage>() : nullptr;
+                if (bc && bc->h.type == CoherenceMessageType::BarrierReached) {
+                    uint32_t mask = bc->b.barrier.mask;
+                    uint32_t nodeId = bc->h.srcNode;
                     std::printf("[BarrierManager] ARRIVED node=%u mask=0x%x\n", nodeId, mask);
 
                     auto &bs = barriers[mask];
@@ -68,17 +81,19 @@ int main(int argc, char **argv) {
 
                     if (bs.arrived.size() >= expected) {
                         std::printf("[BarrierManager] RELEASE mask=0x%x\n", mask);
-                        // Broadcast BARRIER_RELEASE to all nodes in the mask
+                        // Broadcast BarrierRelease to all nodes in the mask
                         for (uint32_t ni = 0; ni < (uint32_t)numNodes; ni++) {
                             if (mask & (1u << ni)) {
                                 framework::TxHandle* rh = ports[ni]->allocateSendBuffer(tick);
                                 if (rh) {
                                     MemMessage *rel = rh->buffer();
-                                    rel->hdr.type = static_cast<uint32_t>(MemMessageType::BARRIER_RELEASE);
-                                    rel->hdr.req_id = mask;
+                                    rel->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
                                     rel->hdr.sourceId = 0;
                                     rel->hdr.targetId = ni;
-                                    rel->hdr.size = sizeof(MemMessageHeader);
+                                    CoherenceMessage rmsg;
+                                    rmsg.h.type = CoherenceMessageType::BarrierRelease;
+                                    rmsg.b.barrier.mask = mask;
+                                    rel->setPayload(rmsg);
                                     rh->send();
                                 }
                             }

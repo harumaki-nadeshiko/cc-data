@@ -648,17 +648,33 @@ main(int argc, char **argv)
                 m = port->recv(tick, &st);
                 continue;
             }
-            if (m->hdr.type == static_cast<uint32_t>(MemMessageType::BARRIER_REACHED)) {
-                uint32_t mask = (uint32_t)m->hdr.req_id;
-                int src = m->hdr.sourceId;
-                std::fprintf(stderr,"[ubio:%d] BARRIER_REACHED mask=0x%x src=%d\n", nid, mask, src);
+            if (m->hdr.type != static_cast<uint32_t>(MemMessageType::PAYLOAD)) {
+                std::fprintf(stderr, "[ubio:%d] drop MemMessage type=%u ts=%lu size=%u\n",
+                             nid, m->hdr.type, m->hdr.timestamp, m->hdr.size);
+                m = port->recv(tick, &st);
+                continue;
+            }
+
+            const CoherenceMessage *coh = m->getPayload<CoherenceMessage>();
+            if (!coh) {
+                std::fprintf(stderr, "[ubio:%d] bad payload size=%u req_id=%lu\n",
+                             nid, m->payloadLen(), m->hdr.req_id);
+                m = port->recv(tick, &st);
+                continue;
+            }
+
+            // Cross-node barrier (now a PAYLOAD CoherenceMessage, not a
+            // dedicated MemMessageType). A node reports BarrierReached; once all
+            // nodes in the mask have arrived, reply BarrierRelease to local gem5.
+            if (coh->h.type == CoherenceMessageType::BarrierReached) {
+                uint32_t mask = coh->b.barrier.mask;
+                int src = coh->h.srcNode;
+                std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x src=%d\n", nid, mask, src);
                 static std::map<uint32_t, std::set<int>> barrierNodes;
                 barrierNodes[mask].insert(src);
-                // Only forward barriers that arrived from the LOCAL gem5 — not
-                // ones forwarded by other ubios (avoids broadcast storm).
-                // Barriers are per-NODE and flow through the socket-0 plane only
-                // (gem5 emits BARRIER_REACHED via its socket-0 UBAdapter). Forward
-                // to every other node's plane-0 ubio (gid = j*K + 0).
+                // Forward only barriers that arrived from the LOCAL gem5 (not
+                // ones already forwarded by other ubios) to every other node's
+                // plane-0 ubio (gid = j*K + 0). Re-copies the raw PAYLOAD msg.
                 if (netPort && !fromNetwork) {
                     int numNodes = g_numNodes;
                     if (numNodes < 1) numNodes = 3;
@@ -677,38 +693,23 @@ main(int argc, char **argv)
                 }
                 uint32_t expected = __builtin_popcount(mask);
                 if (barrierNodes[mask].size() >= expected) {
-                    // Use tick (not tick+linkLatency) so the RELEASE is
-                    // deliverable immediately even when clocks are deep into
-                    // the billions.  allocateSendBuffer would set timestamp =
-                    // tick + linkLatency, which may be > the peer's curT if
-                    // it is at the same tick, causing Port::recv to queue it
-                    // as _pending and delaying delivery indefinitely.
+                    // Use tick (not tick+linkLatency) so the release is
+                    // deliverable immediately even when clocks are deep into the
+                    // billions (see allocateSendBuffer's +linkLatency stamping).
                     framework::TxHandle* rh = gem5Port->allocateSendBuffer(tick);
                     if (rh) {
                         MemMessage* rel = rh->buffer();
                         rel->hdr.timestamp = tick;
-                        rel->hdr.type = (uint32_t)MemMessageType::BARRIER_RELEASE;
-                        rel->hdr.req_id = mask;
-                        rel->hdr.size = sizeof(MemMessageHeader);
+                        rel->hdr.type = (uint32_t)MemMessageType::PAYLOAD;
+                        CoherenceMessage rmsg;
+                        rmsg.h.type = CoherenceMessageType::BarrierRelease;
+                        rmsg.b.barrier.mask = mask;
+                        rel->setPayload(rmsg);
                         rh->send();
-                        std::fprintf(stderr,"[ubio:%d] BARRIER_RELEASE mask=0x%x\n", nid, mask);
+                        std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
                     }
                     barrierNodes[mask].clear();
                 }
-                m = port->recv(tick, &st);
-                continue;
-            }
-            if (m->hdr.type != static_cast<uint32_t>(MemMessageType::PAYLOAD)) {
-                std::fprintf(stderr, "[ubio:%d] drop MemMessage type=%u ts=%lu size=%u\n",
-                             nid, m->hdr.type, m->hdr.timestamp, m->hdr.size);
-                m = port->recv(tick, &st);
-                continue;
-            }
-
-            const CoherenceMessage *coh = m->getPayload<CoherenceMessage>();
-            if (!coh) {
-                std::fprintf(stderr, "[ubio:%d] bad payload size=%u req_id=%lu\n",
-                             nid, m->payloadLen(), m->hdr.req_id);
                 m = port->recv(tick, &st);
                 continue;
             }

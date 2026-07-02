@@ -10,11 +10,9 @@ static constexpr uint32_t kMaxPayloadSize = 1024;
 static constexpr uint32_t kMemMessageHeaderSize = 40;
 
 enum class MemMessageType : uint32_t {
-    CONTROL_SYNC    = 0,
-    TERMINATE       = 1,
-    PAYLOAD         = 2,
-    BARRIER_REACHED = 3,
-    BARRIER_RELEASE = 4,
+    CONTROL_SYNC    = 0,   // clock heartbeat (no payload)
+    TERMINATE       = 1,   // shutdown notice
+    PAYLOAD         = 2,   // carries a CoherenceMessage (incl. barrier control)
 };
 
 struct MemMessageHeader {
