@@ -1277,23 +1277,22 @@ def gem5_config_main():
         print(f"ERROR: invalid --tc={_args.tc}. Must be 1-46.", flush=True)
         sys.exit(1)
 
+    # UBCC configuration is derived from CLI args and passed to
+    # create_ubcc_system via the `options` object (see below), not env vars.
     # Number of sockets: explicit --num-sockets wins; else per-TC default.
     if _args.num_sockets > 0:
-        os.environ["UBCC_NUM_SOCKETS"] = str(_args.num_sockets)
+        _cfg_num_sockets = _args.num_sockets
     elif _args.tc in (32, 33, 34, 35, 39):
         # Dual-socket tests: TC32~TC35 + TC39 force 2 sockets.
-        os.environ["UBCC_NUM_SOCKETS"] = "2"
+        _cfg_num_sockets = 2
     else:
-        os.environ["UBCC_NUM_SOCKETS"] = "1"
+        _cfg_num_sockets = 1
 
-    # Multi-process split configuration -> env for create_ubcc_system.
+    # Multi-process split configuration.
     _local_node = _args.node_id
-    os.environ["UBCC_LOCAL_NODE"] = str(_local_node)
-    if _args.num_nodes > 0:
-        os.environ["UBCC_NUM_NODES"] = str(_args.num_nodes)
-    # When this process owns a single node, only that node's UBAdapter
-    # should bind its Port (UBIO_PORT_ENABLE = node id). -1 = all nodes.
-    os.environ["UBIO_PORT_ENABLE"] = str(_local_node)
+    _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
+    # When this process owns a single node, only that node's UBAdapter binds
+    # its Port (local_node = node id). -1 = all nodes (single-process mode).
 
     binary = compile_workload(tc_name)
     if not binary:
@@ -1446,6 +1445,11 @@ def gem5_config_main():
     options.link_width_bits = 128
     options.numa_high_bit = 0
 
+    # ── UBCC config (Phase 4: passed via options, not env vars) ────
+    options.ubcc_num_nodes = _cfg_num_nodes
+    options.ubcc_num_sockets = _cfg_num_sockets
+    options.ubcc_local_node = _local_node
+
     # ── Patch v25.1: Skip config_filesystem proxy-triggering call ──
     import common.FileSystemConfig as _fsc
     _fsc.config_filesystem = lambda *a, **kw: None
@@ -1456,7 +1460,7 @@ def gem5_config_main():
     # Node2 base + 5*SEG ≈ 2.2 TB) so that self-tests and grant-data
     # population can functional-read any PA.
     # Per-node window = (2 + N*S) DSM/private segments + 16MB metadata.
-    _num_sockets_cfg = int(os.environ.get("UBCC_NUM_SOCKETS", "1"))
+    _num_sockets_cfg = _cfg_num_sockets
     _segs_per_node = 2 + NODES * _num_sockets_cfg
     _node_window = _segs_per_node * DEFAULT_SEG_SIZE + 16 * 1024 * 1024
     _max_pa = (NODES - 1) * (1 << 40) + _node_window
