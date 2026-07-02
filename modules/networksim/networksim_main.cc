@@ -112,8 +112,10 @@ void NetworkSim::step() {
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
 
-            int targetKey = findPortByModule(m->hdr.targetId, m->hdr.targetId * 1000 + 0);
-            auto rit = _routes.find({m->hdr.sourceId, m->hdr.sourceId * 1000 + 0});
+            auto rit = _routes.end();
+            for (auto r = _routes.begin(); r != _routes.end(); ++r) {
+                if (r->first.first == (int)m->hdr.sourceId) { rit = r; break; }
+            }
             uint64_t lat = 1;
             if (rit != _routes.end() && !rit->second.empty()) lat = rit->second[0].latency;
 
