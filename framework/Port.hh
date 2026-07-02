@@ -21,10 +21,10 @@ static constexpr uint64_t kDefaultSyncInterval = 100000;
 static constexpr uint64_t kDefaultLinkLatency  = 100000;
 
 enum class ReceiveStatus {
-    kMessage,
-    kEmpty,
-    kSync,
-    kPendingFuture,
+    kMessage,        // a message is visible (timestamp <= curT); may be a
+                     // CONTROL_SYNC — the caller filters those by hdr.type.
+    kEmpty,          // nothing to receive right now
+    kPendingFuture,  // head message has timestamp > curT; buffered, not visible
 };
 
 enum class PortState { INIT, READY, TERMINATING, CLOSED, PEER_LOST };
@@ -119,7 +119,12 @@ class Port
     bool _pending = false;
     uint64_t _pendingT = 0;
     MemMessage _pendingMsg;
-    uint64_t _lastRxT = static_cast<uint64_t>(~0ULL);
+    // Init 0 (not a sentinel): before the first message from the peer,
+    // receiveTimestamp()==0 makes safeTs()==0, which is the absorbing element
+    // of the min()-based clock bound — the local clock cannot advance past 0
+    // until the peer's first sync raises _lastRxT. This matches the reference
+    // framework and needs no special-case branch in safeTs().
+    uint64_t _lastRxT = 0;
 
     MemMessage _sendBuf;
     bool _sendBufInUse = false;

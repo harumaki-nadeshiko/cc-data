@@ -143,11 +143,12 @@ uint64_t Port::safeTs(uint64_t curT) const {
         _state == PortState::TERMINATING)
         return ~static_cast<uint64_t>(0);
 
+    // safeTs = min(peer's latest timestamp, own lookahead window). Before the
+    // first message from the peer, receiveTimestamp()==0 (init value, not a
+    // sentinel), so this returns 0 — the min() absorbing element — parking the
+    // local clock at 0 until the peer's first sync raises _lastRxT. No special
+    // case needed (matches the reference TimeSync::safeTs).
     uint64_t rxt = receiveTimestamp();
-    // PLAN 1: before we have ever heard from the peer (rxt == sentinel), do NOT
-    // free-run — park at curT until the first sync arrives.
-    if (rxt == ~static_cast<uint64_t>(0))
-        return curT;
     uint64_t base = (_lastSyncTs > 0) ? _lastSyncTs : curT;
     uint64_t syncBound = base + _syncInterval;
     return (rxt < syncBound) ? rxt : syncBound;
@@ -204,8 +205,9 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
         if (_pendingT <= curT) {
             _lastRxT = _pendingT;
             _pending = false;
-            st = (_pendingMsg.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC))
-                     ? ReceiveStatus::kSync : ReceiveStatus::kMessage;
+            // A CONTROL_SYNC is delivered as an ordinary kMessage; the caller
+            // recognizes and skips it via hdr.type (see 2.1.2 alignment).
+            st = ReceiveStatus::kMessage;
             static thread_local MemMessage result;
             result = _pendingMsg;
             return &result;
@@ -232,13 +234,12 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
                      _name.c_str(), tmp.hdr.type, tmp.hdr.timestamp,
                      tmp.hdr.sourceId, tmp.hdr.targetId, curT);
 
-    if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
-        // _lastRxT already updated above (tracks peer's latest ts). Do NOT
-        // advance _lastSyncTs from a received sync — it is our own heartbeat
-        // clock and must only be set by emitSync().
-        st = ReceiveStatus::kSync;
-        static thread_local MemMessage result; result = tmp; return &result;
-    }
+    // A CONTROL_SYNC carries no payload but has a timestamp; it is treated like
+    // any other message here (_lastRxT updated above tracks the peer's latest
+    // ts). It flows through the timestamp-visibility check below and is returned
+    // as an ordinary kMessage for the caller to skip by hdr.type. We must NOT
+    // advance _lastSyncTs from a received sync — that is our own heartbeat clock
+    // and is only set by emitSync().
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
         // Peer is shutting down; stop accepting new traffic.
         failClosed("peer TERMINATE received");

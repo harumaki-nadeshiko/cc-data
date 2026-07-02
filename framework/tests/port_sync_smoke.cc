@@ -86,7 +86,7 @@ int main()
     for (int r=0; r<10; ++r) {
         fm = port_a.recv(1000, &st);
         if (!fm) break;
-        if (st == ReceiveStatus::kSync) {
+        if (fm->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
             std::printf("[A] drained sync\n");
             continue;
         }
