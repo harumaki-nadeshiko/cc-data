@@ -34,7 +34,7 @@ class NetworkSim {
     std::map<int, uint64_t> _linkLatency;
     std::deque<PendingFwd> _fifo;
     uint64_t _tick = 0;
-    bool _done = false;
+    std::set<int> _donePorts;
 
 public:
     NetworkSim(const std::string& topoPath)
@@ -104,14 +104,14 @@ void NetworkSim::buildRoutes() {
 }
 
 void NetworkSim::step() {
-    // NOTE: no unconditional _tick++ here. Advancing the clock is decided in
-    // run() strictly from safeTs, so nsim never drifts ahead of its peers.
     int totalRecv = 0, totalFwd = 0;
     for (auto& kv : _ports) {
+        int mod = kv.first;
+        if (_donePorts.count(mod)) continue;
         Port* p = kv.second.get();
         p->emitSync(_tick);
         while (MemMessage* m = p->recv(_tick)) {
-            if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _done = true; return; }
+            if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _donePorts.insert(mod); break; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
 
@@ -162,12 +162,13 @@ void NetworkSim::step() {
 
 void NetworkSim::run(int maxSteps) {
     int s = 0;
-    while (!_done && (maxSteps < 0 || s < maxSteps)) {
+    while (_donePorts.size() < _ports.size() && (maxSteps < 0 || s < maxSteps)) {
         step();
         s++;
 
         uint64_t minTs = UINT64_MAX;
         for (auto& kv : _ports) {
+            if (_donePorts.count(kv.first)) continue;
             uint64_t b = kv.second->safeTs(_tick);
             if (b < minTs) minTs = b;
         }

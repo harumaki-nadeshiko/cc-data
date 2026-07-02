@@ -22,12 +22,20 @@ static inline bool portDebugEnabled() {
 // ── Port ────────────────────────────────────────────────────────────
 Port::Port() {}
 
-Port::~Port() { closeLocal(); }
+Port::~Port() { _releaseSockets(); }
+
+void Port::_releaseSockets() {
+    if (!_open) return;
+    _open = false;
+    if (_rxSock) _rxSock.reset();
+    if (_txSock) _txSock.reset();
+    if (_ctx)    _ctx.reset();
+}
 
 bool
 Port::init(const PortParams& params, const PortRuntime& runtime)
 {
-    if (_state != PortState::INIT) return false;
+    if (_open) return false;
     _name = params.name;
     _moduleId = params.moduleId;
     _portId = params.portId;
@@ -51,7 +59,7 @@ Port::init(const PortParams& params, const PortRuntime& runtime)
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[Port %s] rx bind(%s) failed: %s\n",
                      _name.c_str(), params.localRxEndpoint.c_str(), e.what());
-        closeLocal();
+        _releaseSockets();
         return false;
     }
     // If peer endpoint equals local (bind-only server mode, e.g. barrier),
@@ -62,35 +70,21 @@ Port::init(const PortParams& params, const PortRuntime& runtime)
         } catch (const zmq::error_t& e) {
             std::fprintf(stderr, "[Port %s] tx connect(%s) failed: %s\n",
                          _name.c_str(), params.peerRxEndpoint.c_str(), e.what());
-            closeLocal();
+            _releaseSockets();
             return false;
         }
     } else {
         _txSock.reset();  // bind-only; send via _rxSock
     }
-    _state = PortState::READY;
+    _open = true;
     std::fprintf(stderr, "[Port %s] rx=%s tx->%s\n",
                  _name.c_str(), params.localRxEndpoint.c_str(),
                  params.peerRxEndpoint.c_str());
     return true;
 }
 
-void Port::failClosed(const char* reason) {
-    _state = PortState::PEER_LOST;
-    std::fprintf(stderr, "[Port %s] failClosed: %s\n", _name.c_str(), reason);
-}
-
-void Port::closeLocal() {
-    if (_state == PortState::CLOSED) return;
-    _state = PortState::CLOSED;
-    if (_rxSock) _rxSock.reset();
-    if (_txSock) _txSock.reset();
-    if (_ctx)    _ctx.reset();
-}
-
 void Port::terminate() {
-    if (_state != PortState::READY) { closeLocal(); return; }
-    _state = PortState::TERMINATING;
+    if (!_open) { _releaseSockets(); return; }
     // best-effort TERMINATE notice
     if (_txSock) {
         try {
@@ -103,23 +97,12 @@ void Port::terminate() {
             _txSock->send(z, zmq::send_flags::dontwait);
         } catch (...) {}
     }
-    closeLocal();
+    _releaseSockets();
 }
 
 uint64_t Port::receiveTimestamp() const { return _pending ? _pendingT : _lastRxT; }
 
 uint64_t Port::safeTs(uint64_t curT) const {
-    // Multi-process split: once the peer has terminated (sent TERMINATE) or the
-    // link has otherwise closed, the peer's virtual clock is no longer a
-    // constraint — it is "done", i.e. infinitely far ahead. Returning UINT64_MAX
-    // removes this port from any min()-based clock bound, so a node that
-    // finishes its workload early (e.g. an idle node) does NOT freeze the
-    // distributed clock of the still-running nodes. Without this, a finished
-    // peer's last sync timestamp would cap min(safeTs) forever -> global stall.
-    if (_state == PortState::PEER_LOST || _state == PortState::CLOSED ||
-        _state == PortState::TERMINATING)
-        return ~static_cast<uint64_t>(0);
-
     // safeTs = min(peer's latest timestamp, own lookahead window). Before the
     // first message from the peer, receiveTimestamp()==0 (init value, not a
     // sentinel), so this returns 0 — the min() absorbing element — parking the
@@ -136,7 +119,7 @@ uint64_t Port::safeTs(uint64_t curT) const {
 MemMessage*
 Port::allocateSendBuffer(uint64_t timestamp)
 {
-    if (_state != PortState::READY) return nullptr;
+    if (!_open) return nullptr;
     MemMessage* msg = new (std::nothrow) MemMessage();
     if (!msg) return nullptr;
     msg->clear();
@@ -150,7 +133,7 @@ bool
 Port::send(MemMessage* msg)
 {
     if (!msg) return false;
-    if (_state == PortState::PEER_LOST || _state != PortState::READY) {
+    if (!_open) {
         delete msg;
         return false;
     }
@@ -179,10 +162,9 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     ReceiveStatus dummy;
     ReceiveStatus& st = status ? *status : dummy;
 
-    if (_state == PortState::PEER_LOST || _state == PortState::CLOSED) {
+    if (!_open) {
         st = ReceiveStatus::kEmpty; return nullptr;
     }
-    if (_state != PortState::READY) { st = ReceiveStatus::kEmpty; return nullptr; }
 
     if (_pending) {
         if (_pendingT <= curT) {
@@ -224,10 +206,10 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
     // advance _lastSyncTs from a received sync — that is our own heartbeat clock
     // and is only set by emitSync().
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
-        // Peer is shutting down; stop accepting new traffic.
-        failClosed("peer TERMINATE received");
-        st = ReceiveStatus::kEmpty;
-        return nullptr;
+        // Deliver TERMINATE to the caller so the application can mark this
+        // port done and stop polling it (Port no longer tracks peer state).
+        st = ReceiveStatus::kMessage;
+        static thread_local MemMessage result; result = tmp; return &result;
     }
     if (tmp.hdr.timestamp > curT) {
         _pending = true; _pendingT = tmp.hdr.timestamp; _pendingMsg = tmp;

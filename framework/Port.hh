@@ -27,8 +27,6 @@ enum class ReceiveStatus {
     kPendingFuture,  // head message has timestamp > curT; buffered, not visible
 };
 
-enum class PortState { INIT, READY, TERMINATING, CLOSED, PEER_LOST };
-
 // Static identity of a port (loaded by PortEnvLoader).
 struct PortParams {
     std::string name;
@@ -53,18 +51,11 @@ class Port
     Port(const Port&) = delete;
     Port& operator=(const Port&) = delete;
 
-    // One-shot init; transitions INIT -> READY. Returns false on bind/connect
-    // failure (state -> CLOSED). Not reusable.
+    // One-shot init. Returns false on bind/connect failure. Not reusable.
     bool init(const PortParams& params, const PortRuntime& runtime = PortRuntime());
 
-    // Best-effort TERMINATE to peer, then immediate local cleanup -> CLOSED.
+    // Best-effort TERMINATE to peer, then release sockets.
     void terminate();
-    // Local cleanup only (no message). -> CLOSED.
-    void closeLocal();
-
-    bool isReady() const { return _state == PortState::READY; }
-    PortState state() const { return _state; }
-    void failClosed(const char* reason);
 
     // ---- Data plane ----
     // Allocate a NEW transport packet stamped at `timestamp` (hdr.timestamp =
@@ -88,9 +79,11 @@ class Port
     const std::string& name() const { return _name; }
 
   private:
+    void _releaseSockets();
+
     std::string _name;
     uint32_t _moduleId = 0, _portId = 0;
-    PortState _state = PortState::INIT;
+    bool _open = false;
 
     std::unique_ptr<zmq::context_t> _ctx;
     std::unique_ptr<zmq::socket_t>  _txSock;

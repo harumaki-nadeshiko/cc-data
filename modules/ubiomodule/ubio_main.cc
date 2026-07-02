@@ -610,7 +610,6 @@ main(int argc, char **argv)
     Port *netPort = new Port();
     if (!gem5Port->init(gem5Pp) || !netPort->init(netPp)) {
         std::fprintf(stderr, "[ubio:%d] port init failed\n", nid);
-        gem5Port->closeLocal(); netPort->closeLocal();
         return 1;
     }
     std::string gem5Rx = gem5Pp.localRxEndpoint, gem5Tx = gem5Pp.peerRxEndpoint;
@@ -628,9 +627,9 @@ main(int argc, char **argv)
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
-    bool done = false;
+    bool gem5Done = false, netDone = false;
 
-    auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork) {
+    auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
         if (!port) return;
         ReceiveStatus st;
         MemMessage *m = port->recv(tick, &st);
@@ -639,7 +638,7 @@ main(int argc, char **argv)
             if (++drain_cnt > 200) break;  // prevent starvation of other ports
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
                 std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu\n", nid, m->hdr.timestamp);
-                done = true;
+                *doneFlag = true;
                 break;
             }
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
@@ -861,7 +860,7 @@ main(int argc, char **argv)
 
     bool ubioDebug = []{ const char* e = std::getenv("EP_DEBUG_PORT"); return e && e[0]=='1'; }();
     uint64_t loop_count = 0;
-    while (!done) {
+    while (!(gem5Done && (netPort == nullptr || netDone))) {
         loop_count++;
         if (ubioDebug && loop_count % 1000000 == 0) {
             std::fprintf(stderr, "[UBIO-LOOP] tick=%lu loop=%lu\n", tick, loop_count);
@@ -869,17 +868,18 @@ main(int argc, char **argv)
         }
         // 1. Heartbeat: emitSync for all ports (even silent ones)
         if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-PRE-EMIT] tick=%lu\n", tick); fflush(stderr); }
-        gem5Port->emitSync(tick);
+        if (!gem5Done) gem5Port->emitSync(tick);
         if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-POST-EMIT] tick=%lu\n", tick); fflush(stderr); }
-        if (netPort) netPort->emitSync(tick);
+        if (netPort && !netDone) netPort->emitSync(tick);
 
         // 2. Drain all ready messages from each port
-        pollAndProcess(gem5Port, gem5Port, false);
-        pollAndProcess(netPort, netPort, true);
+        if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
+        if (netPort && !netDone) pollAndProcess(netPort, netPort, true, &netDone);
 
         // Always advance via safeTs (even before first message aligned)
-        uint64_t minTs = gem5Port->safeTs(tick);
-        if (netPort) {
+        uint64_t minTs = UINT64_MAX;
+        if (!gem5Done) minTs = gem5Port->safeTs(tick);
+        if (netPort && !netDone) {
             uint64_t netSafe = netPort->safeTs(tick);
             if (netSafe < minTs) minTs = netSafe;
         }

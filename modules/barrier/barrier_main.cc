@@ -44,6 +44,7 @@ int main(int argc, char **argv) {
 
     std::map<uint32_t, BarrierState> barriers;
     uint64_t tick = 0;
+    std::set<size_t> donePorts;
 
     std::printf("[BarrierManager] listening on %d nodes\n", numNodes);
 
@@ -51,7 +52,9 @@ int main(int argc, char **argv) {
         for (auto &p : ports) p->emitSync(tick);
 
         bool any = false;
-        for (auto &p : ports) {
+        for (size_t i = 0; i < ports.size(); i++) {
+            if (donePorts.count(i)) continue;
+            auto &p = ports[i];
             ReceiveStatus st;
             MemMessage *m = p->recv(tick, &st);
             while (m && st == ReceiveStatus::kMessage) {
@@ -60,6 +63,10 @@ int main(int argc, char **argv) {
                 if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
                     m = p->recv(tick, &st);
                     continue;
+                }
+                if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
+                    donePorts.insert(i);
+                    break;
                 }
                 any = true;
                 // Barrier control is now a PAYLOAD CoherenceMessage (BarrierReached).
@@ -105,8 +112,11 @@ int main(int argc, char **argv) {
         }
         if (!any) tick++;
         else {
-            uint64_t minTs = ports[0]->safeTs(tick);
-            for (auto &p : ports) { uint64_t ts = p->safeTs(tick); if (ts < minTs) minTs = ts; }
+            uint64_t minTs = UINT64_MAX;
+            for (size_t i = 0; i < ports.size(); i++) {
+                if (donePorts.count(i)) continue;
+                uint64_t ts = ports[i]->safeTs(tick); if (ts < minTs) minTs = ts;
+            }
             tick = (minTs > tick) ? minTs : tick + 1;
         }
     }
