@@ -118,8 +118,7 @@ void Port::terminate() {
             MemMessage m;
             m.hdr.type = static_cast<uint32_t>(MemMessageType::TERMINATE);
             m.hdr.size = sizeof(MemMessageHeader);
-            m.hdr.src_module = _moduleId;
-            m.hdr.src_port = _portId;
+            m.hdr.sourceId = _moduleId;
             zmq::message_t z(m.hdr.size);
             std::memcpy(z.data(), &m, m.hdr.size);
             _txSock->send(z, zmq::send_flags::dontwait);
@@ -162,8 +161,7 @@ Port::allocateSendBuffer(uint64_t timestamp)
     if (_state != PortState::READY || _sendBufInUse) return nullptr;
     _sendBuf.clear();
     _sendBuf.hdr.timestamp = timestamp + _linkLatency;
-    _sendBuf.hdr.src_module = _moduleId;
-    _sendBuf.hdr.src_port = _portId;
+    _sendBuf.hdr.sourceId = _moduleId;
     _sendBuf.hdr.size = sizeof(MemMessageHeader);
     _sendBufInUse = true;
     _txHandle = TxHandle(this);
@@ -180,9 +178,9 @@ Port::doSend()  // private helper invoked by TxHandle::send
         zmq::message_t z(_sendBuf.hdr.size);
         std::memcpy(z.data(), &_sendBuf, _sendBuf.hdr.size);
         if (portDebugEnabled())
-            std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u:%u\n",
+            std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u\n",
                          _name.c_str(), _sendBuf.hdr.type, _sendBuf.hdr.timestamp,
-                         _sendBuf.hdr.dst_module, _sendBuf.hdr.dst_port);
+                         _sendBuf.hdr.targetId);
         sock.send(z, zmq::send_flags::none);
         return true;
     } catch (const zmq::error_t& e) {
@@ -230,10 +228,9 @@ Port::recv(uint64_t curT, ReceiveStatus* status)
 
     _lastRxT = (uint64_t)tmp.hdr.timestamp;
     if (portDebugEnabled())
-        std::fprintf(stderr, "[PORT-RECV] %s type=%u ts=%lu src=%u:%u dst=%u:%u curT=%lu\n",
+        std::fprintf(stderr, "[PORT-RECV] %s type=%u ts=%lu src=%u dst=%u curT=%lu\n",
                      _name.c_str(), tmp.hdr.type, tmp.hdr.timestamp,
-                     tmp.hdr.src_module, tmp.hdr.src_port,
-                     tmp.hdr.dst_module, tmp.hdr.dst_port, curT);
+                     tmp.hdr.sourceId, tmp.hdr.targetId, curT);
 
     if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
         // _lastRxT already updated above (tracks peer's latest ts). Do NOT
@@ -267,7 +264,6 @@ Port::emitSync(uint64_t curTick)
     MemMessage* buf = h->buffer();
     buf->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
     buf->hdr.size = sizeof(MemMessageHeader);
-    buf->hdr.dst_module = 0; buf->hdr.dst_port = 0;
     bool ok = h->send();
     // send() releases the slot; if it failed the slot is already released.
     if (ok) { _lastSyncTs = curTick; return true; }

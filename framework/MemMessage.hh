@@ -7,12 +7,12 @@
 namespace framework {
 
 static constexpr uint32_t kMaxPayloadSize = 1024;
-static constexpr uint32_t kMemMessageHeaderSize = 40;
+static constexpr uint32_t kMemMessageHeaderSize = 32;
 
 enum class MemMessageType : uint32_t {
     CONTROL_SYNC    = 0,
     TERMINATE       = 1,
-    COH_MSG         = 2,
+    PAYLOAD         = 2,   // carries CoherenceMessage
     BARRIER_REACHED = 3,
     BARRIER_RELEASE = 4,
 };
@@ -21,10 +21,8 @@ struct MemMessageHeader {
     uint64_t timestamp;
     uint32_t size;          // total size including header + payload
     uint32_t type;          // MemMessageType
-    uint32_t src_module;    // launcher-assigned module ID
-    uint32_t src_port;      // port ID within module
-    uint32_t dst_module;
-    uint32_t dst_port;
+    uint32_t sourceId;      // source endpoint (node*numSockets + socket)
+    uint32_t targetId;      // target endpoint (node*numSockets + socket)
     uint64_t req_id;        // txn matching ID
 };
 

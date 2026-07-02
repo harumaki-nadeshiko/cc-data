@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
                 any = true;
                 if (m->hdr.type == static_cast<uint32_t>(MemMessageType::BARRIER_REACHED)) {
                     uint32_t mask = static_cast<uint32_t>(m->hdr.req_id);
-                    uint32_t nodeId = m->hdr.src_module;
+                    uint32_t nodeId = m->hdr.sourceId;
                     std::printf("[BarrierManager] ARRIVED node=%u mask=0x%x\n", nodeId, mask);
 
                     auto &bs = barriers[mask];
@@ -76,8 +76,8 @@ int main(int argc, char **argv) {
                                     MemMessage *rel = rh->buffer();
                                     rel->hdr.type = static_cast<uint32_t>(MemMessageType::BARRIER_RELEASE);
                                     rel->hdr.req_id = mask;
-                                    rel->hdr.src_module = 0;
-                                    rel->hdr.dst_module = ni;
+                                    rel->hdr.sourceId = 0;
+                                    rel->hdr.targetId = ni;
                                     rel->hdr.size = sizeof(MemMessageHeader);
                                     rh->send();
                                 }

@@ -23,7 +23,6 @@ struct PendingFwd {
     uint64_t readyTick;
     MemMessage msg;
     int dst_mod;
-    int dst_port;
 };
 
 class NetworkSim {
@@ -113,13 +112,13 @@ void NetworkSim::step() {
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
 
-            int targetKey = findPortByModule(m->hdr.dst_module, m->hdr.dst_port);
-            auto rit = _routes.find({m->hdr.src_module, m->hdr.src_port});
+            int targetKey = findPortByModule(m->hdr.targetId, m->hdr.targetId * 1000 + 0);
+            auto rit = _routes.find({m->hdr.sourceId, m->hdr.sourceId * 1000 + 0});
             uint64_t lat = 1;
             if (rit != _routes.end() && !rit->second.empty()) lat = rit->second[0].latency;
 
             uint64_t readyTick = _tick + lat;
-            PendingFwd pf{readyTick, *m, m->hdr.dst_module, m->hdr.dst_port};
+            PendingFwd pf{readyTick, *m, m->hdr.targetId};
             auto ins = _fifo.begin();
             while (ins != _fifo.end() && ins->readyTick <= readyTick) ++ins;
             _fifo.insert(ins, pf);
@@ -129,7 +128,7 @@ void NetworkSim::step() {
     while (!_fifo.empty() && _fifo.front().readyTick <= _tick) {
         auto pf = _fifo.front(); _fifo.pop_front();
         totalFwd++;
-        int targetKey = findPortByModule(pf.dst_mod, pf.dst_port);
+        int targetKey = findPortByModule(pf.dst_mod, 0);
         auto it = _ports.find(targetKey);
         if (it != _ports.end()) {
             framework::TxHandle* fh = it->second->allocateSendBuffer(_tick);
@@ -143,13 +142,13 @@ void NetworkSim::step() {
                 static int no_ct = 0;
                 if (++no_ct <= 3)
                     std::fprintf(stderr, "[NSIM-NOBUF] tick=%lu dst=%u:%u\n",
-                                 _tick, pf.dst_mod, pf.dst_port);
+                                 _tick, pf.dst_mod, 0);
             }
         } else {
             static int miss_ct = 0;
             if (++miss_ct <= 3)
                 std::fprintf(stderr, "[NSIM-MISS] tick=%lu dst=%u:%u (no port)\n",
-                             _tick, pf.dst_mod, pf.dst_port);
+                             _tick, pf.dst_mod, 0);
         }
     }
 

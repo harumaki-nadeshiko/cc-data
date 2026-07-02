@@ -30,7 +30,7 @@ int main()
     if (!buf) { failures++; std::fprintf(stderr, "FAIL: alloc\n"); }
     else {
         buf->hdr.type = static_cast<uint32_t>(MemMessageType::COH_MSG);
-        buf->hdr.dst_module=20; buf->hdr.dst_port=2; buf->hdr.req_id=42;
+        buf->hdr.targetId=20; buf->hdr._pad1=2; buf->hdr.req_id=42;
         if (!port_a.send(buf)) { failures++; std::fprintf(stderr, "FAIL: send\n"); }
         else std::printf("[A] sent COH_MSG\n");
     }
@@ -45,7 +45,7 @@ int main()
             MemMessage* rb = port_b.sendAllocateBuffer(100);
             if (rb) {
                 rb->hdr.type=static_cast<uint32_t>(MemMessageType::COH_MSG);
-                rb->hdr.dst_module=10; rb->hdr.dst_port=1; rb->hdr.req_id=42;
+                rb->hdr.targetId=10; rb->hdr._pad1=1; rb->hdr.req_id=42;
                 port_b.send(rb); std::printf("[B] sent response\n");
             }
             break;
@@ -72,7 +72,7 @@ int main()
     buf = port_b.sendAllocateBuffer(5000);
     if (buf) {
         buf->hdr.type = static_cast<uint32_t>(MemMessageType::COH_MSG);
-        buf->hdr.dst_module=10; buf->hdr.dst_port=1; buf->hdr.req_id=99;
+        buf->hdr.targetId=10; buf->hdr._pad1=1; buf->hdr.req_id=99;
         buf->hdr.timestamp=5000;
         buf->hdr.size = sizeof(MemMessageHeader);
         if (!port_b.send(buf)) { failures++; std::fprintf(stderr, "FAIL: future send\n"); }
