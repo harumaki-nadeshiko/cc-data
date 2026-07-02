@@ -27,8 +27,11 @@ struct PendingFwd {
 
 class NetworkSim {
     std::vector<Link> _links;
+    // Keyed by module ID only. Each module has exactly one IPC channel to nsim;
+    // topology port IDs are a link-latency attribute, not a routing selector.
     std::map<int, std::unique_ptr<Port>> _ports;
-    std::map<std::pair<int,int>, std::vector<Link>> _routes;
+    // Per-source-module link latency (module -> outgoing link latency).
+    std::map<int, uint64_t> _linkLatency;
     std::deque<PendingFwd> _fifo;
     uint64_t _tick = 0;
     bool _done = false;
@@ -40,26 +43,24 @@ public:
     void loadTopology(const std::string& path);
     void buildPorts();
     void buildRoutes();
-    int findPortByModule(int modId, int portId) const;
     void step();
     void run(int maxSteps = -1);
 };
 
 void NetworkSim::buildPorts() {
-    std::set<int> portKeys;
+    std::set<int> mods;
     for (auto& l : _links) {
-        portKeys.insert(l.src_mod * 1000 + l.src_port);
-        portKeys.insert(l.dst_mod * 1000 + l.dst_port);
+        mods.insert(l.src_mod);
+        mods.insert(l.dst_mod);
     }
-    for (int key : portKeys) {
-        int mod = key / 1000;
+    for (int mod : mods) {
         framework::PortParams pp = framework::PortEnvLoader::nsimUbioPort(mod);
         auto p = std::make_unique<Port>();
         if (!p->init(pp)) {
             std::fprintf(stderr, "[NetworkSim] port init failed mod=%d\n", mod);
             return;
         }
-        _ports[key] = std::move(p);
+        _ports[mod] = std::move(p);
     }
 }
 
@@ -90,14 +91,16 @@ void NetworkSim::loadTopology(const std::string& path) {
 }
 
 void NetworkSim::buildRoutes() {
+    // Links are bidirectional; record the minimum link latency per source
+    // module so a forwarded message gets a representative delay.
     for (auto& l : _links) {
-        _routes[{l.src_mod, l.src_port}].push_back(Link{0, 0, l.dst_mod, l.dst_port, l.latency});
-        _routes[{l.dst_mod, l.dst_port}].push_back(Link{0, 0, l.src_mod, l.src_port, l.latency});
+        auto rec = [&](int mod, uint64_t lat) {
+            auto it = _linkLatency.find(mod);
+            if (it == _linkLatency.end() || lat < it->second) _linkLatency[mod] = lat;
+        };
+        rec(l.src_mod, l.latency);
+        rec(l.dst_mod, l.latency);
     }
-}
-
-int NetworkSim::findPortByModule(int modId, int portId) const {
-    return modId * 1000 + portId;
 }
 
 void NetworkSim::step() {
@@ -112,12 +115,9 @@ void NetworkSim::step() {
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
 
-            auto rit = _routes.end();
-            for (auto r = _routes.begin(); r != _routes.end(); ++r) {
-                if (r->first.first == (int)m->hdr.sourceId) { rit = r; break; }
-            }
             uint64_t lat = 1;
-            if (rit != _routes.end() && !rit->second.empty()) lat = rit->second[0].latency;
+            auto lit = _linkLatency.find((int)m->hdr.sourceId);
+            if (lit != _linkLatency.end()) lat = lit->second;
 
             uint64_t readyTick = _tick + lat;
             PendingFwd pf{readyTick, *m, m->hdr.targetId};
@@ -130,8 +130,7 @@ void NetworkSim::step() {
     while (!_fifo.empty() && _fifo.front().readyTick <= _tick) {
         auto pf = _fifo.front(); _fifo.pop_front();
         totalFwd++;
-        int targetKey = findPortByModule(pf.dst_mod, 0);
-        auto it = _ports.find(targetKey);
+        auto it = _ports.find(pf.dst_mod);
         if (it != _ports.end()) {
             framework::TxHandle* fh = it->second->allocateSendBuffer(_tick);
             if (fh) {
