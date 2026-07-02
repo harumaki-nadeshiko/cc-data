@@ -9,7 +9,7 @@
 #include <set>
 #include <string>
 
-#include "modules/ubiomodule/gem5_shim.hh"
+#include "modules/ubiomodule/ubio_base.hh"
 #include "DataBlock.hh"
 #include "CoherenceMessage.hh"
 #include "ResidentDir.hh"
@@ -21,8 +21,7 @@ namespace cc
 namespace glob
 {
 
-class RubySystem;  // forward (see gem5_shim.hh for cc::glob::RubySystem)
-class UBIOModule;
+class RubySystem;  // opaque forward decl; ubio only stores an (unused) pointer
 
 class UBCCHostIf
 {
@@ -235,8 +234,6 @@ class UBCCController
 
     void wakeup();
 
-    /** Set the local router for sending messages (e.g., UpgradeAckNotify). */
-    void setRouter(UBIOModule *router) { _router = router; }
     void setHost(UBCCHostIf *host) { _host = host; }
     void setOutbound(UBCCOutboundIf *outbound) { _outbound = outbound; }
 
@@ -613,8 +610,6 @@ class UBCCController
     const int _nodeId;
     int _socketId;                // v4-dual-socket
 
-    /** Local UBIOModule *for sending messages (e.g., UpgradeAckNotify). */
-    UBIOModule *_router = nullptr;
     UBCCHostIf *_host = nullptr;
     UBCCOutboundIf *_outbound = nullptr;
     NodeAddressMap _addrMap{3, 1, 128ULL * 1024 * 1024};

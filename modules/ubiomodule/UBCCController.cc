@@ -7,7 +7,6 @@
 
 #include "framework/Log.hh"
 #include "NodeAddressMap.hh"
-#include "UBIOModule.hh"
 
 namespace cc
 {
