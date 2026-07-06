@@ -6,12 +6,12 @@
     {"id": "gem5_0",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=0 --num-nodes=3 --num-sockets=2 --workload={workload}"},
     {"id": "gem5_1",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=1 --num-nodes=3 --num-sockets=2 --workload={workload}"},
     {"id": "gem5_2",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=2 --num-nodes=3 --num-sockets=2 --workload={workload}"},
-    {"id": "ubio_0_s0", "cmd": "{ubio_bin} --node=0 --socket=0 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
-    {"id": "ubio_0_s1", "cmd": "{ubio_bin} --node=0 --socket=1 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
-    {"id": "ubio_1_s0", "cmd": "{ubio_bin} --node=1 --socket=0 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
-    {"id": "ubio_1_s1", "cmd": "{ubio_bin} --node=1 --socket=1 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
-    {"id": "ubio_2_s0", "cmd": "{ubio_bin} --node=2 --socket=0 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
-    {"id": "ubio_2_s1", "cmd": "{ubio_bin} --node=2 --socket=1 --num-sockets=2 --num-nodes=3{fault_rules_args}"},
+    {"id": "ubio_0_s0", "cmd": "{ubio_bin} --node=0 --socket=0 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
+    {"id": "ubio_0_s1", "cmd": "{ubio_bin} --node=0 --socket=1 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
+    {"id": "ubio_1_s0", "cmd": "{ubio_bin} --node=1 --socket=0 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
+    {"id": "ubio_1_s1", "cmd": "{ubio_bin} --node=1 --socket=1 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
+    {"id": "ubio_2_s0", "cmd": "{ubio_bin} --node=2 --socket=0 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
+    {"id": "ubio_2_s1", "cmd": "{ubio_bin} --node=2 --socket=1 --num-sockets=2 --num-nodes=3 {fault_rules_args}"},
     {"id": "networksim", "cmd": "{nsim_bin} {topo_json}"}
   ],
   "links": [

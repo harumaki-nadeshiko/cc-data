@@ -197,7 +197,20 @@ run_tc() {
         [ $any -eq 0 ] && break
         sleep 1; waited=$((waited + 1))
         if [ $waited -ge "$TIMEOUT_SEC" ]; then
-            echo "  TC${tc} TIMEOUT after ${TIMEOUT_SEC}s"
+            # TC9 is a negative test: node0 is expected to crash on non-DSM
+            # access (Aborted/SIGSEGV). If that crash evidence exists, the
+            # test PASSED despite the timeout (other nodes may keep spinning).
+            if [ "$tc" -eq 9 ]; then
+                local crash_log="$LOG_BASE/gem5_tc${tc}_node0/stderr.log"
+                if grep -qE "Aborted|core dumped|SIGSEGV" "$crash_log" 2>/dev/null; then
+                    echo "  TC${tc} PASSED (expected crash detected)"
+                    for pid in $GEM5_PIDS; do kill $pid 2>/dev/null || true; done
+                    return 0
+                fi
+                echo "  TC${tc} TIMEOUT (no crash evidence found)"
+            else
+                echo "  TC${tc} TIMEOUT after ${TIMEOUT_SEC}s"
+            fi
             for pid in $GEM5_PIDS; do kill $pid 2>/dev/null || true; done
             return 1
         fi
