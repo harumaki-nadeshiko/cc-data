@@ -26,4 +26,4 @@ modules/networksim/netsim
 tools/networksim/netsim
 tools/ubio/ubio
 tools/ubio/ubio_main
-tools/ubio/test_peer
+tools/ubio/test_peertests/e2e/workloads/workload.elf

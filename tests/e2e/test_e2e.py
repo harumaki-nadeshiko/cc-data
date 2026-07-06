@@ -1258,7 +1258,15 @@ def _early_unproxy_all(root):
 def gem5_config_main():
     import argparse as _ap
     _parser = _ap.ArgumentParser()
-    _parser.add_argument("--tc", type=int, default=0)
+    _parser.add_argument("--tc", type=int, default=0,
+                        help="Test case id (drives workload selection when "
+                             "--workload is not provided, and the dual-socket "
+                             "default for TC32-35/39). Optional if --workload "
+                             "and --num-sockets are given.")
+    _parser.add_argument("--workload", type=str, default="",
+                        help="Path to a pre-compiled workload ELF. When "
+                             "provided, takes precedence over --tc-driven "
+                             "compilation; gem5 will NOT compile anything.")
     _parser.add_argument("--all", action="store_true")
     # Multi-process split: this gem5 process owns exactly one node.
     #   --node-id N   : build/run only node N (default -1 = all nodes, legacy)
@@ -1269,12 +1277,27 @@ def gem5_config_main():
     _parser.add_argument("--num-sockets", type=int, default=0)
     _args, _ = _parser.parse_known_args()
 
-    if _args.tc in TESTCASES:
+    # Workload selection: --workload (decoupled launcher path) wins; else
+    # fall back to --tc-driven compilation (legacy / single-process path).
+    if _args.workload:
+        binary = _args.workload
+        if not os.path.exists(binary):
+            print(f"ERROR: --workload not found: {binary}", flush=True)
+            sys.exit(1)
+        tc_name = "(precompiled)"
+    elif _args.tc in TESTCASES:
         tc_name = TESTCASES[_args.tc]
+        binary = compile_workload(tc_name)
+        if not binary:
+            sys.exit(1)
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
+        binary = compile_workload(tc_name)
+        if not binary:
+            sys.exit(1)
     else:
-        print(f"ERROR: invalid --tc={_args.tc}. Must be 1-46.", flush=True)
+        print(f"ERROR: provide --workload <path> or --tc <id> "
+              f"(valid ids: {sorted(TESTCASES.keys())})", flush=True)
         sys.exit(1)
 
     # UBCC configuration is derived from CLI args and passed to
@@ -1293,10 +1316,6 @@ def gem5_config_main():
     _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
     # When this process owns a single node, only that node's UBAdapter binds
     # its Port (local_node = node id). -1 = all nodes (single-process mode).
-
-    binary = compile_workload(tc_name)
-    if not binary:
-        sys.exit(1)
 
     # ── Build gem5 system ──────────────────────────────────────────
     import m5
