@@ -88,7 +88,9 @@ mkdir -p "$LOG_BASE" "$ROOT_DIR/build/run"
 
 # Kill any leftover infra from a previous TC / abort.
 _kill_infra() {
-    killall -9 gem5.opt ubio networksim 2>/dev/null || true
+    pkill -9 -f "gem5.opt.*test_e2e" 2>/dev/null || true
+    pkill -9 -f "/build/bin/ubio" 2>/dev/null || true
+    pkill -9 -f "/build/bin/networksim" 2>/dev/null || true
     for pid in ${UBIO_PIDS:-} ${NSIM_PID:-}; do
         kill -9 $pid 2>/dev/null || true
     done
