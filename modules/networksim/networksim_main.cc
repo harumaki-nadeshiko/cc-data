@@ -114,6 +114,8 @@ void NetworkSim::step() {
             if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _donePorts.insert(mod); break; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
+            std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
+                         _tick, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
 
             uint64_t lat = 1;
             auto lit = _linkLatency.find((int)m->hdr.sourceId);
@@ -138,6 +140,8 @@ void NetworkSim::step() {
                 *buf = pf.msg;
                 buf->hdr.timestamp = ts;
                 it->second->send(buf);
+                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
+                             _tick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)

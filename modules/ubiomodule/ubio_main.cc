@@ -217,7 +217,7 @@ static inline uint32_t gidOf(int node, int socket) {
 
 bool
 sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
-        const CoherenceMessage &msg)
+        const CoherenceMessage &msg, bool toNetwork = false)
 {
     const bool traceReadPath =
         (msg.h.type == CoherenceMessageType::ReadReq) ||
@@ -275,6 +275,12 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         return false;
     }
     bool ok = port->send(buf);
+    if (ok) {
+        std::fprintf(stderr, "[TRACE-PERF] %lu|%u|ubio|%lu|0x%lx|%s|%s\n",
+                     tick, dstModule, msg.h.reqId, msg.h.homeLinePa,
+                     toNetwork ? "SEND_NET" : "SEND_GEM5",
+                     coherenceMsgTypeName(msg.h.type));
+    }
     if (traceReadPath) {
         std::fprintf(stderr,
                      "[UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
@@ -312,7 +318,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return sendCoh(gem5Port, tickRef, nodeId, msg);
         }
         return sendCoh(netPort, tickRef,
-                       gidOf(msg.h.dstNode, msg.h.dstSocket), msg);
+                       gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
     }
 
     bool sendRecallReq(const CoherenceMessage &msg) override {
@@ -714,6 +720,10 @@ main(int argc, char **argv)
                          nid, fromNetwork ? "net" : "gem5",
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                          m->hdr.sourceId, m->hdr.targetId);
+            std::fprintf(stderr, "[TRACE-PERF] %lu|%d|ubio|%lu|0x%lx|%s|%s\n",
+                         tick, nid, coh->h.reqId, coh->h.homeLinePa,
+                         fromNetwork ? "RECV_NET" : "RECV_GEM5",
+                         coherenceMsgTypeName(coh->h.type));
 
             // Debug fault injection: evaluate rules against this message.
             // copies: 0 = drop (skip processing+forwarding), 1 = normal,
@@ -783,7 +793,7 @@ main(int argc, char **argv)
                                      nid, coherenceMsgTypeName(coh->h.type),
                                      coh->h.dstNode, coh->h.dstSocket);
                         bool sent = sendCoh(netPort, tick,
-                                            gidOf(coh->h.dstNode, coh->h.dstSocket), *coh);
+                                            gidOf(coh->h.dstNode, coh->h.dstSocket), *coh, true);
                         if (coh->h.type == CoherenceMessageType::ReadReq) {
                             std::fprintf(stderr,
                                          "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=true sendCoh_ret=%s dstNode=%d\n",
@@ -815,7 +825,7 @@ main(int argc, char **argv)
                                      coh->h.srcNode, coh->h.srcSocket);
                         // Response returns to the requester's (node, socket) plane.
                         sendCoh(netPort, tick,
-                                gidOf(coh->h.srcNode, coh->h.srcSocket), response);
+                                gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
                     } else if (isGem5Ingress(coh->h.type)) {
                         std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
                                      nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
@@ -850,7 +860,7 @@ main(int argc, char **argv)
                 if (hasResponse) {
                     Port *out = fromNetwork ? netPort : gem5Port;
                     sendCoh(out, tick, fromNetwork ? (uint32_t)coh->h.srcNode : (uint32_t)nid,
-                            response);
+                            response, fromNetwork);
                 }
             }
 
