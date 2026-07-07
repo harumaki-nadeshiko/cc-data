@@ -4,20 +4,26 @@
 Usage:
     python3 scripts/chain2html.py /tmp/tc5_chains.json > /tmp/tc5.html
     python3 scripts/chain2html.py --target-ns 415 /tmp/tc5_chains.json > /tmp/tc5.html
+
+F.1: P0 visual enhancements:
+  - Time-axis ruler with ns grid lines
+  - Over-target highlighting (red bar + OVER badge)
+  - Inline duration labels on wide segments
+  - Per-type aggregate statistics table
+  - CSV export of visible chains
 """
 import sys, os, json, argparse
 
-TICK2NS = 1e-6  # ps -> ns
+TICK2NS = 1e-6  # ps -> ns — single conversion function per §F.4
 
-# Bright saturated colors for segments
 SEG_COLORS = {
-    "gem5→ubio":  "#3b82f6",  # bright blue
-    "ubio→gem5":  "#22c55e",  # bright green
-    "ubio→nsim":  "#f97316",  # bright orange
-    "nsim→ubio":  "#8b5cf6",  # bright purple
-    "nsim_fifo":  "#71717a",  # gray
-    "ubio_proc":  "#facc15",  # yellow
-    "other":      "#94a3b8",  # light gray
+    "gem5→ubio":  "#3b82f6",
+    "ubio→gem5":  "#22c55e",
+    "ubio→nsim":  "#f97316",
+    "nsim→ubio":  "#8b5cf6",
+    "nsim_fifo":  "#71717a",
+    "ubio_proc":  "#facc15",
+    "other":      "#94a3b8",
 }
 
 TYPE_COLORS = {
@@ -69,7 +75,6 @@ def make_html(data, target_ns=None):
     t_max = meta.get("tick_max", 1)
     span_ps = t_max - t_min or 1
 
-    # Build lightweight chain list sorted by first_tick
     chain_list = []
     for rid, ch in sorted(chains.items(), key=lambda kv: kv[1].get("first_tick", 0)):
         segs = build_segments(ch["events"])
@@ -87,11 +92,8 @@ def make_html(data, target_ns=None):
             "tq_hops": tq_hops,
             "segments": segs,
             "events": [{
-                "tick": e["tick"],
-                "comp": e["comp"],
-                "event": e["event"],
-                "node": e["node"],
-                "extra": e["extra"],
+                "tick": e["tick"], "comp": e["comp"], "event": e["event"],
+                "node": e["node"], "extra": e["extra"],
             } for e in ch["events"]],
         })
 
@@ -121,6 +123,7 @@ def make_html(data, target_ns=None):
   .swimlane {{ border-bottom: 1px solid #f1f5f9; display: flex; align-items: stretch;
                min-height: 28px; }}
   .swimlane:hover {{ background: #f8fafc; }}
+  .swimlane.over-target {{ border-left: 3px solid #ef4444; }}
   .swimlane-label {{ flex: 0 0 420px; padding: 4px 8px; font-size: 11px; cursor: pointer;
                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                      border-right: 1px solid #f1f5f9; user-select: none; }}
@@ -128,14 +131,26 @@ def make_html(data, target_ns=None):
   .swimlane-label .type {{ display: inline-block; padding: 0 4px; border-radius: 3px;
                            font-size: 10px; font-weight: 600; margin-right: 4px; }}
   .swimlane-label .dur {{ color: #f59e0b; font-weight: 600; }}
+  .swimlane-label .over-tag {{ display: inline-block; background: #ef4444; color: #fff;
+                               padding: 0 3px; border-radius: 2px; font-size: 9px;
+                               font-weight: 700; margin-left: 2px; }}
   .swimlane-canvas {{ flex: 1; position: relative; min-width: 200px; margin: 4px 8px 4px 0; }}
   .seg {{ position: absolute; height: 18px; top: 1px; border-radius: 3px; cursor: pointer;
           min-width: 3px; opacity: 0.85; }}
   .seg:hover {{ opacity: 1; outline: 2px solid #1e293b; z-index: 5; }}
-  .target-line {{ position: absolute; top: 0; bottom: 0; border-left: 2px dashed #ef4444;
+  .target-line {{ position: absolute; top: 0; bottom: -20px; border-left: 2px dashed #ef4444;
                   z-index: 4; pointer-events: none; }}
-  .target-label {{ position: absolute; top: -2px; font-size: 9px; color: #ef4444;
-                   font-weight: 600; white-space: nowrap; }}
+  .target-label {{ position: absolute; font-size: 9px; color: #ef4444; font-weight: 600;
+                   white-space: nowrap; z-index: 5; }}
+
+  /* Time ruler */
+  #ruler {{ position: sticky; top: 86px; background: #fff; z-index: 9;
+            border-bottom: 1px solid #e2e8f0; height: 28px; }}
+  #ruler-inner {{ position: relative; height: 100%; margin-left: 420px; }}
+  .ruler-mark {{ position: absolute; bottom: 0; border-left: 1px solid #cbd5e1; height: 100%;
+                 pointer-events: none; }}
+  .ruler-label {{ position: absolute; bottom: 2px; font-size: 9px; color: #94a3b8;
+                  transform: translateX(-50%); white-space: nowrap; pointer-events: none; }}
 
   .expanded {{ padding: 6px 12px 6px 420px; font-size: 11px; color: #475569;
               border-bottom: 1px solid #f1f5f9; background: #fafbfc; }}
@@ -149,6 +164,14 @@ def make_html(data, target_ns=None):
   #tooltip {{ display: none; position: fixed; background: #1e293b; color: #f8fafc;
               padding: 6px 10px; border-radius: 6px; font-size: 11px; z-index: 100;
               pointer-events: none; max-width: 360px; line-height: 1.5; }}
+
+  /* Stats table */
+  #agg-table {{ margin: 20px 14px; padding: 12px; background: #f8fafc;
+               border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; }}
+  #agg-table table {{ border-collapse: collapse; width: 100%; max-width: 700px; }}
+  #agg-table th {{ text-align: left; padding: 3px 10px; border-bottom: 1px solid #cbd5e1;
+                   color: #475569; font-weight: 600; }}
+  #agg-table td {{ padding: 2px 10px; }}
 </style>
 </head>
 <body>
@@ -161,68 +184,43 @@ def make_html(data, target_ns=None):
   <input id="f-rid" placeholder="7205759..." size=18 oninput="render()">
   <label>Min hops:</label>
   <input id="f-hops" type="number" value="2" min="1" style="width:45px" oninput="render()">
-  <button onclick="toggleAll()">expand/collapse all</button>
+  <button onclick="toggleAll()">expand/collapse</button>
+  <button onclick="exportCSV()">export CSV</button>
   <div id="stats"></div>
 </div>
+<div id="ruler"><div id="ruler-inner"></div></div>
 <div id="chains"></div>
 <div id="tooltip"></div>
 
+<div id="agg-table"></div>
+
 <div style="margin:20px 14px; padding:14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; line-height:1.8; max-width:900px;">
 <b style="font-size:14px">Legend</b>
-
 <div style="display:flex; flex-wrap:wrap; gap:16px; margin-top:8px">
 <div style="flex:0 0 280px">
-<b>Swimlane label (left side of each row):</b><br>
+<b>Swimlane label:</b><br>
 <span style="background:#3b82f6;color:#fff;padding:0 4px;border-radius:3px;font-size:10px">ReadReq</span>
-<span style="color:#3b82f6;font-weight:600">rid=72057594037927937</span>
+<span style="color:#3b82f6;font-weight:600">rid=72057...</span>
 <span style="color:#f59e0b;font-weight:600">2401ns</span>
-pa=0x10018000000 ev=44 hops=19<br>
-&nbsp;&nbsp;type badge = coherence request type |
-rid = unique request id |
-duration = total end-to-end latency |
-ev = event count |
-hops = number of Tq (ZMQ) hops
+<span style="background:#ef4444;color:#fff;padding:0 3px;border-radius:2px;font-size:9px">OVER</span>
+pa=... ev=44 hops=19<br>
+  type badge | rid | duration | OVER tag if dur > target<br>
+  pa = physical address | ev = event count | hops = ZMQ Tq hops
 </div>
-
 <div style="flex:0 0 280px">
-<b>Color-coded segments (click swimlane label to expand):</b><br>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#3b82f6;border-radius:2px"></span>
-  <b>Blue</b> = gem5 &rarr; ubio (Tq ZMQ IPC, ~100ns)
+<b>Segment colors:</b><br>
+<span style="display:inline-block;width:40px;height:12px;background:#3b82f6;border-radius:2px"></span> Blue = gem5→ubio<br>
+<span style="display:inline-block;width:40px;height:12px;background:#22c55e;border-radius:2px"></span> Green = ubio→gem5<br>
+<span style="display:inline-block;width:40px;height:12px;background:#f97316;border-radius:2px"></span> Orange = ubio→nsim<br>
+<span style="display:inline-block;width:40px;height:12px;background:#8b5cf6;border-radius:2px"></span> Purple = nsim→ubio<br>
+<span style="display:inline-block;width:40px;height:12px;background:#71717a;border-radius:2px"></span> Gray = nsim FIFO delay<br>
+<span style="display:inline-block;width:40px;height:12px;background:#facc15;border-radius:2px"></span> Yellow = ubio processing
 </div>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#22c55e;border-radius:2px"></span>
-  <b>Green</b> = ubio &rarr; gem5 (Tq ZMQ IPC, ~100ns)
-</div>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#f97316;border-radius:2px"></span>
-  <b>Orange</b> = ubio &rarr; nsim (Tq ZMQ IPC, ~100ns)
-</div>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#8b5cf6;border-radius:2px"></span>
-  <b>Purple</b> = nsim &rarr; ubio (Tq ZMQ IPC, ~100ns)
-</div>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#71717a;border-radius:2px"></span>
-  <b>Gray</b> = nsim FIFO forwarding delay
-</div>
-<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
-  <span style="display:inline-block;width:40px;height:12px;background:#facc15;border-radius:2px"></span>
-  <b>Yellow</b> = ubio local processing
-</div>
-</div>
-
 <div style="flex:0 0 280px">
-<b>Dashed red vertical line:</b><br>
-&nbsp;&nbsp;Target latency reference (default 415ns)<br>
-<b>Hover on a colored segment:</b><br>
-&nbsp;&nbsp;Shows segment type, duration, from &rarr; to event<br>
-<b>Click swimlane label:</b><br>
-&nbsp;&nbsp;Expand to see every event with per-hop delta time<br>
-<b>Filter inputs at top:</b><br>
-&nbsp;&nbsp;Filter by PA (hex), rid prefix, or minimum Tq hops<br>
-<b>Min hops filter:</b><br>
-&nbsp;&nbsp;Set to 1 to see all chains (incl. local-only); set to 3+ to see only multi-node
+<b>Dashed red line:</b> target latency<br>
+<b>Hover segment:</b> type, duration, events<br>
+<b>Click label:</b> expand per-event detail<br>
+<b>Top ruler:</b> ns tick marks + grid lines
 </div>
 </div>
 </div>
@@ -235,26 +233,25 @@ var TYPE_COLORS = {type_colors_json};
 var T_MIN = {t_min};
 var T_MAX = {t_max};
 var SPAN = {span_ps};
-var TARGET_PS = {int(target_ns * 1000) if target_ns else 0};
+var TARGET_NS = {json.dumps(target_ns)};
+var TARGET_PS = target_ns ? target_ns * 1000 : 0;
 
 var expanded = {{}};
 
 function ns(n) {{ return n < 10 ? n.toFixed(1)+"ns" : n < 1000 ? n.toFixed(0)+"ns" : (n/1000).toFixed(1)+"us"; }}
+function psToNs(p) {{ return p * 1e-6; }}
 
-// === event delegation: click on swimlane labels ===
+// event delegation: swimlane label click
 document.getElementById("chains").addEventListener("click", function(e) {{
     var el = e.target.closest("[data-rid]");
-    if (!el) return;
-    var rid = el.getAttribute("data-rid");
-    expanded[rid] = !expanded[rid];
-    render();
+    if (!el) return; var rid = el.getAttribute("data-rid");
+    expanded[rid] = !expanded[rid]; render();
 }});
 
-// === event delegation: hover on segments ===
+// event delegation: segment hover
 document.getElementById("chains").addEventListener("mouseover", function(e) {{
     var el = e.target.closest("[data-tip]");
-    if (!el) return;
-    var tip = document.getElementById("tooltip");
+    if (!el) return; var tip = document.getElementById("tooltip");
     tip.style.display = "block";
     tip.style.left = (e.clientX + 12) + "px";
     tip.style.top = (e.clientY - 10) + "px";
@@ -274,6 +271,9 @@ function render() {{
     var cw = Math.min(window.innerWidth - 460, 1400);
     var vis = 0, evs = 0;
 
+    // Aggregate stats for visible chains
+    var agg = {{}};
+
     for (var i = 0; i < CHAINS.length; i++) {{
         var ch = CHAINS[i];
         if (fpa && (ch.pa || "").toLowerCase().indexOf(fpa) < 0) continue;
@@ -285,9 +285,8 @@ function render() {{
         var tc = TYPE_COLORS[ptype] || "#94a3b8";
         var ridStr = String(ch.rid);
 
-        // ----- swimlane row -----
         var row = document.createElement("div");
-        row.className = "swimlane";
+        row.className = "swimlane" + (ch.dur_ns > TARGET_NS && TARGET_NS > 0 ? " over-target" : "");
 
         var label = document.createElement("div");
         label.className = "swimlane-label";
@@ -300,22 +299,25 @@ function render() {{
         typeBadge.textContent = ptype;
         label.appendChild(typeBadge);
 
+        if (TARGET_NS > 0 && ch.dur_ns > TARGET_NS) {{
+            var overTag = document.createElement("span");
+            overTag.className = "over-tag"; overTag.textContent = "OVER";
+            label.appendChild(overTag);
+        }}
+
         var ridSpan = document.createElement("span");
-        ridSpan.className = "rid";
-        ridSpan.textContent = "rid=" + ridStr;
+        ridSpan.className = "rid"; ridSpan.textContent = "rid=" + ridStr;
         label.appendChild(ridSpan);
 
         label.appendChild(document.createTextNode(" "));
         var durSpan = document.createElement("span");
-        durSpan.className = "dur";
-        durSpan.textContent = ns(ch.dur_ns);
+        durSpan.className = "dur"; durSpan.textContent = ns(ch.dur_ns);
         label.appendChild(durSpan);
 
         label.appendChild(document.createTextNode(
             " pa=" + (ch.pa || "?") + " ev=" + ch.ev_count + " hops=" + ch.tq_hops));
         row.appendChild(label);
 
-        // ----- canvas -----
         var canvas = document.createElement("div");
         canvas.className = "swimlane-canvas";
         canvas.style.width = cw + "px";
@@ -330,9 +332,22 @@ function render() {{
             seg.className = "seg";
             seg.style.cssText = "left:" + lpx.toFixed(1) + "px; width:" + wpx.toFixed(1) +
                 "px; background:" + (COLORS[s.type] || "#aaa");
-            // Store tooltip data using | as separator (rendered as <br>)
+
+            // F.1.3: inline label on wide segments
+            if (wpx > 40) {{
+                seg.textContent = "+" + ns(s.dt_ns);
+                seg.style.fontSize = "9px"; seg.style.color = "#fff";
+                seg.style.fontWeight = "600"; seg.style.paddingLeft = "3px";
+                seg.style.lineHeight = "18px"; seg.style.overflow = "hidden";
+            }}
+
             seg.setAttribute("data-tip", s.type + "|" + ns(s.dt_ns) + "|" + s.from_ev + " -> " + s.to_ev);
             canvas.appendChild(seg);
+
+            // aggregate
+            var key = s.type;
+            if (!agg[key]) agg[key] = {{ vals: [] }};
+            agg[key].vals.push(s.dt_ns);
         }}
 
         if (TARGET_PS > 0) {{
@@ -341,16 +356,10 @@ function render() {{
             tLine.className = "target-line";
             tLine.style.left = tx.toFixed(1) + "px";
             canvas.appendChild(tLine);
-            var tLabel = document.createElement("div");
-            tLabel.className = "target-label";
-            tLabel.style.left = (tx + 4).toFixed(1) + "px";
-            tLabel.textContent = "target=" + ns(TARGET_PS * 1e-6);
-            canvas.appendChild(tLabel);
         }}
         row.appendChild(canvas);
         div.appendChild(row);
 
-        // ----- expanded detail -----
         if (expanded[ridStr]) {{
             var expDiv = document.createElement("div");
             expDiv.className = "expanded";
@@ -362,7 +371,7 @@ function render() {{
                 var dtStr = "", dtCls = "";
                 if (lastTick !== null) {{
                     var dps = ev.tick - lastTick;
-                    dtStr = "+" + ns(dps * 1e-6);
+                    dtStr = "+" + ns(psToNs(dps));
                     var isTq = (ev.event === "RECV_GEM5" || ev.event === "RECV_NET" || ev.event === "RECV");
                     dtCls = isTq ? "dt-tq" : "dt-nsim";
                     if (isTq) tqSum += dps;
@@ -389,7 +398,53 @@ function render() {{
 
     document.getElementById("stats").innerHTML =
         "Showing " + vis + "/" + CHAINS.length + " chains | events: " + evs +
-        " | range: " + ns(T_MIN*1e-6) + " \\u2013 " + ns(T_MAX*1e-6);
+        " | range: " + ns(psToNs(T_MIN)) + " \\u2013 " + ns(psToNs(T_MAX));
+
+    // F.1.1: time ruler
+    var rulerDiv = document.getElementById("ruler-inner");
+    rulerDiv.innerHTML = "";
+    rulerDiv.style.width = cw + "px";
+    var rulerSpan = psToNs(T_MAX - T_MIN);
+    var stepNs = rulerSpan < 200 ? 50 : rulerSpan < 500 ? 100 : rulerSpan < 2000 ? 500 : 1000;
+    for (var nsTick = 0; nsTick <= rulerSpan + stepNs; nsTick += stepNs) {{
+        var px = (nsTick * 1000) / SPAN * cw;
+        var mark = document.createElement("div");
+        mark.className = "ruler-mark"; mark.style.left = px + "px"; rulerDiv.appendChild(mark);
+        var lbl = document.createElement("div");
+        lbl.className = "ruler-label"; lbl.style.left = px + "px";
+        lbl.style.top = (nsTick % (stepNs*2) === 0 ? "2px" : "10px");
+        if (nsTick % (stepNs*2) === 0 || stepNs >= 500) lbl.textContent = nsTick + "ns";
+        rulerDiv.appendChild(lbl);
+    }}
+    if (TARGET_NS > 0) {{
+        var tpx = TARGET_PS / SPAN * cw;
+        var tlbl = document.createElement("div");
+        tlbl.className = "target-label";
+        tlbl.style.left = (tpx + 4) + "px"; tlbl.style.top = "0px";
+        tlbl.textContent = "target=" + ns(TARGET_NS);
+        rulerDiv.appendChild(tlbl);
+    }}
+
+    // F.1.4: aggregate stats table
+    var atbl = document.getElementById("agg-table");
+    var segOrder = ["gem5→ubio","ubio→nsim","nsim_fifo","nsim→ubio","ubio→gem5","ubio_proc","other"];
+    var html = "<b>Segment Statistics</b><table><tr><th>Type</th><th>Count</th><th>Avg(ns)</th><th>P50(ns)</th><th>P99(ns)</th></tr>";
+    for (var si = 0; si < segOrder.length; si++) {{
+        var stype = segOrder[si];
+        var a = agg[stype];
+        if (!a || a.vals.length === 0) continue;
+        a.vals.sort(function(x,y){{return x-y;}});
+        var n = a.vals.length;
+        var avg = a.vals.reduce(function(s,v){{return s+v;}},0) / n;
+        var p50 = a.vals[Math.floor(n*0.5)] || 0;
+        var p99 = a.vals[Math.floor(n*0.99)] || 0;
+        html += "<tr><td style='font-weight:600'><span style='display:inline-block;width:12px;height:12px;background:" +
+                (COLORS[stype]||"#aaa") + ";border-radius:2px;margin-right:4px'></span>" + stype +
+                "</td><td>" + n + "</td><td>" + avg.toFixed(1) + "</td><td>" + p50.toFixed(1) + "</td><td>" + p99.toFixed(1) + "</td></tr>";
+    }}
+    html += "</table>";
+    if (vis === 0) html = "<b>Segment Statistics</b><p style='color:#94a3b8'>No chains match current filter</p>";
+    atbl.innerHTML = html;
 }}
 
 function toggleAll() {{
@@ -399,11 +454,30 @@ function toggleAll() {{
     render();
 }}
 
+// F.1.5: CSV export
+function exportCSV() {{
+    var fpa = document.getElementById("f-pa").value.toLowerCase();
+    var frid = document.getElementById("f-rid").value;
+    var mh = parseInt(document.getElementById("f-hops").value) || 2;
+    var lines = ["rid,pa,type,dur_ns,tq_hops,ev_count"];
+    for (var i = 0; i < CHAINS.length; i++) {{
+        var ch = CHAINS[i];
+        if (fpa && (ch.pa || "").toLowerCase().indexOf(fpa) < 0) continue;
+        if (frid && String(ch.rid).indexOf(frid) !== 0) continue;
+        if (ch.tq_hops < mh) continue;
+        lines.push([ch.rid, ch.pa||"", ch.primary_type, ch.dur_ns, ch.tq_hops, ch.ev_count].join(","));
+    }}
+    var blob = new Blob([lines.join("\\n")], {{type:"text/csv"}});
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "trace_chains.csv"; a.click();
+}}
+
 window.addEventListener("resize", render);
 render();
 </script>
 </body>
 </html>"""
+    # No target-label on each row — now it's on the ruler
 
 
 def main():
