@@ -1,0 +1,163 @@
+# Formal Verification — Coverage, Scope & Fidelity
+
+> Produced: 2026-07-08 | Companion to `CONSOLIDATED_REPORT.md`
+> Purpose: answer three review questions that raw state/depth counts do NOT:
+>   (A1) Is coverage quantified?  (A2) What scope is covered vs not?
+>   (A3) How do we argue the model corresponds to the code?
+>
+> Headline: state counts and search depth measure *exploration size*, not
+> *coverage*. The metrics below are the actual coverage evidence.
+
+---
+
+## A1. Action Coverage (TLC `-coverage`)
+
+**Method**: `tlc2.TLC -coverage 30` on the core protocol under `ubcc_config.cfg`
+(`Nodes={0,1,2}`, `MaxEpoch=4`, `TombstoneWindow=10`). Coverage counts are
+`distinct states : transitions generated` per action, taken directly from the
+TLC coverage report (`/tmp/tlc_coverage_core.log`, run 2026-07-08).
+
+| Protocol action | distinct states | transitions | Covered? |
+|-----------------|----------------:|------------:|:--------:|
+| `Init`                 | 1          | 1           | ✅ |
+| `GrantShared`          | 429,723    | 448,110     | ✅ |
+| `GrantExclusive`       | 381,870    | 402,444     | ✅ |
+| `RecallBarrier`        | 1,070,064  | 1,124,928   | ✅ |
+| `RecallResponse`       | 1,255,129  | 4,413,312   | ✅ |
+| `RecallToGrant`        | 1,167,008  | 3,921,696   | ✅ |
+| `RecallOrphanCleanup`  | 16,042     | 5,543,856   | ✅ |
+| `InvalidationBarrier`  | 218,592    | 226,152     | ✅ |
+| `UpgradeBarrier`       | 258,984    | 267,624     | ✅ |
+| `BarrierAck`           | 795,061    | 3,550,284   | ✅ |
+| `ClearCommit`          | 21,303     | 7,760,988   | ✅ |
+| `UpgradeCommit`        | 39,071     | 1,097,982   | ✅ |
+| `Writeback`            | 41,672     | 241,488     | ✅ |
+| `Evict`                | 10,208     | 180,792     | ✅ |
+| `TickOnly`             | 15,276,027 | 18,240,374  | ✅ |
+| `Stutter`              | 0*         | 2,740,381   | ✅* |
+
+**Result: 15/15 protocol actions triggered — action coverage = 100%, zero dead
+actions.** Every protocol transition path is exercised by the exhaustive search.
+
+Notes:
+- `*Stutter` has `distinct = 0` because it is `UNCHANGED Vars` (a terminal
+  self-loop at `tick = MaxTick`): it generates transitions (2.74M) but never a
+  *new* distinct state, by design. Not a dead action.
+- `RecallOrphanCleanup` (the RECALL-orphan fix, added 2026-07-08) is exercised
+  across 5.5M transitions — it is not dead code; the fix is thoroughly explored.
+- Action coverage is a **native, non-forgeable TLC metric**. It answers "does the
+  model actually reach every protocol path?" — yes, within this scope.
+
+**What this does and does not claim**: it proves *complete action coverage inside
+the checked scope*. It does NOT claim production-scale coverage — that boundary
+is stated explicitly in A2.
+
+---
+
+## A2. Parameter / Scope Coverage Boundary
+
+Model checking is bounded by construction (infinite state variables like `epoch`,
+`tick`, request ids must be capped or TLC cannot terminate). This table states,
+honestly, exactly what has been *exhaustively* covered and what has NOT.
+
+### Covered (exhaustively enumerated, zero counterexamples)
+
+| Dimension | UBCC core (`ubcc_config`) | EP single | EP dual | Transport faults |
+|-----------|---------------------------|-----------|---------|------------------|
+| Nodes / CPUs | 3 nodes | 2 CPUs (1 node) | 2 CPUs × 2 sockets | 3 nodes |
+| Physical addresses (PA) | **1** | 1 | 1 | 1 |
+| Epoch bound | `MaxEpoch=4` | — | — | `MaxEpoch=4` |
+| Tombstone window | 10 | — | — | 10 |
+| Request ids | `0..2` | — | — | `0..2` |
+| Data versions | (abstracted) | `MaxDataVersion=1` | — | (abstracted) |
+| Distinct states | 20,980,755 | 74M | 52M | 66,766 |
+| Search depth | 23 | — | — | — |
+| Properties | 4 safety + 2 liveness | 6 safety | 8 safety | 6 safety |
+
+### NOT covered (explicit boundaries — future work / simulation territory)
+
+| Uncovered dimension | Why it matters | How addressed instead |
+|---------------------|----------------|-----------------------|
+| **Multiple PAs / cross-address interleaving** | Directory-slot contention across lines, Bloom-filter collisions | Planned formal (Stage D1); currently only E2E |
+| **≥4 nodes** | Larger sharer sets | small-scope hypothesis: 3 nodes exposes design races; E2E TC50-54 at scale |
+| **≥3 sockets & cross-socket message routing** | Multi-socket coherence routing (1-hop vs 2-hop latency) | Planned formal (Stage D2); currently E2E |
+| **Bloom filter / backstore / MetaRNF** | Performance/infra layer | Abstracted by design (see A3); resident-dir is authoritative — argued in CONSOLIDATED_REPORT §7.2 |
+| **Real time / latency / ZMQ timing** | Timeout tuning, message ordering under delay | Not a formal target — E2E simulation (`docs/measure/`) |
+| ~~**Fault types beyond Clear drop/dup**~~ | InvAck/RecallResp/UpgradeAck loss/reorder | **DONE (Stage B1-B3)**: `ubcc_transport_faults.tla` now exhaustively enumerates Clear/InvAck/RecallResp/UpgradeAck × drop/dup/reorder; safety PASS (23.2M states) + liveness PASS. See CONSOLIDATED_REPORT §5.1 |
+
+### Coverage claim (defensible wording)
+
+> "Within a small but precisely-defined scope (3 nodes, single PA, 4 epochs), the
+> UBCC protocol core is **exhaustively enumerated with zero safety or liveness
+> counterexamples and 100% action coverage**. This is not production-scale
+> coverage; the value follows the *small-scope hypothesis* — protocol-design
+> defects overwhelmingly manifest in small configurations. Evidence: the
+> Medium-severity RECALL-orphan bug (FV3-LEAK-001) was caught and its fix proven
+> in exactly this 3-node model. Production-scale behaviour is covered by E2E
+> simulation (TC1-54)."
+
+---
+
+## A3. Fidelity Mapping (Model ↔ Code)
+
+**Honest statement first**: TLA+ models are **hand-written mathematical
+abstractions**, not machine-extracted from C++. There is no tool that
+auto-generates a *useful* TLA+ model from gem5 C++ (auto-translation would
+reproduce the code's complexity, not abstract it). Model-code correspondence is
+therefore maintained by **manual modelling + review**, and can be further
+strengthened by **trace validation** (planned Stage E, out of current scope).
+
+We do NOT claim "model = code". We claim: "the model captures the protocol core's
+invariants and progress, and the correspondence below is auditable."
+
+### A3.1 UBCC core action → C++ correspondence
+
+Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCController.cc`:
+
+| TLA+ action | Models this C++ behaviour | C++ anchor (function) |
+|-------------|---------------------------|-----------------------|
+| `GrantShared` / `GrantExclusive` | outer request → grant fast paths (G_I, G_S+RS, same-owner) | `processOuterRequest` |
+| `RecallBarrier` | G_E/G_M owner ≠ requester → recall initiation | `processOuterRequest` → `initiateRecall` |
+| `RecallResponse` | target responds, RECALL → DONE (dataBuf stored) | `processRecallResponse` |
+| `RecallToGrant` | same-requester retry consumes RECALL.DONE → GRANT_HANDSHAKE | `processOuterRequest` (RECALL.DONE branch) |
+| `RecallOrphanCleanup` | timeout-gated orphan discard (lazy + timer) | `isExpiredRecall` / `cleanupExpiredRecallIfNeeded` / `cleanupExpiredRecalls` (wired in `wakeup()` + `processOuterRequest`) |
+| `InvalidationBarrier` | G_S + RU, other sharers → invalidate barrier | `processOuterRequest` (invalidate branch) |
+| `UpgradeBarrier` | G_S requester in sharers → upgrade pending | `processOuterUpgradeReq` |
+| `BarrierAck` | invalidation/upgrade ack accumulation | `processInvalidationAck` |
+| `ClearCommit` | Clear match → commit + tombstone + remove | `processClear` → `commitIntendedResult` / `retireToTombstone` |
+| `UpgradeCommit` | upgrade done → commit | `processOuterUpgradeDone` → `commitIntendedResult` |
+| `Writeback` / `Evict` | owner writeback / sharer eviction | writeback / evict handlers |
+| epoch reserve/commit | `allocateReservedEpoch` monotonicity | `allocateReservedEpoch`, `validateCanonical` |
+
+### A3.2 What is deliberately abstracted away (and why it's sound)
+
+| Abstracted | Reason it does not affect protocol correctness |
+|------------|-----------------------------------------------|
+| Bloom filter | Negative filter only; false positive → extra DRAM read, never wrong directory decision (resident dir authoritative) |
+| Backstore / DRAM shadow | Shadow copy; resident dir is single source of truth (invariant I1) |
+| MetaRNF multi-flight | Per-PA serialization preserved by scoreboard; different PAs parallel (I4) |
+| Real time / ZMQ / latency | Protocol correctness is timing-independent; timing handled by E2E |
+| Data payload bytes | Modelled as version/owner, not raw bytes; integrity checked in E2E (FV-7 memcpy chain) |
+
+### A3.3 Fidelity risks (known, disclosed)
+
+1. **Hand-modelling drift**: a model edit may lag a code change. Mitigation:
+   this mapping table + review; ideally trace validation (Stage E).
+2. **`RecallOrphanCleanup` timeout value**: model uses `RecallTimeout=2` (bounded
+   scope); code uses `_recallTimeout = 1000000` (hardcoded 1µs). The *shape*
+   matches (timeout-gated discard); the *numeric* value differs and should be
+   re-evaluated after the ZMQ-latency change (10ns time-scale).
+3. **Cleanup liveness depends on `wakeup()` being scheduled**: the model gives
+   `WF` to `TickOnly` (time advances); the code assumes `wakeup()` is called
+   periodically even when idle. This assumption is not itself verified in code —
+   flagged as a follow-up (see CONSOLIDATED_REPORT liveness notes / Stage C2).
+
+---
+
+## Summary for review
+
+| Question | Answer |
+|----------|--------|
+| Is coverage quantified? | Yes — 100% action coverage (15/15, zero dead), native TLC metric (A1). |
+| What scope? | Exhaustive in 3-node/single-PA/4-epoch; explicit uncovered boundary listed (A2). |
+| Model ↔ code? | Hand-modelled with auditable mapping table; abstractions justified; risks disclosed (A3). No claim of auto-generation or model=code. |

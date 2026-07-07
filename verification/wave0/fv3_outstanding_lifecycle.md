@@ -82,6 +82,14 @@
 
 **Leak finding FV3-LEAK-001**: A `RECALL.DONE` entry for requester A that is never followed by A's retry remains in `_outstandingReqs` indefinitely. Because `createOutstanding()` (L2594) returns `nullptr` when a key already exists, no new outstanding (GRANT_HANDSHAKE, RECALL, INVALIDATE, UPGRADE_PENDING) can be created for that `linePa`. The `TIMED_OUT` and `CANCELLED` stages are defined but never assigned, so no timer-based eviction exists.
 
+> **RESOLVED (2026-07-08)**: Fixed by the frozen double-layer cleanup
+> (`verification/fixes/recall_orphan_solution.md`), implemented in
+> `modules/ubiomodule/UBCCController.cc` (`isExpiredRecall`,
+> `cleanupExpiredRecallIfNeeded`, `cleanupExpiredRecalls`; wired into `wakeup()`
+> and `processOuterRequest()`). Formally closed: the TLA+ liveness property
+> `RecallProgress` PASSES with the cleanup net present and is VIOLATED without
+> it (contrast run `ubcc_liveness_nocleanup.cfg`). See CONSOLIDATED_REPORT §2.1.1.
+
 **Mitigation in practice**: The enqueue logic (L783-835) handles the case of a different requester arriving while RECALL.DONE exists, but the enqueued request will never be replayed because `replayPendingRequesters()` requires a preceding `removeOutstanding()` + commit cycle. Add epoch-stall detection or periodic cleanup for orphan DONE entries.
 
 ---
