@@ -234,7 +234,7 @@ var T_MIN = {t_min};
 var T_MAX = {t_max};
 var SPAN = {span_ps};
 var TARGET_NS = {json.dumps(target_ns)};
-var TARGET_PS = target_ns ? target_ns * 1000 : 0;
+var TARGET_PS = TARGET_NS ? TARGET_NS * 1000 : 0;
 
 var expanded = {{}};
 
