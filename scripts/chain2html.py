@@ -111,7 +111,7 @@ def make_html(data, target_ns=None):
   body {{ font-family: -apple-system, "Helvetica Neue", sans-serif; margin: 0;
          background: #fff; color: #1e293b; font-size: 13px; }}
   #header {{ position: sticky; top: 0; background: #fff; padding: 10px 14px;
-             border-bottom: 2px solid #e2e8f0; z-index: 10; }}
+             border-bottom: 2px solid #e2e8f0; z-index: 12; }}
   #header b {{ font-size: 16px; }}
   #header input, #header select {{ border: 1px solid #cbd5e1; padding: 4px 8px;
          margin: 0 4px; border-radius: 4px; font-size: 12px; }}
@@ -124,9 +124,10 @@ def make_html(data, target_ns=None):
                min-height: 28px; }}
   .swimlane:hover {{ background: #f8fafc; }}
   .swimlane.over-target {{ border-left: 3px solid #ef4444; }}
-  .swimlane-label {{ flex: 0 0 420px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+  .swimlane-label {{ flex: 0 0 360px; padding: 4px 8px; font-size: 11px; cursor: pointer;
                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-                     border-right: 1px solid #f1f5f9; user-select: none; }}
+                     border-right: 1px solid #f1f5f9; user-select: none;
+                     background: #fff; position: relative; z-index: 1; }}
   .swimlane-label .rid {{ color: #3b82f6; font-weight: 600; }}
   .swimlane-label .type {{ display: inline-block; padding: 0 4px; border-radius: 3px;
                            font-size: 10px; font-weight: 600; margin-right: 4px; }}
@@ -143,16 +144,16 @@ def make_html(data, target_ns=None):
   .target-label {{ position: absolute; font-size: 9px; color: #ef4444; font-weight: 600;
                    white-space: nowrap; z-index: 5; }}
 
-  /* Time ruler */
-  #ruler {{ position: sticky; top: 86px; background: #fff; z-index: 9;
+  /* Time ruler — sticky at very top, above swimlane labels */
+  #ruler {{ position: sticky; top: 0; background: #fff; z-index: 11;
             border-bottom: 1px solid #e2e8f0; height: 28px; }}
-  #ruler-inner {{ position: relative; height: 100%; margin-left: 420px; }}
+  #ruler-inner {{ position: relative; height: 100%; margin-left: 360px; }}
   .ruler-mark {{ position: absolute; bottom: 0; border-left: 1px solid #cbd5e1; height: 100%;
                  pointer-events: none; }}
   .ruler-label {{ position: absolute; bottom: 2px; font-size: 9px; color: #94a3b8;
                   transform: translateX(-50%); white-space: nowrap; pointer-events: none; }}
 
-  .expanded {{ padding: 6px 12px 6px 420px; font-size: 11px; color: #475569;
+  .expanded {{ padding: 6px 12px 6px 360px; font-size: 11px; color: #475569;
               border-bottom: 1px solid #f1f5f9; background: #fafbfc; }}
   .expanded table {{ border-collapse: collapse; width: 100%; }}
   .expanded td {{ padding: 1px 8px; }}
@@ -184,6 +185,9 @@ def make_html(data, target_ns=None):
   <input id="f-rid" placeholder="7205759..." size=18 oninput="render()">
   <label>Min hops:</label>
   <input id="f-hops" type="number" value="2" min="1" style="width:45px" oninput="render()">
+  <label>Zoom:</label>
+  <input id="f-zoom" type="range" min="0.5" max="5" step="0.1" value="1" style="width:100px" oninput="render()">
+  <span id="zoom-val" style="font-size:11px;color:#64748b;min-width:30px;display:inline-block">1.0x</span>
   <button onclick="toggleAll()">expand/collapse</button>
   <button onclick="exportCSV()">export CSV</button>
   <div id="stats"></div>
@@ -240,6 +244,7 @@ var expanded = {{}};
 
 function ns(n) {{ return n < 10 ? n.toFixed(1)+"ns" : n < 1000 ? n.toFixed(0)+"ns" : (n/1000).toFixed(1)+"us"; }}
 function psToNs(p) {{ return p * 1e-6; }}
+function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
 
 // event delegation: swimlane label click
 document.getElementById("chains").addEventListener("click", function(e) {{
@@ -266,9 +271,11 @@ function render() {{
     var fpa = document.getElementById("f-pa").value.toLowerCase();
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
+    var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 0.5, 5);
+    document.getElementById("zoom-val").textContent = zoom.toFixed(1) + "x";
     var div = document.getElementById("chains");
     div.innerHTML = "";
-    var cw = Math.min(window.innerWidth - 460, 1400);
+    var baseW = Math.min(window.innerWidth - 400, 1400);
     var vis = 0, evs = 0;
 
     // Aggregate stats for visible chains
@@ -320,6 +327,7 @@ function render() {{
 
         var canvas = document.createElement("div");
         canvas.className = "swimlane-canvas";
+        var cw = baseW * zoom;
         canvas.style.width = cw + "px";
 
         for (var j = 0; j < ch.segments.length; j++) {{
@@ -400,20 +408,31 @@ function render() {{
         "Showing " + vis + "/" + CHAINS.length + " chains | events: " + evs +
         " | range: " + ns(psToNs(T_MIN)) + " \\u2013 " + ns(psToNs(T_MAX));
 
-    // F.1.1: time ruler
+    // F.1.1: time ruler — adaptive step sizes
     var rulerDiv = document.getElementById("ruler-inner");
     rulerDiv.innerHTML = "";
+    var cw = baseW * zoom;
     rulerDiv.style.width = cw + "px";
-    var rulerSpan = psToNs(T_MAX - T_MIN);
-    var stepNs = rulerSpan < 200 ? 50 : rulerSpan < 500 ? 100 : rulerSpan < 2000 ? 500 : 1000;
-    for (var nsTick = 0; nsTick <= rulerSpan + stepNs; nsTick += stepNs) {{
+    var rulerSpanNs = psToNs(T_MAX - T_MIN);
+    // Adaptive step: pick a step that gives ~5-15 ruler marks at current zoom
+    var targetMarks = 10;
+    var rawStep = rulerSpanNs / targetMarks;
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    var residual = rawStep / mag;
+    var stepNs;
+    if (residual < 1.5) stepNs = 1 * mag;
+    else if (residual < 3.5) stepNs = 2 * mag;
+    else if (residual < 7.5) stepNs = 5 * mag;
+    else stepNs = 10 * mag;
+    stepNs = Math.max(stepNs, 1);
+    for (var nsTick = 0; nsTick <= rulerSpanNs + stepNs; nsTick += stepNs) {{
         var px = (nsTick * 1000) / SPAN * cw;
         var mark = document.createElement("div");
         mark.className = "ruler-mark"; mark.style.left = px + "px"; rulerDiv.appendChild(mark);
         var lbl = document.createElement("div");
         lbl.className = "ruler-label"; lbl.style.left = px + "px";
-        lbl.style.top = (nsTick % (stepNs*2) === 0 ? "2px" : "10px");
-        if (nsTick % (stepNs*2) === 0 || stepNs >= 500) lbl.textContent = nsTick + "ns";
+        lbl.style.top = "2px";
+        lbl.textContent = nsTick < 1000 ? nsTick + "ns" : (nsTick/1000).toFixed(1) + "us";
         rulerDiv.appendChild(lbl);
     }}
     if (TARGET_NS > 0) {{
