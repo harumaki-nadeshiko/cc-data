@@ -143,7 +143,7 @@ void NetworkSim::step() {
                 buf->hdr.timestamp = ts;
                 it->second->send(buf);
                 std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
-                             pf.msg.hdr.timestamp, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
+                             pf.readyTick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)
