@@ -145,12 +145,14 @@ def make_html(data, target_ns=None):
                    white-space: nowrap; z-index: 5; }}
 
   /* Time ruler — sticky at very top, above swimlane labels */
-  #ruler {{ position: sticky; top: 0; background: #fff; z-index: 11;
-            border-bottom: 1px solid #e2e8f0; height: 28px; }}
+  #ruler {{ position: sticky; top: 0; background: #f8fafc; z-index: 11;
+            border-bottom: 1px solid #cbd5e1; height: 32px; overflow: hidden; }}
+  #ruler-title {{ position: absolute; left: 8px; top: 8px; font-size: 10px;
+                  font-weight: 600; color: #475569; width: 344px; }}
   #ruler-inner {{ position: relative; height: 100%; margin-left: 360px; }}
-  .ruler-mark {{ position: absolute; bottom: 0; border-left: 1px solid #cbd5e1; height: 100%;
+  .ruler-mark {{ position: absolute; bottom: 0; border-left: 1px solid #cbd5e1; height: 8px;
                  pointer-events: none; }}
-  .ruler-label {{ position: absolute; bottom: 2px; font-size: 9px; color: #94a3b8;
+  .ruler-label {{ position: absolute; top: 6px; font-size: 10px; color: #334155;
                   transform: translateX(-50%); white-space: nowrap; pointer-events: none; }}
 
   .expanded {{ padding: 6px 12px 6px 360px; font-size: 11px; color: #475569;
@@ -192,7 +194,7 @@ def make_html(data, target_ns=None):
   <button onclick="exportCSV()">export CSV</button>
   <div id="stats"></div>
 </div>
-<div id="ruler"><div id="ruler-inner"></div></div>
+<div id="ruler"><div id="ruler-title">relative time (each lane from t=0) →</div><div id="ruler-inner"></div></div>
 <div id="chains"></div>
 <div id="tooltip"></div>
 
@@ -260,7 +262,7 @@ document.getElementById("chains").addEventListener("mouseover", function(e) {{
     tip.style.display = "block";
     tip.style.left = (e.clientX + 12) + "px";
     tip.style.top = (e.clientY - 10) + "px";
-    tip.innerHTML = el.getAttribute("data-tip").replace(/\|/g, "<br>");
+    tip.innerHTML = el.getAttribute("data-tip").replace(/\\|/g, "<br>");
 }});
 document.getElementById("chains").addEventListener("mouseout", function(e) {{
     if (!e.target.closest("[data-tip]")) return;
@@ -280,6 +282,28 @@ function render() {{
 
     // Aggregate stats for visible chains
     var agg = {{}};
+
+    // ── Per-chain RELATIVE time axis ──────────────────────────────────
+    // Each swimlane starts at its own t=0 (the chain's first event). All lanes
+    // share ONE relative scale = max duration among visible chains, so lanes
+    // are directly comparable and the target line is meaningful per-chain.
+    // (Previously lanes used a global absolute axis spanning the whole run,
+    // which crammed every chain's real work into a sliver and made the target
+    // line land at ~4% width — unreadable.)
+    var maxDurPs = 0;
+    var visList = [];
+    for (var vi = 0; vi < CHAINS.length; vi++) {{
+        var vc = CHAINS[vi];
+        if (fpa && (vc.pa || "").toLowerCase().indexOf(fpa) < 0) continue;
+        if (frid && String(vc.rid).indexOf(frid) !== 0) continue;
+        if (vc.tq_hops < mh) continue;
+        visList.push(vc);
+        if (vc.dur_ps > maxDurPs) maxDurPs = vc.dur_ps;
+    }}
+    // Ensure the target line is always on-screen even if every chain is faster.
+    if (TARGET_PS > 0 && TARGET_PS > maxDurPs) maxDurPs = TARGET_PS * 1.1;
+    if (maxDurPs <= 0) maxDurPs = 1;
+    var SCALE = maxDurPs;  // ps that map to full canvas width
 
     for (var i = 0; i < CHAINS.length; i++) {{
         var ch = CHAINS[i];
@@ -332,8 +356,9 @@ function render() {{
 
         for (var j = 0; j < ch.segments.length; j++) {{
             var s = ch.segments[j];
-            var lpx = (s.from_tick - T_MIN) / SPAN * cw;
-            var wpx = Math.max(s.dt_ps / SPAN * cw, 3);
+            // Per-chain relative position: offset from THIS chain's first event.
+            var lpx = (s.from_tick - ch.first_tick) / SCALE * cw;
+            var wpx = Math.max(s.dt_ps / SCALE * cw, 2);
             if (wpx < 0.5) continue;
 
             var seg = document.createElement("div");
@@ -359,7 +384,7 @@ function render() {{
         }}
 
         if (TARGET_PS > 0) {{
-            var tx = TARGET_PS / SPAN * cw;
+            var tx = TARGET_PS / SCALE * cw;
             var tLine = document.createElement("div");
             tLine.className = "target-line";
             tLine.style.left = tx.toFixed(1) + "px";
@@ -406,37 +431,40 @@ function render() {{
 
     document.getElementById("stats").innerHTML =
         "Showing " + vis + "/" + CHAINS.length + " chains | events: " + evs +
-        " | range: " + ns(psToNs(T_MIN)) + " \\u2013 " + ns(psToNs(T_MAX));
+        " | lanes share a RELATIVE axis 0\\u2013" + ns(psToNs(SCALE)) +
+        " (each lane starts at its own t=0)";
 
-    // F.1.1: time ruler — adaptive step sizes
+    // F.1.1: time ruler — RELATIVE axis (0 .. maxDur), adaptive step sizes.
     var rulerDiv = document.getElementById("ruler-inner");
     rulerDiv.innerHTML = "";
     var cw = baseW * zoom;
     rulerDiv.style.width = cw + "px";
-    var rulerSpanNs = psToNs(T_MAX - T_MIN);
-    // Adaptive step: pick a step that gives ~5-15 ruler marks at current zoom
-    var targetMarks = 10;
-    var rawStep = rulerSpanNs / targetMarks;
-    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    var residual = rawStep / mag;
-    var stepNs;
-    if (residual < 1.5) stepNs = 1 * mag;
-    else if (residual < 3.5) stepNs = 2 * mag;
-    else if (residual < 7.5) stepNs = 5 * mag;
-    else stepNs = 10 * mag;
-    stepNs = Math.max(stepNs, 1);
-    for (var nsTick = 0; nsTick <= rulerSpanNs + stepNs; nsTick += stepNs) {{
-        var px = (nsTick * 1000) / SPAN * cw;
+    // Work entirely in PS against the same SCALE the segments use, so the
+    // ruler is guaranteed consistent with the bars. Labels formatted via the
+    // shared ns()/psToNs() helpers.
+    var spanPs = SCALE;
+    var targetMarks = Math.max(6, Math.round(10 * zoom));
+    var rawStepPs = spanPs / targetMarks;
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStepPs)));
+    var residual = rawStepPs / mag;
+    var stepPs;
+    if (residual < 1.5) stepPs = 1 * mag;
+    else if (residual < 3.5) stepPs = 2 * mag;
+    else if (residual < 7.5) stepPs = 5 * mag;
+    else stepPs = 10 * mag;
+    stepPs = Math.max(stepPs, 1);
+    for (var tPs = 0; tPs <= spanPs + stepPs; tPs += stepPs) {{
+        var px = tPs / SCALE * cw;
+        if (px > cw + 1) break;
         var mark = document.createElement("div");
         mark.className = "ruler-mark"; mark.style.left = px + "px"; rulerDiv.appendChild(mark);
         var lbl = document.createElement("div");
         lbl.className = "ruler-label"; lbl.style.left = px + "px";
-        lbl.style.top = "2px";
-        lbl.textContent = nsTick < 1000 ? nsTick + "ns" : (nsTick/1000).toFixed(1) + "us";
+        lbl.textContent = ns(psToNs(tPs));
         rulerDiv.appendChild(lbl);
     }}
     if (TARGET_NS > 0) {{
-        var tpx = TARGET_PS / SPAN * cw;
+        var tpx = TARGET_PS / SCALE * cw;
         var tlbl = document.createElement("div");
         tlbl.className = "target-label";
         tlbl.style.left = (tpx + 4) + "px"; tlbl.style.top = "0px";
