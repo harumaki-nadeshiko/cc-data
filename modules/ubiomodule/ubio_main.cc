@@ -274,10 +274,11 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         delete buf;
         return false;
     }
+    uint64_t sendTs = buf->hdr.timestamp;
     bool ok = port->send(buf);
     if (ok) {
         std::fprintf(stderr, "[TRACE-PERF] %lu|%u|ubio|%lu|0x%lx|%s|%s\n",
-                     tick, dstModule, msg.h.reqId, msg.h.homeLinePa,
+                     sendTs, dstModule, msg.h.reqId, msg.h.homeLinePa,
                      toNetwork ? "SEND_NET" : "SEND_GEM5",
                      coherenceMsgTypeName(msg.h.type));
     }
@@ -721,7 +722,7 @@ main(int argc, char **argv)
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                          m->hdr.sourceId, m->hdr.targetId);
             std::fprintf(stderr, "[TRACE-PERF] %lu|%d|ubio|%lu|0x%lx|%s|%s\n",
-                         tick, nid, coh->h.reqId, coh->h.homeLinePa,
+                         m->hdr.timestamp, nid, coh->h.reqId, coh->h.homeLinePa,
                          fromNetwork ? "RECV_NET" : "RECV_GEM5",
                          coherenceMsgTypeName(coh->h.type));
 

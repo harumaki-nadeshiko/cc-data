@@ -42,6 +42,17 @@ Port::init(const PortParams& params, const PortRuntime& runtime)
     _syncInterval = runtime.syncInterval;
     _linkLatency  = runtime.linkLatency;
 
+    const char* env_link = std::getenv("EP_LINK_LATENCY_PS");
+    if (env_link) _linkLatency = std::strtoull(env_link, nullptr, 10);
+    const char* env_sync = std::getenv("EP_SYNC_INTERVAL_PS");
+    if (env_sync) _syncInterval = std::strtoull(env_sync, nullptr, 10);
+    if (_syncInterval < _linkLatency) {
+        std::fprintf(stderr, "[PORT-CFG-WARN] %s syncInterval(%lu) < linkLatency(%lu), "
+                     "clamping syncInterval=linkLatency\n",
+                     params.name.c_str(), _syncInterval, _linkLatency);
+        _syncInterval = _linkLatency;
+    }
+
     _ctx = std::make_unique<zmq::context_t>(1);
     _txSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);
     _rxSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);

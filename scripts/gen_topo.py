@@ -15,16 +15,17 @@ Builds a full-mesh among all network modules (one ubio plane per
   type 2s : 3 nodes x 2 sockets   => NMOD=6  => 15 links
 
 Latency policy (ps):
-  cross-node        = 415000 ps (415 ns)
-  same-node cross-socket = 225000 ps (225 ns, mid of 210-240 ns range)
+  cross-node same-socket  = --cross-node-latency  (default 405000 = 405 ns)
+  same-node cross-socket  = --cross-socket-latency (default  25000 =  25 ns)
+
+  TODO(2-hop): cross-node + cross-socket links currently use a single-hop
+  heterogeneous delay = cross_node + cross_socket (D4 temporary scheme).
+  Physically this should be two-hop forwarding (inter-node link + inter-socket
+  link). Revert to proper multi-hop routing once networksim supports it.
 
 Node mapping: mod_id = node * num_sockets + socket
 """
 import argparse, json, sys
-
-# Target latencies per design doc §6.1
-CROSS_NODE_LATENCY = 415000
-CROSS_SOCKET_LATENCY = 225000
 
 
 def main():
@@ -35,6 +36,10 @@ def main():
                    help="number of nodes (default 3)")
     p.add_argument("--sockets", type=int,
                    help="sockets per node (default derived from --type)")
+    p.add_argument("--cross-node-latency", type=int, default=405000,
+                   help="cross-node same-socket link latency in ps (default 405000)")
+    p.add_argument("--cross-socket-latency", type=int, default=25000,
+                   help="same-node cross-socket link latency in ps (default 25000)")
     p.add_argument("--out", required=True, help="output topo.json path")
     args = p.parse_args()
 
@@ -50,14 +55,36 @@ def main():
         num_nodes = args.nodes
         num_sockets = args.sockets
 
+    cross_node = args.cross_node_latency
+    cross_sock = args.cross_socket_latency
     nmod = num_nodes * num_sockets
 
     links = []
+    # Per-class counters for summary
+    cnt_node = 0
+    cnt_sock = 0
+    cnt_both = 0
+
     for a in range(nmod):
         node_a = a // num_sockets
+        sock_a = a % num_sockets
         for b in range(a + 1, nmod):
             node_b = b // num_sockets
-            lat = CROSS_NODE_LATENCY if node_a != node_b else CROSS_SOCKET_LATENCY
+            sock_b = b % num_sockets
+
+            # TODO(2-hop): cross-node + cross-socket currently single-hop
+            # with heterogeneous delay = cross_node + cross_socket.
+            # Physically should be two-hop forwarding; revert once nsim
+            # supports multi-hop routing.
+            if node_a != node_b and sock_a != sock_b:
+                lat = cross_node + cross_sock
+                cnt_both += 1
+            elif node_a != node_b:
+                lat = cross_node
+                cnt_node += 1
+            else:
+                lat = cross_sock
+                cnt_sock += 1
             links.append([a, 1, b, 1, lat])
 
     with open(args.out, "w") as f:
@@ -66,6 +93,9 @@ def main():
     n_links = len(links)
     print(f"[gen_topo] nodes={num_nodes} sockets={num_sockets} "
           f"NMOD={nmod} links={n_links} -> {args.out}")
+    print(f"[gen_topo]   cross-node           latency={cross_node:>7} ps  count={cnt_node}")
+    print(f"[gen_topo]   cross-socket         latency={cross_sock:>7} ps  count={cnt_sock}")
+    print(f"[gen_topo]   cross-node+socket    latency={cross_node + cross_sock:>7} ps  count={cnt_both}")
 
 if __name__ == "__main__":
     main()

@@ -6,6 +6,7 @@
 #include <deque>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 #include <string>
 #include <fstream>
@@ -30,8 +31,10 @@ class NetworkSim {
     // Keyed by module ID only. Each module has exactly one IPC channel to nsim;
     // topology port IDs are a link-latency attribute, not a routing selector.
     std::map<int, std::unique_ptr<Port>> _ports;
-    // Per-source-module link latency (module -> outgoing link latency).
-    std::map<int, uint64_t> _linkLatency;
+    // Per-(src,dst) link latency (ps). Bidirectional: both (a,b) and (b,a)
+    // are stored.  TODO(2-hop): cross-node+cross-socket currently single-hop
+    // heterogeneous delay. Revert to multi-hop when nsim supports it.
+    std::map<std::pair<int,int>, uint64_t> _linkLatency;
     std::deque<PendingFwd> _fifo;
     uint64_t _tick = 0;
     std::set<int> _donePorts;
@@ -91,15 +94,10 @@ void NetworkSim::loadTopology(const std::string& path) {
 }
 
 void NetworkSim::buildRoutes() {
-    // Links are bidirectional; record the minimum link latency per source
-    // module so a forwarded message gets a representative delay.
+    _linkLatency.clear();
     for (auto& l : _links) {
-        auto rec = [&](int mod, uint64_t lat) {
-            auto it = _linkLatency.find(mod);
-            if (it == _linkLatency.end() || lat < it->second) _linkLatency[mod] = lat;
-        };
-        rec(l.src_mod, l.latency);
-        rec(l.dst_mod, l.latency);
+        _linkLatency[{l.src_mod, l.dst_mod}] = l.latency;
+        _linkLatency[{l.dst_mod, l.src_mod}] = l.latency;
     }
 }
 
@@ -115,11 +113,15 @@ void NetworkSim::step() {
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
             std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
-                         _tick, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
+                         m->hdr.timestamp, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
 
             uint64_t lat = 1;
-            auto lit = _linkLatency.find((int)m->hdr.sourceId);
+            auto lit = _linkLatency.find({(int)m->hdr.sourceId,
+                                           (int)m->hdr.targetId});
             if (lit != _linkLatency.end()) lat = lit->second;
+            else
+                std::fprintf(stderr, "[NSIM-NOROUTE] src=%u dst=%u falling back to 1ps\n",
+                             m->hdr.sourceId, m->hdr.targetId);
 
             uint64_t readyTick = _tick + lat;
             PendingFwd pf{readyTick, *m, m->hdr.targetId};
@@ -141,7 +143,7 @@ void NetworkSim::step() {
                 buf->hdr.timestamp = ts;
                 it->second->send(buf);
                 std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
-                             _tick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
+                             pf.msg.hdr.timestamp, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)
