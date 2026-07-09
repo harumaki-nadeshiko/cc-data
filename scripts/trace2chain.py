@@ -81,11 +81,14 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
         rid = ev["reqId"]
         if rid < min_req_id or rid in exclude_req_ids:
             continue
-        if rid not in chains:
-            chains[rid] = {"reqId": rid, "pa": None, "events": []}
+        pa = ev["pa"]
+        # Group by (reqId, PA) — same reqId may be reused for different PAs
+        key = f"{rid}:{pa}" if pa != "0x0" else f"{rid}:?"
+        if key not in chains:
+            chains[key] = {"reqId": rid, "pa": None, "events": []}
         if ev["pa"] != "0x0":
-            chains[rid]["pa"] = ev["pa"]
-        chains[rid]["events"].append(ev)
+            chains[key]["pa"] = ev["pa"]
+        chains[key]["events"].append(ev)
 
     # Sort events within each chain by tick, then build summary
     for rid, ch in chains.items():
