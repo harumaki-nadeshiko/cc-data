@@ -722,7 +722,7 @@ main(int argc, char **argv)
                             }
                         }
                     }
-                    uint32_t expected = __builtin_popcount(mask) * g_numSockets;
+                    uint32_t expected = __builtin_popcount(mask);
                     if (barrierNodes[mask].size() >= expected) {
                         // Send BarrierRelease to ALL local socket planes via netPort
                         // (each local ubio will forward to its own gem5).
