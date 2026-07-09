@@ -36,7 +36,7 @@ int main(int argc, char **argv)
     const uint32_t v2 = 0x3900B022u;
 
     if (node_id == 0) dsm_store(HOME_SOCKET1_SEG, X_OFF, v0);
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 1) {
         uint32_t a = dsm_load(HOME_SOCKET1_SEG, X_OFF);
@@ -44,7 +44,7 @@ int main(int argc, char **argv)
         emit_tc39_route(node_id, 1, 0);
         if (a != v0) fail++;
     }
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 2) {
         dsm_store(HOME_SOCKET1_SEG, X_OFF, v2);
@@ -53,7 +53,7 @@ int main(int argc, char **argv)
     if (node_id == 0) {
         dsm_store(HOME_SOCKET0_SEG, Y_OFF, 0x3900CC33u); /* unrelated cross-plane traffic */
     }
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     {
         uint32_t got = dsm_load(HOME_SOCKET1_SEG, X_OFF);
@@ -61,7 +61,7 @@ int main(int argc, char **argv)
         if (got != v2) fail++;
     }
 
-    sync_wait(0b111);
+    sync_wait(0x3F);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

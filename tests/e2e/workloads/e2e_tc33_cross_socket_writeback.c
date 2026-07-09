@@ -69,7 +69,7 @@ int main(int argc, char **argv)
     int fail = 0;
     const uint32_t expect = 0x33DD0011u;
 
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 2) {
         for (int i = 0; i < PRESS_LINES; i++) {
@@ -78,7 +78,7 @@ int main(int argc, char **argv)
         }
         emit_tc33_route(node_id, 1);
     }
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 0) {
         uint32_t got = dsm_load2(HOME_NODE, HOME_SOCKET, WB_OFF);
@@ -86,7 +86,7 @@ int main(int argc, char **argv)
         if (got != expect) fail++;
     }
 
-    sync_wait(0b111);
+    sync_wait(0x3F);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

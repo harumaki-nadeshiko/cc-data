@@ -73,7 +73,7 @@ int main(int argc, char **argv)
 
     if (node_id == 0) dsm_store2(HOME_LOCAL_NODE, HOME_LOCAL_SOCKET, OFF_LOCAL, local_v);
     if (node_id == 1) dsm_store2(HOME_REMOTE_NODE, HOME_REMOTE_SOCKET, OFF_REMOTE, remote_v);
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 0) {
         volatile uint32_t sink = 0;
@@ -92,7 +92,7 @@ int main(int argc, char **argv)
         if (got != remote_v) fail++;
     }
 
-    sync_wait(0b111);
+    sync_wait(0x3F);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     }
 
     dsm_store2(0, 0, DONE_OFF + (uint32_t)node_id * 64u, 0x35DD0000u | (uint32_t)node_id);
-    sync_wait(0b111);
+    sync_wait(0x3F);
 
     if (node_id == 0) {
         for (int n = 0; n < 3; n++) {
@@ -86,7 +86,7 @@ int main(int argc, char **argv)
         }
     }
 
-    sync_wait(0b111);
+    sync_wait(0x3F);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

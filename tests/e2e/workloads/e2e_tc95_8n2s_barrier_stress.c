@@ -9,7 +9,7 @@
 #define NUM_NODES   8
 #define NUM_SOCKETS 2
 #define TOTAL_SEGS  (NUM_NODES * NUM_SOCKETS)
-#define BARRIER_ALL ((1u << NUM_NODES) - 1)  /* 0xFFFF for 8n2s */
+#define BARRIER_ALL ((1u << (NUM_NODES * NUM_SOCKETS)) - 1)  /* 0xFFFF for 8n2s */
 
 #define HASH_MAGIC  0x9E3779B9U
 #define ITERATIONS  3
