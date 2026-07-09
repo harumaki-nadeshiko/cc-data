@@ -1,5 +1,9 @@
 # E2E Test Suite — Test Case Reference
 
+> 最后更新: 2026-07-09
+> 测试环境: Docker, ZMQ 100ns, 8-32 CPUs
+> 预估时间基于 ZMQ=100ns。10ns ZMQ 会显著延长测试时间。
+
 ## Topology Mapping
 
 | 拓扑 | 命令 | 节点×Socket | 适用 TC |
@@ -11,22 +15,22 @@
 
 ## Test Case List
 
-### Basic Protocol (TC1-10) — 3n1s
+### Basic Protocol (TC1-10) — 3n1s · 预估 <60s 每个
 
-| TC | 名称 | 描述 |
-|----|------|------|
-| 1 | dsm_local | 单节点本地 DSM 读写 smoke test |
-| 2 | remote_read | 跨节点远程读 |
-| 3 | pingpong | 双节点乒乓 owner 转移 (3 rounds) |
-| 4 | three_node_ring | 三节点环形 owner 转移 |
-| 5 | single_writer | 单写者多读者一致性 |
-| 6 | multi_sharer | 多 reader 共享一致性 |
-| 7 | writeback_evict | 写回/逐出路径 — 数据持久 |
-| 8 | upgrade_invalidate | Shared→Upgrade 无效化其他 sharer |
-| 9 | non_dsm_negative | 非 DSM 地址负面测试 |
-| 10 | concurrent_atomic | 并发读写原子性 (无 torn read) |
+| TC | 名称 | 描述 | 时间(100ns ZMQ) |
+|----|------|------|----------------|
+| 1 | dsm_local | 单节点本地 DSM 读写 | ~10s |
+| 2 | remote_read | 跨节点远程读 | ~15s |
+| 3 | pingpong | 双节点乒乓 owner 转移 | ~20s |
+| 4 | three_node_ring | 三节点环形 owner 转移 | ~30s |
+| 5 | single_writer | 单写者多读者一致性 | ~30s |
+| 6 | multi_sharer | 多 reader 共享一致性 | ~20s |
+| 7 | writeback_evict | 写回/逐出路径 | ~20s |
+| 8 | upgrade_invalidate | Shared→Upgrade 无效化 | ~30s |
+| 9 | non_dsm_negative | 非 DSM 地址负面测试 | ~10s |
+| 10 | concurrent_atomic | 并发读写原子性 | ~30s |
 
-### Concurrency & Races (TC11-19) — 3n1s
+### Concurrency & Races (TC11-19) — 3n1s · 预估 <60s 每个
 
 | TC | 名称 | 描述 |
 |----|------|------|
@@ -56,81 +60,40 @@
 | 30 | stale_clear_tombstone | 过期 tombstone 重放 |
 | 31 | multicpu_concurrent_isolation | 4 CPUs/node 并发隔离 |
 
-### Dual-Socket (TC32-39) — 3n2s
+### Dual-Socket (TC32-39) — 3n2s · 预估 <180s 每个
 
-| TC | 名称 | 描述 |
-|----|------|------|
-| 32 | cross_socket_read_miss | 跨 socket 读缺失 |
-| 33 | cross_socket_writeback | 跨 socket 写回 |
-| 34 | dual_socket_pingpong | 双 socket 乒乓 |
-| 35 | numa_latency_stress | NUMA 跨 socket/node 混合压力 |
-| 36-37 | owner_upgrade_ge/gm | G_E/G_M 窗口 owner 升级 |
-| 38 | stale_clear_tombstone_storm | 高频 stale Clear storm |
-| 39 | dual_socket_same_pa_interference | 同 PA 跨 socket 干扰 |
-
-### Recall/Orphan/Timeout (TC40-46) — 3n1s
-
-| TC | 名称 | 描述 |
-|----|------|------|
-| 40 | recall_timeout_retry | RECALL 超时重试 |
-| 41 | recall_invalidate_overlap | RECALL+Invalidate 重叠 |
-| 42 | exact_epoch_wrap_24b | 24-bit epoch 精确回绕 |
-| 43 | rapid_owner_cycle | 三节点快速 owner 循环 |
-| 44 | full_protocol_matrix | 密集多 PA 协议矩阵回归 |
-| 45 | fill_conflict_bloom_sat | fill 冲突 + bloom 饱和 |
-| 46 | multibeat_recall | 多拍 recall 数据完整性 (64B) |
-
-### Fault Injection (TC47-49) — 3n1s
-
-| TC | 名称 | 描述 |
-|----|------|------|
-| 47 | drop_clear | 丢 Clear — tombstone recovery |
-| 48 | dup_inv_ack | 重复 InvalidateAck — 幂等 |
-| 49 | reorder_acks | InvalidateAck 重排 |
-
-### Complex Applications (TC50-54) — 3n1s
-
-| TC | 名称 | 描述 |
-|----|------|------|
-| 50 | producer_consumer_ring | 生产者-消费者环形 |
-| 51 | bank_ledger | 银行账本 |
-| 52 | mapreduce_scatter_gather | MapReduce scatter/gather |
-| 53 | cache_contention_storm | 缓存争用风暴 |
-| 54 | numa_tiled_matmul | NUMA 分块矩阵乘 |
-
-### Recall Orphan (TC63-64) — 3n1s
-
-| TC | 名称 | 描述 |
-|----|------|------|
-| 63 | recall_orphan_timer_cleanup | timer cleanup 清理 orphan |
-| 64 | recall_done_orphan_lazy_cleanup | lazy cleanup 清理 orphan |
-
-### Latency Measurement (TC80-82)
-
-| TC | 名称 | 拓扑 | 描述 |
+| TC | 名称 | 时间 | 描述 |
 |----|------|------|------|
-| 80 | cross_node_latency | 3n1s | 跨节点单 PA 重复读, cntvct_el0 计时 |
-| 81 | cross_socket_latency | 3n2s | 同 node 跨 socket vs 同 socket 读延迟对比 |
-| 82 | 8node_ring_latency | 8n1s | 8 节点环形读延迟 |
+| 32 | cross_socket_read_miss | ~60s | 跨 socket 读缺失 |
+| 33 | cross_socket_writeback | ~120s | 跨 socket 写回 |
+| 34 | dual_socket_pingpong | ~60s | 双 socket 乒乓 |
+| 35 | numa_latency_stress | ~180s | 跨 socket/node 混合压力 |
+| 36-37 | owner_upgrade_ge/gm | ~30s | G_E/G_M 窗口 owner 升级 |
+| 38 | stale_clear_tombstone_storm | ~60s | 高频 stale Clear |
+| 39 | dual_socket_same_pa_interference | ~60s | 同 PA 跨 socket 干扰 |
 
-### Capacity Comparison (TC84-85) — 3n1s
+**注意**: TC32-35,39 禁止在 1s 拓扑运行。barrier(`sync_wait`)在 2s 下有已知问题,PASS 的 TC 均未使用 barrier。
 
-| TC | 名称 | 描述 | 配置差异 |
-|----|------|------|---------|
-| 84 | cacheline_capacity_vanilla | baseline: 无 BF/backstore | `UBCC_BF_BYTES=0` |
-| 85 | cacheline_capacity_optimized | BF+backstore 优化 | 默认配置 |
+### Latency / Capacity / 8-Node (TC80-94) · 预估时间变化大
 
-TC84/85 运行同一 workload 代码，区别在 gem5 CLI 参数。
+| TC | 名称 | 拓扑 | 时间 | 描述 |
+|----|------|------|------|------|
+| 80 | cross_node_latency | 3n1s | ~120s | 跨节点读延迟 cntvct 计时 |
+| 81 | cross_socket_latency | 3n2s | ~60s | 同/跨 socket 读对比 |
+| 82 | 8node_ring_latency | 8n1s | ~300s | 8 节点环形读 |
+| 84 | cacheline_capacity | 3n1s | ~600s | 50 行容量, baseline (BF=0) |
+| 85 | cacheline_capacity | 3n1s | ~600s | 同 TC84, BF 启用 |
+| 90 | 8node_all_to_all | 8n1s | ~120s | 8×8=64 reads |
+| 91 | 8node_hotspot | 8n1s | ~600s | 8 节点争同一 PA |
+| 92 | 8node_butterfly | 8n1s | ~120s | 环形数据迁移 |
+| 93 | 8node_pairwise_pingpong | 8n1s | ~120s | 4 对乒乓 |
+| 94 | 8node_barrier | 8n1s | ~300s | 单轮 8 节点 barrier |
 
-### 8-Node Workloads (TC90-94) — 8n1s
+### 预估时间说明
 
-| TC | 名称 | 描述 |
-|----|------|------|
-| 90 | 8node_all_to_all | 8 节点全对全 DSM 读写 (8×8=64 reads) |
-| 91 | 8node_hotspot | 8 节点争用同一个 PA |
-| 92 | 8node_butterfly | 8 节点环形数据迁移 (i→(i+1)%8) |
-| 93 | 8node_pairwise_pingpong | 4 对同时乒乓 (0↔1,2↔3,4↔5,6↔7) |
-| 94 | 8node_barrier_stress | 8 节点单轮 barrier + 读写 |
+- 以上时间基于 ZMQ=100ns(100000 ps)。ZMQ=10ns 会更慢(同步频率更高)
+- 8 节点测试受限 PDES 保守同步开销,单次运行可能超时;日志仍有 trace 可验证进展
+- 如测试超时,在日志中检查 nsim `FWD` 事件数和 gem5 `CLK-SYNC` 确认是否在推进
 
 ## 运行示例
 
