@@ -22,8 +22,8 @@ namespace framework {
 // - syncInterval = clock lookahead window.
 // Invariant: syncInterval >= linkLatency (violating this prevents the local
 // clock from advancing when the peer sends syncs at linkLatency cadence).
-static constexpr uint64_t kDefaultSyncInterval = 100000;
-static constexpr uint64_t kDefaultLinkLatency  = 100000;
+static constexpr uint64_t kDefaultSyncInterval = 10000;
+static constexpr uint64_t kDefaultLinkLatency  = 10000;
 
 enum class ReceiveStatus {
     kMessage,        // a message is visible (timestamp <= curT); may be a
