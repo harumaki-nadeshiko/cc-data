@@ -85,6 +85,7 @@ TESTCASES = {
     92: "e2e_tc92_8node_butterfly",
     93: "e2e_tc93_8node_pairwise_pingpong",
     94: "e2e_tc94_8node_barrier_stress",
+    95: "e2e_tc95_8n2s_barrier_stress",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1209,7 +1210,8 @@ VERIFIERS = {
     80: verify_tc80, 81: verify_tc81, 82: verify_tc82,
     84: verify_tc84, 85: verify_tc84,
     90: verify_tc90,
-    91: verify_tc91, 92: verify_tc92, 93: verify_tc93, 94: verify_tc94,
+    91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
+    95: verify_tc95,
 }
 
 def verify_testcase(tc_id, reads, lines):

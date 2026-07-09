@@ -674,52 +674,83 @@ main(int argc, char **argv)
                 continue;
             }
 
-            // Cross-node barrier (now a PAYLOAD CoherenceMessage, not a
-            // dedicated MemMessageType). A node reports BarrierReached; once all
-            // nodes in the mask have arrived, reply BarrierRelease to local gem5.
-            if (coh->h.type == CoherenceMessageType::BarrierReached) {
-                uint32_t mask = coh->b.barrier.mask;
-                int src = coh->h.srcNode;
-                std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x src=%d\n", nid, mask, src);
-                static std::map<uint32_t, std::set<int>> barrierNodes;
-                barrierNodes[mask].insert(src);
-                // Forward only barriers that arrived from the LOCAL gem5 (not
-                // ones already forwarded by other ubios) to every other node's
-                // plane-0 ubio (gid = j*K + 0). Re-copies the raw PAYLOAD msg.
-                if (netPort && !fromNetwork) {
-                    int numNodes = g_numNodes;
-                    if (numNodes < 1) numNodes = 3;
-                    for (int i = 0; i < numNodes; ++i) {
-                        if (i != nid) {
-                            framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
-                            if (fwd) {
-                                *fwd = *m;
-                                fwd->hdr.timestamp = tick;  // immediate delivery
-                                fwd->hdr.targetId = gidOf(i, 0);
-                                netPort->send(fwd);
-                            }
-                            else { std::fprintf(stderr,"[ubio:%d] BARRIER-FWD-FAIL to=%d\n", nid, i); }
-                        }
-                    }
-                }
-                uint32_t expected = __builtin_popcount(mask);
-                if (barrierNodes[mask].size() >= expected) {
-                    // Use tick (not tick+linkLatency) so the release is
-                    // deliverable immediately even when clocks are deep into the
-                    // billions (see allocateSendBuffer's +linkLatency stamping).
+            // Forward BarrierRelease from network to local gem5 (per-socket barrier).
+            if (coh->h.type == CoherenceMessageType::BarrierRelease) {
+                if (fromNetwork) {
+                    // Arrived from a peer ubio (another local socket) — forward
+                    // to local gem5's UBAdapter via gem5Port.
                     framework::MemMessage* rel = gem5Port->allocateSendBuffer(tick);
                     if (rel) {
+                        *rel = *m;
                         rel->hdr.timestamp = tick;
-                        rel->hdr.type = (uint32_t)MemMessageType::PAYLOAD;
-                        CoherenceMessage rmsg;
-                        rmsg.h.type = CoherenceMessageType::BarrierRelease;
-                        rmsg.b.barrier.mask = mask;
-                        rel->setPayload(rmsg);
+                        rel->hdr.targetId = gidOf(nid, sid);
                         gem5Port->send(rel);
-                        std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
+                        std::fprintf(stderr, "[ubio:%d] BarrierRelease fwd to gem5 mask=0x%x\n",
+                                     nid, coh->b.barrier.mask);
                     }
-                    barrierNodes[mask].clear();
                 }
+                // Already handled via gem5Port send above; skip further processing.
+                m = port->recv(tick, &st);
+                continue;
+            }
+
+            // Cross-node barrier (now a PAYLOAD CoherenceMessage, not a
+                // dedicated MemMessageType). A node reports BarrierReached; once all
+                // (node,socket) planes in the mask have arrived, reply BarrierRelease
+                // to ALL local socket planes.
+                if (coh->h.type == CoherenceMessageType::BarrierReached) {
+                    uint32_t mask = coh->b.barrier.mask;
+                    int src = coh->h.srcNode;
+                    std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x src=%d\n", nid, mask, src);
+                    static std::map<uint32_t, std::set<int>> barrierNodes;
+                    barrierNodes[mask].insert(src);
+                    // Forward to ALL sockets of every node (include own node's
+                    // other sockets, since each ubio only sees its own gem5).
+                    if (netPort && !fromNetwork) {
+                        int numNodes = g_numNodes;
+                        if (numNodes < 1) numNodes = 3;
+                        for (int i = 0; i < numNodes; ++i) {
+                            for (int s = 0; s < g_numSockets; ++s) {
+                                if (i == nid && s == sid) continue; // don't send to self
+                                framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
+                                if (fwd) {
+                                    *fwd = *m;
+                                    fwd->hdr.timestamp = tick;
+                                    fwd->hdr.targetId = gidOf(i, s);
+                                    netPort->send(fwd);
+                                }
+                            }
+                        }
+                    }
+                    uint32_t expected = __builtin_popcount(mask);
+                    if (barrierNodes[mask].size() >= expected) {
+                        // Send BarrierRelease to ALL local socket planes via netPort
+                        // (each local ubio will forward to its own gem5).
+                        for (int s = 0; s < g_numSockets; ++s) {
+                            framework::MemMessage* rel = netPort
+                                ? netPort->allocateSendBuffer(tick)
+                                : gem5Port->allocateSendBuffer(tick);
+                            if (rel) {
+                                rel->hdr.timestamp = tick;
+                                rel->hdr.type = (uint32_t)MemMessageType::PAYLOAD;
+                                CoherenceMessage rmsg;
+                                rmsg.h.type = CoherenceMessageType::BarrierRelease;
+                                rmsg.b.barrier.mask = mask;
+                                rel->setPayload(rmsg);
+                                if (netPort && s != sid) {
+                                    // Send to other local sockets via nsim
+                                    rel->hdr.targetId = gidOf(nid, s);
+                                    netPort->send(rel);
+                                } else {
+                                    // Send to local UBAdapter via gem5Port
+                                    rel->hdr.targetId = gidOf(nid, s);
+                                    gem5Port->send(rel);
+                                }
+                            }
+                        }
+                        std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
+                        barrierNodes[mask].clear();
+                    }
                 m = port->recv(tick, &st);
                 continue;
             }
