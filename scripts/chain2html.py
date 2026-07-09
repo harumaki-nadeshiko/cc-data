@@ -363,7 +363,7 @@ function render() {{
 
             seg.setAttribute("data-tip", s.type + "|" + ns(s.dt_ns) + "|" + s.from_ev + " -> " + s.to_ev);
             // Large idle gaps (>10us) are between unrelated requests, not real delays.
-            if (s.dt_ns > 10000) seg.style.opacity = "0.12";
+            if (s.dt_ns > 10000) seg.style.opacity = "0.35";
             canvas.appendChild(seg);
 
             // aggregate: only count segments <10us for meaningful stats
