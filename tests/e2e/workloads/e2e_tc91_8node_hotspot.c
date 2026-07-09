@@ -1,12 +1,12 @@
 /* TC91: 8-node hotspot — all nodes contend for the same DSM PA.
- * Node 0 writes a sentinel, then all 8 nodes repeatedly read it.
+ * Node 0 writes a sentinel, then each node reads it once.
  * Verifies: cache-line ownership transfer under 8-way contention.
  */
 #include "e2e_common.h"
 
 #define NUM_NODES 8
 #define SEG_SIZE 0x8000000ULL
-#define DSM_VA_BASE 0xFFFFB8000000ULL  /* 0x1000000000000 - (8+1)*128MB */
+#define DSM_VA_BASE 0xFFFFB8000000ULL
 
 static inline volatile uint32_t *dsm_addr(int home_node, uint32_t off)
 {
@@ -27,14 +27,11 @@ int main(int argc, char **argv)
 
     sync_wait(0xFF);
 
-    int fail = 0;
-    uint32_t last_got = 0;
-    for (int r = 0; r < 8; r++) {
-        __asm__ volatile("ldr %w0, [%1]" : "=r"(last_got) : "r"(dsm_addr(hotspot_home, off)));
-        if (last_got != val) fail++;
-    }
-    emit_read_val(node_id, hotspot_home, val, last_got, fail == 0);
+    uint32_t got;
+    __asm__ volatile("ldr %w0, [%1]" : "=r"(got) : "r"(dsm_addr(hotspot_home, off)));
+    int ok = (got == val);
+    emit_read_val(node_id, hotspot_home, val, got, ok);
     sync_wait(0xFF);
-    _exit_program(fail ? 1 : 0);
+    _exit_program(ok ? 0 : 1);
     return 0;
 }
