@@ -704,18 +704,21 @@ main(int argc, char **argv)
                     std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x src=%d\n", nid, mask, src);
                     static std::map<uint32_t, std::set<int>> barrierNodes;
                     barrierNodes[mask].insert(src);
-                    // Forward to socket-0 of every other node (per-node barrier).
+                    // Forward to ALL sockets of every node (per-socket barrier:
+                    // each socket independently fires BarrierReached).
                     if (netPort && !fromNetwork) {
                         int numNodes = g_numNodes;
                         if (numNodes < 1) numNodes = 3;
                         for (int i = 0; i < numNodes; ++i) {
-                            if (i == nid) continue;
-                            framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
-                            if (fwd) {
-                                *fwd = *m;
-                                fwd->hdr.timestamp = tick;
-                                fwd->hdr.targetId = gidOf(i, 0);
-                                netPort->send(fwd);
+                            for (int s = 0; s < g_numSockets; ++s) {
+                                if (i == nid && s == sid) continue;
+                                framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
+                                if (fwd) {
+                                    *fwd = *m;
+                                    fwd->hdr.timestamp = tick;
+                                    fwd->hdr.targetId = gidOf(i, s);
+                                    netPort->send(fwd);
+                                }
                             }
                         }
                     }

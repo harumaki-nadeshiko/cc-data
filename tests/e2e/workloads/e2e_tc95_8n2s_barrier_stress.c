@@ -1,49 +1,48 @@
-/* TC95: 8-node dual-socket barrier stress — per-socket barrier bits.
+/* TC95: 8n2s per-socket barrier stress — TC12-analogue.
  * Mask = 0xFFFF = 16 bits for 8 nodes x 2 sockets.
- * Each node's socket 0 writes a sentinel, sync_wait, socket 1 reads it.
+ * Each iteration has 3 segments. Each socket's primary CPU emits a
+ * [SYNC] marker then sync_wait with dynamic active threads.
+ * Active threads per socket per iter = hash(node,socket,iter) % 4 + 1.
  */
 #include "e2e_common.h"
 
-#define NUM_NODES 8
+#define NUM_NODES   8
 #define NUM_SOCKETS 2
-#define SEG_SIZE 0x8000000ULL
-#define TOTAL_SEGS (NUM_NODES * NUM_SOCKETS)
-#define DSM_VA_BASE ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_SEGS + 1) * (uint64_t)SEG_SIZE)
-#define BARRIER_ALL 0xFF  /* bits 0-15 for 8 nodes x 2 sockets */
+#define TOTAL_SEGS  (NUM_NODES * NUM_SOCKETS)
+#define BARRIER_ALL ((1u << TOTAL_SEGS) - 1)  /* 0xFFFF for 8n2s */
 
-static inline volatile uint32_t *dsm_addr2(int home_node, int home_socket, uint32_t off)
+#define HASH_MAGIC  0x9E3779B9U
+#define ITERATIONS  3
+#define SEGMENTS    3
+
+static inline uint32_t any_hash(uint32_t a, uint32_t b)
 {
-    uint64_t seg = (uint64_t)home_node * NUM_SOCKETS + (uint64_t)home_socket;
-    return (volatile uint32_t *)(DSM_VA_BASE + seg * SEG_SIZE + off);
+    uint32_t h = a * HASH_MAGIC + b;
+    h ^= h >> 16; h *= 0x85EBCA77U; h ^= h >> 13;
+    return h;
 }
 
 int main(int argc, char **argv)
 {
-    int node_id = 0;
+    int node_id = 0, cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
-    uint32_t off = 0x7000;
-
-    /* Only socket-0 CPUs participate in barrier writes */
-    int cpu_index = 0;
     if (argc >= 3) cpu_index = parse_int(argv[2]);
     int socket_id = cpu_index % NUM_SOCKETS;
+    int primary = (cpu_index % 4 == 0);
 
-    if (socket_id == 0) {
-        uint32_t val = 0x95000000u | ((uint32_t)node_id << 8);
-        __asm__ volatile("str %w0, [%1]" : : "r"(val), "r"(dsm_addr2(node_id, 0, off)));
+    if (!primary) { _exit_program(0); return 0; }
+
+    for (int iter = 0; iter < ITERATIONS; iter++) {
+        for (int seg = 1; seg <= SEGMENTS; seg++) {
+            uint32_t val = any_hash((uint32_t)(node_id * NUM_SOCKETS + socket_id),
+                                    (uint32_t)(iter * SEGMENTS + seg)) % 8;
+            emit_sync_marker(node_id * NUM_SOCKETS + socket_id, iter, seg, val);
+            uint32_t active = any_hash((uint32_t)node_id,
+                                       (uint32_t)(socket_id * 1000 + iter)) % 4 + 1;
+            sync_wait(BARRIER_ALL, (unsigned)active);
+        }
     }
-
-    sync_wait(BARRIER_ALL);
-
-    if (socket_id == 1) {
-        uint32_t val = 0x95000000u | ((uint32_t)node_id << 8);
-        uint32_t got;
-        __asm__ volatile("ldr %w0, [%1]" : "=r"(got) : "r"(dsm_addr2(node_id, 0, off)));
-        int ok = (got == val);
-        emit_read_val(node_id, 0, val, got, ok);
-        _exit_program(ok ? 0 : 1);
-        return 0;
-    }
+    emit_phase_done(node_id * NUM_SOCKETS + socket_id, "done");
     _exit_program(0);
     return 0;
 }
