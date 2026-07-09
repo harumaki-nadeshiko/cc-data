@@ -1,6 +1,13 @@
 # 延迟测量、校准与可视化 — 总体方案文档
 
-> 状态：方案设计期 | 最后更新：2026-07-07
+> 状态：部分实施 | 最后更新：2026-07-09
+> 
+> **2026-07-09 更新**: 
+> - gen_topo.py 已支持 `--nodes N --sockets K`(§6.1 已实现)
+> - 实现了 8 节点 + dual-socket 独立 workload 隔离(详见 `docs/dev_manual/e2e_test_manual.md`)
+> - 约束方程组 + 求解脚本见 `docs/measure/latency_tuning_constraints.md` + `scripts/solve_latency_params.py`
+> - 外部参数配置见 `gem5/configs/ruby/chi_params.json`
+> - EPSNFController/EPBackend/UBAdapter 三件套修复(§P1)
 
 ---
 
@@ -168,7 +175,8 @@ for a in range(nmod):
         links.append([a, 1, b, 1, lat])
 ```
 
-**需要先增加 `gen_topo.py` 的参数**：当前只有 `--type 1s/2s`，需加 `--nodes N` `--sockets K`，或者从 topo JSON 读取 node/socket 数量。
+**需要先增加 `gen_topo.py` 的参数**：~~当前只有 `--type 1s/2s`，需加 `--nodes N` `--sockets K`，或者从 topo JSON 读取 node/socket 数量。~~
+（已于 2026-07-09 实现：`--nodes`/`--sockets` 参数和 `--cross-node-latency`/`--cross-socket-latency` 均可用。）
 
 **待确认**：同Node跨Socket IO hop 的目标 210~240ns 是否真的就是 nsim 段的 link latency，还是包含额外开销？
 
