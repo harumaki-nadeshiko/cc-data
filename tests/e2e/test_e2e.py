@@ -1120,6 +1120,41 @@ def verify_tc64(reads, lines):
     return True, "TC64 PASSED: lazy cleanup removed RECALL.DONE orphan, new requester served", []
 
 
+def verify_tc90(reads, lines):
+    """TC90: 8-node all-to-all DSM read. 8 nodes x 8 reads = 64 READ_VAL, all MATCH."""
+    if len(reads) < 64:
+        return False, f"TC90 FAILED: expected 64 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC90 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
+
+
+def verify_tc91(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC91 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC91 PASSED: 8-node hotspot contention", []
+
+def verify_tc92(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC92 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC92 PASSED: 8-node butterfly data migration", []
+
+def verify_tc93(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC93 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC93 PASSED: 8-node pairwise pingpong", []
+
+def verify_tc94(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC94 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC94 PASSED: 8-round barrier stress", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
