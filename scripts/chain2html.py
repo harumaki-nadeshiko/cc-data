@@ -276,7 +276,7 @@ function render() {{
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
     var mev = parseInt(document.getElementById("f-ev").value) || 1;
-    var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 0.5, 5);
+    var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 0.1, 100);
     document.getElementById("zoom-val").textContent = zoom.toFixed(1) + "x";
     var div = document.getElementById("chains");
     div.innerHTML = "";
