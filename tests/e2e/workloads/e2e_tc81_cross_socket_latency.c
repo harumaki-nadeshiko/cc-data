@@ -1,7 +1,7 @@
 #include "e2e_common.h"
 #define NUM_NODES 3
 #define SEG_SIZE 0x8000000ULL
-#define DSM_VA_BASE 0xffff00000000ULL
+#define DSM_VA_BASE 0xFFFFC8000000ULL
 static inline volatile uint32_t *dsm2(int h,int s,uint32_t o){
     return (volatile uint32_t*)(DSM_VA_BASE+((uint64_t)h*2+s)*SEG_SIZE+o);
 }
