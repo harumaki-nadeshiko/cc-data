@@ -76,6 +76,10 @@ TESTCASES = {
     63: "e2e_tc63_recall_orphan_timer_cleanup",
     64: "e2e_tc64_recall_done_orphan_lazy_cleanup",
     90: "e2e_tc90_8node_all_to_all",
+    91: "e2e_tc91_8node_hotspot",
+    92: "e2e_tc92_8node_butterfly",
+    93: "e2e_tc93_8node_pairwise_pingpong",
+    94: "e2e_tc94_8node_barrier_stress",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1121,6 +1125,31 @@ def verify_tc90(reads, lines):
     return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
 
 
+def verify_tc91(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC91 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC91 PASSED: 8-node hotspot contention", []
+
+def verify_tc92(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC92 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC92 PASSED: 8-node butterfly data migration", []
+
+def verify_tc93(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC93 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC93 PASSED: 8-node pairwise pingpong", []
+
+def verify_tc94(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC94 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC94 PASSED: 8-round barrier stress", []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1142,6 +1171,7 @@ VERIFIERS = {
     53: verify_tc53, 54: verify_tc54,
     63: verify_tc63, 64: verify_tc64,
     90: verify_tc90,
+    91: verify_tc91, 92: verify_tc92, 93: verify_tc93, 94: verify_tc94,
 }
 
 def verify_testcase(tc_id, reads, lines):
