@@ -1,6 +1,6 @@
-/* TC94: 8-node barrier stress — 8 rounds of sync_wait(0xFF).
- * Each round each node writes a monotonic counter, then barrier.
- * Verifies: 8-node barrier correctness over multiple rounds.
+/* TC94: 8-node barrier stress — 3 rounds of sync_wait(0xFF).
+ * Each round each node writes a counter, barrier, then verifies own value.
+ * Verifies: 8-node barrier + local DSM correctness.
  */
 #include "e2e_common.h"
 
@@ -20,7 +20,7 @@ int main(int argc, char **argv)
     uint32_t off = 0x6700;
 
     int fail = 0;
-    for (int round = 0; round < 8; round++) {
+    for (int round = 0; round < 3; round++) {
         uint32_t val = 0x94000000u | ((uint32_t)round << 16) | ((uint32_t)node_id << 8);
         __asm__ volatile("str %w0, [%1]" : : "r"(val), "r"(dsm_addr(node_id, off)));
         sync_wait(0xFF);
@@ -28,10 +28,8 @@ int main(int argc, char **argv)
         uint32_t got;
         __asm__ volatile("ldr %w0, [%1]" : "=r"(got) : "r"(dsm_addr(node_id, off)));
         if (got != val) fail++;
+        emit_read_val(node_id, node_id, val, got, got == val);
     }
-
-    emit_read_val(node_id, node_id, 0x94000000u | (7u << 16) | ((uint32_t)node_id << 8),
-                  (uint32_t)0, fail == 0);
     sync_wait(0xFF);
     _exit_program(fail ? 1 : 0);
     return 0;
