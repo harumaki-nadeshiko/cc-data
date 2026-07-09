@@ -11,7 +11,7 @@ static inline volatile uint32_t *dsm_addr(int h, uint32_t o) {
 int main(int argc, char **argv) {
     int nid = 0;
     if (argc >= 2) nid = parse_int(argv[1]);
-    uint32_t val = 0x800000AAn;
+    uint32_t val = 0x800000AAu;
     if (nid == 0) __asm__ volatile("str %w0,[%1]"::"r"(val),"r"(dsm_addr(0,0x6000)));
     sync_wait(0b111);
     if (nid == 1) {
