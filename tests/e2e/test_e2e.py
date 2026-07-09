@@ -1155,6 +1155,12 @@ def verify_tc94(reads, lines):
         return False, f"TC94 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
     return True, "TC94 PASSED: 8-round barrier stress", []
 
+def verify_tc95(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC95 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC95 PASSED: 8n2s per-socket barrier stress", []
+
 
 def verify_tc80(reads, lines):
     if len(reads) < 1:
