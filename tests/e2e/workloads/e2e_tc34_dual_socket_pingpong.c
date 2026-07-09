@@ -19,7 +19,7 @@ int main(int argc, char **argv)
     if (n == 0)      dsm_store(0, 0, VAL0);   /* DSM(node=0,socket=0) on socket-0 plane */
     else if (n == 1) dsm_store(1, 0, VAL1);   /* DSM(node=0,socket=1) on socket-1 plane */
 
-    sync_wait(0x3F);
+    sync_wait(0b111);
 
     if (n == 2) {
         uint32_t a = dsm_load(0, 0);          /* DSM(node=0,socket=0) */
@@ -28,7 +28,7 @@ int main(int argc, char **argv)
         emit_read_val(2, 1, VAL1, b, b == VAL1);
     }
 
-    sync_wait(0x3F);
+    sync_wait(0b111);
     _exit_program(0);
     return 0;
 }
