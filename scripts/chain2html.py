@@ -14,7 +14,7 @@ F.1: P0 visual enhancements:
 """
 import sys, os, json, argparse
 
-TICK2NS = 1e-6  # ps -> ns — single conversion function per §F.4
+TICK2NS = 1e-3  # ps -> ns — single conversion function
 
 SEG_COLORS = {
     "gem5→ubio":  "#3b82f6",
@@ -245,7 +245,7 @@ var TARGET_PS = TARGET_NS ? TARGET_NS * 1000 : 0;
 var expanded = {{}};
 
 function ns(n) {{ return n < 10 ? n.toFixed(1)+"ns" : n < 1000 ? n.toFixed(0)+"ns" : (n/1000).toFixed(1)+"us"; }}
-function psToNs(p) {{ return p * 1e-6; }}
+function psToNs(p) {{ return p * 1e-3; }}
 function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
 
 // event delegation: swimlane label click
@@ -283,27 +283,10 @@ function render() {{
     // Aggregate stats for visible chains
     var agg = {{}};
 
-    // ── Per-chain RELATIVE time axis ──────────────────────────────────
-    // Each swimlane starts at its own t=0 (the chain's first event). All lanes
-    // share ONE relative scale = max duration among visible chains, so lanes
-    // are directly comparable and the target line is meaningful per-chain.
-    // (Previously lanes used a global absolute axis spanning the whole run,
-    // which crammed every chain's real work into a sliver and made the target
-    // line land at ~4% width — unreadable.)
-    var maxDurPs = 0;
-    var visList = [];
-    for (var vi = 0; vi < CHAINS.length; vi++) {{
-        var vc = CHAINS[vi];
-        if (fpa && (vc.pa || "").toLowerCase().indexOf(fpa) < 0) continue;
-        if (frid && String(vc.rid).indexOf(frid) !== 0) continue;
-        if (vc.tq_hops < mh) continue;
-        visList.push(vc);
-        if (vc.dur_ps > maxDurPs) maxDurPs = vc.dur_ps;
-    }}
-    // Ensure the target line is always on-screen even if every chain is faster.
-    if (TARGET_PS > 0 && TARGET_PS > maxDurPs) maxDurPs = TARGET_PS * 1.1;
-    if (maxDurPs <= 0) maxDurPs = 1;
-    var SCALE = maxDurPs;  // ps that map to full canvas width
+    // ── Absolute time axis ──────────────────────────────────────────
+    // All chains share the global timeline from T_MIN to T_MAX. Each chain's
+    // segments appear at their absolute position, so you can see the
+    // chronological order of different requests.
 
     for (var i = 0; i < CHAINS.length; i++) {{
         var ch = CHAINS[i];
@@ -357,8 +340,8 @@ function render() {{
         for (var j = 0; j < ch.segments.length; j++) {{
             var s = ch.segments[j];
             // Per-chain relative position: offset from THIS chain's first event.
-            var lpx = (s.from_tick - ch.first_tick) / SCALE * cw;
-            var wpx = Math.max(s.dt_ps / SCALE * cw, 2);
+            var lpx = (s.from_tick - T_MIN) / SPAN * cw;
+            var wpx = Math.max(s.dt_ps / SPAN * cw, 2);
             if (wpx < 0.5) continue;
 
             var seg = document.createElement("div");
@@ -375,16 +358,21 @@ function render() {{
             }}
 
             seg.setAttribute("data-tip", s.type + "|" + ns(s.dt_ns) + "|" + s.from_ev + " -> " + s.to_ev);
+            // Large idle gaps (>10us) are between unrelated requests, not real delays.
+            if (s.dt_ns > 10000) seg.style.opacity = "0.12";
             canvas.appendChild(seg);
 
-            // aggregate
+            // aggregate: only count segments <10us for meaningful stats
             var key = s.type;
-            if (!agg[key]) agg[key] = {{ vals: [] }};
-            agg[key].vals.push(s.dt_ns);
+            if (!agg[key]) agg[key] = {{ vals: [], large: 0 }};
+            if (s.dt_ns > 10000)
+                agg[key].large++;
+            else
+                agg[key].vals.push(s.dt_ns);
         }}
 
         if (TARGET_PS > 0) {{
-            var tx = TARGET_PS / SCALE * cw;
+            var tx = TARGET_PS / SPAN * cw;
             var tLine = document.createElement("div");
             tLine.className = "target-line";
             tLine.style.left = tx.toFixed(1) + "px";
@@ -431,30 +419,27 @@ function render() {{
 
     document.getElementById("stats").innerHTML =
         "Showing " + vis + "/" + CHAINS.length + " chains | events: " + evs +
-        " | lanes share a RELATIVE axis 0\\u2013" + ns(psToNs(SCALE)) +
-        " (each lane starts at its own t=0)";
+        " | absolute timeline: " + ns(psToNs(T_MIN)) + " \\u2013 " + ns(psToNs(T_MAX));
 
-    // F.1.1: time ruler — RELATIVE axis (0 .. maxDur), adaptive step sizes.
+    // Time ruler — absolute axis (T_MIN to T_MAX).
     var rulerDiv = document.getElementById("ruler-inner");
     rulerDiv.innerHTML = "";
     var cw = baseW * zoom;
     rulerDiv.style.width = cw + "px";
-    // Work entirely in PS against the same SCALE the segments use, so the
-    // ruler is guaranteed consistent with the bars. Labels formatted via the
-    // shared ns()/psToNs() helpers.
-    var spanPs = SCALE;
+    var spanPs = T_MAX - T_MIN;
+    var spanNs = psToNs(spanPs);
     var targetMarks = Math.max(6, Math.round(10 * zoom));
-    var rawStepPs = spanPs / targetMarks;
-    var mag = Math.pow(10, Math.floor(Math.log10(rawStepPs)));
-    var residual = rawStepPs / mag;
+    var rawStep = spanPs / targetMarks;
+    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    var residual = rawStep / mag;
     var stepPs;
     if (residual < 1.5) stepPs = 1 * mag;
     else if (residual < 3.5) stepPs = 2 * mag;
     else if (residual < 7.5) stepPs = 5 * mag;
     else stepPs = 10 * mag;
     stepPs = Math.max(stepPs, 1);
-    for (var tPs = 0; tPs <= spanPs + stepPs; tPs += stepPs) {{
-        var px = tPs / SCALE * cw;
+    for (var tPs = T_MIN; tPs <= T_MAX + stepPs; tPs += stepPs) {{
+        var px = (tPs - T_MIN) / spanPs * cw;
         if (px > cw + 1) break;
         var mark = document.createElement("div");
         mark.className = "ruler-mark"; mark.style.left = px + "px"; rulerDiv.appendChild(mark);
@@ -464,7 +449,7 @@ function render() {{
         rulerDiv.appendChild(lbl);
     }}
     if (TARGET_NS > 0) {{
-        var tpx = TARGET_PS / SCALE * cw;
+        var tpx = TARGET_PS / SPAN * cw;
         var tlbl = document.createElement("div");
         tlbl.className = "target-label";
         tlbl.style.left = (tpx + 4) + "px"; tlbl.style.top = "0px";
@@ -475,19 +460,20 @@ function render() {{
     // F.1.4: aggregate stats table
     var atbl = document.getElementById("agg-table");
     var segOrder = ["gem5→ubio","ubio→nsim","nsim_fifo","nsim→ubio","ubio→gem5","ubio_proc","other"];
-    var html = "<b>Segment Statistics</b><table><tr><th>Type</th><th>Count</th><th>Avg(ns)</th><th>P50(ns)</th><th>P99(ns)</th></tr>";
+    var html = "<b>Segment Statistics</b> <span style='color:#94a3b8;font-size:11px'>(gaps >10us excluded; hover on bars to see raw values)</span>" +
+               "<table><tr><th>Type</th><th>Count</th><th>P50(ns)</th><th>Avg(ns)</th><th>P99(ns)</th><th>Large gaps</th></tr>";
     for (var si = 0; si < segOrder.length; si++) {{
         var stype = segOrder[si];
         var a = agg[stype];
-        if (!a || a.vals.length === 0) continue;
+        if (!a || (a.vals.length === 0 && a.large === 0)) continue;
         a.vals.sort(function(x,y){{return x-y;}});
         var n = a.vals.length;
-        var avg = a.vals.reduce(function(s,v){{return s+v;}},0) / n;
-        var p50 = a.vals[Math.floor(n*0.5)] || 0;
-        var p99 = a.vals[Math.floor(n*0.99)] || 0;
+        var avg = n > 0 ? a.vals.reduce(function(s,v){{return s+v;}},0) / n : 0;
+        var p50 = n > 0 ? a.vals[Math.floor(n*0.5)] : 0;
+        var p99 = n > 0 ? a.vals[Math.floor(n*0.99)] : 0;
         html += "<tr><td style='font-weight:600'><span style='display:inline-block;width:12px;height:12px;background:" +
                 (COLORS[stype]||"#aaa") + ";border-radius:2px;margin-right:4px'></span>" + stype +
-                "</td><td>" + n + "</td><td>" + avg.toFixed(1) + "</td><td>" + p50.toFixed(1) + "</td><td>" + p99.toFixed(1) + "</td></tr>";
+                "</td><td>" + n + "</td><td style='font-weight:600;color:#334155'>" + p50.toFixed(1) + "</td><td>" + (n>0?avg.toFixed(1):"-") + "</td><td>" + p99.toFixed(1) + "</td><td style='color:#94a3b8'>" + (a.large>0?"+":"") + a.large + "</td></tr>";
     }}
     html += "</table>";
     if (vis === 0) html = "<b>Segment Statistics</b><p style='color:#94a3b8'>No chains match current filter</p>";
