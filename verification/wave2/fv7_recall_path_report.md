@@ -155,3 +155,55 @@ All hops preserve both `epoch` and `reqId`:
 4. **FIRE-AND-FORGET for RecallResp**: UBRouter lines 197–199 and 478 confirm RecallResp is fire-and-forget — no response message follows. The UBCC processes it inline in `deliverToUbcc`. This means the router must not drop the message; if lost, the recall deadlocks. No retry mechanism is visible.
 
 5. **processRecallResponse epoch check is half-range**: Uses `normalizeEpoch` + `checkEpochForLine` which applies `isNewerEpoch` half-range comparison (line 2170). This guards against stale responses from delayed delivery across the recall path.
+
+---
+
+## 9. Push-Grant Delivery (2026-07-10 change)
+
+The Read grant path was converted from **pull+retry** to **home-pushed grant**. This
+affects hops 19–20 of §1/§2 (the "grant back to requester" leg), not the
+RECALL data-capture path (hops 1–18), which is unchanged.
+
+### 9.1 What changed
+- **Before (pull)**: after `processRecallResponse` armed the grant (`replayArmed=true`),
+  the requester had to *re-issue* a ReadReq and pull the grant. If the requester was
+  the home node (requester==home), no network ReadResp was ever produced, so the
+  requester only rediscovered the grant on its next EP-SNF retry-timer tick (~8.4µs).
+- **After (push)**: at the three `replayArmed=true` points (RECALL→GRANT
+  `UBCCController.cc` ~1212, INVALIDATE→GRANT ~1496, queue-replay ~2737), the home now
+  builds a complete ReadResp from the `grantOst` fields (`buildGrantResponse`) and
+  pushes it to the requester via the existing `_outbound` channel (`sendGrantPush`),
+  reusing the same delivery route as RecallReq/InvalidateReq/UpgradeAckNotify.
+
+### 9.2 Correctness / fault argument (why formal model is unaffected)
+- **No new commit path.** A grant only becomes committed on **Clear**, which is already
+  the fault-modeled message in `ubcc_transport_faults.tla` (explicit
+  Deliver/Drop/Duplicate queue). Push changes *when/how the requester learns the grant
+  is ready*, not *when the directory commits*. The commit invariants
+  (`NoDoubleCommit`, `EpochMonotonic`, `SharersCanonical`, `ReserveNotCommit`) are
+  therefore untouched.
+- **Idempotent delivery.** The pushed ReadResp lands in the requester UBAdapter's
+  `_readyResponses[(ReadResp,reqId)]` and is consumed once (`erase` on hit,
+  `UBAdapter.cc:356`). A racing self-retry sees the same key → no double grant.
+- **Fallback preserved.** If `sendGrantPush` fails, `replayArmed` remains set and the
+  20000-cycle EP-SNF retry timer still drives the requester to pull — i.e. push is a
+  latency optimization layered on top of the pull fallback, not a new single point of
+  failure. (Contrast §8.4: RecallResp is fire-and-forget; the *grant* now has a pull
+  fallback behind it.)
+- **TLA+ result.** No spec change was required. The push is a transport-layer delivery
+  detail, and `ubcc_protocol_core.tla` abstracts the transport
+  (`ubcc_protocol.tla` `NetWellFormed == TRUE`). All modeled transitions
+  (`RecallToGrant`, `BarrierAck` INVALIDATE branch) are identical.
+
+### 9.3 TLC re-run (2026-07-10, post-change, specs unchanged)
+| Config | Spec | Result |
+|---|---|---|
+| `ubcc_config` | Spec (safety, MaxEpoch=4) | **PASS** — 20.98M distinct states, no error |
+| `ubcc_multi_pa` | Spec | **PASS** — 45,760 states |
+| `ubcc_multi_socket` | Spec | **PASS** — 58,561 states |
+| `ubcc_liveness` | FairSpec (P1–P4) | **PASS** — no error |
+| `ubcc_transport_faults` | TFSpec (safety) | **PASS** — 23.24M distinct states |
+| `ubcc_transport_faults_liveness` | TFFairSpec | **PASS** (FaultRecallProgress) |
+| `ubcc_liveness_nocleanup` | FairSpecNoCleanup | **FAIL as designed** — RecallProgress counterexample (negative control: proves the model detects the orphan wedge) |
+| `ep_intra_node` / `ep_intra_node_dual` | Spec / DualSpec | **PASS** |
+| `ep_intra_node_single` | Spec | Inconclusive — state explosion (>125M states, 96% depth, **no violation found**); pre-existing scale issue, unchanged by push. |

@@ -226,10 +226,28 @@ NetWellFormed == TRUE`）。也就是说：
    §8 加一条 push-grant fallback 说明）、`fv3_outstanding_lifecycle.md`（replayArmed
    语义从"pull 钥匙"改为"fallback 标记"）、`CONSOLIDATED_REPORT.md` 顶层记一笔。
 
-### 8.4 结论
+### 8.4 结论（已执行，2026-07-10）
 
-- **安全不变式**：push 不触碰被建模的状态机 → 预期零回归，只需重跑确认。
-- **liveness**：push 让完成更快、且保留 pull fallback → 属性仍成立，只需重跑确认。
-- **唯一可能实际改 spec 的**：`transport_faults` 若建模 grant 交付层，需补 push-grant
-  丢失的 fault + fallback 场景。
-- **文档需更新**：fv7 / fv3 / CONSOLIDATED_REPORT 记录 pull→push 的交付语义变化。
+- **安全不变式**：push 不触碰被建模的状态机 → **零回归已确认**。
+- **liveness**：push 让完成更快、且保留 pull fallback → 属性仍成立，**已确认**。
+- **transport_faults 是否需改 spec**：**不需要**。经查 `ubcc_transport_faults.tla`
+  只对 **Clear**（显式队列 Deliver/Drop/Duplicate）和 RecallResp/InvAck（Duplicate）
+  注入故障；grant/ReadResp 交付层未建模为故障消息。push 不新增 commit 路径（commit 仍
+  只在 Clear 发生，已被故障建模），且 push 丢失有 pull fallback → 在现有故障模型下安全，
+  无需新增 push-grant 丢失场景。
+- **文档已更新**：`fv7_recall_path_report.md §9` 记录 pull→push 交付语义变化 + 故障论证
+  + TLC 重跑结果表。
+
+### 8.5 TLC 实测结果（specs 未改动，仅重跑确认零回归）
+
+| Config | Spec | 结果 |
+|---|---|---|
+| ubcc_config | Spec 安全 | PASS（20.98M distinct states） |
+| ubcc_multi_pa | Spec | PASS |
+| ubcc_multi_socket | Spec | PASS |
+| ubcc_liveness | FairSpec P1–P4 | PASS |
+| ubcc_transport_faults | TFSpec 安全 | PASS（23.24M distinct states） |
+| ubcc_transport_faults_liveness | TFFairSpec | PASS |
+| ubcc_liveness_nocleanup | FairSpecNoCleanup | **按设计 FAIL**（负向对照，证明模型能检出 orphan wedge） |
+| ep_intra_node / _dual | Spec / DualSpec | PASS |
+| ep_intra_node_single | Spec | 状态爆炸未完成（>125M states，无违反）；既有规模问题，与 push 无关 |

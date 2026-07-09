@@ -65,11 +65,36 @@ def collect_events(lines):
     return events
 
 
+# A "request lifecycle" starts when the requester (gem5) issues one of these
+# on the network — this is the natural boundary that lets us split reused
+# reqIds (small internal ids like 2/3 are recycled across transactions on the
+# same PA) into distinct chains, so each chain = one real request.
+LIFECYCLE_START_TYPES = {"ReadReq", "UpgradeReq", "WriteReq", "Writeback",
+                         "EvictReq", "CleanUnique"}
+
+
+def _is_lifecycle_start(ev):
+    """A gem5 SEND of a request type marks the start of a new request instance."""
+    if ev["comp"] != "gem5" or ev["event"] != "SEND":
+        return False
+    primary = ev["extra"].split("|")[0]
+    return primary in LIFECYCLE_START_TYPES
+
+
 def build_chains(events, min_req_id=0, exclude_req_ids=None):
-    """Group events by reqId, sort, and build summary strings.
+    """Group events into per-request-instance chains.
+
+    reqIds are NOT unique: small internal ids (e.g. 2, 3) are recycled across
+    independent transactions on the same PA. Keying purely by (reqId, PA) glues
+    those unrelated transactions into one bogus chain whose duration mixes
+    multiple requests plus idle gaps. Instead we open a NEW chain instance every
+    time the requester (gem5) issues a fresh request (SEND ReadReq/UpgradeReq/...)
+    for a given (reqId, PA), and route subsequent events for that (reqId, PA) into
+    the currently-open instance. This makes "one chain == one request lifecycle
+    (issue -> commit)".
 
     Args:
-        events: list of event dicts
+        events: list of event dicts (assumed globally tick-sorted by caller)
         min_req_id: skip reqIds below this value (e.g. 8 to skip internal ops)
         exclude_req_ids: set of reqIds to exclude (e.g. barrier reqIds)
     """
@@ -77,15 +102,43 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
         exclude_req_ids = set()
 
     chains = {}
+    # (reqId, pa) -> currently-open chain key, so mid-lifecycle events attach to
+    # the right instance and a later re-issue opens a fresh one.
+    open_key = {}
+    inst_counter = {}
+
     for ev in events:
         rid = ev["reqId"]
         if rid < min_req_id or rid in exclude_req_ids:
             continue
         pa = ev["pa"]
-        # Group by (reqId, PA) — same reqId may be reused for different PAs
-        key = f"{rid}:{pa}" if pa != "0x0" else f"{rid}:?"
-        if key not in chains:
-            chains[key] = {"reqId": rid, "pa": None, "events": []}
+        group = (rid, pa if pa != "0x0" else "?")
+
+        # The tracer emits some gem5 SEND lines twice (exact duplicate at the
+        # same tick). A duplicate lifecycle-start must NOT open a spurious new
+        # instance — only a genuinely new issue (different tick, or after the
+        # current instance already has downstream events) starts a new chain.
+        dup_start = False
+        if _is_lifecycle_start(ev) and group in open_key:
+            cur = chains[open_key[group]]["events"]
+            if cur and cur[-1]["tick"] == ev["tick"] \
+                    and cur[-1]["comp"] == "gem5" \
+                    and cur[-1]["event"] == "SEND" \
+                    and cur[-1]["extra"] == ev["extra"]:
+                dup_start = True
+
+        if (_is_lifecycle_start(ev) and not dup_start) or group not in open_key:
+            # Open a new instance. Suffix with an instance index so reused
+            # (reqId, PA) pairs become distinct, stable chain keys.
+            idx = inst_counter.get(group, 0)
+            inst_counter[group] = idx + 1
+            base = f"{rid}:{group[1]}"
+            key = base if idx == 0 else f"{base}#{idx}"
+            open_key[group] = key
+            chains[key] = {"reqId": rid, "pa": None, "events": [],
+                           "instance": idx}
+
+        key = open_key[group]
         if ev["pa"] != "0x0":
             chains[key]["pa"] = ev["pa"]
         chains[key]["events"].append(ev)

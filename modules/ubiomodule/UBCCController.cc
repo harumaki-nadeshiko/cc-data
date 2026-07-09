@@ -148,7 +148,8 @@ UBCCController::ensureDirEntry(uint64_t line_pa)
 UBCCController::ResidentAccessResult
 UBCCController::ensureResidentForAccess(
     uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-    int requesterNode, uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
+    int requesterNode, int requesterSocket,
+    uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
 {
     size_t slot = 0;
     if (_directory.lookupWithSlot(line_pa, entry, slot)) {
@@ -156,6 +157,7 @@ UBCCController::ensureResidentForAccess(
         if (_directory.fillPending(line_pa) || _directory.wbPending(line_pa)) {
             PendingRequester pr;
             pr.node = requesterNode;
+            pr.socket = requesterSocket;
             pr.reqType = reqType;
             pr.writeIntent = writeIntent;
             pr.epoch = baseEpoch;
@@ -171,13 +173,15 @@ UBCCController::ensureResidentForAccess(
     }
 
     return handleResidentMiss(line_pa, reqType, writeIntent,
-                              requesterNode, baseEpoch, reqId, entry);
+                              requesterNode, requesterSocket,
+                              baseEpoch, reqId, entry);
 }
 
 UBCCController::ResidentAccessResult
 UBCCController::handleResidentMiss(
     uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-    int requesterNode, uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
+    int requesterNode, int requesterSocket,
+    uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
 {
     const bool mayContain = _directory.bloomMayContain(line_pa);
     if (!_directory.hasFreeSlot() && !evictOneVictim(line_pa)) {
@@ -208,6 +212,7 @@ UBCCController::handleResidentMiss(
     _directory.setPinned(line_pa, true);
     PendingRequester pr;
     pr.node = requesterNode;
+    pr.socket = requesterSocket;
     pr.reqType = reqType;
     pr.writeIntent = writeIntent;
     pr.epoch = baseEpoch;
@@ -327,7 +332,7 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             }
         } else {
             auto g = processOuterRequest(linePa, pr.reqType, pr.writeIntent,
-                                         pr.node, pr.epoch, pr.reqId,
+                                         pr.node, pr.socket, pr.epoch, pr.reqId,
                                          nullptr, nullptr, nullptr, nullptr,
                                          nullptr, nullptr);
             if (static_cast<int>(g) == -1) {
@@ -373,7 +378,7 @@ grantTypeFromIntended(MESIState s)
 UBCC_OuterGrantType
 UBCCController::processOuterRequest(
     uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-    int requesterNode,
+    int requesterNode, int requesterSocket,
     uint64_t baseEpoch, uint64_t reqId,
     Tick *outGrantVisibleTick, Tick *outSentinelVisibleTick,
     bool *outRecallNeeded, int *outRecallOwnerNode,
@@ -384,13 +389,13 @@ UBCCController::processOuterRequest(
 
     framework::LogInfo("UBCC",
             "UBCC node_id=%d: processOuterRequest PA=0x%lx req=%d write=%d "
-            "requesterNode=%d baseEpoch=%lu reqId=%lu\n",
+            "requesterNode=%d requesterSocket=%d baseEpoch=%lu reqId=%lu\n",
             _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
-            requesterNode, baseEpoch, reqId);
+            requesterNode, requesterSocket, baseEpoch, reqId);
     printf("[UBCC-OUTER-REQ] home=%d pa=0x%lx req=%d write=%d requester=%d "
-           "baseEpoch=%lu reqId=%lu\n",
+           "sock=%d baseEpoch=%lu reqId=%lu\n",
            _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
-           requesterNode, baseEpoch, reqId);
+           requesterNode, requesterSocket, baseEpoch, reqId);
 
     // Initialize M6 recall outputs and F3 dataSource output
     if (outRecallNeeded)   *outRecallNeeded = false;
@@ -418,7 +423,8 @@ UBCCController::processOuterRequest(
 
     DirEntry entry;
     ResidentAccessResult r = ensureResidentForAccess(
-        line_pa, reqType, writeIntent, requesterNode, baseEpoch, reqId, entry);
+        line_pa, reqType, writeIntent, requesterNode, requesterSocket,
+        baseEpoch, reqId, entry);
     printf("[UBCC-OUTER-REQ] home=%d pa=0x%lx residentResult=%d state=%s "
            "sharers=0x%lx epoch=%lu\n",
            _nodeId, line_pa, static_cast<int>(r), mesiStateName(entry.state),
@@ -512,6 +518,7 @@ UBCCController::processOuterRequest(
             if (q.size() < MAX_PENDING_PER_PA) {
                 PendingRequester pr;
                 pr.node = requesterNode;
+                pr.socket = requesterSocket;
                 pr.reqType = reqType;
                 pr.writeIntent = writeIntent;
                 pr.epoch = baseEpoch;
@@ -565,7 +572,7 @@ UBCCController::processOuterRequest(
                 grant = UBCC_OuterGrantType::GlobalGrantShared;
                 // Intended: G_S, sharers+=req, no owner
                 oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                         requesterNode, -1);
+                                         requesterNode, -1, requesterSocket);
                 if (oreq) {
                     oreq->reservedEpoch = reservedEpoch;
                     oreq->reqId = reqId;
@@ -583,7 +590,7 @@ UBCCController::processOuterRequest(
                 if (!writeIntent) {
                     grant = UBCC_OuterGrantType::GlobalGrantExclusive;
                     oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                             requesterNode, -1);
+                                             requesterNode, -1, requesterSocket);
                     if (oreq) {
                         oreq->reservedEpoch = reservedEpoch;
                         oreq->reqId = reqId;
@@ -600,7 +607,7 @@ UBCCController::processOuterRequest(
                 } else {
                     grant = UBCC_OuterGrantType::GlobalGrantModified;
                     oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                             requesterNode, -1);
+                                             requesterNode, -1, requesterSocket);
                     if (oreq) {
                         oreq->reservedEpoch = reservedEpoch;
                         oreq->reqId = reqId;
@@ -623,7 +630,7 @@ UBCCController::processOuterRequest(
             if (reqType == UBCC_OuterReqType::GlobalReadShared) {
                 grant = UBCC_OuterGrantType::GlobalGrantShared;
                 oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                         requesterNode, -1);
+                                         requesterNode, -1, requesterSocket);
                 if (oreq) {
                     oreq->reservedEpoch = reservedEpoch;
                     oreq->reqId = reqId;
@@ -672,7 +679,8 @@ UBCCController::processOuterRequest(
                     // v4: Create INVALIDATE + GRANT_HANDSHAKE
                     // INVALIDATE outstanding
                     OutstandingRequest *invOreq = createOutstanding(
-                        line_pa, OpType::INVALIDATE, requesterNode, -1);
+                        line_pa, OpType::INVALIDATE, requesterNode, -1,
+                        requesterSocket);
                     if (invOreq) {
                         invOreq->reservedEpoch = reservedEpoch;
                         invOreq->reqId = reqId;
@@ -707,7 +715,7 @@ UBCCController::processOuterRequest(
                         ? UBCC_OuterGrantType::GlobalGrantModified
                         : UBCC_OuterGrantType::GlobalGrantExclusive;
                     oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                             requesterNode, -1);
+                                             requesterNode, -1, requesterSocket);
                     if (oreq) {
                         oreq->reservedEpoch = reservedEpoch;
                         oreq->reqId = reqId;
@@ -751,7 +759,7 @@ UBCCController::processOuterRequest(
 
                 OutstandingRequest *grantOreq = createOutstanding(
                     line_pa, OpType::GRANT_HANDSHAKE,
-                    requesterNode, -1);
+                    requesterNode, -1, requesterSocket);
                 if (grantOreq) {
                     grantOreq->reservedEpoch = recallData.reservedEpoch;
                     grantOreq->reqId = recallData.reqId;
@@ -837,6 +845,7 @@ UBCCController::processOuterRequest(
                 if (q.size() < MAX_PENDING_PER_PA) {
                     PendingRequester pr;
                     pr.node = requesterNode;
+                    pr.socket = requesterSocket;
                     pr.reqType = reqType;
                     pr.writeIntent = writeIntent;
                     pr.epoch = baseEpoch;
@@ -862,7 +871,8 @@ UBCCController::processOuterRequest(
                        _nodeId, line_pa, existingOwner, requesterNode);
 
                 OutstandingRequest *recallOreq = createOutstanding(
-                    line_pa, OpType::RECALL, requesterNode, existingOwner);
+                    line_pa, OpType::RECALL, requesterNode, existingOwner,
+                    requesterSocket);
                 if (!recallOreq) {
                     warn("UBCC node_id=%d: failed to create RECALL outstanding "
                          "PA=0x%lx requester=%d owner=%d\n",
@@ -899,7 +909,7 @@ UBCCController::processOuterRequest(
             if (reqType == UBCC_OuterReqType::GlobalReadShared) {
                 grant = UBCC_OuterGrantType::GlobalGrantShared;
                 oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                         requesterNode, -1);
+                                         requesterNode, -1, requesterSocket);
                 if (oreq) {
                     oreq->reservedEpoch = reservedEpoch;
                     oreq->reqId = reqId;
@@ -921,7 +931,7 @@ UBCCController::processOuterRequest(
                     ? UBCC_OuterGrantType::GlobalGrantModified
                     : UBCC_OuterGrantType::GlobalGrantExclusive;
                 oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                         requesterNode, -1);
+                                         requesterNode, -1, requesterSocket);
                 if (oreq) {
                     oreq->reservedEpoch = reservedEpoch;
                     oreq->reqId = reqId;
@@ -1195,7 +1205,8 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     removeOutstanding(line_pa);
 
     OutstandingRequest *grantOst = createOutstanding(
-        line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1);
+        line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1,
+        recallDone.requesterSocket);
     if (!grantOst) {
         fatal("UBCC node_id=%d: failed to create GRANT_HANDSHAKE after "
               "RecallResp PA=0x%lx requester=%d\n",
@@ -1231,6 +1242,22 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         grantOst->intendedSharersMask = 0;
         grantOst->intendedOwnerNode = requesterNode;
         grantOst->intendedDirty = writeIntent;
+    }
+
+    // Push-grant: home proactively delivers ReadResp to requester so
+    // the EP-SNF retry can hit _readyResponses immediately (~0-cycle gap)
+    // instead of waiting for the 20000-cycle retry timer.
+    // replayArmed stays true as pull fallback if push fails.
+    if (_outbound) {
+        CoherenceMessage push;
+        buildGrantResponse(*grantOst, push);
+        _outbound->sendGrantPush(push);
+        printf("[PUSH-GRANT] RECALL home=%d pa=0x%lx requester=%d sock=%d "
+               "reqId=%lu grantType=%d dataSource=%d\n",
+               _nodeId, line_pa, grantOst->requesterNode,
+               grantOst->requesterSocket, grantOst->reqId,
+               static_cast<int>(grantTypeFromIntended(grantOst->intendedState)),
+               static_cast<int>(grantOst->dataSource));
     }
 
     _recallResponseCount++;
@@ -1498,6 +1525,20 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             // are already set from when the INVALIDATE was created.
             ost->recallBarrierDone = false;
             ost->invalidateBarrierDone = true;  // INVALIDATE is now DONE
+
+            // Push-grant: home proactively delivers ReadResp so requester's
+            // retry hits _readyResponses immediately.
+            if (_outbound) {
+                CoherenceMessage push;
+                buildGrantResponse(*ost, push);
+                _outbound->sendGrantPush(push);
+                printf("[PUSH-GRANT] INVALIDATE home=%d pa=0x%lx requester=%d "
+                       "sock=%d reqId=%lu grantType=%d\n",
+                       _nodeId, line_pa, ost->requesterNode,
+                       ost->requesterSocket, ost->reqId,
+                       static_cast<int>(grantTypeFromIntended(ost->intendedState)));
+            }
+
             printf("[UBCC-INV-TO-GRANT] home=%d pa=0x%lx requester=%d stage=%d "
                    "intended=%s baseEpoch=%lu reservedEpoch=%lu reqId=%lu\n",
                    _nodeId, line_pa, ost->requesterNode,
@@ -1608,7 +1649,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     DirEntry entry;
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, UBCC_OuterReqType::GlobalWriteback, keepAsClean,
-        requesterNode, epochVal, 0, entry);
+        requesterNode, -1, epochVal, 0, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -1734,7 +1775,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     DirEntry entry;
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, UBCC_OuterReqType::GlobalEvict, false,
-        evictingNode, epochVal, 0, entry);
+        evictingNode, -1, epochVal, 0, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -1858,7 +1899,7 @@ UBCCController::processOuterUpgradeReq(
     DirEntry entry;
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, UBCC_OuterReqType::GlobalReadUnique, true,
-        requesterNode, epoch, reqId, entry);
+        requesterNode, -1, epoch, reqId, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -2721,7 +2762,7 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
         //   G_S + RU → INVALIDATE + GRANT_HANDSHAKE
         //   G_E/G_M + RS/RU → new RECALL + GRANT_HANDSHAKE
         processOuterRequest(linePa, pr.reqType, pr.writeIntent,
-                            pr.node, rebaseEpoch, pr.reqId,
+                            pr.node, pr.socket, rebaseEpoch, pr.reqId,
                             nullptr, nullptr, nullptr, nullptr, nullptr,
                             nullptr);
 
@@ -2735,6 +2776,21 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             OutstandingRequest *ost = findOutstanding(linePa);
             if (ost) {
                 ost->replayArmed = true;
+
+                // Push-grant: the queue replay may have created a direct
+                // GRANT_HANDSHAKE (G_S+RS case). Push the grant immediately
+                // so the requester gets it without waiting for retry timer.
+                if (ost->opType == OpType::GRANT_HANDSHAKE && _outbound) {
+                    CoherenceMessage push;
+                    buildGrantResponse(*ost, push);
+                    _outbound->sendGrantPush(push);
+                    printf("[PUSH-GRANT] QUEUE-REPLAY home=%d pa=0x%lx "
+                           "requester=%d sock=%d reqId=%lu grantType=%d\n",
+                           _nodeId, linePa, ost->requesterNode,
+                           ost->requesterSocket, ost->reqId,
+                           static_cast<int>(
+                               grantTypeFromIntended(ost->intendedState)));
+                }
             }
             break;
         }
@@ -2820,7 +2876,8 @@ UBCCController::findOutstanding(uint64_t linePa)
 
 OutstandingRequest*
 UBCCController::createOutstanding(uint64_t linePa, OpType opType,
-                                  int requesterNode, int targetNode)
+                                  int requesterNode, int targetNode,
+                                  int requesterSocket)
 {
     // v4: Keep single outstanding per line
     if (_outstandingReqs.count(linePa))
@@ -2833,6 +2890,7 @@ UBCCController::createOutstanding(uint64_t linePa, OpType opType,
     req.opType = opType;
     req.stage = OpStage::CREATED;
     req.requesterNode = requesterNode;
+    req.requesterSocket = requesterSocket;
     req.targetNode = targetNode;
     req.targetMask = 0;
     req.intendedState = MESIState::G_I;
@@ -2858,6 +2916,58 @@ void
 UBCCController::removeOutstanding(uint64_t linePa)
 {
     _outstandingReqs.erase(linePa);
+}
+
+// ---- Push-Grant: build a complete ReadResp from GRANT_HANDSHAKE outstanding ----
+
+void
+UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
+                                    CoherenceMessage &push) const
+{
+    // Construct a complete ReadResp using fields stored in the grantOst.
+    // Aligns with pull-path ReadResp construction in ubio_main.cc:408-424.
+    // Differences: field sources come from grantOst, not an inbound msg.
+
+    push.h.type = CoherenceMessageType::ReadResp;
+    push.h.srcNode = _nodeId;
+    push.h.dstNode = grantOst.requesterNode;
+    push.h.dstSocket = grantOst.requesterSocket >= 0
+        ? static_cast<uint16_t>(grantOst.requesterSocket)
+        : static_cast<uint16_t>(_socketId);  // fallback: use home socket
+    push.h.homeNode = _nodeId;
+    push.h.requesterNode = grantOst.requesterNode;
+    push.h.homeLinePa = grantOst.linePa;
+    push.h.epoch = grantOst.baseEpoch;
+    push.h.reqId = grantOst.reqId;
+    push.h.flags = grantOst.dataValid
+        ? static_cast<uint32_t>(CFLAG_HAS_DATA) : 0;
+
+    // Grant type from intended MESI state (reuses existing helper)
+    push.b.readResp.grantType =
+        static_cast<int8_t>(grantTypeFromIntended(grantOst.intendedState));
+
+    // Data source: RecallBuffer if data came from previous owner, else HomeMemory
+    push.b.readResp.dataSource = static_cast<int8_t>(grantOst.dataSource);
+
+    // Set zero/nil for fields not stored in grantOst (pull path fills these
+    // from the inbound msg, but requester doesn't need them for the push).
+    push.b.readResp.pendingInvCount = 0;
+    push.b.readResp.grantVisibleTick = curTick();
+    push.b.readResp.sentinelVisibleTick = curTick();
+    push.b.readResp.recallNeeded = false;
+    push.b.readResp.recallOwnerNode = -1;
+    push.b.readResp.authEpoch = grantOst.baseEpoch;
+    push.b.readResp.committedEpoch = 0;
+    push.b.readResp.pendingInvMask = 0;
+
+    // Grant data: copy from grantOst dataBuf if dataValid
+    if (grantOst.dataValid) {
+        std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
+    }
+
+    push.h.seqNum = 0;
+    push.h.enqueueTick = curTick();
+    push.h.readyTick = curTick();
 }
 
 // ---- v4-dual-socket: Query Line Metadata (read-only snapshot) ----

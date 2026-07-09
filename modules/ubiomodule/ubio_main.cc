@@ -333,6 +333,13 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         return routeControlToTarget(msg);
     }
 
+    bool sendGrantPush(const CoherenceMessage &msg) override {
+        // Push-grant: home proactively delivers ReadResp to requester.
+        // Reuses routeControlToTarget which correctly handles both local
+        // (gem5Port) and cross-node (netPort) routing via dstNode/dstSocket.
+        return routeControlToTarget(msg);
+    }
+
     void hostIssueBackstoreRead(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
         auto it = store.find(pa);
@@ -384,7 +391,8 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         auto grant = ubcc.processOuterRequest(
             msg.h.homeLinePa, reqType,
             (msg.h.flags & static_cast<uint32_t>(CFLAG_WRITE_INTENT)) != 0,
-            msg.h.requesterNode, msg.h.epoch, msg.h.reqId,
+            msg.h.requesterNode, msg.h.srcSocket,
+            msg.h.epoch, msg.h.reqId,
             &grantVisibleTick, &sentinelVisibleTick,
             &recallNeeded, &recallOwnerNode,
             &dataSource, &authEpoch);

@@ -44,6 +44,15 @@ class UBCCOutboundIf
     virtual bool sendRecallReq(const CoherenceMessage &msg) = 0;
     virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
+
+    /**
+     * Push a grant ReadResp from home to requester.
+     * This is the push-grant fast path: home proactively delivers the grant
+     * when it becomes ready, instead of waiting for the requester to poll.
+     * sendGrantPush returns false on failure; when that happens the caller
+     * retains replayArmed fallback (20000-cycle retry timer still works).
+     */
+    virtual bool sendGrantPush(const CoherenceMessage &msg) = 0;
 };
 
 // Forward declarations for M5 outer protocol types.
@@ -108,6 +117,7 @@ struct OutstandingRequest {
     OpType   opType;           // Type of operation
     OpStage  stage;            // Current stage in normative state machine
     int      requesterNode;    // Node waiting for completion
+    int      requesterSocket;  // v4-dual-socket: requester's socket plane
     int      homeNode;         // Home node for this line
     int      targetNode;       // Recall target / upgrade requester
     uint64_t targetMask;       // Invalidation target mask (sharers to invalidate)
@@ -161,7 +171,7 @@ struct OutstandingRequest {
     OutstandingRequest()
         : linePa(0), baseEpoch(0), reservedEpoch(0), reqId(0),
           opType(OpType::GRANT_HANDSHAKE), stage(OpStage::CREATED),
-          requesterNode(-1), homeNode(-1), targetNode(-1), targetMask(0),
+          requesterNode(-1), requesterSocket(-1), homeNode(-1), targetNode(-1), targetMask(0),
           intendedState(MESIState::G_I), intendedSharersMask(0),
           intendedOwnerNode(-1), intendedDirty(false),
           reqType(UBCC_OuterReqType::GlobalReadShared),
@@ -207,13 +217,14 @@ class UBCCController
     // requesters are queued here until the head requester's Clear commits.
     struct PendingRequester {
         int node;                 // Requester node ID
+        int socket;               // v4-dual-socket: requester's socket plane
         UBCC_OuterReqType reqType; // RS or RU
         bool writeIntent;          // True for RU with write intent
         uint64_t epoch;            // Observed epoch at enqueue time
         uint64_t reqId;            // Requester-allocated ID, reused on replay
 
         PendingRequester()
-            : node(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
+            : node(-1), socket(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
               writeIntent(false), epoch(0), reqId(0) {}
     };
 
@@ -290,6 +301,7 @@ class UBCCController
      * @param reqType             GlobalReadShared or GlobalReadUnique
      * @param writeIntent         True if requester has write intent
      * @param requesterNode       Node ID of the requesting node
+     * @param requesterSocket     v4-dual-socket: socket plane of the requester
      * @param baseEpoch           Requester-observed committed epoch
      * @param reqId               Requester-allocated transaction ID
      * @param outGrantVisibleTick Output: tick when grant decision was made
@@ -302,7 +314,7 @@ class UBCCController
      */
     UBCC_OuterGrantType processOuterRequest(
         uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-        int requesterNode,
+        int requesterNode, int requesterSocket = -1,
         uint64_t baseEpoch = 0, uint64_t reqId = 0,
         Tick *outGrantVisibleTick = nullptr,
         Tick *outSentinelVisibleTick = nullptr,
@@ -586,7 +598,8 @@ class UBCCController
     // ---- v4: Outstanding request API ----
     OutstandingRequest* findOutstanding(uint64_t linePa);
     OutstandingRequest* createOutstanding(uint64_t linePa, OpType opType,
-                                          int requesterNode, int targetNode);
+                                           int requesterNode, int targetNode,
+                                           int requesterSocket = -1);
     void removeOutstanding(uint64_t linePa);
 
     void onBackstoreFillComplete(uint64_t linePa, bool found,
@@ -690,10 +703,12 @@ class UBCCController
     };
     ResidentAccessResult ensureResidentForAccess(
         uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-        int requesterNode, uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
+        int requesterNode, int requesterSocket,
+        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
     ResidentAccessResult handleResidentMiss(
         uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-        int requesterNode, uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
+        int requesterNode, int requesterSocket,
+        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
     void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);
@@ -769,6 +784,16 @@ class UBCCController
      * with rebased epoch against the NEW committed state.
      */
     void replayPendingRequesters(uint64_t linePa);
+
+    /**
+     * Push-grant: build a complete ReadResp from a GRANT_HANDSHAKE outstanding.
+     * Constructs the grant message using fields stored in grantOst (requesterNode,
+     * requesterSocket, reqId, baseEpoch, intendedState, dataBuf, dataSource, etc.).
+     * The caller sends it via _outbound->sendGrantPush().
+     * Aligns with pull-path ReadResp construction in ubio_main.cc:408-424.
+     */
+    void buildGrantResponse(const OutstandingRequest &grantOst,
+                            CoherenceMessage &push) const;
 
     /**
      * Allocate a monotonic reqId from the directory.
