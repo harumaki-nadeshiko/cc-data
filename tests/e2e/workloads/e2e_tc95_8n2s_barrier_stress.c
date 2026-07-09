@@ -9,7 +9,7 @@
 #define SEG_SIZE 0x8000000ULL
 #define TOTAL_SEGS (NUM_NODES * NUM_SOCKETS)
 #define DSM_VA_BASE ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_SEGS + 1) * (uint64_t)SEG_SIZE)
-#define BARRIER_ALL 0xFFFF  /* bits 0-15 for 8 nodes x 2 sockets */
+#define BARRIER_ALL 0xFF  /* bits 0-15 for 8 nodes x 2 sockets */
 
 static inline volatile uint32_t *dsm_addr2(int home_node, int home_socket, uint32_t off)
 {
