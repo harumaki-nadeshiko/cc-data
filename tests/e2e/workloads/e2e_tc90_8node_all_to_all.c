@@ -7,7 +7,7 @@
 
 #define NUM_NODES 8
 #define SEG_SIZE 0x8000000ULL
-#define DSM_VA_BASE 0xffffc8000000ULL  /* pre-computed for 8 nodes x 1 socket */
+#define DSM_VA_BASE 0xFFFFB8000000ULL  /* 0x1000000000000 - (8+1)*128MB */
 
 static inline volatile uint32_t *dsm_addr(int home_node, uint32_t off)
 {

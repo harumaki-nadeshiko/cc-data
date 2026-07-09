@@ -152,7 +152,7 @@ run_tc() {
     for nid in $(seq 0 $((NUM_NODES-1))); do
         local gout="$LOG_BASE/gem5_tc${tc}_node${nid}/stdout.log"
         local bound=0
-        for tries in $(seq 1 90); do
+        for tries in $(seq 1 300); do    # up to 300s wait (8-node init takes time)
             if [ "$(grep -c 'STEP5.*Port enabled' "$gout" 2>/dev/null)" -ge "$NUM_SOCKETS" ]; then
                 bound=1; break
             fi
