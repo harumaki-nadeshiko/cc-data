@@ -28,12 +28,12 @@ int main(int argc, char **argv)
     sync_wait(0xFF);
 
     int fail = 0;
+    uint32_t last_got = 0;
     for (int r = 0; r < 8; r++) {
-        uint32_t got;
-        __asm__ volatile("ldr %w0, [%1]" : "=r"(got) : "r"(dsm_addr(hotspot_home, off)));
-        if (got != val) fail++;
+        __asm__ volatile("ldr %w0, [%1]" : "=r"(last_got) : "r"(dsm_addr(hotspot_home, off)));
+        if (last_got != val) fail++;
     }
-    emit_read_val(node_id, hotspot_home, val, got ? got : val, fail == 0);
+    emit_read_val(node_id, hotspot_home, val, last_got, fail == 0);
     sync_wait(0xFF);
     _exit_program(fail ? 1 : 0);
     return 0;
