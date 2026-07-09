@@ -408,6 +408,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeNode = nid;
         response.h.requesterNode = msg.h.requesterNode;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -439,6 +440,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::WritebackResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
@@ -453,6 +455,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::EvictResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
@@ -471,6 +474,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::UpgradeResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
@@ -494,6 +498,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::UpgradeDoneResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
@@ -512,6 +517,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::ClearResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
@@ -555,6 +561,7 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         response.h.type = CoherenceMessageType::QueryLineMetaResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
+        response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
