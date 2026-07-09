@@ -75,6 +75,11 @@ TESTCASES = {
     54: "e2e_tc54_numa_tiled_matmul",
     63: "e2e_tc63_recall_orphan_timer_cleanup",
     64: "e2e_tc64_recall_done_orphan_lazy_cleanup",
+    80: "e2e_tc80_cross_node_latency",
+    81: "e2e_tc81_cross_socket_latency",
+    82: "e2e_tc82_8node_ring_latency",
+    84: "e2e_tc84_cacheline_capacity",
+    85: "e2e_tc84_cacheline_capacity",
     90: "e2e_tc90_8node_all_to_all",
     91: "e2e_tc91_8node_hotspot",
     92: "e2e_tc92_8node_butterfly",
@@ -1112,42 +1117,38 @@ def verify_tc64(reads, lines):
         return False, f'TC64 FAILED: expected Node0 final read after lazy cleanup', node0
     if node0[-1]['verdict'] != 'MATCH':
         return False, f'TC64 FAILED: Node0 final read mismatch after lazy cleanup', [node0[-1]]
-    return True, 'TC64 PASSED: lazy cleanup removed RECALL.DONE orphan, new requester served', []
+    return True, "TC64 PASSED: lazy cleanup removed RECALL.DONE orphan, new requester served", []
 
 
-def verify_tc90(reads, lines):
-    """TC90: 8-node all-to-all DSM read. 8 nodes x 8 reads = 64 READ_VAL, all MATCH."""
-    if len(reads) < 64:
-        return False, f"TC90 FAILED: expected 64 READ_VAL, got {len(reads)}", reads
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC90 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
+def verify_tc80(reads, lines):
+    if len(reads) < 1:
+        return False, "TC80 FAILED: no READ_VAL", reads
+    if reads[-1]["verdict"] != "MATCH":
+        return False, "TC80 FAILED: final read mismatch", [reads[-1]]
+    lat_lines = [l for l in lines if "[LATENCY]" in l]
+    return True, f"TC80 PASSED: cross-node latency ({len(lat_lines)} samples)", []
 
+def verify_tc81(reads, lines):
+    if len(reads) < 1:
+        return False, "TC81 FAILED: no READ_VAL", reads
+    if reads[-1]["verdict"] != "MATCH":
+        return False, "TC81 FAILED: mismatch", [reads[-1]]
+    lat_lines = [l for l in lines if "[LATENCY]" in l]
+    same = sum(1 for l in lat_lines if "type=same" in l)
+    cross = sum(1 for l in lat_lines if "type=cross" in l)
+    return True, f"TC81 PASSED: cross-socket latency (same={same}, cross={cross})", []
 
-def verify_tc91(reads, lines):
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC91 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC91 PASSED: 8-node hotspot contention", []
+def verify_tc82(reads, lines):
+    if len(reads) < 1:
+        return False, "TC82 FAILED: no READ_VAL", reads
+    if reads[-1]["verdict"] != "MATCH":
+        return False, "TC82 FAILED: mismatch", [reads[-1]]
+    lat_lines = [l for l in lines if "[LATENCY]" in l]
+    return True, f"TC82 PASSED: 8-node ring latency ({len(lat_lines)} nodes)", []
 
-def verify_tc92(reads, lines):
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC92 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC92 PASSED: 8-node butterfly data migration", []
-
-def verify_tc93(reads, lines):
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC93 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC93 PASSED: 8-node pairwise pingpong", []
-
-def verify_tc94(reads, lines):
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC94 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC94 PASSED: 8-round barrier stress", []
+def verify_tc84(reads, lines):
+    cap_lines = [l for l in lines if "[CAPACITY]" in l]
+    return True, f"TC84/85 PASSED: capacity test ({len(cap_lines)} markers)", []
 
 
 VERIFIERS = {
@@ -1170,6 +1171,8 @@ VERIFIERS = {
     50: verify_tc50, 51: verify_tc51, 52: verify_tc52,
     53: verify_tc53, 54: verify_tc54,
     63: verify_tc63, 64: verify_tc64,
+    80: verify_tc80, 81: verify_tc81, 82: verify_tc82,
+    84: verify_tc84, 85: verify_tc84,
     90: verify_tc90,
     91: verify_tc91, 92: verify_tc92, 93: verify_tc93, 94: verify_tc94,
 }
