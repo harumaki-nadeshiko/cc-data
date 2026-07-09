@@ -188,7 +188,7 @@ def make_html(data, target_ns=None):
   <label>Min hops:</label>
   <input id="f-hops" type="number" value="2" min="1" style="width:45px" oninput="render()">
   <label>Min ev:</label>
-  <input id="f-ev" type="number" value="10" min="1" style="width:45px" oninput="render()">
+  <input id="f-ev" type="number" value="1" min="1" style="width:45px" oninput="render()">
   <label>Zoom:</label>
   <input id="f-zoom" type="range" min="0.1" max="100" step="0.1" value="1" style="width:100px" oninput="render()">
   <span id="zoom-val" style="font-size:11px;color:#64748b;min-width:30px;display:inline-block">1.0x</span>
@@ -197,7 +197,7 @@ def make_html(data, target_ns=None):
   <div id="stats"></div>
 </div>
 <div id="ruler"><div id="ruler-title">relative time (each lane from t=0) →</div><div id="ruler-inner"></div></div>
-<div id="chains"></div>
+<div id="chains" style="overflow-x:auto"></div>
 <div id="tooltip"></div>
 
 <div id="agg-table"></div>
@@ -275,7 +275,7 @@ function render() {{
     var fpa = document.getElementById("f-pa").value.toLowerCase();
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
-    var mev = parseInt(document.getElementById("f-ev").value) || 10;
+    var mev = parseInt(document.getElementById("f-ev").value) || 1;
     var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 0.5, 5);
     document.getElementById("zoom-val").textContent = zoom.toFixed(1) + "x";
     var div = document.getElementById("chains");
@@ -496,7 +496,7 @@ function exportCSV() {{
     var fpa = document.getElementById("f-pa").value.toLowerCase();
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
-    var mev = parseInt(document.getElementById("f-ev").value) || 10;
+    var mev = parseInt(document.getElementById("f-ev").value) || 1;
     var lines = ["rid,pa,type,dur_ns,tq_hops,ev_count"];
     for (var i = 0; i < CHAINS.length; i++) {{
         var ch = CHAINS[i];
