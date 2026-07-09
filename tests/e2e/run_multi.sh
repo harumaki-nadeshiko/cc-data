@@ -30,8 +30,10 @@ TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
 case "${1:-}" in
-    --1s) TOPO_KIND="1s"; shift ;;
-    --2s) TOPO_KIND="2s"; shift ;;
+    --1s)   TOPO_KIND="1s"; shift ;;
+    --2s)   TOPO_KIND="2s"; shift ;;
+    --8n1s) TOPO_KIND="8n1s"; shift ;;
+    --8n2s) TOPO_KIND="8n2s"; shift ;;
 esac
 JSON="$ROOT_DIR/configs/topo_${TOPO_KIND}.json"
 [ -f "$JSON" ] || { echo "FATAL: config $JSON not found" >&2; exit 2; }
@@ -112,11 +114,12 @@ run_tc() {
     echo "=== TC${tc} (topo=$TOPO_KIND, ${NUM_NODES}nodes x ${NUM_SOCKETS}sockets) ==="
 
     # 1. Compile workload → fixed path workload.elf
-    bash "$ROOT_DIR/scripts/compile_workload.sh" "$tc" >/dev/null 2>&1 \
+    NUM_NODES="$NUM_NODES" NUM_SOCKETS="$NUM_SOCKETS" \
+        bash "$ROOT_DIR/scripts/compile_workload.sh" "$tc" >/dev/null 2>&1 \
         || { echo "  TC${tc} COMPILE FAILED"; return 1; }
 
-    # 2. Generate networksim topo.json (fixed mesh by topology kind)
-    python3 "$ROOT_DIR/scripts/gen_topo.py" --type "$TOPO_KIND" --out "$TOPO_JSON" >/dev/null 2>&1
+    # 2. Generate networksim topo.json (full mesh, --nodes/--sockets from JSON)
+    python3 "$ROOT_DIR/scripts/gen_topo.py" --nodes "$NUM_NODES" --sockets "$NUM_SOCKETS" --out "$TOPO_JSON" >/dev/null 2>&1
     # Clean sshd ipc endpoints
     rm -rf /workspace/gem5/shared_ipc/ipc_* /tmp/ubio_n* /tmp/networksim_* 2>/dev/null || true
     mkdir -p /workspace/gem5/shared_ipc 2>/dev/null || true

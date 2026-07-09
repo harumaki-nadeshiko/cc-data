@@ -53,11 +53,12 @@ UBCCController::getInstance(int node_id, int socket_id)
 }
 
 UBCCController::UBCCController(int node_id, int socket_id,
-                               RubySystem *ruby_system,
-                               uint32_t epoch_bits,
-                               uint32_t resident_bf_bytes,
-                               uint32_t resident_force_entries,
-                               int num_sockets)
+                                RubySystem *ruby_system,
+                                uint32_t epoch_bits,
+                                uint32_t resident_bf_bytes,
+                                uint32_t resident_force_entries,
+                                int num_sockets,
+                                int num_nodes)
   : _nodeId(node_id),
     _socketId(socket_id),
     _interconnectLatency(200),
@@ -98,7 +99,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // buildDsmPA()/homeSocket() use the correct per-(node,socket) plane layout.
     // The default member initializer assumes num_sockets=1 (single-socket
     // legacy); for dual-socket we must override it here.
-    _addrMap = NodeAddressMap(3, kNumSockets, kSegSize);
+    _addrMap = NodeAddressMap(num_nodes, kNumSockets, kSegSize);
     framework::LogInfo("UBCC",
             "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
             "dsmBase=0x%lx dsmSize=0x%lx numSockets=%d\n",

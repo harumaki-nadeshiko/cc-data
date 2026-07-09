@@ -75,6 +75,7 @@ TESTCASES = {
     54: "e2e_tc54_numa_tiled_matmul",
     63: "e2e_tc63_recall_orphan_timer_cleanup",
     64: "e2e_tc64_recall_done_orphan_lazy_cleanup",
+    90: "e2e_tc90_8node_all_to_all",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1110,6 +1111,16 @@ def verify_tc64(reads, lines):
     return True, 'TC64 PASSED: lazy cleanup removed RECALL.DONE orphan, new requester served', []
 
 
+def verify_tc90(reads, lines):
+    """TC90: 8-node all-to-all DSM read. 8 nodes x 8 reads = 64 READ_VAL, all MATCH."""
+    if len(reads) < 64:
+        return False, f"TC90 FAILED: expected 64 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC90 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
+
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1130,6 +1141,7 @@ VERIFIERS = {
     50: verify_tc50, 51: verify_tc51, 52: verify_tc52,
     53: verify_tc53, 54: verify_tc54,
     63: verify_tc63, 64: verify_tc64,
+    90: verify_tc90,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1138,14 +1150,14 @@ def verify_testcase(tc_id, reads, lines):
     return False, f"FAILED: unknown test case TC{tc_id}", []
 
 # ── Compilation ───────────────────────────────────────────────────
-def compile_workload(tc_name):
+def compile_workload(tc_name, num_nodes=3):
+    if tc_name.startswith("/") and os.path.isfile(tc_name):
+        return tc_name
     elf_path = os.path.join(WORKLOAD_DIR, tc_name + ".elf")
     src_path = os.path.join(WORKLOAD_DIR, tc_name + ".c")
     if not os.path.exists(src_path):
-        print(f"ERROR: source not found: {src_path}", flush=True)
+        print(f"ERROR: workload source not found: {src_path}", flush=True)
         return None
-    if os.path.exists(elf_path) and os.path.getmtime(src_path) <= os.path.getmtime(elf_path):
-        return elf_path
     cc = "aarch64-linux-gnu-gcc"
     dual_socket_tcs = {
         "e2e_tc32_cross_socket_read_miss",
@@ -1157,7 +1169,7 @@ def compile_workload(tc_name):
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [
         cc, "-static", "-O0", "-g",
-        "-DNUM_NODES=3", f"-DNUM_SOCKETS={num_sockets}",
+        f"-DNUM_NODES={num_nodes}", f"-DNUM_SOCKETS={num_sockets}",
         "-I", WORKLOAD_DIR,
         "-o", elf_path, src_path,
     ]

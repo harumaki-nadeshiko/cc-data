@@ -221,12 +221,13 @@ class UBCCController
     static constexpr size_t MAX_PENDING_PER_PA = 4;
 
     // v4-dual-socket: constructor now takes socket_id.
-    UBCCController(int node_id, int socket_id = 0,
-                   RubySystem *ruby_system = nullptr,
-                   uint32_t epoch_bits = 64,
-                   uint32_t resident_bf_bytes = ResidentDir::DefaultBloomBytes,
-                   uint32_t resident_force_entries = 0,
-                   int num_sockets = 1);
+     UBCCController(int node_id, int socket_id = 0,
+                    RubySystem *ruby_system = nullptr,
+                    uint32_t epoch_bits = 64,
+                    uint32_t resident_bf_bytes = ResidentDir::DefaultBloomBytes,
+                    uint32_t resident_force_entries = 0,
+                    int num_sockets = 1,
+                    int num_nodes = 3);
     ~UBCCController();
 
     int nodeId() const { return _nodeId; }
