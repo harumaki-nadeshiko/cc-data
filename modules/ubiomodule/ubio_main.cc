@@ -858,14 +858,28 @@ main(int argc, char **argv)
                 for (int rep = 0; rep < faultCopies; ++rep) {
                     CoherenceMessage response;
                     bool hasResponse = false;
-                    if (handleUbccMessage(ubcc, nid, *coh, response, hasResponse) && hasResponse) {
+                    bool handled = handleUbccMessage(ubcc, nid, *coh, response, hasResponse);
+                    if (handled && coh->h.type == CoherenceMessageType::RecallResp) {
+                        // RECALL.DONE only flips state inside the home UBCC; there is
+                        // no normal response packet back to gem5. Mirror the RecallResp
+                        // to the local UBAdapter as a wake-only notification so the
+                        // requester's EP-SNF retries immediately instead of waiting for
+                        // the 20k-cycle fallback timer.
+                        bool sentToGem5 = sendCoh(gem5Port, tick,
+                            gidOf(nid, sid), *coh);
+                        std::fprintf(stderr,
+                                     "[TRACE-4-RECALL] n%d net->gem5 recall-done sendCoh_ret=%s reqId=%lu dstSocket=%d\n",
+                                     nid, sentToGem5 ? "true" : "false",
+                                     coh->h.reqId, sid);
+                    }
+                    if (handled && hasResponse) {
                         std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back to %d:%d\n",
                                      nid, coherenceMsgTypeName(response.h.type),
                                      coh->h.srcNode, coh->h.srcSocket);
                         // Response returns to the requester's (node, socket) plane.
                         sendCoh(netPort, tick,
                                 gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
-                    } else if (isGem5Ingress(coh->h.type)) {
+                    } else if (!handled && isGem5Ingress(coh->h.type)) {
                         std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
                                      nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                         bool sentToGem5 = sendCoh(gem5Port, tick,

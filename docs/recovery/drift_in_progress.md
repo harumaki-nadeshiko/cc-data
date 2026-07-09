@@ -45,3 +45,11 @@
   - 编译通过（`build/ARM/gem5.opt` 重新生成成功）。
   - `tests/e2e/run_multi.sh 16` 通过（`TC16 PASSED`）。
   - 日志无 panic/assert/deadlock；`node0/node1/node2` 均出现 `AFTER_WR`，最终 read 一致（`a0a0`/`b0b0` 单一收敛值，本次为 `b0b0`）。
+
+## 2026-07-10 Autonomous update (TC3 RECALL.DONE 事件驱动唤醒)
+- 复盘 TC3 的 8.4µs 空等：请求方 EP-SNF 命中 `handleRemoteMiss(...)=BUSY` 后进入 `_retryQueue`，仅靠 `epsnf_retry_cycles()` 的 20000-cycle fallback 定时器重试。
+- 代码确认：`RecallResp` 到达 home/requester 节点时先在 `modules/ubiomodule/ubio_main.cc` 被 `handleUbccMessage()` 消费，随后 `UBCCController::processRecallResponse()` 立即把该行切成 `replayArmed` 的 `GRANT_HANDSHAKE`；但原先没有任何消息/事件回到 gem5 唤醒本地 EP-SNF。
+- 修复：
+  - `ubio_main.cc` 在处理来自网络的 `RecallResp` 后，额外镜像一份到本地 gem5 `UBAdapter`，仅作为 `RECALL.DONE` 唤醒通知；
+  - `UBAdapter.cc` 为 `RecallResp` 增加 wake-only 分支，直接触发 `_onResponseWired()`，不把它当成普通响应缓存/匹配。
+- 保持 `EPSNFController.cc` 的 20000-cycle backoff 不变，作为真正 BUSY / 远端未完成时的 fallback。
