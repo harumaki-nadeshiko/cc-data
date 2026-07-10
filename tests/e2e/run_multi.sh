@@ -280,6 +280,16 @@ if [ "$TOPO_KIND" = "1s" ]; then
     done
 fi
 
+# Sanity: warn if an 8n2s-only TC is passed under 8n1s (or non-8n2s)
+if [ "$TOPO_KIND" = "8n1s" ]; then
+    for tc in "$@"; do
+        case "$tc" in 95|96|97|98)
+            echo "FATAL: TC$tc requires --8n2s topology. Re-run with --8n2s." >&2
+            exit 2
+        ;; esac
+    done
+fi
+
 PASS=0; FAIL=0
 for tc in "$@"; do
     if UBIO_PIDS="" run_tc "$tc"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi

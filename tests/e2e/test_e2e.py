@@ -86,6 +86,9 @@ TESTCASES = {
     93: "e2e_tc93_8node_pairwise_pingpong",
     94: "e2e_tc94_8node_barrier_stress",
     95: "e2e_tc95_8n2s_barrier_stress",
+    96: "e2e_tc96_8n2s_cross_socket_read",
+    97: "e2e_tc97_8n2s_pingpong",
+    98: "e2e_tc98_8n2s_hotspot",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1162,6 +1165,33 @@ def verify_tc95(reads, lines):
     return True, "TC95 PASSED: 8n2s per-socket barrier stress", []
 
 
+def verify_tc96(reads, lines):
+    """TC96: 8-node dual-socket cross-socket read. 16 READ_VAL (one per socket-plane)."""
+    if len(reads) < 16:
+        return False, f"TC96 FAILED: expected 16 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC96 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC96 PASSED: 8n2s cross-socket read (16/16 MATCH)", []
+
+
+def verify_tc97(reads, lines):
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC97 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC97 PASSED: 8n2s ownership ping-pong", []
+
+
+def verify_tc98(reads, lines):
+    """TC98: 8n2s same-PA hot-spot. 16 READ_VAL for done markers, all MATCH."""
+    if len(reads) < 16:
+        return False, f"TC98 FAILED: expected 16 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC98 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC98 PASSED: 8n2s same-PA hot-spot (16 done markers MATCH)", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1218,6 +1248,7 @@ VERIFIERS = {
     90: verify_tc90,
     91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
     95: verify_tc95,
+    96: verify_tc96, 97: verify_tc97, 98: verify_tc98,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1241,6 +1272,10 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc34_dual_socket_pingpong",
         "e2e_tc35_numa_latency_stress",
         "e2e_tc39_dual_socket_same_pa_interference",
+        "e2e_tc95_8n2s_barrier_stress",
+        "e2e_tc96_8n2s_cross_socket_read",
+        "e2e_tc97_8n2s_pingpong",
+        "e2e_tc98_8n2s_hotspot",
     }
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [

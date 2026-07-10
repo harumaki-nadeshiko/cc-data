@@ -9,7 +9,11 @@
 
 #define ROUNDS                192
 #define BASE_OFF              0xA000
-#define DONE_OFF              0xAF00
+// DONE_OFF must be OUTSIDE the round address space [BASE_OFF, BASE_OFF+128×64).
+// Previously 0xAF00 overlapped with round offsets (e.g. node2 r=102 hits 0xAF00),
+// so a late round write could overwrite the done marker on the same cache line.
+// Moved to 0x8000 (below BASE_OFF) so the two address spaces never collide.
+#define DONE_OFF              0x8000
 
 static inline volatile uint32_t *dsm_addr2(int home_node, int home_socket, uint32_t off)
 {
