@@ -18,7 +18,7 @@ rm -rf states/
 
 echo "=== TLC: $MODEL ==="
 timeout "$TIMEOUT" java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-  -config "$CFG" -workers 4 "$MODEL" 2>&1 | tee "/tmp/tlc_${MODEL%.tla}.log"
+  -config "$CFG" -workers "$(nproc)" "$MODEL" 2>&1 | tee "/tmp/tlc_${MODEL%.tla}.log"
 
 # Clean after run
 rm -f *TTrace_*.tla *TTrace_*.bin
