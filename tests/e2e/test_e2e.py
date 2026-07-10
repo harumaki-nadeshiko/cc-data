@@ -89,6 +89,7 @@ TESTCASES = {
     96: "e2e_tc96_8n2s_cross_socket_read",
     97: "e2e_tc97_8n2s_pingpong",
     98: "e2e_tc98_8n2s_hotspot",
+    99: "e2e_tc99_8n2s_perplane_slots",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1192,6 +1193,16 @@ def verify_tc98(reads, lines):
     return True, "TC98 PASSED: 8n2s same-PA hot-spot (16 done markers MATCH)", []
 
 
+def verify_tc99(reads, lines):
+    """TC99: 8n2s per-plane slot contention (milder TC98 variant)."""
+    if len(reads) < 16:
+        return False, f"TC99 FAILED: expected 16 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC99 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    return True, "TC99 PASSED: 8n2s per-plane slot contention (16 done markers MATCH)", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1248,7 +1259,7 @@ VERIFIERS = {
     90: verify_tc90,
     91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
     95: verify_tc95,
-    96: verify_tc96, 97: verify_tc97, 98: verify_tc98,
+    96: verify_tc96, 97: verify_tc97, 98: verify_tc98, 99: verify_tc99,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1277,6 +1288,7 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc96_8n2s_cross_socket_read",
         "e2e_tc97_8n2s_pingpong",
         "e2e_tc98_8n2s_hotspot",
+        "e2e_tc99_8n2s_perplane_slots",
     }
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [

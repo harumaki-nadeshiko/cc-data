@@ -283,7 +283,7 @@ fi
 # Sanity: warn if an 8n2s-only TC is passed under 8n1s (or non-8n2s)
 if [ "$TOPO_KIND" = "8n1s" ]; then
     for tc in "$@"; do
-        case "$tc" in 95|96|97|98)
+        case "$tc" in 95|96|97|98|99)
             echo "FATAL: TC$tc requires --8n2s topology. Re-run with --8n2s." >&2
             exit 2
         ;; esac
