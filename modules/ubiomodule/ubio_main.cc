@@ -300,6 +300,13 @@ matchesNetEndpoint(const std::string &ep, int nid)
     return ep == ("ipc:///tmp/networksim_m" + std::to_string(nid) + "_p1");
 }
 
+struct PendingBackstoreFill {
+    uint64_t fireTick;
+    uint64_t pa;
+    bool found;
+    UBCCController::BackstoreEntry entry;
+};
+
 struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     UBCCController &ubcc;
     Port *gem5Port;
@@ -308,6 +315,13 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     int socketId;
     uint64_t &tickRef;
     std::map<uint64_t, UBCCController::BackstoreEntry> store;
+
+    // T_ubio_dram backstore read delay (design: latency_tuning_constraints.md §6.2)
+    // When non-zero, backstore reads are deferred by this amount to model real
+    // DRAM latency instead of returning instantaneously. Configurable via env var
+    // UBIO_DRAM_DELAY_PS at ubio process startup.
+    uint64_t _ubioDramDelayPs = 0;
+    std::vector<PendingBackstoreFill> _pendingFills;
 
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
                                int nid, int sid, uint64_t &t)
@@ -347,7 +361,17 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (found) {
             e = it->second;
         }
-        ubcc.onBackstoreFillComplete(pa, found, e);
+        // T_ubio_dram: when delay is configured, defer the fill-complete
+        // callback to model real DRAM read latency instead of returning
+        // instantaneously (design: latency_tuning_constraints.md §6.2).
+        // UBCC will enqueue this requester into _residentWaiters and
+        // replay it when the fill fires later.
+        if (_ubioDramDelayPs > 0) {
+            _pendingFills.push_back(
+                {tickRef + _ubioDramDelayPs, pa, found, e});
+        } else {
+            ubcc.onBackstoreFillComplete(pa, found, e);
+        }
     }
 
     void hostIssueBackstoreWrite(uint64_t pa) override {
@@ -363,6 +387,22 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         const bool existed = store.erase(pa) > 0;
         ubcc.directory().bloomRemove(pa);
         ubcc.onBackstoreDeleteAck(pa, existed);
+    }
+
+    // Drain expired pending backstore fills (T_ubio_dram expiry).
+    // Must be called from the main loop every tick after clock advances,
+    // so delayed fills fire at the correct simulated time.
+    void drainPendingFills(uint64_t tick) {
+        if (_pendingFills.empty()) return;
+        auto it = _pendingFills.begin();
+        while (it != _pendingFills.end()) {
+            if (tick >= it->fireTick) {
+                ubcc.onBackstoreFillComplete(it->pa, it->found, it->entry);
+                it = _pendingFills.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
 };
@@ -647,6 +687,11 @@ main(int argc, char **argv)
     UBCCController ubcc(nid, sid, nullptr, 64,
                           ResidentDir::DefaultBloomBytes, 0, g_numSockets, g_numNodes);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
+    // T_ubio_dram: backstore read delay (ps).  When set, backstore reads are
+    // deferred by this amount to model real DRAM latency instead of returning
+    // instantaneously.  See docs/measure/latency_tuning_constraints.md §6.2.
+    const char* envDramDelay = std::getenv("UBIO_DRAM_DELAY_PS");
+    if (envDramDelay) host._ubioDramDelayPs = std::strtoull(envDramDelay, nullptr, 10);
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
     bool gem5Done = false, netDone = false;
@@ -963,6 +1008,9 @@ main(int argc, char **argv)
             // we stay clock-locked to the slowest peer.
             std::this_thread::yield();
         }
+        // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
+        // callbacks simulate real DRAM read latency.
+        host.drainPendingFills(tick);
     }
 
     return 0;
