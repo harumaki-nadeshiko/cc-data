@@ -32,7 +32,8 @@ int main(int argc, char **argv)
     if (argc >= 2) node_id = parse_int(argv[1]);
     if (argc >= 3) cpu_index = parse_int(argv[2]);
     int socket_id = cpu_index % NUM_SOCKETS;
-    int primary = (cpu_index < NUM_SOCKETS);
+    int local_cpu = cpu_index % 4;
+    int primary = (local_cpu < NUM_SOCKETS);
     int my_pos = ring_pos(node_id, socket_id);
 
     if (!primary) { _exit_program(0); return 0; }

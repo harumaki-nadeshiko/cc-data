@@ -41,7 +41,10 @@ int main(int argc, char **argv)
     if (argc >= 2) node_id = parse_int(argv[1]);
     if (argc >= 3) cpu_index = parse_int(argv[2]);
     int socket_id = cpu_index % NUM_SOCKETS;
-    int primary = (cpu_index < NUM_SOCKETS);
+    // cpu_index is GLOBAL (per-node offset = node_id * CPUS_PER_NODE).
+    // CPUS_PER_NODE = DEFAULT_D * DEFAULT_L = 2 * 2 = 4.
+    int local_cpu = cpu_index % 4;
+    int primary = (local_cpu < NUM_SOCKETS);
     if (!primary) { _exit_program(0); return 0; }
 
     emit_e2e_meta(node_id, "TC96");
