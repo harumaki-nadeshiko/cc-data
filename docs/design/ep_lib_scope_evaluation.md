@@ -155,13 +155,180 @@
 
 ---
 
-## 5. 与交付形态的交叉（回指 ep_static_lib_review.md §3）
+## 5. 交付方向纠正（推翻 ep_static_lib_review.md §3 的假设）
 
-无论范围取方案乙还是丙，"拿到 binary 后能否改"仍取决于**交付形态**：
-- **链接期 .a（3a）**：范围=方案乙即可，融合在 proprietary 构建时；binary 后不可改（只能改 env
-  var / chi_params.json / ubio）。
-- **.so 插件（3b）**：范围仍=方案乙，但库要额外导出 C ABI 工厂 + `-fvisibility=hidden`；binary 后
-  可换整个 EP 库。**这才真正兑现"binary 后有修改空间"**，但依赖 proprietary 方提供插件 ABI。
+**`ep_static_lib_review.md §3` 假设"对方给我们黑盒 binary，能否 binary 后改取决于对方给不给
+插件点"——这个假设是错的。** 真实交付流是反过来的：
 
-→ **范围选方案乙是确定的；能不能在 binary 后改，取决于对方给不给 .so 插件点。这仍是两天内必须
-向对方确认的头号问题。**
+> **我们先交付 gem5（含 EP+UBAdapter 源码）→ 他们把它合进 proprietary-sim → 产出 binary。**
+> 且他们对 memory / cache-coherence 子系统基本不改动。
+
+在这个方向下，一个关键结论：
+
+- **所有 dlopen 插入点、C ABI、`libep_strategy.so` 加载逻辑，都在我们交付的 gem5 源码里，是我们
+  现在就写死的。** 他们编译时原样带进 binary。
+- 技术前提**已满足**：`gem5.opt` 已链接 `libdl.so.2`（实测 `ldd`），dlopen/dlsym 运行时支持天生
+  存在，无需 gem5 插件框架，也**无需对方做任何配合**。
+- 因此"binary 定型后能否热插策略 `.so`" = **我们现在有没有在 EP 里埋好 dlopen 桩** —— 完全我方
+  可控，不再是"两天内要问对方"的阻塞项。
+- memory：确认使用 gem5 标准 memory（SimpleMemory），**不需要**为对接对方 memory 做注入回调。
+  `populateGrantData` 里对 `RubySystem::getPhysMem()` 的调用保持现状即可。
+
+---
+
+## 6. 双层独立性架构（本方案核心）
+
+把独立性拆成两层，各自解决不同诉求：
+
+```
+┌──────────── 第一层：编译期模块化（源码交付，他们照编）─────────────┐
+│ gem5 (我们交付) → 他们合进 proprietary-sim → binary                │
+│                                                                    │
+│  EPSNF / EPRNF / MetaRNF ─ CHI 胶水，留 gem5 (SimObject/事件循环)  │
+│         │ 调用决策                                                 │
+│  EPBackend ──────────────── 策略密集，POD 进出                     │
+│         │                                                          │
+│  ┌───── 第二层：运行期插件（我方预埋 dlopen 桩）──────┐             │
+│  │  EPBackend 内的"策略调用点"先 dlsym 找 libep_strategy.so，      │
+│  │  找到就用 .so 的实现，找不到就用【编译进 binary 的内置默认】     │
+│  │       │ dlopen/dlsym (C ABI, POD 进出)                          │
+│  │  libep_strategy.so（可选覆盖层，binary 后可单独替换）           │
+│  │    · 地址映射 · grant 决策 · 数据源策略                         │
+│  │    · recall/inval/upgrade 决策 · retry-delay 策略               │
+│  └────────────────────────────────────────────────────┘           │
+│                                                                    │
+│  UBAdapter (传输接缝，留 gem5，走 framework/zmq — framework 不专有化)│
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**两层的自由度对照：**
+
+| 层 | 改什么 | 何时能改 | 需要对方参与？ |
+|----|--------|---------|--------------|
+| 第一层：源码 | 任意逻辑（含 CHI 胶水、事件时序） | 合并**前**随便改；合并**后**要重新交付源码 + 他们重编 | 合并后需要（重新集成） |
+| 第二层：`.so` 热插 | 纯函数决策层（grant/地址/recall/upgrade/retry-delay 策略） | **binary 定型后，只换 `libep_strategy.so`** | **不需要** |
+
+第二层就是"拿到 binary 后仍有修改空间"的兑现，**钥匙在我方，现在就能埋桩**。
+
+---
+
+## 7. dlopen 桩的形态（关键设计约束）
+
+### 7.1 "可选覆盖层 + 内置默认" 模型
+桩不能依赖被热插的逻辑本身，否则 `.so` 缺失时无法启动。正确形态：
+
+```cpp
+// EPBackend 内（伪代码）。桩本身编译进 binary，不依赖 .so 是否存在。
+// 内置默认实现始终编译进 binary → 即使没有 .so，binary 也能独立跑。
+struct EpStrategyVTable {
+    void (*decide_grant)(const GrantRequest*, GrantDecision*);
+    int  (*home_node)(int node_id, uint64_t pa);
+    void (*decide_upgrade)(const UpgradeInfo*, UpgradeDecision*);
+    uint64_t (*retry_delay_cycles)(int retryCount, uint64_t lastTick);
+    // ... 其它纯函数决策
+};
+
+static EpStrategyVTable g_strategy = { /* 内置默认实现的函数指针 */ };
+
+void ep_strategy_init() {
+    const char* path = std::getenv("EP_STRATEGY_SO");     // 可选
+    if (!path) return;                                    // 无 .so → 用内置默认
+    void* h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) { warn("EP_STRATEGY_SO load failed, using built-in"); return; }
+    // 逐个 dlsym；任何一个缺失就保留该项的内置默认（部分覆盖也允许）
+    if (auto f = dlsym(h, "ep_decide_grant"))   g_strategy.decide_grant = (...)f;
+    if (auto f = dlsym(h, "ep_home_node"))       g_strategy.home_node    = (...)f;
+    // ...
+}
+```
+
+要点：
+1. **内置默认始终在 binary 里** → 没有 `.so` 也能跑（和 push-grant 的 pull-fallback 同一哲学）。
+2. **`.so` 是可选覆盖** → 有则覆盖对应决策，可部分覆盖。
+3. **通过 env var `EP_STRATEGY_SO` 指定路径** → 与现有 `EP_RETRY_CYCLES` 等 env 旋钮一致。
+4. **`.so` 必须无状态（纯函数）**：所有状态（`_requesterLines`、`_pendingGrantTxns` 等）由
+   EPBackend 持有并通过 POD struct 传入传出。这样 `.so` 可安全替换，不破坏 gem5 checkpoint。
+
+### 7.2 C ABI 接口草图（只覆盖"纯函数决策层"）
+
+```c
+// libep_strategy.so 导出的 C ABI（POD 进出，零 gem5/SLICC 类型）
+extern "C" {
+  // 地址映射
+  int      ep_home_node(int node_id, uint64_t pa);
+  int      ep_home_socket(int node_id, uint64_t pa);
+  uint64_t ep_build_dsm_pa(int tgt, int home, uint64_t offset, int socket);
+  uint64_t ep_dsm_offset(uint64_t pa);
+  int      ep_is_dsm(int node_id, uint64_t pa);
+
+  // grant 决策
+  typedef struct { uint64_t linePa; int neededPerm, writeIntent, ingressSocket, homeNode; } GrantRequest;
+  typedef struct { int action; int reqType; uint64_t baseEpoch, reqId;
+                   int recallOwner, dataSource; } GrantDecision;
+  void ep_decide_grant(const GrantRequest*, GrantDecision*);
+
+  // 数据源填充策略（数据读取通过回调，避免依赖 gem5 physMem 类型）
+  typedef int (*read_phys_mem_fn)(uint64_t pa, uint8_t* buf, int sz, void* ctx);
+  int  ep_populate_grant_data(uint64_t homePa, int dataSource,
+                              uint8_t* outBuf, int bufSize,
+                              read_phys_mem_fn readFn, void* ctx);
+
+  // recall / invalidation / upgrade 决策
+  void ep_decide_recall (const void* in, void* out);
+  void ep_decide_inval  (const void* in, void* out);
+  void ep_decide_upgrade(const void* in, void* out);
+
+  // retry/backoff 策略（返回下次重试 delay cycles；调度执行留 gem5）
+  uint64_t ep_retry_delay_cycles(int retryCount, uint64_t lastAttemptTick);
+}
+```
+
+---
+
+## 8. 埋桩范围 = "高修改概率 ∩ 纯函数决策"（前几节的交集）
+
+| 逻辑 | 可 dlopen 热插？ | binary 后自由度 |
+|------|----------------|----------------|
+| 地址映射 / DSM 布局 | ✅（纯函数，零 gem5 类型） | 高 |
+| grant 决策（EPBackend） | ✅（POD 进出 + 回调） | 高 |
+| 数据源填充策略 | ✅（回调读 physMem） | 高 |
+| recall / upgrade / inval 决策 | ✅（POD 进出） | 高 |
+| retry-delay 策略 | ✅（返回 delay，调度留 gem5） | 高 |
+| **CHI snoop 状态机（EPRNF）** | ❌ 只能外化"决策部分"，发消息/时序留 gem5 | **低（binary 后不可改执行）** |
+| **CHI 消息构造 / scheduleEvent 时序** | ❌（有状态、绑事件循环） | 低 |
+| **传输 / ZMQ 收发（UBAdapter）** | ❌（绑事件循环；但 framework 我方自持，可编译期改） | 低（但我方可控） |
+
+**结论**：EPBackend 的决策层几乎全部可热插；EPRNF 的 CHI snoop 逻辑虽也高修改概率，但只能外化
+"决策"、不能外化"执行"——它的 binary 后自由度天然受限，属于第一层（改源码+重新交付）。
+
+---
+
+## 9. 落地清单与工作量（双层方案）
+
+| 任务 | 工时 | 说明 |
+|------|------|------|
+| 定义 `ep_strategy.h`（C ABI + POD struct + VTable） | 0.5 天 | 只含纯函数决策接口 |
+| EPBackend 埋 dlopen 桩 + 内置默认实现 + `ep_strategy_init()` | 1.5 天 | 把现有决策抽成"内置默认"，走 VTable 间接调用 |
+| 抽 NodeAddressMap 决策进 `.so`（最易，先做验证机制） | 0.5 天 | 纯函数，PoC 首选 |
+| 抽 grant / recall / upgrade / retry-delay 决策 | 2 天 | 逐个从 EPBackend 迁到 VTable |
+| 建 `libep_strategy/` 独立 CMake 项目（编 `.so`，可选覆盖） | 0.5 天 | `-fvisibility=hidden` + 只导出 `ep_*` |
+| E2E 回归验证（有 `.so` / 无 `.so` 两种路径都跑 TC 全集） | 1 天 | 确认内置默认 == `.so` 行为 |
+| 文档（本文件 + `.so` 开发者指南） | 0.5 天 | |
+| **合计** | **~6.5 天** | 不含第一层的 gem5 源码模块化（那部分本就在交付源码里） |
+
+**风险**：主要是把 EPBackend 现有决策"提纯"成无状态纯函数——目前决策和状态更新（`_requesterLines`
+等）交织在 `handleRemoteMiss` 里，需要小心把"决定"和"改状态/发消息"分开（决定进 `.so`，改状态/
+发消息留 EPBackend）。这也是唯一需要动现有代码结构的地方。
+
+---
+
+## 10. 最终建议
+
+1. **技术边界**：方案乙（整个 EP 目录作为 gem5 内一批 SimObject 源码交付）——这是第一层。
+2. **可修改性边界**：在 EPBackend 埋 dlopen 桩，把"高修改概率 ∩ 纯函数决策"做成 `libep_strategy.so`
+   可选覆盖层（内置默认兜底）——这是第二层，兑现"binary 后可改"，**我方现在就能埋，不依赖对方**。
+3. **不再是阻塞项**：`ep_static_lib_review.md §3/§7` 里"必须问对方交付形态/插件 ABI"的结论，在
+   "我方交付 gem5"的正确方向下**作废**。唯一还值得跟对方对齐的是：gem5 版本号一致、他们确实不改
+   memory/coherence（已口头确认）、以及 SimObject 参数生成流程保留。
+4. **PoC 起步**：先拿 NodeAddressMap（纯函数、零耦合）做 dlopen 桩的最小验证，跑通"换 `.so` 改地址
+   映射行为"，机制成立后再铺开到 grant/upgrade 等决策。

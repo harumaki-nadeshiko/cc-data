@@ -1,8 +1,12 @@
 # EP+UBAdapter 库化 & 参数外置方案 — 重新审视与工作量分析
 
 > 日期: 2026-07-10 | 审视对象: `ep_static_lib_plan.md`、`p2_8node_externalize_plan.md`
-> 场景: 两天后 gem5/ submodule 版本固定，与公司私有仿真器框架合并，最终只能拿到
-> Proprietary-Gem5 binary。目标：拿到 binary 后仍保留对 EP+UBAdapter 的修改空间。
+> 场景: 两天后 gem5/ submodule 版本固定，与公司私有仿真器框架合并。
+>
+> ⚠️ **本文 §3 关于"交付形态取决于对方"的分析已被推翻。** 真实交付流是
+> **我们交付 gem5(含 EP) → 他们合入 proprietary-sim**，dlopen 桩由我方预埋、不依赖对方。
+> 最新且正确的方案见 **`ep_lib_scope_evaluation.md §5–§10（双层架构）`**。本文的依赖面分析
+> (§1)、build-generated 头 ABI 风险(§2)、工作量拆解(§5) 仍然有效，但结论以 scope_evaluation 为准。
 
 ---
 
