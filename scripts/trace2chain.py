@@ -106,12 +106,27 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
     # the right instance and a later re-issue opens a fresh one.
     open_key = {}
     inst_counter = {}
+    # reqId -> most-recently-opened chain key that carries a real PA. nsim
+    # events (pa=0x0 but real reqId) are woven into this chain so the network
+    # hop (ubio SEND_NET -> nsim RECV -> nsim FWD -> ubio RECV_NET) becomes
+    # visible as distinct segments instead of one merged block. Without this,
+    # nsim RECV/FWD land in a separate rid:? chain and the real link latency
+    # (nsim RECV->FWD) gets fused with the PDES sync-alignment tail (FWD->recv)
+    # into a single opaque segment.
+    last_pa_key_for_rid = {}
 
     for ev in events:
         rid = ev["reqId"]
         if rid < min_req_id or rid in exclude_req_ids:
             continue
         pa = ev["pa"]
+
+        # nsim event (pa=0x0, real reqId): attach to the currently-open PA chain
+        # for this reqId if one exists, so the network hop is shown inline.
+        if ev["comp"] == "nsim" and pa == "0x0" and rid in last_pa_key_for_rid:
+            chains[last_pa_key_for_rid[rid]]["events"].append(ev)
+            continue
+
         group = (rid, pa if pa != "0x0" else "?")
 
         # The tracer emits some gem5 SEND lines twice (exact duplicate at the
@@ -141,11 +156,32 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
         key = open_key[group]
         if ev["pa"] != "0x0":
             chains[key]["pa"] = ev["pa"]
+            # Remember this as the chain nsim events for this reqId should join.
+            last_pa_key_for_rid[rid] = key
         chains[key]["events"].append(ev)
+
+    # Within the same tick, order events by causal role so a network hop reads
+    # correctly: ubio SEND_NET (leaves ubio) -> nsim RECV (enters nsim) -> ...
+    # -> nsim FWD (leaves nsim) -> ubio RECV_NET (enters peer ubio). Without
+    # this, same-tick events (e.g. nsim RECV and ubio SEND_NET both at the send
+    # tick) sort arbitrarily and scramble the segment attribution.
+    def _tiebreak(e):
+        comp, evt = e["comp"], e["event"]
+        order = {
+            ("gem5", "SEND"): 0,
+            ("ubio", "RECV_GEM5"): 1,
+            ("ubio", "SEND_NET"): 2,
+            ("nsim", "RECV"): 3,
+            ("nsim", "FWD"): 4,
+            ("ubio", "RECV_NET"): 5,
+            ("ubio", "SEND_GEM5"): 6,
+            ("gem5", "RECV"): 7,
+        }
+        return order.get((comp, evt), 9)
 
     # Sort events within each chain by tick, then build summary
     for rid, ch in chains.items():
-        ch["events"].sort(key=lambda e: e["tick"])
+        ch["events"].sort(key=lambda e: (e["tick"], _tiebreak(e)))
         if ch["events"]:
             first = ch["events"][0]
             last = ch["events"][-1]

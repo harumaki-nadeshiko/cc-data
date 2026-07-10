@@ -22,6 +22,22 @@ namespace framework {
 // - syncInterval = clock lookahead window.
 // Invariant: syncInterval >= linkLatency (violating this prevents the local
 // clock from advancing when the peer sends syncs at linkLatency cadence).
+//
+// FIDELITY NOTE (conservative PDES quantization):
+//   syncInterval is the conservative-synchronization lookahead. Because each
+//   process only advances its clock in steps bounded by min(peer safeTs), a
+//   message that becomes "ready" at readyTick is not actually delivered until
+//   the receiver's clock ticks past it — quantized to ~syncInterval. This adds
+//   a per-network-hop alignment tail ON TOP OF the real link latency (visible
+//   in the trace visualizer as the "nsim_sync" / pale segment, distinct from
+//   the "nsim_link" violet segment = the true configured link latency).
+//   This tail is a simulation-synchronization artifact, NOT queueing/congestion
+//   (nsim models a fixed single-hop link with no bandwidth/contention model).
+//   To reduce it in production, LOWER syncInterval (e.g. via env var
+//   EP_SYNC_INTERVAL_PS, see Port.cc). Tradeoff: smaller syncInterval => finer
+//   time resolution / lower alignment error, but MORE sync heartbeats =>
+//   higher IPC overhead and slower wall-clock simulation. Must stay
+//   >= linkLatency (see invariant above).
 static constexpr uint64_t kDefaultSyncInterval = 100000;
 static constexpr uint64_t kDefaultLinkLatency  = 100000;
 

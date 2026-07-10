@@ -18,11 +18,14 @@ TICK2NS = 1e-3  # ps -> ns — single conversion function
 
 SEG_COLORS = {
     "gem5→ubio":  "#3b82f6",
-    "ubio→gem5":  "#22c55e",
     "ubio→nsim":  "#f97316",
+    "nsim_link":  "#7c3aed",   # nsim RECV -> FWD : real configured link latency
+    "nsim_sync":  "#cbd5e1",   # nsim FWD  -> ubio RECV_NET : PDES sync-alignment
     "nsim→ubio":  "#8b5cf6",
     "nsim_fifo":  "#71717a",
+    "ubio→gem5":  "#22c55e",
     "ubio_proc":  "#facc15",
+    "gem5_proc":  "#16a34a",   # gem5-internal (e.g. snoop RECV->SEND)
     "other":      "#94a3b8",
 }
 
@@ -41,12 +44,23 @@ TYPE_COLORS = {
 def classify_segment(from_ev, to_ev):
     fc = from_ev["comp"]
     tc = to_ev["comp"]
+    fe = from_ev["event"]
+    te = to_ev["event"]
     if fc == "gem5" and tc == "ubio": return "gem5→ubio"
     if fc == "ubio" and tc == "gem5": return "ubio→gem5"
-    if fc == "ubio" and tc == "nsim": return "ubio→nsim"
-    if fc == "nsim" and tc == "ubio": return "nsim→ubio"
-    if fc == "nsim" and tc == "nsim": return "nsim_fifo"
+    # nsim now woven inline. Split the network hop into two meaningful parts:
+    #   nsim RECV -> nsim FWD    : the real configured link latency (e.g. 405ns)
+    #   nsim FWD  -> ubio RECV_* : PDES conservative-sync alignment tail
+    #                              (quantized by syncInterval; NOT queueing)
+    if fc == "ubio" and tc == "nsim": return "ubio→nsim"     # ubio SEND_NET -> nsim RECV
+    if fc == "nsim" and tc == "nsim":
+        if fe == "RECV" and te == "FWD": return "nsim_link"
+        return "nsim_fifo"
+    if fc == "nsim" and tc == "ubio":
+        if fe == "FWD": return "nsim_sync"                   # FWD -> ubio RECV_NET
+        return "nsim→ubio"
     if fc == "ubio" and tc == "ubio": return "ubio_proc"
+    if fc == "gem5" and tc == "gem5": return "gem5_proc"   # e.g. snoop: RECV -> SEND
     return "other"
 
 
@@ -190,7 +204,7 @@ def make_html(data, target_ns=None):
   <label>Min ev:</label>
   <input id="f-ev" type="number" value="1" min="1" style="width:45px" oninput="render()">
   <label>Zoom:</label>
-  <input id="f-zoom" type="range" min="0.1" max="100" step="0.1" value="1" style="width:100px" oninput="render()">
+  <input id="f-zoom" type="range" min="1" max="50" step="0.1" value="1" style="width:100px" oninput="render()">
   <span id="zoom-val" style="font-size:11px;color:#64748b;min-width:30px;display:inline-block">1.0x</span>
   <button onclick="toggleAll()">expand/collapse</button>
   <button onclick="exportCSV()">export CSV</button>
@@ -219,10 +233,13 @@ pa=... ev=44 hops=19<br>
 <b>Segment colors:</b><br>
 <span style="display:inline-block;width:40px;height:12px;background:#3b82f6;border-radius:2px"></span> Blue = gem5→ubio<br>
 <span style="display:inline-block;width:40px;height:12px;background:#22c55e;border-radius:2px"></span> Green = ubio→gem5<br>
-<span style="display:inline-block;width:40px;height:12px;background:#f97316;border-radius:2px"></span> Orange = ubio→nsim<br>
+<span style="display:inline-block;width:40px;height:12px;background:#f97316;border-radius:2px"></span> Orange = ubio→nsim (enter net)<br>
+<span style="display:inline-block;width:40px;height:12px;background:#7c3aed;border-radius:2px"></span> Violet = <b>nsim link latency</b> (configured, e.g. 405ns)<br>
+<span style="display:inline-block;width:40px;height:12px;background:#cbd5e1;border-radius:2px"></span> Pale = <b>PDES sync alignment</b> (nsim FWD→recv; quantized by syncInterval, NOT queueing)<br>
 <span style="display:inline-block;width:40px;height:12px;background:#8b5cf6;border-radius:2px"></span> Purple = nsim→ubio<br>
 <span style="display:inline-block;width:40px;height:12px;background:#71717a;border-radius:2px"></span> Gray = nsim FIFO delay<br>
-<span style="display:inline-block;width:40px;height:12px;background:#facc15;border-radius:2px"></span> Yellow = ubio processing
+<span style="display:inline-block;width:40px;height:12px;background:#facc15;border-radius:2px"></span> Yellow = ubio processing<br>
+<span style="display:inline-block;width:40px;height:12px;background:#16a34a;border-radius:2px"></span> Dk green = gem5 internal (snoop)
 </div>
 <div style="flex:0 0 280px">
 <b>Dashed red line:</b> target latency<br>
@@ -276,7 +293,7 @@ function render() {{
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
     var mev = parseInt(document.getElementById("f-ev").value) || 1;
-    var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 0.1, 100);
+    var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 1, 50);
     document.getElementById("zoom-val").textContent = zoom.toFixed(1) + "x";
     var div = document.getElementById("chains");
     div.innerHTML = "";
@@ -463,7 +480,7 @@ function render() {{
 
     // F.1.4: aggregate stats table
     var atbl = document.getElementById("agg-table");
-    var segOrder = ["gem5→ubio","ubio→nsim","nsim_fifo","nsim→ubio","ubio→gem5","ubio_proc","other"];
+    var segOrder = ["gem5→ubio","ubio→nsim","nsim_link","nsim_sync","nsim_fifo","nsim→ubio","ubio→gem5","ubio_proc","gem5_proc","other"];
     var html = "<b>Segment Statistics</b> <span style='color:#94a3b8;font-size:11px'>(gaps >10us excluded; hover on bars to see raw values)</span>" +
                "<table><tr><th>Type</th><th>Count</th><th>P50(ns)</th><th>Avg(ns)</th><th>P99(ns)</th><th>Large gaps</th></tr>";
     for (var si = 0; si < segOrder.length; si++) {{
