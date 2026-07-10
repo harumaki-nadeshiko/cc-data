@@ -273,7 +273,7 @@ echo "Workload: $WORKLOAD  (compiled per-TC; path is constant)"
 # Sanity: warn if a --2s-only TC is passed under 1s
 if [ "$TOPO_KIND" = "1s" ]; then
     for tc in "$@"; do
-        case "$tc" in 32|33|34|35|39)
+        case "$tc" in 32|33|34|35|39|81)
             echo "FATAL: TC$tc requires --2s topology. Re-run with --2s." >&2
             exit 2
         ;; esac

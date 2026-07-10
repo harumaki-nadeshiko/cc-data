@@ -58,7 +58,7 @@ fi
 # fall back to per-TC defaults.
 if [ -z "${NUM_SOCKETS:-}" ]; then
     case "$TC_ID" in
-        32|33|34|35|39|95|96|97|98) NUM_SOCKETS=2 ;;
+        32|33|34|35|39|81|95|96|97|98) NUM_SOCKETS=2 ;;
         *)              NUM_SOCKETS=1 ;;
     esac
 fi

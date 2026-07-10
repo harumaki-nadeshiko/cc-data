@@ -1272,6 +1272,7 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc34_dual_socket_pingpong",
         "e2e_tc35_numa_latency_stress",
         "e2e_tc39_dual_socket_same_pa_interference",
+        "e2e_tc81_cross_socket_latency",
         "e2e_tc95_8n2s_barrier_stress",
         "e2e_tc96_8n2s_cross_socket_read",
         "e2e_tc97_8n2s_pingpong",
