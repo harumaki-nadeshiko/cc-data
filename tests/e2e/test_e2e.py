@@ -90,6 +90,8 @@ TESTCASES = {
     97: "e2e_tc97_8n2s_pingpong",
     98: "e2e_tc98_8n2s_hotspot",
     99: "e2e_tc99_8n2s_perplane_slots",
+    100: "e2e_tc100_8n2s_batch_rs",
+    101: "e2e_tc101_8n2s_direct_fwd",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1203,6 +1205,28 @@ def verify_tc99(reads, lines):
     return True, "TC99 PASSED: 8n2s per-plane slot contention (16 done markers MATCH)", []
 
 
+def verify_tc100(reads, lines):
+    """TC100: 8n2s batch RS. Same cache line hammered by 16 readers, one final MATCH."""
+    if len(reads) < 1:
+        return False, f"TC100 FAILED: expected 1 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC100 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    batch_lines = [l for l in lines if "BATCH-RS" in l]
+    return True, f"TC100 PASSED: batch RS (1 final MATCH, {len(batch_lines)} BATCH-RS grants)", []
+
+
+def verify_tc101(reads, lines):
+    """TC101: 8n2s direct-forward chain. 4 READ_VAL, all MATCH."""
+    if len(reads) < 4:
+        return False, f"TC101 FAILED: expected 4 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC101 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    fwd_lines = [l for l in lines if "C4-FORWARD" in l]
+    return True, f"TC101 PASSED: direct-forward chain ({len(fwd_lines)} C4 forward events)", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1260,6 +1284,7 @@ VERIFIERS = {
     91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
     95: verify_tc95,
     96: verify_tc96, 97: verify_tc97, 98: verify_tc98, 99: verify_tc99,
+    100: verify_tc100, 101: verify_tc101,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1289,6 +1314,8 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc97_8n2s_pingpong",
         "e2e_tc98_8n2s_hotspot",
         "e2e_tc99_8n2s_perplane_slots",
+        "e2e_tc100_8n2s_batch_rs",
+        "e2e_tc101_8n2s_direct_fwd",
     }
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [

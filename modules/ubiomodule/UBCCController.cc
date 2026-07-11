@@ -500,20 +500,9 @@ UBCCController::processOuterRequest(
                 }
             }
 
-            // §6 Q3=C: RS merge RS — if incoming is RS and queue already has RS, skip
-            bool alreadyHasRS = false;
-            for (auto &pr : q) {
-                if (pr.reqType == UBCC_OuterReqType::GlobalReadShared) {
-                    alreadyHasRS = true;
-                    break;
-                }
-            }
-            if (isRS && alreadyHasRS) {
-                printf("[UBCC-QUEUE] pa=0x%lx action=merge "
-                       "requester=%d reqType=RS writeIntent=0 reqId=%lu depth=%zu\n",
-                       line_pa, requesterNode, reqId, q.size());
-                return static_cast<UBCC_OuterGrantType>(-1);
-            }
+            // C3: RS merge dedup removed — batch RS grant handles all RS in one shot
+            // §6 Q3=C was: RS merge RS — if incoming is RS and queue already has RS, skip
+            // Removed to let all RS requests accumulate for batch grant in replayPendingRequesters.
 
             if (q.size() < MAX_PENDING_PER_PA) {
                 PendingRequester pr;
@@ -827,20 +816,7 @@ UBCCController::processOuterRequest(
                     }
                 }
 
-                // §6 RS merge
-                bool alreadyHasRS = false;
-                for (auto &pr : q) {
-                    if (pr.reqType == UBCC_OuterReqType::GlobalReadShared) {
-                        alreadyHasRS = true;
-                        break;
-                    }
-                }
-                if (isRS && alreadyHasRS) {
-                    printf("[UBCC-QUEUE] pa=0x%lx action=merge "
-                           "requester=%d reqType=RS writeIntent=0 reqId=%lu depth=%zu\n",
-                           line_pa, requesterNode, reqId, q.size());
-                    return static_cast<UBCC_OuterGrantType>(-1);
-                }
+                // C3: RS merge dedup removed — see comment at the other location (~L503)
 
                 if (q.size() < MAX_PENDING_PER_PA) {
                     PendingRequester pr;
@@ -2756,9 +2732,67 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                pr.writeIntent, pr.reqId, pr.epoch, rebaseEpoch,
                mesiStateName(entry.state));
 
+        // ── C3 Batch RS path: G_S + RS → direct grant without outstanding ──
+        if (entry.state == MESIState::G_S &&
+            pr.reqType == UBCC_OuterReqType::GlobalReadShared) {
+
+            printf("[UBCC-QUEUE-REPLAY-BATCH] pa=0x%lx requester=%d "
+                   "reqType=RS rebaseEpoch=%lu committedState=%s\n",
+                   linePa, pr.node, rebaseEpoch, mesiStateName(entry.state));
+
+            // Build a temporary outstanding for commit/tombstone/grant construction
+            OutstandingRequest tempOst;
+            tempOst.linePa = linePa;
+            tempOst.baseEpoch = rebaseEpoch;
+            tempOst.reservedEpoch = allocateReservedEpoch(entry);
+            tempOst.reqId = pr.reqId;
+            tempOst.opType = OpType::GRANT_HANDSHAKE;
+            tempOst.stage = OpStage::WAITING_CLEAR;
+            tempOst.requesterNode = pr.node;
+            tempOst.requesterSocket = pr.socket;
+            tempOst.intendedState = MESIState::G_S;
+            tempOst.intendedSharersMask = entry.sharersMask | (1ULL << pr.node);
+            tempOst.intendedOwnerNode = -1;
+            tempOst.intendedDirty = false;
+            tempOst.reqType = pr.reqType;
+            tempOst.writeIntent = false;
+            tempOst.replayArmed = true;
+
+            // Data from _lineDataCache (recall-sourced), or HomeMemory
+            auto cacheIt = _lineDataCache.find(linePa);
+            if (cacheIt != _lineDataCache.end()) {
+                tempOst.dataValid = true;
+                memcpy(tempOst.dataBuf, cacheIt->second.data(), 64);
+                tempOst.dataSource = GrantDataSource::RecallBuffer;
+            } else {
+                tempOst.dataSource = GrantDataSource::HomeMemory;
+            }
+
+            // Commit directly (no Clear needed for shared)
+            commitIntendedResult(entry, tempOst);
+            _directory.update(linePa, entry);
+            validateSharersCanonical(linePa);
+            retireToTombstone(tempOst, true);
+            refreshPinnedBit(linePa);
+
+            // Push-grant to requester
+            if (_outbound) {
+                CoherenceMessage push;
+                buildGrantResponse(tempOst, push);
+                _outbound->sendGrantPush(push);
+                printf("[PUSH-GRANT] BATCH-RS home=%d pa=0x%lx "
+                       "requester=%d sock=%d grantType=%d\n",
+                       _nodeId, linePa, pr.node, pr.socket,
+                       static_cast<int>(grantTypeFromIntended(tempOst.intendedState)));
+            }
+
+            continue;  // skip processOuterRequest, continue to next queued entry
+        }
+        // ── End C3 Batch RS ──
+
         // Replay as fresh processOuterRequest — it sees the NEW committed state.
         // The outcome depends on the current committed state:
-        //   G_S + RS → direct GRANT_HANDSHAKE (no recall/invalidate)
+        //   G_S + RS → direct GRANT_HANDSHAKE (no recall/invalidate)   -- handled above
         //   G_S + RU → INVALIDATE + GRANT_HANDSHAKE
         //   G_E/G_M + RS/RU → new RECALL + GRANT_HANDSHAKE
         processOuterRequest(linePa, pr.reqType, pr.writeIntent,

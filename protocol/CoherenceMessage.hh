@@ -55,6 +55,7 @@ enum CoherenceMessageFlags : uint32_t {
     CFLAG_HAS_DATA       = 1u << 4,
     CFLAG_IS_READ_RECALL = 1u << 5,
     CFLAG_BUSY            = 1u << 6,
+    CFLAG_DATA_FORWARDED  = 1u << 7,  // C4: data was direct-forwarded from owner to requester
 };
 
 // ---- Message Header (fixed envelope) ----
