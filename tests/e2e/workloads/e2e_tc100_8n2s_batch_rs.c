@@ -1,13 +1,13 @@
-/* TC100: 8-node dual-socket batch RS performance test (C3).
- * 16 readers (2 per node × 8 nodes) repeatedly read the SAME cache line.
- * This exercises the G_S shared-read scenario where multiple RS requests
- * queue up at the home UBCC and benefit from C3 batch grant.
+/* TC100: 8-node dual-socket batch RS grant stress test (C3).
+ *
+ * KEY DESIGN: All 16 primary CPUs read the SAME cache line simultaneously
+ * after a barrier. This triggers N RS requests arriving at the home UBCC
+ * while a live outstanding exists → queue → batch grant on replay.
  *
  * Flow:
- *   1. Node 0 socket-0 writes "seed" value to establish initial data
- *   2. Barrier — all nodes arrive
- *   3. All 16 primary CPUs read the same line 2 times each
- *   4. Node 0 socket-0 reads done marker (same line re-used)
+ *   1. Node 0 socket-0 writes seed (0xCAFE0000u) to hot line, barrier
+ *   2. ALL 16 CPUs read the hot line ROUNDS times simultaneously
+ *   3. Barrier and node 0 verifies final value
  */
 #include "e2e_common.h"
 
@@ -16,13 +16,11 @@
 #define TOTAL_CPUS  (NUM_NODES * NUM_SOCKETS)
 #define SEG_SIZE    0x8000000ULL
 #define DSM_VA_BASE ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_CPUS + 1) * SEG_SIZE)
-#define TARGET_OFF  0x1000
-#define READ_ROUNDS 2
+#define ROUNDS      8
 
-static inline volatile uint32_t *shared_line(void)
+static inline volatile uint32_t *hot_addr(void)
 {
-    uint64_t va = DSM_VA_BASE + 0 * SEG_SIZE + TARGET_OFF;
-    return (volatile uint32_t *)va;
+    return (volatile uint32_t *)(DSM_VA_BASE + 0 * SEG_SIZE + 0x1000);
 }
 
 int main(int argc, char **argv)
@@ -35,31 +33,37 @@ int main(int argc, char **argv)
     int primary = (local_cpu < NUM_SOCKETS);
     if (!primary) { _exit_program(0); return 0; }
 
-    int is_main_cpu = (node_id == 0 && socket_id == 0);
-    if (is_main_cpu) emit_e2e_meta(node_id, "TC100");
+    if (node_id == 0 && socket_id == 0) emit_e2e_meta(node_id, "TC100");
 
-    /* Phase 1: Node 0 socket-0 writes seed value, then barrier */
-    if (is_main_cpu) {
-        *shared_line() = 0xCAFE0000u;
+    /* Phase 1: node0 writes seed to establish data */
+    if (node_id == 0 && socket_id == 0) {
+        *hot_addr() = 0xCAFE0000u;
     }
-    if (is_main_cpu) emit_phase_done(node_id, "phase1_write");
+
     sync_wait((1u << TOTAL_CPUS) - 1);
 
-    /* Phase 2: All 16 readers read the same cache line, then node 0 verifies */
-    for (int r = 0; r < READ_ROUNDS; r++) {
-        uint32_t v = *shared_line();
+    /* Phase 2: ALL 16 CPUs read same line ROUNDS times simultaneously.
+     * This triggers RS contention → batch grant via replayPendingRequesters. */
+    uint32_t v = 0xBAAD;
+    for (int r = 0; r < ROUNDS; r++) {
+        v = *hot_addr();
         __asm__ volatile("" : : "r"(v) : "memory");
     }
 
+    /* Use the read value to ensure pipeline drain */
+    __asm__ volatile("" : : "r"(v) : "memory");
+
+    sync_wait((1u << TOTAL_CPUS) - 1);
+
+    /* Phase 3: node0 verifies seed value survived all concurrent reads */
     int fail = 0;
-    if (is_main_cpu) {
-        uint32_t got = *shared_line();
-        uint32_t expected = 0xCAFE0000u;
-        emit_read_val(node_id, 0, expected, got, got == expected);
-        if (got != expected) fail++;
+    if (node_id == 0 && socket_id == 0) {
+        uint32_t got = *hot_addr();
+        emit_read_val(node_id, 0, 0xCAFE0000u, got, got == 0xCAFE0000u);
+        if (got != 0xCAFE0000u) fail++;
     }
 
-    if (is_main_cpu) emit_phase_done(node_id, "phase2_done");
+    sync_wait((1u << TOTAL_CPUS) - 1);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

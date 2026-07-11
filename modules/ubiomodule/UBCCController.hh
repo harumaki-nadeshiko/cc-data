@@ -657,6 +657,9 @@ class UBCCController
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
     std::set<uint64_t> _evictionPendingRemoval;
 
+    // C3 batch RS grant env switch
+    bool _batchRsEnabled;
+
     // Split-mode data persistence: when a line transitions through recall
     // (owner -> requester), cache the recalled 64B payload at home so that
     // later shared grants can carry correct data instead of stale HomeMemory.

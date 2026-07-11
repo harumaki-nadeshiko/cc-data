@@ -1,6 +1,7 @@
 #include "UBCCController.hh"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstdarg>
 #include <sstream>
@@ -72,6 +73,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
     _ownerMismatchRejectedCount(0),
     _invalidationCount(0),
     _invalidationAckCount(0),
+    _batchRsEnabled(true),
     _epRnfSnoopCount(0),
     _tombstoneReplayCount(0),
     _invariantWarnCount(0),
@@ -105,6 +107,11 @@ UBCCController::UBCCController(int node_id, int socket_id,
             "dsmBase=0x%lx dsmSize=0x%lx numSockets=%d\n",
             _nodeId, _socketId, _epochBits, _dsmLocalBase, _dsmSegSize,
             kNumSockets);
+
+    const char *env = std::getenv("UBCC_BATCH_RS");
+    if (env) _batchRsEnabled = (std::atoi(env) != 0);
+    framework::LogInfo("UBCC", "UBCC node_id=%d socket=%d: C3 batch RS %s\n",
+            _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
 
     registerInstance(node_id, socket_id, this);
 }
@@ -2733,7 +2740,8 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                mesiStateName(entry.state));
 
         // ── C3 Batch RS path: G_S + RS → direct grant without outstanding ──
-        if (entry.state == MESIState::G_S &&
+        if (_batchRsEnabled &&
+            entry.state == MESIState::G_S &&
             pr.reqType == UBCC_OuterReqType::GlobalReadShared) {
 
             printf("[UBCC-QUEUE-REPLAY-BATCH] pa=0x%lx requester=%d "

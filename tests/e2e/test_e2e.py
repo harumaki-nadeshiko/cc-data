@@ -1217,9 +1217,9 @@ def verify_tc100(reads, lines):
 
 
 def verify_tc101(reads, lines):
-    """TC101: 8n2s direct-forward chain. 4 READ_VAL, all MATCH."""
-    if len(reads) < 4:
-        return False, f"TC101 FAILED: expected 4 READ_VAL, got {len(reads)}", reads
+    """TC101: 8n2s direct-forward chain. 16 READ_VAL (one per socket-plane), all MATCH."""
+    if len(reads) < 16:
+        return False, f"TC101 FAILED: expected 16 READ_VAL, got {len(reads)}", reads
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC101 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
