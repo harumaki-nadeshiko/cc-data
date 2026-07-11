@@ -385,6 +385,10 @@ class UBCCController
 
     bool copyOutstandingGrantData(uint64_t line_pa, DataBlock &outBlk) const;
 
+    // C3-bis: G_S+RS immediate-commit grant data
+    std::map<uint64_t, OutstandingRequest> _immediateGrantData;
+    bool copyImmediateGrantData(uint64_t line_pa, DataBlock &outBlk);
+
     // ---- M6: Recall Management ----
     /**
      * Receive recall response from the owner node (data/ack).

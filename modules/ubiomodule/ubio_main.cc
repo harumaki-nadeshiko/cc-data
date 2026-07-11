@@ -451,7 +451,8 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         cc::glob::DataBlock grantData(64);
         bool hasGrantData =
             (dataSource == GrantDataSource::RecallBuffer) &&
-            ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData);
+            (ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
+             ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData));
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;

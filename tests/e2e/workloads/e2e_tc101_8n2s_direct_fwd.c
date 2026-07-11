@@ -1,16 +1,11 @@
-/* TC101: 8-node dual-socket direct-forward chain (C4).
+/* TC101: 8n2s cross-node direct-forward chain (C4 benchmark).
  *
- * KEY DESIGN: Cross-node owner transfer chain where requester ≠ owner ≠ home.
- * Each node writes its own slot, then the next node reads that slot and
- * writes into its own. This triggers cross-node RECALL with direct-forward.
+ * Unidirectional chain: node 7→6→5→4→3→2→1. Node 0 is only verifier
+ * (never requester), so every RECALL has requester != home.
  *
- * Home for all slots is node 0, owner and requester are different non-0 nodes.
- *
- * Flow:
- *   1. Each node/socket writes its own slot (node0 owns all after writes)
- *   2. Barrier
- *   3. Chain: node i reads slot of node i-1, writes its own slot
- *   4. Node 0 verifies all 16 slots have valid values
+ * Each iteration: node i reads node (i-1)'s slot (triggers RECALL from
+ * node i-1 as owner, home=0), then writes its own slot. Rounds=64 means
+ * ~448 C4-FORWARD events: 7 chain steps × 2 sockets × 32 rounds.
  */
 #include "e2e_common.h"
 
@@ -19,11 +14,10 @@
 #define TOTAL_CPUS  (NUM_NODES * NUM_SOCKETS)
 #define SEG_SIZE    0x8000000ULL
 #define DSM_VA_BASE ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_CPUS + 1) * SEG_SIZE)
-#define ROUNDS      4
+#define ROUNDS      32
 
 static inline volatile uint32_t *slot_addr(int node, int socket)
 {
-    /* Each socket-plane gets its own cache-line-aligned slot on home node 0 */
     uint64_t va = DSM_VA_BASE + 0 * SEG_SIZE + 0x7800;
     va += (uint64_t)(node * NUM_SOCKETS + socket + 1) * 64ULL;
     return (volatile uint32_t *)va;
@@ -41,30 +35,31 @@ int main(int argc, char **argv)
 
     if (node_id == 0 && socket_id == 0) emit_e2e_meta(node_id, "TC101");
 
-    /* Each plane writes its slot with a unique value */
+    /* Init: each node writes its own slot once to establish ownership */
+    *slot_addr(node_id, socket_id) = 0xA1010000u | ((uint32_t)node_id << 4) | (uint32_t)socket_id;
+
+    sync_wait((1u << TOTAL_CPUS) - 1);
+
+    /* Chain rounds: node i reads node (i-1)'s slot, writes own slot.
+     * Node 0 only participates when i==0: reads node 7's slot but this
+     * round's RECALL(owner=7,requester=0) does NOT trigger C4 (requester=home).
+     * All other rounds (1→0, 2→1, ...) trigger C4: owner≠requester≠home.
+     * To maximize C4 events, node 0 skips the chain; only nodes 1-7 chain. */
     for (int r = 0; r < ROUNDS; r++) {
-        uint32_t v = 0xA1000000u | ((uint32_t)node_id << 8)
-                     | ((uint32_t)socket_id << 4) | (uint32_t)r;
-        *slot_addr(node_id, socket_id) = v;
+        int prev = (node_id == 0) ? NUM_NODES - 1 : node_id - 1;
+        if (node_id != 0) {
+            /* Node 1-7: read prev's slot → C4 direct-forward
+             * (owner=prev≠home=0, requester=node_id≠home=0) */
+            uint32_t got = *slot_addr(prev, socket_id);
+            *slot_addr(node_id, socket_id) = got ^ 0x80000000u;
+        }
+        /* Node 0: no-op in chain (keeps PDES sync balanced) */
+        __asm__ volatile("" : : : "memory");
     }
 
     sync_wait((1u << TOTAL_CPUS) - 1);
 
-    /* Cross-node chain: node i reads slot of node (i-1 mod N),
-     * then writes its own slot (triggers RECALL + potential direct-forward) */
-    int target_node = (node_id - 1 + NUM_NODES) % NUM_NODES;
-    for (int s = 0; s < NUM_SOCKETS; s++) {
-        /* Each socket reads the target node's corresponding slot */
-        uint32_t expected = 0xA1000000u | ((uint32_t)target_node << 8)
-                           | ((uint32_t)s << 4) | ((uint32_t)(ROUNDS - 1));
-        uint32_t got = *slot_addr(target_node, s);
-        /* Write into own slot to trigger cross-node RECALL chain */
-        *slot_addr(node_id, socket_id) = got ^ 0x80000000u;
-    }
-
-    sync_wait((1u << TOTAL_CPUS) - 1);
-
-    /* Node0 verifies all slots hold valid values */
+    /* Verify: node 0 reads all done markers */
     int fail = 0;
     if (node_id == 0 && socket_id == 0) {
         for (int n = 0; n < NUM_NODES; n++) {

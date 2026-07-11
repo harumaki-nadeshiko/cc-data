@@ -624,30 +624,49 @@ UBCCController::processOuterRequest(
 
         case MESIState::G_S: {
             if (reqType == UBCC_OuterReqType::GlobalReadShared) {
+                // C3-bis: G_S+RS fast path — no outstanding, no Clear.
+                // Shared reads are clean; if grant is lost, requester retries
+                // and gets re-granted from the same G_S state.
                 grant = UBCC_OuterGrantType::GlobalGrantShared;
-                oreq = createOutstanding(line_pa, OpType::GRANT_HANDSHAKE,
-                                         requesterNode, -1, requesterSocket);
-                if (oreq) {
-                    oreq->reservedEpoch = reservedEpoch;
-                    oreq->reqId = reqId;
-                    oreq->baseEpoch = baseEpoch;
-                    oreq->stage = OpStage::WAITING_CLEAR;
-                    oreq->intendedState = MESIState::G_S;
-                    oreq->intendedSharersMask = entry.sharersMask | (1ULL << requesterNode);
-                    oreq->intendedOwnerNode = -1;
-                    oreq->intendedDirty = false;
-                    auto cacheIt = _lineDataCache.find(line_pa);
-                    if (cacheIt != _lineDataCache.end()) {
-                        oreq->dataValid = true;
-                        memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                        oreq->dataSource = GrantDataSource::RecallBuffer;
-                        if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                    } else {
-                        oreq->dataSource = GrantDataSource::HomeMemory;
-                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                    }
-                    if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
+
+                OutstandingRequest tempOst;
+                tempOst.linePa = line_pa;
+                tempOst.baseEpoch = baseEpoch;
+                tempOst.reservedEpoch = reservedEpoch;
+                tempOst.reqId = reqId;
+                tempOst.opType = OpType::GRANT_HANDSHAKE;
+                tempOst.stage = OpStage::WAITING_CLEAR;
+                tempOst.requesterNode = requesterNode;
+                tempOst.requesterSocket = requesterSocket;
+                tempOst.intendedState = MESIState::G_S;
+                tempOst.intendedSharersMask = entry.sharersMask | (1ULL << requesterNode);
+                tempOst.intendedOwnerNode = -1;
+                tempOst.intendedDirty = false;
+                tempOst.reqType = reqType;
+                tempOst.writeIntent = false;
+                auto cacheIt = _lineDataCache.find(line_pa);
+                if (cacheIt != _lineDataCache.end()) {
+                    tempOst.dataValid = true;
+                    memcpy(tempOst.dataBuf, cacheIt->second.data(), 64);
+                    tempOst.dataSource = GrantDataSource::RecallBuffer;
+                    if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                } else {
+                    tempOst.dataSource = GrantDataSource::HomeMemory;
+                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                 }
+                if (outAuthEpoch) *outAuthEpoch = baseEpoch;
+
+                // Immediate commit — no outstanding created
+                commitIntendedResult(entry, tempOst);
+                _directory.update(line_pa, entry);
+                retireToTombstone(tempOst, true);
+                refreshPinnedBit(line_pa);
+
+                // Stash grant data for caller to read via copyImmediateGrantData()
+                _immediateGrantData[line_pa] = tempOst;
+
+                printf("[UBCC-GSRS-FAST] pa=0x%lx requester=%d sharers=0x%lx\n",
+                       line_pa, requesterNode, entry.sharersMask);
             } else {
                 // Unique request — invalidation needed for non-requester sharers
                 uint64_t otherSharers = entry.sharersMask;
@@ -2302,6 +2321,18 @@ UBCCController::copyOutstandingGrantData(uint64_t line_pa, DataBlock &outBlk) co
     }
 
     outBlk.setData(ost.dataBuf, 0, 64);
+    return true;
+}
+
+bool
+UBCCController::copyImmediateGrantData(uint64_t line_pa, DataBlock &outBlk)
+{
+    auto it = _immediateGrantData.find(line_pa);
+    if (it == _immediateGrantData.end()) {
+        return false;
+    }
+    outBlk.setData(it->second.dataBuf, 0, 64);
+    _immediateGrantData.erase(it);
     return true;
 }
 
