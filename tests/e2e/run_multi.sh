@@ -27,6 +27,12 @@ WORKLOAD="$ROOT_DIR/tests/e2e/workloads/workload.elf"
 TOPO_JSON="$ROOT_DIR/build/run/topo.json"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 
+# C5: PDES sync interval (ps).  Lower values improve time-resolution but
+# increase IPC overhead.  Default was 100000 (100ns); 25000 (25ns) reduces
+# conservative-sync alignment tails on cross-node hops.
+export EP_SYNC_INTERVAL_PS="${EP_SYNC_INTERVAL_PS:-25000}"
+export EP_LINK_LATENCY_PS="${EP_LINK_LATENCY_PS:-25000}"
+
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
 case "${1:-}" in

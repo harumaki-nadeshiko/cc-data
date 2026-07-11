@@ -109,14 +109,6 @@ fallback 路径不引入死锁。
 
 ---
 
-## Part D: PDES 同步量化延迟
-
-在之前 latency 分析中发现的 nsim 网络跳存在 ~177.5ns 的 PDES 同步对齐尾延迟（`syncInterval=100ns`
-量化），已写入 `framework/Port.hh`（行 20–27 注释）。可通过环境变量 `EP_SYNC_INTERVAL_PS` 在生产
-环境调小以降低量化误差（代价：心跳频率增加，IPC 开销增大）。
-
----
-
 ## 文件索引
 
 | 文件 | 内容 |
@@ -124,4 +116,4 @@ fallback 路径不引入死锁。
 | `docs/measure/tc98_tc99_hotspot.md` | TC98 单 PA 争用根因分析 + TC98/99 编译运行指南 |
 | `verification/tla/ep_intra_node_single.tla` | EP intra-node TLA+ 模型（含 FairSpec + QueueBounded） |
 | `verification/tla/ep_intra_node_single.cfg` | TLC 配置（CONSTRAINT QueueBounded ≤4） |
-| `framework/Port.hh:20-35` | syncInterval 保真度权衡注释 |
+| `verification/tla/run_tlc.sh` | TLC 运行脚本（$(nproc) workers） |

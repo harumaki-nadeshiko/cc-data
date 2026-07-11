@@ -14,9 +14,10 @@ EXTENDS Naturals, Integers, FiniteSets, Sequences, TLC
 (***************************************************************************)
 (* Constants & derived sets                                                 *)
 (***************************************************************************)
-CONSTANTS NumCPUs, MaxDataVersion
+CONSTANTS NumCPUs, MaxDataVersion, MaxTxn
 ASSUME NumCPUs >= 2
 ASSUME MaxDataVersion >= 1
+ASSUME MaxTxn >= 1
 
 CPU       == 0 .. (NumCPUs - 1)
 EPRNF     == NumCPUs
@@ -51,7 +52,8 @@ VARIABLES
     rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
     snfState, backendState, backendGrantData,
     dramData, dramWritten, latestGlobalWrite,
-    reqQ, snpQ, rspQ, datQ
+    reqQ, snpQ, rspQ, datQ,
+    txnCount
 
 vars == <<cpuState, cpuData, cpuPendingData,
           hnfState, hnfData, hnfCacheLine, hnfOwner, hnfSharers,
@@ -61,7 +63,8 @@ vars == <<cpuState, cpuData, cpuPendingData,
           rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
           snfState, backendState, backendGrantData,
           dramData, dramWritten, latestGlobalWrite,
-          reqQ, snpQ, rspQ, datQ>>
+          reqQ, snpQ, rspQ, datQ,
+          txnCount>>
 
 (***************************************************************************)
 (* Init                                                                     *)
@@ -96,6 +99,7 @@ Init ==
     /\ snpQ = <<>>
     /\ rspQ = <<>>
     /\ datQ = <<>>
+    /\ txnCount = 0
 
 (***************************************************************************)
 (* Message helpers                                                          *)
@@ -110,6 +114,7 @@ SnpMsg(kind, dst) == [kind |-> kind, dst |-> dst, data |-> 0]
 (***************************************************************************)
 
 CpuLoad(cpu) ==
+    /\ txnCount < MaxTxn
     /\ cpuState[cpu] = "I"
     /\ cpuState' = [cpuState EXCEPT ![cpu] = "P_RS"]
     /\ reqQ' = Append(reqQ, Msg("RS", cpu, 0))
@@ -119,9 +124,11 @@ CpuLoad(cpu) ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ,
+                   txnCount>>
 
 CpuStore(cpu, data) ==
+    /\ txnCount < MaxTxn
     /\ data \in DataV
     /\ cpuState[cpu] \in {"I","SC"}
     /\ cpuState'        = [cpuState EXCEPT ![cpu] = "P_RU"]
@@ -133,7 +140,8 @@ CpuStore(cpu, data) ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ,
+                   txnCount>>
 
 CpuStoreHit(cpu, data) ==
     \* Direct upgrade: CPU already has UC/UD, commits store locally.
@@ -150,7 +158,8 @@ CpuStoreHit(cpu, data) ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, reqQ, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, reqQ, snpQ, rspQ, datQ,
+                   txnCount>>
 
 CpuEvict(cpu) ==
     /\ cpuState[cpu] \in {"SC","UC","UD"}
@@ -162,7 +171,29 @@ CpuEvict(cpu) ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ, txnCount>>
+
+(***************************************************************************)
+(* CPU retry: re-enqueue a pending request that lost arbitration            *)
+(***************************************************************************)
+
+CpuRetry(cpu) ==
+    /\ cpuState[cpu] \in {"P_RS", "P_RU", "P_EVICT"}
+    /\ LET kind == CASE cpuState[cpu] = "P_RS"    -> "RS"
+                     [] cpuState[cpu] = "P_RU"    -> "RU"
+                     [] cpuState[cpu] = "P_EVICT" -> "EVICT"
+           data == CASE cpuState[cpu] = "P_RU"    -> cpuPendingData[cpu]
+                     [] OTHER                     -> cpuData[cpu]
+       IN reqQ' = Append(reqQ, Msg(kind, cpu, data))
+    /\ UNCHANGED <<cpuState, cpuData, cpuPendingData,
+                   hnfState, hnfData, hnfCacheLine, hnfOwner, hnfSharers,
+                   hnfTbeValid, hnfTbeOp, hnfTbePhase, hnfTbeRequester,
+                   hnfTbeNeedData, hnfTbeGrantData,
+                   hnfPendingOwnerUpdate,
+                   rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
+                   snfState, backendState, backendGrantData,
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ,
+                   txnCount>>
 
 (***************************************************************************)
 (* HN-F actions: allocate TBE, hit/miss dispatch                            *)
@@ -212,7 +243,7 @@ HnfAcceptReq ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ, txnCount>>
 
 HnfDropStaleReq ==
     \* Drop a request whose CPU is no longer in the expected pending state.
@@ -231,7 +262,7 @@ HnfDropStaleReq ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F hit: serve data to CPU directly                                     *)
@@ -259,7 +290,7 @@ HnfHitServe ==
                           rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                           snfState, backendState, backendGrantData,
                           dramData, dramWritten, latestGlobalWrite,
-                          reqQ, snpQ, rspQ, datQ>>
+                          reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F miss: enqueue to SNF                                                *)
@@ -279,7 +310,7 @@ HnfMissToSnf ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    backendState, backendGrantData,
-                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ, reqQ>>
+                   dramData, dramWritten, latestGlobalWrite, snpQ, rspQ, datQ, reqQ, txnCount>>
 
 (***************************************************************************)
 (* SNF forward to backend                                                   *)
@@ -298,7 +329,7 @@ SnfForward ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* Backend grant arrives                                                    *)
@@ -306,8 +337,8 @@ SnfForward ==
 
 BackendGrant ==
     /\ backendState = "WAITING_GRANT"
-    /\ \E gd \in DataV : /\ backendGrantData' = gd
-                          /\ datQ' = Append(datQ, Msg("SNF_GRANT", 0, gd))
+    /\ LET gd == 1 IN /\ backendGrantData' = gd
+                        /\ datQ' = Append(datQ, Msg("SNF_GRANT", 0, gd))
     /\ backendState' = "IDLE"
     /\ UNCHANGED <<cpuState, cpuData, cpuPendingData,
                    hnfState, hnfData, hnfCacheLine, hnfOwner, hnfSharers,
@@ -317,7 +348,8 @@ BackendGrant ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ>>
+                   reqQ, snpQ, rspQ,
+                   txnCount>>
 
 (***************************************************************************)
 (* HN-F installs SNF grant → fill cache line, deliver to CPU                *)
@@ -346,8 +378,9 @@ HnfInstallGrant ==
                    /\ hnfSharers' = {cpu}
                    /\ cpuState'   = [cpuState EXCEPT ![cpu] = "UD"]
                    /\ cpuData'    = [cpuData  EXCEPT ![cpu] = gd]
-                   /\ latestGlobalWrite' = gd
-           /\ hnfTbeValid' = FALSE
+                    /\ latestGlobalWrite' = gd
+            /\ txnCount' = txnCount + 1
+            /\ hnfTbeValid' = FALSE
            /\ hnfTbeOp'    = "NONE"
            /\ hnfTbePhase' = "NONE"
            /\ hnfTbeRequester' = -1
@@ -357,7 +390,7 @@ HnfInstallGrant ==
                           rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                           snfState, backendState, backendGrantData,
                           dramData, dramWritten,
-                          reqQ, snpQ, rspQ>>
+                          reqQ, snpQ, rspQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F snoops current owner (RU from non-owner while line UC/UD)           *)
@@ -382,7 +415,7 @@ HnfSnoopOwnerRU ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F snoop to EP-RNF (CU path: CleanUnique invalidate)                   *)
@@ -402,7 +435,7 @@ HnfSnoopRnfCleanUnique ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, rspQ, datQ>>
+                   reqQ, rspQ, datQ, txnCount>>
 
 HnfInvalidateCpuSharers ==
     \* Invalidate CPU sharers (except requester) during SC→RU upgrade.
@@ -427,7 +460,7 @@ HnfInvalidateCpuSharers ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* EP-RNF receives snoop and starts CleanUnique                             *)
@@ -449,7 +482,7 @@ EpRnfStartCleanUnique ==
                    rnfCompUCSeen, rnfCompAckSent,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, datQ>>
+                   reqQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F receives CompUC from EP-RNF                                         *)
@@ -471,7 +504,7 @@ HnfRecvCompUC ==
                    rnfState, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, datQ>>
+                   reqQ, snpQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* EP-RNF sends CompAck                                                     *)
@@ -490,7 +523,7 @@ EpRnfSendCompAck ==
                    rnfState, rnfCompUCSeen, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, datQ>>
+                   reqQ, snpQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F receives CompAck                                                    *)
@@ -512,7 +545,7 @@ HnfRecvCompAck ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, datQ>>
+                   reqQ, snpQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* EP-RNF callback: after CompUC + CompAck, state transitions to target     *)
@@ -536,7 +569,7 @@ EpRnfCallback ==
                    hnfPendingOwnerUpdate,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F writeback to DRAM (eviction from UC/UD owner)                       *)
@@ -557,7 +590,7 @@ HnfWritebackToDram ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ>>
+                   reqQ, snpQ, rspQ, txnCount>>
 
 DramAcceptWriteback ==
     /\ Len(datQ) > 0
@@ -572,7 +605,7 @@ DramAcceptWriteback ==
                    hnfPendingOwnerUpdate,
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
-                   latestGlobalWrite, reqQ, snpQ, rspQ>>
+                   latestGlobalWrite, reqQ, snpQ, rspQ, txnCount>>
 
 HnfFinishWriteback ==
     \* Completes eviction: removes CPU from sharers, clears line if empty.
@@ -598,7 +631,7 @@ HnfFinishWriteback ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* HN-F grant serve from snoop path (after CompAck, line already present)   *)
@@ -632,7 +665,7 @@ HnfGrantAfterSnoop ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendState, backendGrantData,
                    dramData, dramWritten,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* Backend Clear handshake (grant retirement)                               *)
@@ -650,7 +683,7 @@ BackendSendClear ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState, backendGrantData,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 BackendRecvClearAck ==
     /\ backendState = "WAITING_CLEAR"
@@ -664,7 +697,7 @@ BackendRecvClearAck ==
                    rnfState, rnfCompUCSeen, rnfCompAckSent, rnfCallbackArmed,
                    snfState,
                    dramData, dramWritten, latestGlobalWrite,
-                   reqQ, snpQ, rspQ, datQ>>
+                   reqQ, snpQ, rspQ, datQ, txnCount>>
 
 (***************************************************************************)
 (* Next / Spec                                                              *)
@@ -675,6 +708,7 @@ Next ==
     \/ \E cpu \in CPU, data \in DataV : CpuStore(cpu, data)
     \/ \E cpu \in CPU, data \in DataV : CpuStoreHit(cpu, data)
     \/ \E cpu \in CPU : CpuEvict(cpu)
+    \/ \E cpu \in CPU : CpuRetry(cpu)
     \/ HnfAcceptReq
     \/ HnfDropStaleReq
     \/ HnfHitServe
@@ -712,6 +746,7 @@ FairSpec ==
     /\ \A cpu \in CPU, data \in DataV : WF_vars(CpuStore(cpu, data))
     /\ \A cpu \in CPU, data \in DataV : WF_vars(CpuStoreHit(cpu, data))
     /\ \A cpu \in CPU : WF_vars(CpuEvict(cpu))
+    /\ \A cpu \in CPU : WF_vars(CpuRetry(cpu))
     /\ WF_vars(HnfAcceptReq)
     /\ WF_vars(HnfInstallGrant)
     /\ WF_vars(HnfGrantAfterSnoop)

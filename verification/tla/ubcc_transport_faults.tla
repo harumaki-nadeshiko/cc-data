@@ -11,6 +11,7 @@ EXTENDS ubcc_protocol_core, Sequences, TLC
 (*   MsgKind      transport mechanism        fault coverage                 *)
 (*   -------      -------------------        --------------                 *)
 (*   Clear        explicit transport queue   drop, duplicate, reorder       *)
+(*   PushGrant    explicit transport queue   drop, duplicate, reorder       *)
 (*   InvAck       BarrierAck action envelope drop(unfair), dup, reorder     *)
 (*   RecallResp   RecallResponse envelope    drop(unfair), dup              *)
 (*   UpgradeAck   BarrierAck (UPGRADE) env.  drop(unfair), dup, reorder     *)
@@ -40,7 +41,7 @@ VARIABLES transport, transportRecord
 
 TVars == <<dir, ost, tombstone, commitLog, epochLog, tick, transport, transportRecord>>
 
-MsgKind == {"Clear", "InvAck", "RecallResp", "UpgradeAck"}
+MsgKind == {"Clear", "InvAck", "RecallResp", "UpgradeAck", "PushGrant"}
 
 Audit(action, kind, epoch, reqId, outcome) ==
     [action |-> action, kind |-> kind, epoch |-> epoch, reqId |-> reqId, outcome |-> outcome]
@@ -150,6 +151,35 @@ CoreInvAck ==
     /\ \E n \in Nodes : BarrierAck(n)
     /\ UNCHANGED <<transport, transportRecord>>
 
+(* ── PushGrant message: explicit transport queue with drop/dup/reorder ─── *)
+(* RecallToGrant normally creates a GRANT_HANDSHAKE atomically.  Under        *)
+(* faults, the push-grant can be dropped or duplicated while in flight        *)
+(* between Home and Requester.                                                *)
+QueuePushGrant ==
+    /\ tick < MaxTick
+    /\ ~ReplayDrainBarrier
+    /\ Len(transport) = 0
+    /\ ost.valid /\ ost.opType = "RECALL" /\ ost.stage = "DONE"
+    /\ ~HasQueued("PushGrant", ost.baseEpoch, ost.reqId)
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+    /\ transport' = Append(transport, [kind |-> "PushGrant", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+    /\ UNCHANGED transportRecord
+    /\ tick' = tick + 1
+
+DeliverPushGrant ==
+    /\ tick < MaxTick
+    /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "PushGrant"
+        /\ ost.valid /\ ost.opType = "RECALL" /\ ost.stage = "DONE"
+        /\ transport[i].src = ost.requester
+        /\ transport[i].epoch = ost.baseEpoch
+        /\ transport[i].reqId = ost.reqId
+        /\ RecallToGrant
+        /\ transport' = RemoveAt(transport, i)
+        /\ transportRecord' = Append(transportRecord,
+               Audit("deliver", "PushGrant", transport[i].epoch, transport[i].reqId, "grant_installed"))
+    /\ UNCHANGED <<commitLog, epochLog>>
+
 (* ── Clear message: explicit transport queue with drop/dup/REORDER ─────── *)
 QueueClear ==
     /\ tick < MaxTick
@@ -195,21 +225,21 @@ DropMsg ==
     /\ tick < MaxTick
     /\ Len(transport) > 0
     /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind = "Clear"
+        /\ transport[i].kind \in {"Clear", "PushGrant"}
         /\ dir' = dir
         /\ ost' = ost
         /\ tombstone' = AgeTrackedTombstone(tombstone)
         /\ UNCHANGED <<commitLog, epochLog>>
         /\ transport' = RemoveAt(transport, i)
         /\ transportRecord' = Append(transportRecord,
-               Audit("drop", "Clear", transport[i].epoch, transport[i].reqId, "lost"))
+               Audit("drop", transport[i].kind, transport[i].epoch, transport[i].reqId, "lost"))
         /\ tick' = tick + 1
 
 DuplicateMsg ==
     /\ tick < MaxTick
     /\ Len(transport) = 1
     /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind = "Clear"
+        /\ transport[i].kind \in {"Clear", "PushGrant"}
         /\ CopyCount(transport[i]) = 1
         /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
         /\ transport' = Append(transport, transport[i])
@@ -241,6 +271,8 @@ TFNext ==
     \/ CoreInvAck
     \/ QueueClear
     \/ DeliverClear
+    \/ QueuePushGrant
+    \/ DeliverPushGrant
     \/ DuplicateMsg
     \/ DropMsg
     \/ ReorderMsg
@@ -264,6 +296,7 @@ TFSpec == TFInit /\ [][TFNext]_TVars
 TFFairSpec ==
     /\ TFSpec
     /\ WF_TVars(DeliverClear)
+    /\ WF_TVars(DeliverPushGrant)
     /\ WF_TVars(CoreRecallToGrant)
     /\ WF_TVars(RecallOrphanWithAudit)
     /\ WF_TVars(CoreUpgradeCommit)

@@ -229,7 +229,9 @@ class UBCCController
     };
 
     // Maximum pending requesters per PA (configurable queue depth)
-    static constexpr size_t MAX_PENDING_PER_PA = 4;
+    // C1: raised from 4 to 16 to eliminate retry-timer penalty under
+    //     high-contention workloads (TC98: 16-way single-PA writes).
+    static constexpr size_t MAX_PENDING_PER_PA = 16;
 
     // v4-dual-socket: constructor now takes socket_id.
      UBCCController(int node_id, int socket_id = 0,
