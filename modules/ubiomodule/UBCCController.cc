@@ -527,6 +527,13 @@ UBCCController::processOuterRequest(
                        "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
                        line_pa, requesterNode,
                        isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                // TC98: Log recall wait state for hot-contention diagnostics
+                if (existing->stage == OpStage::WAITING_TARGET_RESP) {
+                    std::fprintf(stderr, "[UBCC-RECALL-WAIT] pa=0x%lx recall_target=%d "
+                                 "new_requester=%d queue_depth=%zu existing_requester=%d\n",
+                                 line_pa, existing->targetNode, requesterNode,
+                                 q.size(), existing->requesterNode);
+                }
             } else {
                 printf("[UBCC-QUEUE] pa=0x%lx action=drop_full "
                        "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
@@ -581,8 +588,19 @@ UBCCController::processOuterRequest(
                     oreq->intendedSharersMask = (1ULL << requesterNode);
                     oreq->intendedOwnerNode = -1;
                     oreq->intendedDirty = false;
-                    oreq->dataSource = GrantDataSource::HomeMemory;
-                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                    // TC101: Check _lineDataCache for warm data (e.g. from prior recall)
+                    {
+                        auto cacheIt = _lineDataCache.find(line_pa);
+                        if (cacheIt != _lineDataCache.end()) {
+                            oreq->dataValid = true;
+                            memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
+                            oreq->dataSource = GrantDataSource::RecallBuffer;
+                            if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                        } else {
+                            oreq->dataSource = GrantDataSource::HomeMemory;
+                            if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                        }
+                    }
                     if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                 }
             } else { // GlobalReadUnique
@@ -599,8 +617,19 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = false;
-                        oreq->dataSource = GrantDataSource::HomeMemory;
-                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                        // TC101: Check _lineDataCache for warm data
+                        {
+                            auto cacheIt = _lineDataCache.find(line_pa);
+                            if (cacheIt != _lineDataCache.end()) {
+                                oreq->dataValid = true;
+                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
+                                oreq->dataSource = GrantDataSource::RecallBuffer;
+                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                            } else {
+                                oreq->dataSource = GrantDataSource::HomeMemory;
+                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                            }
+                        }
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 } else {
@@ -616,8 +645,19 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = true;
-                        oreq->dataSource = GrantDataSource::HomeMemory;
-                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                        // TC101: Check _lineDataCache for warm data
+                        {
+                            auto cacheIt = _lineDataCache.find(line_pa);
+                            if (cacheIt != _lineDataCache.end()) {
+                                oreq->dataValid = true;
+                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
+                                oreq->dataSource = GrantDataSource::RecallBuffer;
+                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                            } else {
+                                oreq->dataSource = GrantDataSource::HomeMemory;
+                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                            }
+                        }
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 }
@@ -730,8 +770,19 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = writeIntent;
-                        oreq->dataSource = GrantDataSource::HomeMemory;
-                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                        // TC101: Check _lineDataCache (warm data from existing G_S)
+                        {
+                            auto cacheIt = _lineDataCache.find(line_pa);
+                            if (cacheIt != _lineDataCache.end()) {
+                                oreq->dataValid = true;
+                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
+                                oreq->dataSource = GrantDataSource::RecallBuffer;
+                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
+                            } else {
+                                oreq->dataSource = GrantDataSource::HomeMemory;
+                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
+                            }
+                        }
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 }

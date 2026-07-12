@@ -308,48 +308,7 @@ matchesNetEndpoint(const std::string &ep, int nid)
     };
 };
 
-struct MetaRNFClient {
-    // Phase 3: Simulated DDR4 access to metadata backstore pages.
-    // Interface matches real ZMQ→gem5 MetaRNFController for future swap-in.
-    using ReadCB = std::function<void(const uint8_t*)>;
-    struct Op { uint64_t fireTick; uint64_t pagePa; bool isWrite;
-        uint8_t buf[256]; ReadCB readCb; };
-    std::map<uint64_t, cc::glob::BackstorePage> _pages;
-    std::vector<Op> _pending;
-    uint64_t _tickRef;
-    uint64_t _tDramPs = 50000;  // ~50ns DDR4 (env UBCC_META_DRAM_DELAY_PS)
-    MetaRNFClient(uint64_t &tick) : _tickRef(tick) {}
-
-    void readPage(uint64_t pagePa, ReadCB cb) {
-        _pending.push_back({_tickRef + _tDramPs, pagePa, false, {}, cb});
-    }
-    void writePage(uint64_t pagePa, const uint8_t *buf) {
-        Op op{_tickRef + _tDramPs, pagePa, true, {}, nullptr};
-        memcpy(op.buf, buf, 256);
-        _pending.push_back(std::move(op));
-    }
-    void drain() {
-        auto it = _pending.begin();
-        while (it != _pending.end()) {
-            if (_tickRef >= it->fireTick) {
-                if (it->isWrite) {
-                    cc::glob::BackstorePage page;
-                    page.loadFrom(it->buf);
-                    _pages[it->pagePa] = std::move(page);
-                } else {
-                    auto pi = _pages.find(it->pagePa);
-                    if (it->readCb) {
-                        if (pi != _pages.end()) {
-                            uint8_t ser[256]; pi->second.storeTo(ser);
-                            it->readCb(ser);
-                        } else { it->readCb(nullptr); }
-                    }
-                }
-                it = _pending.erase(it);
-            } else ++it;
-        }
-    }
-};
+struct DsmDataStore {
     std::map<uint64_t, std::array<uint8_t, 64>> data;
     struct PendingDataOp { uint64_t fireTick; uint64_t pa; bool isWrite;
         std::array<uint8_t, 64> buf; std::function<void(const uint8_t*)> cb; };
@@ -369,6 +328,74 @@ struct MetaRNFClient {
     void writeData(uint64_t pa, const uint8_t *buf, uint64_t t) { std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64); pending.push_back({t + _dsmDramDelayPs, pa, true, a, nullptr}); }
 };
 
+// Phase 3: MetaRNFClient — async metadata page read/write via gem5 MetaRNFController
+struct MetaRNFClient {
+    Port *_gem5Port = nullptr;
+    uint64_t &_tickRef;
+    int _nodeId = 0;
+    int _socketId = 0;
+    uint64_t _nextReqId = 0x8000000000000000ULL; // high bit set to avoid collision with normal reqIds
+
+    struct PendingRead {
+        uint64_t reqId;
+        std::function<void(const uint8_t* data256)> callback;
+    };
+    std::map<uint64_t, PendingRead> _pendingReads;
+
+    MetaRNFClient(uint64_t &tick) : _tickRef(tick) {}
+
+    void init(Port *gem5Port, int nid, int sid) {
+        _gem5Port = gem5Port;
+        _nodeId = nid;
+        _socketId = sid;
+    }
+
+    // Send MetaRNFReadReq to gem5; callback invoked when MetaRNFReadResp arrives
+    void readPage(uint64_t pagePa, std::function<void(const uint8_t* data256)> callback) {
+        uint64_t rid = _nextReqId++;
+        CoherenceMessage req;
+        req.h.type = CoherenceMessageType::MetaRNFReadReq;
+        req.h.srcNode = _nodeId;
+        req.h.srcSocket = _socketId;
+        req.h.dstNode = _nodeId;
+        req.h.dstSocket = _socketId;
+        req.h.homeLinePa = pagePa;
+        req.h.reqId = rid;
+        req.b.metaRNF.pagePa = pagePa;
+        _pendingReads[rid] = {rid, callback};
+        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+    }
+
+    // Send MetaRNFWriteReq to gem5 (fire-and-forget)
+    void writePage(uint64_t pagePa, const cc::glob::BackstorePage &page) {
+        CoherenceMessage req;
+        req.h.type = CoherenceMessageType::MetaRNFWriteReq;
+        req.h.srcNode = _nodeId;
+        req.h.srcSocket = _socketId;
+        req.h.dstNode = _nodeId;
+        req.h.dstSocket = _socketId;
+        req.h.homeLinePa = pagePa;
+        req.h.reqId = _nextReqId++;
+        req.b.metaRNF.pagePa = pagePa;
+        memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
+        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+    }
+
+    // Handle MetaRNFReadResp from gem5
+    void handleResp(const CoherenceMessage &msg) {
+        uint64_t rid = msg.h.reqId;
+        auto it = _pendingReads.find(rid);
+        if (it != _pendingReads.end()) {
+            if (it->second.callback) {
+                it->second.callback(msg.b.metaRNF.data);
+            }
+            _pendingReads.erase(it);
+        } else {
+            std::fprintf(stderr, "[MetaRNF] WARN: no pending read for reqId=%lu\n", rid);
+        }
+    }
+};
+
 struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     UBCCController &ubcc;
     Port *gem5Port;
@@ -379,17 +406,26 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     // Phase 2: BackstoreSchema-based page store replaces flat std::map
     cc::glob::BackstoreSchemaA _schema;
     cc::glob::GroupIndex _groupIdx[cc::glob::BackstoreNumGroups];
-    MetaRNFClient _metaRNF;  // Phase 3: DDR4-simulated page R/W, swap for real ZMQ later
+    std::map<uint64_t, cc::glob::BackstorePage> _pages;
     uint64_t _nextPageId = 1;
 
     uint64_t _ubioDramDelayPs = 0;
     std::vector<PendingBackstoreFill> _pendingFills;
     DsmDataStore dsmData;
+    MetaRNFClient _metaRNF;
 
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
                                int nid, int sid, uint64_t &t)
         : ubcc(ctrl), gem5Port(gport), netPort(nport),
-          nodeId(nid), socketId(sid), tickRef(t), _metaRNF(t) {}
+          nodeId(nid), socketId(sid), tickRef(t), _metaRNF(t)
+    {
+        _metaRNF.init(gport, nid, sid);
+    }
+
+    cc::glob::BackstorePage* _getPage(uint64_t pagePa) {
+        auto it = _pages.find(pagePa);
+        return (it != _pages.end()) ? &it->second : nullptr;
+    }
 
     bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
@@ -402,88 +438,101 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     bool sendGrantPush(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
 
     void hostIssueBackstoreRead(uint64_t pa) override {
+        UBCCController::BackstoreEntry e{};
+        bool found = false;
         int g = _schema.groupForPa(pa);
-        auto pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
-        if (pages.empty()) {
-            ubcc.onBackstoreFillComplete(pa, false, {});
+        std::vector<uint64_t> pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
+
+        // Try local cache first (L1 cache role — keep _pages as write-through cache)
+        for (auto pagePa : pages) {
+            cc::glob::BackstorePage* p = _getPage(pagePa);
+            if (!p) continue;
+            cc::glob::BackstoreEntry schemaEntry;
+            if (_schema.lookupInPage(pa, *p, schemaEntry) && !schemaEntry.deleted) {
+                e.state = static_cast<MESIState>(schemaEntry.state);
+                e.sharersMask = schemaEntry.sharersMask;
+                e.epoch = schemaEntry.epoch;
+                found = true;
+                break;
+            }
+        }
+
+        if (found || pages.empty()) {
+            // Local cache hit or no candidates — complete immediately
+            if (_ubioDramDelayPs > 0)
+                _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
+            else
+                ubcc.onBackstoreFillComplete(pa, found, e);
             return;
         }
-        uint64_t pagePa = pages[0];  // Phase 3: read from first candidate page
-        // Phase 3: async DDR4 read via MetaRNFClient, callback does schema lookup
-        // and onBackstoreFillComplete, with T_meta_dram latency built in.
-        auto *self = this;
-        _metaRNF.readPage(pagePa, [self, pa, pagePa](const uint8_t *buf) {
-            UBCCController::BackstoreEntry e{};
-            bool found = false;
-            if (buf) {
-                cc::glob::BackstorePage page; page.loadFrom(buf);
+
+        // Local miss — issue MetaRNF read for the first candidate page
+        uint64_t targetPagePa = pages[0];
+        _metaRNF.readPage(targetPagePa, [this, pa, targetPagePa](const uint8_t* data256) {
+            UBCCController::BackstoreEntry e2{};
+            bool found2 = false;
+            if (data256) {
+                // Cache the page locally
+                cc::glob::BackstorePage pg;
+                memcpy(&pg, data256, std::min(sizeof(pg), (size_t)256));
+                _pages[targetPagePa] = pg;
+                // Now do the lookup
                 cc::glob::BackstoreEntry schemaEntry;
-                if (self->_schema.lookupInPage(pa, page, schemaEntry) && !schemaEntry.deleted) {
-                    e.state = static_cast<MESIState>(schemaEntry.state);
-                    e.sharersMask = schemaEntry.sharersMask;
-                    e.epoch = schemaEntry.epoch;
-                    found = true;
+                if (_schema.lookupInPage(pa, pg, schemaEntry) && !schemaEntry.deleted) {
+                    e2.state = static_cast<MESIState>(schemaEntry.state);
+                    e2.sharersMask = schemaEntry.sharersMask;
+                    e2.epoch = schemaEntry.epoch;
+                    found2 = true;
                 }
             }
-            if (self->_ubioDramDelayPs > 0)
-                self->_pendingFills.push_back({self->tickRef + self->_ubioDramDelayPs, pa, found, e});
-            else
-                self->ubcc.onBackstoreFillComplete(pa, found, e);
+            ubcc.onBackstoreFillComplete(pa, found2, e2);
         });
     }
 
     void hostIssueBackstoreWrite(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
-        if (!ubcc.snapshotResidentForBackstore(pa, e)) { ubcc.onBackstoreWriteAck(pa); return; }
+        if (!ubcc.snapshotResidentForBackstore(pa, e)) {
+            ubcc.onBackstoreWriteAck(pa);
+            return;
+        }
         ubcc.directory().bloomInsert(pa);
         int g = _schema.groupForPa(pa);
         cc::glob::BackstoreEntry schemaEntry;
-        schemaEntry.pa = pa; schemaEntry.state = static_cast<cc::glob::UBCCMESIState>(e.state);
-        schemaEntry.sharersMask = e.sharersMask; schemaEntry.epoch = e.epoch;
+        schemaEntry.pa = pa;
+        schemaEntry.state = static_cast<cc::glob::UBCCMESIState>(e.state);
+        schemaEntry.sharersMask = e.sharersMask;
+        schemaEntry.epoch = e.epoch;
         schemaEntry.deleted = false;
-        auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
-        uint64_t targetPa = plan.target_page_pa;
 
+        auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
+        cc::glob::BackstorePage* p = nullptr;
         if (plan.needs_new_page) {
             cc::glob::BackstorePage np; np.clear();
             np.hdr.page_id = _nextPageId++;
-            _schema.applyUpsert(np, pa, schemaEntry, plan);
-            _schema.updateIndexAfterWrite(_groupIdx[g], plan, targetPa);
-            uint8_t ser[256]; np.storeTo(ser);
-            _metaRNF.writePage(targetPa, ser);
-            ubcc.onBackstoreWriteAck(pa);
-        } else {
-            // Read-modify-write: fetch existing page, apply, write back
-            auto *self = this;
-            _metaRNF.readPage(targetPa, [self, pa, schemaEntry, plan, targetPa](const uint8_t *buf) {
-                cc::glob::BackstorePage page;
-                if (buf) page.loadFrom(buf); else page.clear();
-                self->_schema.applyUpsert(page, pa, schemaEntry, plan);
-                self->_schema.updateIndexAfterWrite(self->_groupIdx[self->_schema.groupForPa(pa)], plan, targetPa);
-                uint8_t ser[256]; page.storeTo(ser);
-                self->_metaRNF.writePage(targetPa, ser);
-            });
-            ubcc.onBackstoreWriteAck(pa);
+            _pages[plan.target_page_pa] = np;
+            p = &_pages[plan.target_page_pa];
+        } else if (plan.needs_read_before) {
+            p = _getPage(plan.target_page_pa);
         }
+        if (!p) { ubcc.onBackstoreWriteAck(pa); return; }
+        _schema.applyUpsert(*p, pa, schemaEntry, plan);
+        _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
+        // Phase 3: Write-through to gem5 MetaRNF for persistence
+        _metaRNF.writePage(plan.target_page_pa, *p);
+        ubcc.onBackstoreWriteAck(pa);
     }
 
     void hostIssueBackstoreDelete(uint64_t pa) override {
         int g = _schema.groupForPa(pa);
         auto plan = _schema.planDelete(pa, _groupIdx[g]);
+        cc::glob::BackstorePage* p = _getPage(plan.target_page_pa);
+        bool existed = p && _schema.applyDelete(*p, pa, plan);
         ubcc.directory().bloomRemove(pa);
-        auto *self = this;
-        _metaRNF.readPage(plan.target_page_pa, [self, pa, plan](const uint8_t *buf) {
-            bool existed = false;
-            if (buf) {
-                cc::glob::BackstorePage page; page.loadFrom(buf);
-                existed = self->_schema.applyDelete(page, pa, plan);
-                if (existed) {
-                    uint8_t ser[256]; page.storeTo(ser);
-                    self->_metaRNF.writePage(plan.target_page_pa, ser);
-                }
-            }
-            self->ubcc.onBackstoreDeleteAck(pa, existed);
-        });
+        // Phase 3: Write-through modified page back to MetaRNF
+        if (existed && p) {
+            _metaRNF.writePage(plan.target_page_pa, *p);
+        }
+        ubcc.onBackstoreDeleteAck(pa, existed);
     }
 
     void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
@@ -538,10 +587,6 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
             &dataSource, &authEpoch);
 
         // BUSY - don"t send poison ReadResp; caller will retry
-        if (static_cast<int>(grant) < 0)
-            return true;
-
-        // BUSY — don't send poison ReadResp; caller will retry
         if (static_cast<int>(grant) < 0)
             return true;
 
@@ -793,10 +838,6 @@ main(int argc, char **argv)
     // instantaneously.  See docs/measure/latency_tuning_constraints.md §6.2.
     const char* envDramDelay = std::getenv("UBIO_DRAM_DELAY_PS");
     if (envDramDelay) host._ubioDramDelayPs = std::strtoull(envDramDelay, nullptr, 10);
-    const char* envDsmDelay = std::getenv("UBCC_DSM_DRAM_DELAY_PS");
-    if (envDsmDelay) host.dsmData._dsmDramDelayPs = std::strtoull(envDsmDelay, nullptr, 10);
-    const char* envMetaDelay = std::getenv("UBCC_META_DRAM_DELAY_PS");
-    if (envMetaDelay) host._metaRNF._tDramPs = std::strtoull(envMetaDelay, nullptr, 10);
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
     bool gem5Done = false, netDone = false;
@@ -1054,8 +1095,22 @@ main(int argc, char **argv)
                             resp.h.srcSocket = sid;
                             resp.h.dstNode = coh->h.homeNode;
                             resp.h.dstSocket = coh->h.homeSocket;
-                            // 数据字段：填零（best effort，dirty 数据可能已丢失）
-                            memset(resp.b.recallResp.data, 0, 64);
+                            // 尝试从 DsmDataStore 获取数据，而不是直接填零
+                            // DsmDataStore 缓存了最近访问的 DSM 行数据
+                            {
+                                auto dsmIt = host.dsmData.data.find(coh->h.homeLinePa);
+                                if (dsmIt != host.dsmData.data.end()) {
+                                    memcpy(resp.b.recallResp.data, dsmIt->second.data(), 64);
+                                    std::fprintf(stderr,
+                                        "[RECALL-PROXY] n%d using DsmDataStore data for PA=0x%lx\n",
+                                        nid, coh->h.homeLinePa);
+                                } else {
+                                    memset(resp.b.recallResp.data, 0, 64);
+                                    std::fprintf(stderr,
+                                        "[RECALL-PROXY] n%d no DsmDataStore data for PA=0x%lx, filling zeros\n",
+                                        nid, coh->h.homeLinePa);
+                                }
+                            }
                             resp.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
                             sendCoh(netPort, tick,
                                     gidOf(coh->h.homeNode, coh->h.homeSocket),
@@ -1081,6 +1136,13 @@ main(int argc, char **argv)
                         }
                     }
                 }
+                m = port->recv(tick, &st);
+                continue;
+            }
+
+            // MetaRNFReadResp: response from gem5 MetaRNFController (Phase 3)
+            if (coh->h.type == CoherenceMessageType::MetaRNFReadResp) {
+                host._metaRNF.handleResp(*coh);
                 m = port->recv(tick, &st);
                 continue;
             }
@@ -1149,7 +1211,6 @@ main(int argc, char **argv)
         // callbacks simulate real DRAM read latency.
         host.drainPendingFills(tick);
         host.dsmData.drain(tick);
-        host._metaRNF.drain();
     }
 
     return 0;
