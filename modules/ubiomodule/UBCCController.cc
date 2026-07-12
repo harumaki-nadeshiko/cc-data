@@ -465,14 +465,12 @@ UBCCController::processOuterRequest(
             // F24: Unless this outstanding was created by replay (replayArmed=true)
             // and the retry matches the grant tuple — then return the grant directly.
             if (existing->requesterNode == requesterNode) {
-                if (existing->replayArmed &&
-                    existing->stage == OpStage::WAITING_CLEAR &&
-                    existing->reqId == reqId &&
-                    existing->reqType == reqType &&
-                    existing->writeIntent == writeIntent) {
-                    // Retry hit on replay-armed grant — return the grant
+                // Same-requester has live outstanding in WAITING_CLEAR:
+                // the grant was already delivered. Return it directly regardless
+                // of replayArmed or reqId match. The retry is idempotent.
+                if (existing->stage == OpStage::WAITING_CLEAR) {
                     framework::LogInfo("UBCC",
-                            "UBCC node_id=%d: replayArmed hit PA=0x%lx "
+                            "UBCC node_id=%d: grant hit PA=0x%lx "
                             "requester=%d reqId=%lu intended=%s — granting\n",
                             _nodeId, line_pa, requesterNode, reqId,
                              mesiStateName(existing->intendedState));
