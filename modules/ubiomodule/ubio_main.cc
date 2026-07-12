@@ -300,11 +300,12 @@ matchesNetEndpoint(const std::string &ep, int nid)
     return ep == ("ipc:///tmp/networksim_m" + std::to_string(nid) + "_p1");
 }
 
-struct PendingBackstoreFill {
-    uint64_t fireTick;
-    uint64_t pa;
-    bool found;
-    UBCCController::BackstoreEntry entry;
+    struct PendingBackstoreFill {
+        uint64_t fireTick;
+        uint64_t pa;
+        bool found;
+        UBCCController::BackstoreEntry entry;
+    };
 };
 
 struct DsmDataStore {
@@ -334,12 +335,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     int nodeId;
     int socketId;
     uint64_t &tickRef;
-    std::map<uint64_t, UBCCController::BackstoreEntry> store;
+    // Phase 2: BackstoreSchema-based page store replaces flat std::map
+    cc::glob::BackstoreSchemaA _schema;
+    cc::glob::GroupIndex _groupIdx[cc::glob::BackstoreNumGroups];
+    std::map<uint64_t, cc::glob::BackstorePage> _pages;
+    uint64_t _nextPageId = 1;
 
-    // T_ubio_dram backstore read delay (design: latency_tuning_constraints.md §6.2)
-    // When non-zero, backstore reads are deferred by this amount to model real
-    // DRAM latency instead of returning instantaneously. Configurable via env var
-    // UBIO_DRAM_DELAY_PS at ubio process startup.
     uint64_t _ubioDramDelayPs = 0;
     std::vector<PendingBackstoreFill> _pendingFills;
     DsmDataStore dsmData;
@@ -349,66 +350,84 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         : ubcc(ctrl), gem5Port(gport), netPort(nport),
           nodeId(nid), socketId(sid), tickRef(t) {}
 
+    cc::glob::BackstorePage* _getPage(uint64_t pagePa) {
+        auto it = _pages.find(pagePa);
+        return (it != _pages.end()) ? &it->second : nullptr;
+    }
+
     bool routeControlToTarget(const CoherenceMessage &msg) {
-        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
+        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
             return sendCoh(gem5Port, tickRef, nodeId, msg);
-        }
-        return sendCoh(netPort, tickRef,
-                       gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
+        return sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
     }
-
-    bool sendRecallReq(const CoherenceMessage &msg) override {
-        return routeControlToTarget(msg);
-    }
-
-    bool sendInvalidateReq(const CoherenceMessage &msg) override {
-        return routeControlToTarget(msg);
-    }
-    bool sendUpgradeAckNotify(const CoherenceMessage &msg) override {
-        return routeControlToTarget(msg);
-    }
-
-    bool sendGrantPush(const CoherenceMessage &msg) override {
-        // Push-grant: home proactively delivers ReadResp to requester.
-        // Reuses routeControlToTarget which correctly handles both local
-        // (gem5Port) and cross-node (netPort) routing via dstNode/dstSocket.
-        return routeControlToTarget(msg);
-    }
+    bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    bool sendUpgradeAckNotify(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    bool sendGrantPush(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
 
     void hostIssueBackstoreRead(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
-        auto it = store.find(pa);
-        const bool found = it != store.end();
-        if (found) {
-            e = it->second;
+        bool found = false;
+        int g = _schema.groupForPa(pa);
+        std::vector<uint64_t> pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
+        for (auto pagePa : pages) {
+            cc::glob::BackstorePage* p = _getPage(pagePa);
+            if (!p) continue;
+            cc::glob::BackstoreEntry schemaEntry;
+            if (_schema.lookupInPage(pa, *p, schemaEntry) && !schemaEntry.deleted) {
+                e.state = static_cast<MESIState>(schemaEntry.state);
+                e.sharersMask = schemaEntry.sharersMask;
+                e.epoch = schemaEntry.epoch;
+                found = true;
+                break;
+            }
         }
-        // T_ubio_dram: when delay is configured, defer the fill-complete
-        // callback to model real DRAM read latency instead of returning
-        // instantaneously (design: latency_tuning_constraints.md §6.2).
-        // UBCC will enqueue this requester into _residentWaiters and
-        // replay it when the fill fires later.
-        if (_ubioDramDelayPs > 0) {
-            _pendingFills.push_back(
-                {tickRef + _ubioDramDelayPs, pa, found, e});
-        } else {
+        if (_ubioDramDelayPs > 0)
+            _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
+        else
             ubcc.onBackstoreFillComplete(pa, found, e);
-        }
     }
 
     void hostIssueBackstoreWrite(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
-        if (ubcc.snapshotResidentForBackstore(pa, e)) {
-            store[pa] = e;
-            ubcc.directory().bloomInsert(pa);
+        if (!ubcc.snapshotResidentForBackstore(pa, e)) {
+            ubcc.onBackstoreWriteAck(pa);
+            return;
         }
+        ubcc.directory().bloomInsert(pa);
+        int g = _schema.groupForPa(pa);
+        cc::glob::BackstoreEntry schemaEntry;
+        schemaEntry.pa = pa;
+        schemaEntry.state = static_cast<cc::glob::UBCCMESIState>(e.state);
+        schemaEntry.sharersMask = e.sharersMask;
+        schemaEntry.epoch = e.epoch;
+        schemaEntry.deleted = false;
+
+        auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
+        cc::glob::BackstorePage* p = nullptr;
+        if (plan.needs_new_page) {
+            cc::glob::BackstorePage np; np.clear();
+            np.hdr.page_id = _nextPageId++;
+            _pages[plan.target_page_pa] = np;
+            p = &_pages[plan.target_page_pa];
+        } else if (plan.needs_read_before) {
+            p = _getPage(plan.target_page_pa);
+        }
+        if (!p) { ubcc.onBackstoreWriteAck(pa); return; }
+        _schema.applyUpsert(*p, pa, schemaEntry, plan);
+        _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
         ubcc.onBackstoreWriteAck(pa);
     }
 
     void hostIssueBackstoreDelete(uint64_t pa) override {
-        const bool existed = store.erase(pa) > 0;
+        int g = _schema.groupForPa(pa);
+        auto plan = _schema.planDelete(pa, _groupIdx[g]);
+        cc::glob::BackstorePage* p = _getPage(plan.target_page_pa);
+        bool existed = p && _schema.applyDelete(*p, pa, plan);
         ubcc.directory().bloomRemove(pa);
         ubcc.onBackstoreDeleteAck(pa, existed);
     }
+
     void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
     void writeDsmData(uint64_t pa, const uint8_t *buf) override { dsmData.writeData(pa, buf, tickRef); }
 
