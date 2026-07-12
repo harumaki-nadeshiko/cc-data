@@ -10,6 +10,7 @@
 #include "framework/MemMessage.hh"
 #include "framework/Log.hh"
 #include "modules/ubiomodule/UBCCController.hh"
+#include "modules/ubiomodule/BackstoreSchemaA.hh"
 
 #include <cstdio>
 #include <cstdlib>
