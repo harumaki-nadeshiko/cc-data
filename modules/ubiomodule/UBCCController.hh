@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>

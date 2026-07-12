@@ -44,6 +44,9 @@ enum class CoherenceMessageType : uint16_t {
     HomeWritebackNotify,     // v4-dual-socket: HN-F completes DDR4 writeback
     BarrierReached,          // cross-node barrier: a node has arrived (mask in body)
     BarrierRelease,          // cross-node barrier: release the nodes in the mask
+    MetaRNFReadReq,          // Phase 3: ubio → gem5, read a 256B metadata page via MetaRNF
+    MetaRNFReadResp,         // Phase 3: gem5 → ubio, response with 256B page data
+    MetaRNFWriteReq,         // Phase 3: ubio → gem5, write a 256B metadata page via MetaRNF
 };
 
 // ---- Message Flags ----
@@ -207,6 +210,13 @@ struct UBBarrierBody {
     UBBarrierBody() : mask(0) {}
 };
 
+// Phase 3: MetaRNF metadata page access (256B pages)
+struct UBMetaRNFBody {
+    uint64_t pagePa;
+    uint8_t  data[256];
+    UBMetaRNFBody() : pagePa(0) { memset(data, 0, 256); }
+};
+
 union CoherenceMessageBody {
     UBReadReqBody readReq;
     UBReadRespBody readResp;
@@ -229,6 +239,7 @@ union CoherenceMessageBody {
     UBHomeWritebackNotifyBody homeWritebackNotify;
     UBUpgradeAckNotifyBody upgradeAckNotify;  // v4-P0 fix: FV-9 gap
     UBBarrierBody barrier;                    // BarrierReached / BarrierRelease
+    UBMetaRNFBody  metaRNF;                    // MetaRNFReadReq/Resp, MetaRNFWriteReq
 
     CoherenceMessageBody() {} // value-initialized by CoherenceMessage default ctor
 };
@@ -268,6 +279,9 @@ coherenceMsgTypeName(CoherenceMessageType t)
         case CoherenceMessageType::HomeWritebackNotify: return "HomeWritebackNotify";
         case CoherenceMessageType::BarrierReached:   return "BarrierReached";
         case CoherenceMessageType::BarrierRelease:   return "BarrierRelease";
+        case CoherenceMessageType::MetaRNFReadReq:   return "MetaRNFReadReq";
+        case CoherenceMessageType::MetaRNFReadResp:  return "MetaRNFReadResp";
+        case CoherenceMessageType::MetaRNFWriteReq:  return "MetaRNFWriteReq";
         default:                           return "Unknown";
     }
 }
