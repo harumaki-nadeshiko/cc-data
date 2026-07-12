@@ -307,6 +307,26 @@ struct PendingBackstoreFill {
     UBCCController::BackstoreEntry entry;
 };
 
+struct DsmDataStore {
+    std::map<uint64_t, std::array<uint8_t, 64>> data;
+    struct PendingDataOp { uint64_t fireTick; uint64_t pa; bool isWrite;
+        std::array<uint8_t, 64> buf; std::function<void(const uint8_t*)> cb; };
+    uint64_t _dsmDramDelayPs = 50000;
+    std::vector<PendingDataOp> pending;
+    void drain(uint64_t tick) {
+        auto it = pending.begin();
+        while (it != pending.end()) {
+            if (tick >= it->fireTick) {
+                if (it->isWrite) { data[it->pa] = it->buf; }
+                else { auto d = data.find(it->pa); if (it->cb) it->cb(d != data.end() ? d->second.data() : nullptr); }
+                it = pending.erase(it);
+            } else ++it;
+        }
+    }
+    void readData(uint64_t pa, uint64_t t, std::function<void(const uint8_t*)> cb) { pending.push_back({t + _dsmDramDelayPs, pa, false, {}, cb}); }
+    void writeData(uint64_t pa, const uint8_t *buf, uint64_t t) { std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64); pending.push_back({t + _dsmDramDelayPs, pa, true, a, nullptr}); }
+};
+
 struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     UBCCController &ubcc;
     Port *gem5Port;
@@ -322,6 +342,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     // UBIO_DRAM_DELAY_PS at ubio process startup.
     uint64_t _ubioDramDelayPs = 0;
     std::vector<PendingBackstoreFill> _pendingFills;
+    DsmDataStore dsmData;
 
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
                                int nid, int sid, uint64_t &t)
@@ -388,6 +409,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         ubcc.directory().bloomRemove(pa);
         ubcc.onBackstoreDeleteAck(pa, existed);
     }
+    void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
+    void writeDsmData(uint64_t pa, const uint8_t *buf) override { dsmData.writeData(pa, buf, tickRef); }
 
     // Drain expired pending backstore fills (T_ubio_dram expiry).
     // Must be called from the main loop every tick after clock advances,
@@ -1044,6 +1067,7 @@ main(int argc, char **argv)
         // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
         // callbacks simulate real DRAM read latency.
         host.drainPendingFills(tick);
+        host.dsmData.drain(tick);
     }
 
     return 0;

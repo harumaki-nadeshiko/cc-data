@@ -30,6 +30,9 @@ class UBCCHostIf
     virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
     virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
     virtual void hostIssueBackstoreDelete(uint64_t pa) = 0;
+    virtual void readDsmData(uint64_t pa,
+                             std::function<void(const uint8_t*)> cb) = 0;
+    virtual void writeDsmData(uint64_t pa, const uint8_t *buf) = 0;
 };
 
 /**
@@ -663,6 +666,15 @@ class UBCCController
 
     // C3 batch RS grant env switch
     bool _batchRsEnabled;
+
+    // Phase 1: Bloom reconstruction
+    uint64_t _bloomReconstructInterval = 10000;
+    uint64_t _bloomReconstructCounter = 0;
+
+    // Phase 1: DSM Data Store coalescing (future use)
+    std::map<uint64_t, std::vector<PendingRequester>> _pendingDataWaiters;
+    std::set<uint64_t> _pendingDataReads;
+    bool _coalesceRsReads = false;
 
     // Split-mode data persistence: when a line transitions through recall
     // (owner -> requester), cache the recalled 64B payload at home so that

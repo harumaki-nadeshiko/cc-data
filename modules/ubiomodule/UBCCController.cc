@@ -124,10 +124,15 @@ UBCCController::~UBCCController()
 void
 UBCCController::wakeup()
 {
-    // v4: Clean up expired tombstones on each wakeup
     cleanupTombstones();
-    // v4: Clean up expired RECALL orphans on each wakeup
     cleanupExpiredRecalls();
+    if (++_bloomReconstructCounter >= _bloomReconstructInterval) {
+        _bloomReconstructCounter = 0;
+        for (int g = 0; g < ResidentDir::BloomGroups; ++g) {
+            if (_directory.shouldReconstructGroup(g))
+                _directory.reconstructGroup(g);
+        }
+    }
 }
 
 // ---- isDsmAddr (pure computation, no SentinelHelper) ----
@@ -2408,6 +2413,7 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
         std::array<uint8_t, 64> cached{};
         memcpy(cached.data(), ost.dataBuf, 64);
         _lineDataCache[ost.linePa] = cached;
+        if (_host) _host->writeDsmData(ost.linePa, ost.dataBuf);
     } else if (entry.state == MESIState::G_I) {
         _lineDataCache.erase(ost.linePa);
     }
