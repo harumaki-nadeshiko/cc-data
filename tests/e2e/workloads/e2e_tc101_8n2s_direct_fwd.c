@@ -71,6 +71,7 @@ int main(int argc, char **argv)
         }
     }
 
+    sync_wait((1u << TOTAL_CPUS) - 1);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

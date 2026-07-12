@@ -934,15 +934,47 @@ main(int argc, char **argv)
                         sendCoh(netPort, tick,
                                 gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
                     } else if (!handled && isGem5Ingress(coh->h.type)) {
-                        std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
-                                     nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
-                        bool sentToGem5 = sendCoh(gem5Port, tick,
-                            gidOf(coh->h.srcNode, coh->h.srcSocket), *coh);
-                        std::fprintf(stderr,
-                                     "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
-                                     nid, sentToGem5 ? "true" : "false",
-                                     coherenceMsgTypeName(coh->h.type), coh->h.reqId,
-                                     coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
+                        if (gem5Done && coh->h.type == CoherenceMessageType::RecallReq) {
+                            // gem5 已退出，无法处理 RECALL。合成 RecallResp 返回给 home。
+                            // 注意：此时 gem5 的 L1/L2 可能有未写回的 dirty 数据，
+                            // 但 barrier 设计保证 verify 在 gem5 退出前完成，
+                            // 此路径仅作防御性兜底。
+                            std::fprintf(stderr,
+                                "[RECALL-PROXY] n%d gem5Done=true, synthesizing RecallResp "
+                                "for PA=0x%lx reqId=%lu homeNode=%d\n",
+                                nid, coh->h.homeLinePa, coh->h.reqId, coh->h.homeNode);
+                            CoherenceMessage resp;
+                            resp.h = coh->h;
+                            resp.h.type = CoherenceMessageType::RecallResp;
+                            resp.h.srcNode = nid;
+                            resp.h.srcSocket = sid;
+                            resp.h.dstNode = coh->h.homeNode;
+                            resp.h.dstSocket = coh->h.homeSocket;
+                            // 数据字段：填零（best effort，dirty 数据可能已丢失）
+                            memset(resp.b.recallResp.data, 0, 64);
+                            resp.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+                            sendCoh(netPort, tick,
+                                    gidOf(coh->h.homeNode, coh->h.homeSocket),
+                                    resp, true);
+                        } else if (gem5Done) {
+                            // gem5 已退出，其他 gem5Ingress 消息无法处理，记录告警
+                            std::fprintf(stderr,
+                                "[WARN-GEM5DONE] n%d gem5Done=true, dropping %s "
+                                "reqId=%lu PA=0x%lx\n",
+                                nid, coherenceMsgTypeName(coh->h.type),
+                                coh->h.reqId, coh->h.homeLinePa);
+                        } else {
+                            // 正常路径：转发给 gem5
+                            std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
+                                         nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
+                            bool sentToGem5 = sendCoh(gem5Port, tick,
+                                gidOf(coh->h.srcNode, coh->h.srcSocket), *coh);
+                            std::fprintf(stderr,
+                                         "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
+                                         nid, sentToGem5 ? "true" : "false",
+                                         coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                         coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
+                        }
                     }
                 }
                 m = port->recv(tick, &st);
