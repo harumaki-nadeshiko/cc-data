@@ -307,7 +307,6 @@ matchesNetEndpoint(const std::string &ep, int nid)
         bool found;
         UBCCController::BackstoreEntry entry;
     };
-};
 
 struct DsmDataStore {
     std::map<uint64_t, std::array<uint8_t, 64>> data;
