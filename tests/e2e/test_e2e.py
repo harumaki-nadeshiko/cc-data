@@ -92,6 +92,7 @@ TESTCASES = {
     99: "e2e_tc99_8n2s_perplane_slots",
     100: "e2e_tc100_8n2s_batch_rs",
     101: "e2e_tc101_8n2s_direct_fwd",
+    102: "e2e_tc102_writeback_data_persist",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1227,6 +1228,17 @@ def verify_tc101(reads, lines):
     return True, f"TC101 PASSED: direct-forward chain ({len(fwd_lines)} C4 forward events)", []
 
 
+def verify_tc102(reads, lines):
+    """TC102: Writeback data persistence.
+    At least 1 READ_VAL (node 2 cross-node read after eviction), all MATCH."""
+    if len(reads) < 1:
+        return False, f"TC102 FAILED: expected >=1 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC102 FAILED: {len(mismatches)} MISMATCH(es) — writeback data lost", mismatches
+    return True, f"TC102 PASSED: writeback dirty data persisted ({len(reads)} reads OK)", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1284,7 +1296,7 @@ VERIFIERS = {
     91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
     95: verify_tc95,
     96: verify_tc96, 97: verify_tc97, 98: verify_tc98, 99: verify_tc99,
-    100: verify_tc100, 101: verify_tc101,
+    100: verify_tc100, 101: verify_tc101, 102: verify_tc102,
 }
 
 def verify_testcase(tc_id, reads, lines):

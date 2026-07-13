@@ -557,7 +557,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 };
 
 bool
-handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
+handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+                  const CoherenceMessage &msg,
                   CoherenceMessage &response, bool &hasResponse)
 {
     hasResponse = false;
@@ -594,10 +595,16 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
         uint64_t pendingInvMask = ubcc.getPendingInvalidationMask(msg.h.homeLinePa);
         uint64_t committedEpoch = ubcc.getEpochForLine(msg.h.homeLinePa);
         cc::glob::DataBlock grantData(64);
+        // Always try to source grant data from ubio-side stores:
+        // 1. Outstanding grant data (recall-sourced, highest priority)
+        // 2. Immediate grant data (G_S+RS fast path)
+        // 3. _lineDataCache (persisted from prior recall/writeback)
+        // 4. DsmDataStore (persistent home DRAM — synchronous lookup)
+        // gem5 local physMem is NOT a valid source in split-mode.
         bool hasGrantData =
-            (dataSource == GrantDataSource::RecallBuffer) &&
-            (ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
-             ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData));
+            ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
+            ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
+            ubcc.copyLineDataCache(msg.h.homeLinePa, grantData);
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
@@ -631,6 +638,11 @@ handleUbccMessage(UBCCController &ubcc, int nid, const CoherenceMessage &msg,
             (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0;
         bool success = ubcc.processWriteback(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, keepAsClean);
+        // Persist dirty data from writeback into DsmDataStore + _lineDataCache
+        if (success && msg.b.writebackReq.hasData) {
+            host.writeDsmData(msg.h.homeLinePa, msg.b.writebackReq.data);
+            ubcc.updateLineDataCache(msg.h.homeLinePa, msg.b.writebackReq.data);
+        }
         response.h.type = CoherenceMessageType::WritebackResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
@@ -919,12 +931,19 @@ main(int argc, char **argv)
                 // dedicated MemMessageType). A node reports BarrierReached; once all
                 // (node,socket) planes in the mask have arrived, reply BarrierRelease
                 // to ALL local socket planes.
+                // TC90 fix: key by (mask, seq) to distinguish successive barriers
+                // sharing the same mask. Without this, interleaved BarrierReached
+                // messages from different generations pollute the set and get
+                // cleared together, causing later barriers to never complete.
                 if (coh->h.type == CoherenceMessageType::BarrierReached) {
                     uint32_t mask = coh->b.barrier.mask;
+                    uint32_t seq  = coh->b.barrier.seq;
                     int src = coh->h.srcNode;
-                    std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x src=%d\n", nid, mask, src);
-                    static std::map<uint32_t, std::set<int>> barrierNodes;
-                    barrierNodes[mask].insert(src);
+                    std::fprintf(stderr,"[ubio:%d] BarrierReached mask=0x%x seq=%u src=%d\n", nid, mask, seq, src);
+                    using BarrierKey = std::pair<uint32_t, uint32_t>;
+                    static std::map<BarrierKey, std::set<int>> barrierNodes;
+                    BarrierKey bk{mask, seq};
+                    barrierNodes[bk].insert(src);
                     // Forward to ALL sockets of every node (per-socket barrier:
                     // each socket independently fires BarrierReached).
                     if (netPort && !fromNetwork) {
@@ -944,7 +963,7 @@ main(int argc, char **argv)
                         }
                     }
                     uint32_t expected = __builtin_popcount(mask);
-                    if (barrierNodes[mask].size() >= expected) {
+                    if (barrierNodes[bk].size() >= expected) {
                         // Send BarrierRelease to ALL local socket planes via netPort
                         // (each local ubio will forward to its own gem5).
                         bool allSent = true;
@@ -958,6 +977,7 @@ main(int argc, char **argv)
                                 CoherenceMessage rmsg;
                                 rmsg.h.type = CoherenceMessageType::BarrierRelease;
                                 rmsg.b.barrier.mask = mask;
+                                rmsg.b.barrier.seq = seq;
                                 rel->setPayload(rmsg);
                                 if (netPort && s != sid) {
                                     // Send to other local sockets via nsim
@@ -973,10 +993,10 @@ main(int argc, char **argv)
                             }
                         }
                         if (allSent) {
-                            barrierNodes[mask].clear();
-                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
+                            barrierNodes.erase(bk);
+                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x seq=%u\n", nid, mask, seq);
                         } else {
-                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x RETRY (send/alloc fail)\n", nid, mask);
+                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x seq=%u RETRY (send/alloc fail)\n", nid, mask, seq);
                         }
                     }
                 m = port->recv(tick, &st);
@@ -1086,7 +1106,7 @@ main(int argc, char **argv)
                 for (int rep = 0; rep < faultCopies; ++rep) {
                     CoherenceMessage response;
                     bool hasResponse = false;
-                    bool handled = handleUbccMessage(ubcc, nid, *coh, response, hasResponse);
+                    bool handled = handleUbccMessage(ubcc, host, nid, *coh, response, hasResponse);
                     if (handled && coh->h.type == CoherenceMessageType::RecallResp) {
                         // RECALL.DONE only flips state inside the home UBCC; there is
                         // no normal response packet back to gem5. Mirror the RecallResp
@@ -1186,7 +1206,7 @@ main(int argc, char **argv)
             for (int rep = 0; rep < faultCopies; ++rep) {
                 CoherenceMessage response;
                 bool hasResponse = false;
-                if (!handleUbccMessage(ubcc, nid, *coh, response, hasResponse)) {
+                if (!handleUbccMessage(ubcc, host, nid, *coh, response, hasResponse)) {
                     std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
                                  nid, coherenceMsgTypeName(coh->h.type));
                     break;

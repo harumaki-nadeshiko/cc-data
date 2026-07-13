@@ -112,6 +112,13 @@ run_tc() {
     local tc=$1
     _kill_infra  # ensure clean state before each TC
 
+    # TC98 fix: per-TC timeout override.  High-contention tests need much
+    # longer than the default 600s because PDES serialization is inherent.
+    local TC_TIMEOUT="$TIMEOUT_SEC"
+    case "$tc" in
+        98) TC_TIMEOUT="${TIMEOUT_SEC_TC98:-1500}" ;;  # ≥25 min
+    esac
+
     local m5base="$ROOT_DIR/build/run/tc${tc}"
     local m5outdir="$m5base/m5out"
     rm -rf "$m5base"; mkdir -p "$m5outdir"
@@ -205,7 +212,7 @@ run_tc() {
         done
         [ $any -eq 0 ] && break
         sleep 1; waited=$((waited + 1))
-        if [ $waited -ge "$TIMEOUT_SEC" ]; then
+        if [ $waited -ge "$TC_TIMEOUT" ]; then
             # TC9 is a negative test: node0 is expected to crash on non-DSM
             # access (Aborted/SIGSEGV). If that crash evidence exists, the
             # test PASSED despite the timeout (other nodes may keep spinning).
@@ -218,7 +225,7 @@ run_tc() {
                 fi
                 echo "  TC${tc} TIMEOUT (no crash evidence found)"
             else
-                echo "  TC${tc} TIMEOUT after ${TIMEOUT_SEC}s"
+                echo "  TC${tc} TIMEOUT after ${TC_TIMEOUT}s"
             fi
             for pid in $GEM5_PIDS; do kill $pid 2>/dev/null || true; done
             return 1

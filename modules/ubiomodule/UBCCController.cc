@@ -196,7 +196,7 @@ UBCCController::handleResidentMiss(
     uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
 {
     const bool mayContain = _directory.bloomMayContain(line_pa);
-    if (!_directory.hasFreeSlot() && !evictOneVictim(line_pa)) {
+    if (!_directory.hasFreeSlotForPa(line_pa) && !evictOneVictim(line_pa)) {
         return ResidentAccessResult::Busy;
     }
 
@@ -487,12 +487,14 @@ UBCCController::processOuterRequest(
                     if (outAuthEpoch) *outAuthEpoch = existing->baseEpoch;
                     return grantTypeFromIntended(existing->intendedState);
                 }
+                // TC98 fix: rate-limit high-frequency BUSY log
+                { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                 framework::LogInfo("UBCC",
                         "UBCC node_id=%d: existing outstanding PA=0x%lx "
-                        "same requester=%d opType=%d stage=%d — BUSY\n",
+                        "same requester=%d opType=%d stage=%d — BUSY (n=%lu)\n",
                         _nodeId, line_pa, requesterNode,
                         static_cast<int>(existing->opType),
-                        static_cast<int>(existing->stage));
+                        static_cast<int>(existing->stage), _cnt); }
                 return static_cast<UBCC_OuterGrantType>(-1);
             }
             // recall_done_fix.md §4.2 Case C: different requester — enqueue or drop
@@ -502,10 +504,12 @@ UBCCController::processOuterRequest(
             // §4.4: Duplicate retry — same (requester, reqId) already queued → BUSY
             for (auto &pr : q) {
                 if (pr.node == requesterNode && pr.reqId == reqId) {
+                    // TC98 fix: rate-limit dup_retry log
+                    { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                     printf("[UBCC-QUEUE] pa=0x%lx action=dup_retry "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                            line_pa, requesterNode,
-                           isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                           isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                     return static_cast<UBCC_OuterGrantType>(-1);
                 }
             }
@@ -523,22 +527,27 @@ UBCCController::processOuterRequest(
                 pr.epoch = baseEpoch;
                 pr.reqId = reqId;
                 q.push_back(pr);
+                // TC98 fix: rate-limit enqueue log
+                { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                 printf("[UBCC-QUEUE] pa=0x%lx action=enqueue "
-                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                        line_pa, requesterNode,
-                       isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                       isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 // TC98: Log recall wait state for hot-contention diagnostics
                 if (existing->stage == OpStage::WAITING_TARGET_RESP) {
+                    static uint64_t _rcnt = 0; if (++_rcnt <= 3 || _rcnt % 1000 == 0)
                     std::fprintf(stderr, "[UBCC-RECALL-WAIT] pa=0x%lx recall_target=%d "
-                                 "new_requester=%d queue_depth=%zu existing_requester=%d\n",
+                                 "new_requester=%d queue_depth=%zu existing_requester=%d (n=%lu)\n",
                                  line_pa, existing->targetNode, requesterNode,
-                                 q.size(), existing->requesterNode);
+                                 q.size(), existing->requesterNode, _rcnt);
                 }
             } else {
+                // TC98 fix: rate-limit drop_full log
+                { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                 printf("[UBCC-QUEUE] pa=0x%lx action=drop_full "
-                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                        line_pa, requesterNode,
-                       isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                       isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
             }
             return static_cast<UBCC_OuterGrantType>(-1);
         }
@@ -823,10 +832,12 @@ UBCCController::processOuterRequest(
                 // §4.4: Duplicate retry check
                 for (auto &pr : q) {
                     if (pr.node == requesterNode && pr.reqId == reqId) {
+                        // TC98 fix: rate-limit dup_retry log (RECALL.DONE path)
+                        { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                         printf("[UBCC-QUEUE] pa=0x%lx action=dup_retry "
-                               "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                               "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                                line_pa, requesterNode,
-                               isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                               isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                         return static_cast<UBCC_OuterGrantType>(-1);
                     }
                 }
@@ -842,15 +853,19 @@ UBCCController::processOuterRequest(
                     pr.epoch = baseEpoch;
                     pr.reqId = reqId;
                     q.push_back(pr);
+                    // TC98 fix: rate-limit enqueue log (RECALL.DONE path)
+                    { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                     printf("[UBCC-QUEUE] pa=0x%lx action=enqueue "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                            line_pa, requesterNode,
-                           isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                           isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 } else {
+                    // TC98 fix: rate-limit drop_full log (RECALL.DONE path)
+                    { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
                     printf("[UBCC-QUEUE] pa=0x%lx action=drop_full "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu\n",
+                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
                            line_pa, requesterNode,
-                           isRS ? "RS" : "RU", writeIntent, reqId, q.size());
+                           isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 }
                 return static_cast<UBCC_OuterGrantType>(-1);
             }
@@ -1647,10 +1662,12 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 
     // v4: Outstanding-aware BUSY check (§4.6.2)
     if (isLineBusy(line_pa)) {
+        // TC98 fix: rate-limit writeback BUSY log
+        { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processWriteback PA=0x%lx "
-                "line busy (outstanding active) — BUSY/RETRY\n",
-                _nodeId, line_pa);
+                "line busy (outstanding active) — BUSY/RETRY (n=%lu)\n",
+                _nodeId, line_pa, _cnt); }
         return false;
     }
 
@@ -1729,8 +1746,10 @@ UBCCController::notifyHomeWritebackComplete(uint64_t homePa)
     // the stale writeback notification must not overwrite the state.
     // The in-flight request will determine the correct final state.
     if (isLineBusy(homePa)) {
-        printf("[UBCC-HOME-WB] home=%d pa=0x%lx BUSY — deferred\n",
-               _nodeId, homePa);
+        // TC98 fix: rate-limit home-WB BUSY log
+        { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
+        printf("[UBCC-HOME-WB] home=%d pa=0x%lx BUSY — deferred (n=%lu)\n",
+               _nodeId, homePa, _cnt); }
         return;
     }
 
@@ -1783,10 +1802,12 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // Phase 2: Line busy check unified to OutstandingRequest-aware
     if (isLineBusy(line_pa)) {
+        // TC98 fix: rate-limit evict BUSY log
+        { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: processEvict PA=0x%lx "
-                "line busy — rejected\n",
-                _nodeId, line_pa);
+                "line busy — rejected (n=%lu)\n",
+                _nodeId, line_pa, _cnt); }
         return false;
     }
 
@@ -3087,8 +3108,10 @@ UBCCController::processHomeWritebackNotify(uint64_t homePa, uint64_t notifyEpoch
 
     // Guard: if a new request is already in-flight, drop stale notify
     if (isLineBusy(homePa)) {
-        printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx BUSY — deferred\n",
-               _nodeId, _socketId, homePa);
+        // TC98 fix: rate-limit home-WB-NOTIFY BUSY log
+        { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
+        printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx BUSY — deferred (n=%lu)\n",
+               _nodeId, _socketId, homePa, _cnt); }
         return;
     }
 

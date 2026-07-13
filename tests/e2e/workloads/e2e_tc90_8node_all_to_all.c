@@ -29,8 +29,18 @@ static inline uint32_t dsm_load(int home_node, uint32_t off)
 
 int main(int argc, char **argv)
 {
-    int node_id = 0;
+    int node_id = 0, cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+
+    /* Only the primary CPU (cpu_index % 4 == 0) runs the workload.
+     * Non-primary CPUs exit immediately, matching the pattern used by
+     * other multi-CPU-per-node TCs (e.g. TC37). This prevents 4× barrier
+     * traffic and a race condition where a late CPU thread arrives at the
+     * barrier after release, starts a new generation, and deadlocks. */
+    int primary = (cpu_index % 4 == 0);
+    if (!primary) _exit_program(0);
+
     uint32_t sentinel = 0x90000000u | ((uint32_t)node_id << 8);
     uint32_t off = 0x6400;
 

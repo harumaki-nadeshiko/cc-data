@@ -134,7 +134,11 @@ struct UBInvalidateReqBody { /* no extra fields beyond header */ };
 
 struct UBInvalidateAckBody { /* no extra fields beyond header */ };
 
-struct UBWritebackReqBody { /* no extra fields beyond header */ };
+struct UBWritebackReqBody {
+    bool hasData;
+    uint8_t data[64];
+    UBWritebackReqBody() : hasData(false) { memset(data, 0, 64); }
+};
 
 struct UBWritebackRespBody {
     bool success;
@@ -207,7 +211,9 @@ struct UBUpgradeAckNotifyBody {
 // layer (MemMessageType) only needs PAYLOAD/TERMINATE/CONTROL_SYNC.
 struct UBBarrierBody {
     uint32_t mask;
-    UBBarrierBody() : mask(0) {}
+    uint32_t seq;     // barrier generation — distinguishes successive barriers
+                      // sharing the same mask (TC90 fix)
+    UBBarrierBody() : mask(0), seq(0) {}
 };
 
 // Phase 3: MetaRNF metadata page access (256B pages)

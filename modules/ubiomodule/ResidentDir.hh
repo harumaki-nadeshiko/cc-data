@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "BackstoreTypes.hh"
@@ -12,6 +13,8 @@ namespace cc
 
 namespace glob
 {
+
+// ---- Directory Entry (unpacked, used at API boundary) ----
 
 struct UBCCDirEntry {
     uint64_t lineAddr;
@@ -37,19 +40,67 @@ struct UBCCDirEntry {
     static bool canonicalOneHotRequired(const UBCCDirEntry &e);
 };
 
+// ---- Runtime layout configuration ----
+
+struct ResidentDirConfig {
+    size_t sram_bytes     = 512 * 1024;   // total SRAM budget
+    size_t bloom_bytes    = 60 * 1024;    // bloom filter budget
+    size_t index_bytes    = 4 * 1024;     // group index budget
+    int    pa_bits        = 40;           // effective PA bits (1TB = 40)
+    int    sharers_bits   = 8;            // width of sharers field
+    int    epoch_bits     = 24;           // width of epoch field
+    int    ways           = 0;            // 0 = auto-search optimal
+    int    set_bits       = 0;            // 0 = auto-search optimal
+};
+
+// ---- Computed layout (derived from config at construction time) ----
+
+struct ResidentDirLayout {
+    int    ways;                // actual associativity chosen
+    int    set_bits;            // log2(num_sets)
+    int    num_sets;            // 1 << set_bits
+    int    tag_bits;            // cacheline_addr_bits - set_bits
+    int    entry_bits;          // total bits per entry (tag+valid+mesi+dirty+ctrl+sharers+epoch)
+    int    plru_padded_ways;    // next_power_of_2(ways)
+    int    plru_bits;           // plru_padded_ways - 1
+    int    set_total_bits;      // ways * entry_bits + plru_bits
+    int    set_bytes;           // ceil(set_total_bits / 8)
+    size_t capacity;            // ways * num_sets
+    size_t dir_bytes;           // num_sets * set_bytes (actual SRAM used for dir)
+
+    // Per-entry field bit offsets within an entry (relative to entry start)
+    int    off_valid;           // 0: 1 bit
+    int    off_mesi;            // 1: 2 bits
+    int    off_dirty;           // 3: 1 bit
+    int    off_ctrl;            // 4: 3 bits (fill_pending, wb_pending, pinned)
+    int    off_sharers;         // 7: sharers_bits
+    int    off_epoch;           // 7+sharers_bits: epoch_bits
+    int    off_tag;             // 7+sharers_bits+epoch_bits: tag_bits
+
+    // Config echo
+    int    sharers_bits;
+    int    epoch_bits;
+    int    pa_bits;
+};
+
+// ---- Set-associative Resident Directory with Pseudo-LRU ----
+
 class ResidentDir
 {
   public:
-    static constexpr size_t SramBytes = 512 * 1024;
-    static constexpr size_t EntryBytes = 7;
+    static constexpr int    BloomHashes  = 4;
+    static constexpr int    BloomGroups  = 16;
     static constexpr size_t DefaultBloomBytes = 60 * 1024;
     static constexpr size_t DefaultIndexBytes = 4 * 1024;
-    static constexpr int    BloomHashes = 4;
-    static constexpr int    BloomGroups = 16;
 
+    // Legacy constructor (backward compat)
     explicit ResidentDir(size_t bf_bytes = DefaultBloomBytes,
                          size_t force_entries = 0);
 
+    // Full-config constructor
+    explicit ResidentDir(const ResidentDirConfig &cfg);
+
+    // ---- Data interface (same API as before) ----
     bool lookup(uint64_t pa, UBCCDirEntry& out) const;
     bool lookupWithSlot(uint64_t pa, UBCCDirEntry& out, size_t& slot) const;
     bool insert(uint64_t pa, const UBCCDirEntry& in);
@@ -58,7 +109,24 @@ class ResidentDir
     bool forceRemove(uint64_t pa);
     void clear();
 
-    // ---- Plain Bloom Filter (grouped) ----
+    // ---- Control flags ----
+    void setFillPending(uint64_t pa, bool v);
+    void setWbPending(uint64_t pa, bool v);
+    void setPinned(uint64_t pa, bool v);
+    bool fillPending(uint64_t pa) const;
+    bool wbPending(uint64_t pa) const;
+    bool pinned(uint64_t pa) const;
+    void touch(uint64_t pa);
+
+    // ---- Capacity / eviction ----
+    bool hasFreeSlot() const;
+    bool hasFreeSlotForPa(uint64_t pa) const;
+    bool pickVictim(uint64_t avoidPa, uint64_t &victimPa, UBCCDirEntry &victim) const;
+    size_t capacity() const { return _layout.capacity; }
+    size_t count() const { return _count; }
+    const ResidentDirLayout& layout() const { return _layout; }
+
+    // ---- Bloom Filter (grouped) ----
     bool bloomMayContain(uint64_t pa) const;
     void bloomInsert(uint64_t pa);
     void bloomRemove(uint64_t pa);
@@ -76,66 +144,90 @@ class ResidentDir
     // ---- Diagnostics ----
     double estimateFPR(int group = -1) const;
 
-    uint8_t control(size_t slot) const;
-    void setFillPending(uint64_t pa, bool v);
-    void setWbPending(uint64_t pa, bool v);
-    void setPinned(uint64_t pa, bool v);
-    bool fillPending(uint64_t pa) const;
-    bool wbPending(uint64_t pa) const;
-    bool pinned(uint64_t pa) const;
-    void touch(uint64_t pa);
-
-    bool hasFreeSlot() const;
-    bool pickVictim(uint64_t avoidPa, uint64_t &victimPa, UBCCDirEntry &victim) const;
-
-    size_t capacity() const { return _capacity; }
-    size_t count() const { return _count; }
+    // Legacy compat: `control` (slot-based) no longer meaningful; return 0
+    uint8_t control(size_t) const { return 0; }
 
   private:
-    size_t hashLine(uint64_t pa) const;
-    bool findSlot(uint64_t pa, size_t& slot) const;
+    void init(const ResidentDirConfig &cfg);
 
-    uint64_t loadPacked56(size_t slot) const;
-    void storePacked56(size_t slot, uint64_t packed56);
-    void encodeEntry(uint64_t pa, const UBCCDirEntry& in, uint64_t& out56) const;
-    void decodeEntry(uint64_t pa, uint64_t packed56, UBCCDirEntry& out) const;
+    // ---- Layout search ----
+    static ResidentDirLayout searchOptimalLayout(const ResidentDirConfig &cfg);
+    static int nextPow2(int v);
 
-    static int decodeOwner(uint8_t owner_code);
-    static uint8_t encodeOwner(int owner_node);
-    static uint64_t splitmix64(uint64_t x);
+    // ---- Set/way addressing ----
+    int  setIndex(uint64_t pa) const;
+    uint64_t tagOf(uint64_t pa) const;
+    size_t globalSlot(int set, int way) const { return (size_t)set * _layout.ways + way; }
+
+    // ---- Bit-packed entry access ----
+    // All bit operations address into _dirBits[] which is the SRAM region
+    // for directory entries (separate from bloom).
+    void   writeBits(size_t bitOffset, int numBits, uint64_t value);
+    uint64_t readBits(size_t bitOffset, int numBits) const;
+
+    // Per-entry accessors (set, way) → absolute bit offset
+    size_t entryBitOffset(int set, int way) const;
+    size_t plruBitOffset(int set) const;
+
+    // Entry field read/write
+    bool     getValid(int set, int way) const;
+    void     setValid(int set, int way, bool v);
+    uint64_t getTag(int set, int way) const;
+    void     setTag(int set, int way, uint64_t tag);
+    uint8_t  getMesi(int set, int way) const;
+    void     setMesi(int set, int way, uint8_t mesi);
+    bool     getDirty(int set, int way) const;
+    void     setDirty(int set, int way, bool v);
+    uint8_t  getCtrl(int set, int way) const;
+    void     setCtrl(int set, int way, uint8_t ctrl);
+    uint64_t getSharers(int set, int way) const;
+    void     setSharers(int set, int way, uint64_t sh);
+    uint64_t getEpoch(int set, int way) const;
+    void     setEpoch(int set, int way, uint64_t ep);
+
+    void encodeEntry(int set, int way, uint64_t pa, const UBCCDirEntry &in);
+    void decodeEntry(int set, int way, UBCCDirEntry &out) const;
+
+    // ---- Pseudo-LRU (tree-based) ----
+    uint32_t getPlruTree(int set) const;
+    void     setPlruTree(int set, uint32_t tree);
+    int      plruVictimWay(int set) const;
+    void     plruTouch(int set, int way);
+
+    // Find way in set matching pa; returns -1 if miss
+    int findWay(uint64_t pa) const;
 
     // ---- Bloom Filter helpers ----
+    static uint64_t splitmix64(uint64_t x);
+    int    bloomGroup(uint64_t pa) const;
     size_t bloomByteOffset(uint64_t pa, int hash_idx, int group) const;
-    size_t bloomBitIndex(size_t byteOff, int bitSub) const;
-    bool bloomBitTest(uint64_t pa, int hash_idx) const;
-    void bloomBitSet(uint64_t pa, int hash_idx);
-    int bloomGroup(uint64_t pa) const;
+    bool   bloomBitTest(uint64_t pa, int hash_idx) const;
+    void   bloomBitSet(uint64_t pa, int hash_idx);
     size_t bloomGroupBytes() const { return _bloomBytes / BloomGroups; }
 
     void validateCanonical(const UBCCDirEntry& in, uint64_t pa) const;
-
-    // Scan resident entries belonging to a group and insert into shadow BF.
     void scanResidentForGroup(int g, std::vector<uint8_t>& shadowBF) const;
 
   private:
-    uint8_t _buf[SramBytes];
-    size_t _capacity;
+    ResidentDirLayout _layout;
     size_t _count;
-    size_t _bfOffset;
+
+    // SRAM storage: all bit-packed into a single flat buffer
+    std::vector<uint8_t> _dirBits;   // directory entries (set-associative)
+    std::vector<uint8_t> _bloomBits; // bloom filter
+
     size_t _bloomBytes;
     size_t _bloomBitCount;
-    uint64_t _lruTick;
-
-    std::vector<uint64_t> _keys;
-    std::vector<uint8_t> _used;
-    std::vector<uint8_t> _dist;
-    std::vector<uint8_t> _ctrl;
-    std::vector<uint8_t> _bloomBits;
 
     GroupIndex _groupIndex[BloomGroups];
 
     static constexpr uint32_t kReconstructPeriod = 1024;
     static constexpr double kReconstructStaleThreshold = 0.25;
+
+    // ctrl flag bit definitions within the 3-bit ctrl field
+    static constexpr uint8_t kCtrlFillPending = 1u << 0;
+    static constexpr uint8_t kCtrlWbPending   = 1u << 1;
+    static constexpr uint8_t kCtrlPinned      = 1u << 2;
 };
 
 } // namespace glob

@@ -235,7 +235,11 @@ class UBCCController
     // Maximum pending requesters per PA (configurable queue depth)
     // C1: raised from 4 to 16 to eliminate retry-timer penalty under
     //     high-contention workloads (TC98: 16-way single-PA writes).
-    static constexpr size_t MAX_PENDING_PER_PA = 16;
+    // TC98 fix: raised to 32 — with 16 socket-plane requesters the queue
+    // was exactly at capacity, causing drop_full rejections on timing
+    // edge cases and forcing costly EP_RETRY_CYCLES polling instead of
+    // the push-grant fast path.
+    static constexpr size_t MAX_PENDING_PER_PA = 32;
 
     // v4-dual-socket: constructor now takes socket_id.
      UBCCController(int node_id, int socket_id = 0,
@@ -388,6 +392,20 @@ class UBCCController
         uint64_t epoch, uint64_t reqId);
 
     bool copyOutstandingGrantData(uint64_t line_pa, DataBlock &outBlk) const;
+
+    /** Update _lineDataCache with externally-provided data (e.g. writeback). */
+    void updateLineDataCache(uint64_t line_pa, const uint8_t *data) {
+        std::array<uint8_t, 64> a{}; std::memcpy(a.data(), data, 64);
+        _lineDataCache[line_pa] = a;
+    }
+
+    /** Copy _lineDataCache entry into outBlk. Returns true if found. */
+    bool copyLineDataCache(uint64_t line_pa, DataBlock &outBlk) const {
+        auto it = _lineDataCache.find(line_pa);
+        if (it == _lineDataCache.end()) return false;
+        std::memcpy(outBlk.data, it->second.data(), 64);
+        return true;
+    }
 
     // C3-bis: G_S+RS immediate-commit grant data
     std::map<uint64_t, OutstandingRequest> _immediateGrantData;
