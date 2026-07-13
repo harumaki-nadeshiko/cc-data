@@ -947,6 +947,7 @@ main(int argc, char **argv)
                     if (barrierNodes[mask].size() >= expected) {
                         // Send BarrierRelease to ALL local socket planes via netPort
                         // (each local ubio will forward to its own gem5).
+                        bool allSent = true;
                         for (int s = 0; s < g_numSockets; ++s) {
                             framework::MemMessage* rel = netPort
                                 ? netPort->allocateSendBuffer(tick)
@@ -961,16 +962,22 @@ main(int argc, char **argv)
                                 if (netPort && s != sid) {
                                     // Send to other local sockets via nsim
                                     rel->hdr.targetId = gidOf(nid, s);
-                                    netPort->send(rel);
+                                    if (!netPort->send(rel)) allSent = false;
                                 } else {
                                     // Send to local UBAdapter via gem5Port
                                     rel->hdr.targetId = gidOf(nid, s);
-                                    gem5Port->send(rel);
+                                    if (!gem5Port->send(rel)) allSent = false;
                                 }
+                            } else {
+                                allSent = false;
                             }
                         }
-                        std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
-                        barrierNodes[mask].clear();
+                        if (allSent) {
+                            barrierNodes[mask].clear();
+                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x\n", nid, mask);
+                        } else {
+                            std::fprintf(stderr,"[ubio:%d] BarrierRelease mask=0x%x RETRY (send/alloc fail)\n", nid, mask);
+                        }
                     }
                 m = port->recv(tick, &st);
                 continue;
