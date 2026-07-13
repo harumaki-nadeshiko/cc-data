@@ -116,8 +116,12 @@ run_tc() {
     # longer than the default 600s because PDES serialization is inherent.
     local TC_TIMEOUT="$TIMEOUT_SEC"
     case "$tc" in
-        98) TC_TIMEOUT="${TIMEOUT_SEC_TC98:-1500}" ;;  # ≥25 min
+        98) TC_TIMEOUT="${TIMEOUT_SEC_TC98:-1500}" ;;  # floor 1500s, overridable
     esac
+    # Always respect a higher value passed via TIMEOUT_SEC env var
+    if [ "$TIMEOUT_SEC" -gt "$TC_TIMEOUT" ] 2>/dev/null; then
+        TC_TIMEOUT="$TIMEOUT_SEC"
+    fi
 
     local m5base="$ROOT_DIR/build/run/tc${tc}"
     local m5outdir="$m5base/m5out"

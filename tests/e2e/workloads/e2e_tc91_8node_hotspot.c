@@ -15,8 +15,16 @@ static inline volatile uint32_t *dsm_addr(int home_node, uint32_t off)
 
 int main(int argc, char **argv)
 {
-    int node_id = 0;
+    int node_id = 0, cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+
+    /* Single-arg sync_wait(mask) expects exactly ONE primary thread per node.
+     * Non-primary CPUs exit immediately (same pattern as TC90/TC94); otherwise
+     * all 4 CPUs enter the cross-node barrier and desynchronize the per-node
+     * barrier generation, hanging the home node at the final barrier. */
+    int primary = (cpu_index % 4 == 0);
+    if (!primary) _exit_program(0);
 
     int hotspot_home = 0;
     uint32_t off = 0x6400;

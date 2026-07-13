@@ -1,5 +1,21 @@
 # TC98 BUSY Retry 风暴修复方案
 
+> ⚠️ **已作废（2026-07-14）**：本文档的根因诊断（"requesterNode = _nodeId 始终 = home
+> node → same-requester BUSY 风暴"）经代码追踪 + 实测日志**证伪**。实际每节点有独立
+> EPBackend（`_nodeId` 各不同），请求由发起节点自己的 EP-SNF 处理，`requesterNode`
+> 已正确 = 真实发起节点，经 `req.h.requesterNode` 原样传到 home UBCC；8 节点读同一行
+> 产生 8 个不同 requester，走 enqueue 路径，**无 same-requester BUSY 风暴**（实测 BUSY
+> 计数 = 0）。
+>
+> - **Fix A（requesterNode 修正）：不实施**（修不存在的 bug，且 default=-1 fallback
+>   反而可能引入 MachineID→node 映射错误）。
+> - **Fix B（指数退避）：作为性能优化候选保留**，见 `current_status.md` §四之二 perf-1。
+>
+> TC98 真实超时根因尚未定位（属 8n2s 拓扑系统性 home 死锁 / PDES 全局死锁的一部分），
+> 见 `current_status.md` §四 P0「8n2s 拓扑系统性死锁」。以下原文仅作历史保留。
+
+---
+
 > 状态：待实施
 > 前置依赖：当前 HEAD (a0446f6) 的所有修改已合入
 > 预计影响文件：4 个 gem5 文件 + 1 个 ubio 文件

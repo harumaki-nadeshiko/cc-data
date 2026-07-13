@@ -9,7 +9,12 @@ static inline volatile uint32_t *dsm_addr(int h,uint32_t o){
     return (volatile uint32_t*)(DSM_VA_BASE+(uint64_t)h*SEG_SIZE+o);
 }
 int main(int argc,char**argv){
-    int nid=0; if(argc>=2)nid=parse_int(argv[1]);
+    int nid=0, cpu_index=0;
+    if(argc>=2)nid=parse_int(argv[1]);
+    if(argc>=3)cpu_index=parse_int(argv[2]);
+    /* Single-arg sync_wait(mask): only primary CPU per node participates
+     * (TC90/TC94 pattern) to keep the cross-node barrier generation in sync. */
+    if((cpu_index%4)!=0){_exit_program(0);return 0;}
     int dst=(nid+1)%NUM_NODES;
     uint32_t val=0x82000000u|((uint32_t)nid<<8);
     __asm__("str %w0,[%1]"::"r"(val),"r"(dsm_addr(nid,0x6200)));

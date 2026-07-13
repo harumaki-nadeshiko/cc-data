@@ -9,8 +9,13 @@ static inline volatile uint32_t *dsm_addr(int h, uint32_t o) {
     return (volatile uint32_t *)(DSM_VA_BASE + (uint64_t)h * SEG_SIZE + o);
 }
 int main(int argc, char **argv) {
-    int nid = 0;
+    int nid = 0, cpu_index = 0;
     if (argc >= 2) nid = parse_int(argv[1]);
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    /* Single-arg sync_wait(mask): only the primary CPU per node participates.
+     * Non-primary CPUs exit immediately (TC90/TC94 pattern) to keep the
+     * per-node cross-node barrier generation in sync. */
+    if ((cpu_index % 4) != 0) { _exit_program(0); return 0; }
     uint32_t val = 0x800000AAu;
     if (nid == 0) __asm__ volatile("str %w0,[%1]"::"r"(val),"r"(dsm_addr(0,0x6000)));
     sync_wait(0b111);

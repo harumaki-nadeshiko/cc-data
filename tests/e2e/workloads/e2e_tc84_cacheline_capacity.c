@@ -7,7 +7,15 @@ static inline volatile uint32_t *dsm_addr(int h,uint32_t o){
     return (volatile uint32_t*)(DSM_VA_BASE+(uint64_t)h*SEG_SIZE+o);
 }
 int main(int argc,char**argv){
-    int nid=0; if(argc>=2)nid=parse_int(argv[1]);
+    int nid=0, cpu_index=0;
+    if(argc>=2)nid=parse_int(argv[1]);
+    if(argc>=3)cpu_index=parse_int(argv[2]);
+    /* Single-arg sync_wait(mask): only the primary CPU per node participates
+     * (TC90/TC94 pattern). Without this, all 4 CPUs enter the cross-node
+     * barrier and desynchronize the per-node barrier generation, hanging the
+     * home node (node0) at the barrier. This — not PDES latency — was the real
+     * cause of the TC84/TC85 timeouts. */
+    if((cpu_index%4)!=0){_exit_program(0);return 0;}
     if(nid!=0){sync_wait(0b111);_exit_program(0);return 0;}
     int ok=0;
     for(int i=0;i<N;i++){uint32_t o=0x1000+(uint32_t)i*64u,v=0x84000000u^(uint32_t)i,g;__asm__("str %w0,[%1]"::"r"(v),"r"(dsm_addr(0,o)));__asm__("dmb ish":::"memory");__asm__("ldr %w0,[%1]":"=r"(g):"r"(dsm_addr(0,o)));if(g==v)ok++;}

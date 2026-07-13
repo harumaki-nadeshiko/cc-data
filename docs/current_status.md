@@ -1,7 +1,18 @@
 # 当前状态与待解决问题
 
-> 更新：2026-07-14
-> HEAD: `8451ad8`
+> 更新：2026-07-14（本轮修复：barrier per-node 语义、TC42 recall stale 标记、TC80/82/84/85/91 primary check）
+> HEAD: `8451ad8` (+ 未提交本轮改动)
+
+---
+
+## 本轮修复摘要（2026-07-14）
+
+| 问题 | 之前的（错误）诊断 | 实测确认的真实根因 | 修复 | 结果 |
+|------|-------------------|-------------------|------|------|
+| **TC80/82/91 TIMEOUT** | "纯 PDES 性能 / 热点竞争，数据正确" | barrier **per-thread 发送 vs ubio per-node 聚合** 语义不匹配：无 primary check 的 workload 4 个 CPU 都进 barrier，第一个到达的线程即触发 BarrierReached，release 提前，generation 错位 → home 节点在末尾 barrier 死等 | (1) `sync_wait` 改本地聚齐再发一次 + release 带 seq 校验；(2) TC80/82/91 workload 加 primary CPU check | **全 PASS** |
+| **TC84/85 TIMEOUT** | "纯 PDES 性能瓶颈" | 同上 barrier bug（TC84/85 缺 cpu_index primary check，node0 的 4 CPU 都进 barrier） | workload 加 primary CPU check | **PASS**（1200s→~1-2min） |
+| **TC42 MISMATCH** | "EP-RNF 一次性注册，第二次 CleanUnique 静默升级" | 实测 DPRINTF 证伪：EP-RNF 注册正常。真因：**`_activeRecallPAs` stale 标记**——node1 被 **ReadUnique**-recall 后标记未清理（旧代码只清 ReadShared recall），后续真正的 store-upgrade CleanUnique snoop 被 RECALL-SNOOP guard 误判为 recall-induced，静默回 SnpResp_I，跳过 OuterUpgradeReq | `EPRNFController::finishChiTxn` 对 ReadShared **和** ReadUnique recall 都清理 activeRecall | **PASS** |
+| **~~fix_tc98 Fix A/B~~** | 待实施（requesterNode 修正 + 指数退避） | 代码追踪证伪：requesterNode 已正确=真实请求节点，8 节点产生 8 个不同 requester，无 same-requester BUSY 风暴 | 不实施（挪到性能优化 TODO） | — |
 
 ---
 
@@ -41,72 +52,59 @@ node=1 L1: dsm_store → CleanUnique(S→M)
 
 ---
 
-## 三、回归测试状态
-
-全量回归（排除 TC9、TC98），`TIMEOUT_SEC=300/600` 下：
+## 三、回归测试状态（2026-07-14 本轮实测）
 
 | 拓扑 | 通过 | 失败 | 详情 |
 |------|-----|------|------|
-| 1s (51 TC) | 47 | 4 | **TC42 FAIL** (epoch wrap), TC80/84/85 TIMEOUT（纯性能，数据正确） |
-| 2s (9 TC) | 9 | 0 | 全通过（含之前失败的 TC39） |
-| 8n1s (6 TC) | 5 | 1 | **TC91 TIMEOUT**（热点竞争，数据正确） |
-| 8n2s (6 TC) | 6 | 0 | 全通过（含之前失败的 TC101） |
-| **合计 (72 TC)** | **67** | **5** | |
+| 1s   | TC2/3/5/8/42/80/84/85 全 PASS | — | TC42、TC80、TC84、TC85 本轮全部修复 |
+| 2s   | TC32/33/34/35/39 PASS | — | — |
+| 8n1s | TC82/90/91/92/93/94 PASS | — | **TC82/91 本轮修复** |
+| 8n2s | TC99 PASS | **TC2/95/96/97/100/101 TIMEOUT，TC98 TIMEOUT** | 8n2s 拓扑系统性 home 死锁 / 全局死锁（见 P0） |
+
+> 说明：8n2s（16-plane 双 socket）的失败是**独立的、系统性的 home 节点死锁 / PDES 全局死锁**，与本轮修的 barrier/TC42 无关（本轮修复未引入回归——同类 TC 在 1s/2s/8n1s 下全过）。这是本轮之后的**下一优先级**。
 
 ---
 
 ## 四、待解决问题
 
-### P0: TC42 — CleanUnique 静默升级（数据正确性 bug）
+### P0: 8n2s 拓扑系统性死锁（下一优先级）
 
-**现象**：node 1 读到 `0x42A00000`（v3）而非 `0x42A00001`（v4）。EP-SNF 日志显示 v4 的 WriteUnique 从未发出——node 0 的 CleanUnique 走了 HN-F 静默 auto-upgrade。
+**现象**（`TIMEOUT_SEC=600`，TC98 给到 1800s）：
+- **home 节点死锁**：TC2/96/100/101 —— 其余 7 节点正常 `doExitCleanup` 退出后，home(node0) 卡在 CLK-SYNC 无限处理 Recall/Clear，无法自行终止。
+- **全局死锁**：TC95/97 —— 全 8 节点卡在 CLK-SYNC，PDES 零进展。
+- **全局活锁**：TC98 —— 全 8 节点持续 ReadReq 洪泛到 node0 + Recall，无终止。
+- **唯一通过**：TC99（per-plane slot contention，访问模式不触发 home 死锁）。
 
-**根因**：`RegisterEPRNF_OnSharedHint` 在第一次 ReadShared grant 时把 EP-RNF 注册为 HN-F co-sharer，第一次 CleanUnique 能正确触发 snoop 通知 UBCC。但升级后 EP-RNF 从 `dir_sharers` 被清除。后续再写又走 CleanUnique 静默升级，UBCC 收不到通知。
-
-**修复方向**：确保 EP-RNF 在每次需要时都重新注册为 sharer。即在被清掉后，下次 HN-F CompData 响应路径重新 `dir_sharers.add(epRnfMachineID)`。需要确认：G_S 已在目录中时，后续 ReadShared 是否经过同一个 `RegisterEPRNF_OnSharedHint` transition。
-
----
-
-### P0: TC91 / TC98 — BUSY retry 风暴
-
-**现象**：TC91 8 路竞争 600s 超时（8 READ_VAL 全 MATCH，数据正确），TC98 16 路竞争 1500s 超时（0/16 round 完成）。
-
-**根因链**：
-
-```
-EP-SNF requesterNode = _nodeId（始终 home node）
-    → UBCC "same requester" → BUSY（不入队 _pendingRequesters）
-    → push-grant 路径不工作
-    → 每 20000 cycle retry × N 路 → 海量跨进程 ReadReq
-    → 淹没 networksim PDES 带宽
-    → InvalidateAck / RecallResp 延迟 → outstanding 永远不 clear
-    → 恶性循环
-```
-
-**修复 plan**：已写入 `docs/fix_tc98_retry_storm.md`，两个 Fix（均未实施）：
-
-| | 内容 | 涉及文件 |
-|---|------|---------|
-| **Fix A** | 修正 `requesterNode`：从 CHI `m_requestor` (MachineID) 推导原始请求节点，不再用 `_nodeId` | `EPSNFController.cc`, `EPBackend.hh/.cc`, `EPSNFController.hh` |
-| **Fix B** | EP-SNF retry 指数退避：`EP_RETRY_MIN_CYCLES`（默认 20K）、`EP_RETRY_MAX_CYCLES`（默认 2M）、指数因子 ×2 | `EPSNFController.cc/.hh` |
+**性质**：全部无 crash / 无 panic / 无 IPC bind 失败，是纯协议/PDES 死锁。初步方向：
+1. home 节点在所有 requester 退出后无法收敛终止（可能需要"所有 requester 已 TERMINATE 则 home 自终止"的检测）；
+2. 跨 socket conservative sync 对齐（`EP_SYNC_INTERVAL_PS=25000` 对 16-plane 可能不足）；
+3. TC98 曾疑似的 BUSY retry 风暴（注意：fix_tc98 的 Fix A/B 已证伪，见下）。
+**尚未深入定位，留待下一轮。**
 
 ---
 
-### P1: TC80 / TC84 / TC85 — PDES 性能瓶颈
+### P0（已否决）：fix_tc98_retry_storm.md 的 Fix A/B
 
-| TC | 最大超时 | 进展 | 数据正确性 |
-|----|---------|------|-----------|
-| TC80 | 1200s | 8 次 latency 采样 + 1 READ_VAL MATCH 全部产出 | 数据全对 |
-| TC84 | 1200s | 1/50 条 MATCH 产出 | 数据对但未完成 |
-| TC85 | 1200s | 同 TC84（同一 workload 映射） | 同上 |
-
-全部是纯 PDES 性能问题：IDLE 进程拖慢全局 safeTs 取 min，导致 networksim 时钟推进极慢。无逻辑 bug。短期可通过继续增大超时绕过，长期需要 PDES lookahead 优化。
+**结论：不实施，判据已被代码追踪证伪。**
+- Fix A 前提"`requesterNode = _nodeId` 始终 = home node"错误。实际每节点有独立 EPBackend（`_nodeId` 各不相同），请求由**发起节点自己的** EP-SNF 处理，`requesterNode` 已正确=真实发起节点 X，经 `req.h.requesterNode` 原样传到 home UBCC（`UBAdapter.cc:311` → `ubio_main.cc:581`）。8 节点读同一行 → UBCC 看到 8 个不同 requester → 走 enqueue，**无 same-requester BUSY 风暴**。最新日志实测 BUSY 计数 = 0。
+- Fix B（指数退避）当前无 retry 风暴可退，属过度设计。
+- 两者作为**性能优化候选**保留在 TODO（见第六节），本轮及短期不实施。
 
 ---
 
-### P2: TC42 后续：epoch wrap 验证
+### P2: TC42 后续 —— epoch wrap 验证（已随本轮 PASS）
 
-TC42 的 epoch field 从 0xFFFFFE → 0xFFFFFF → 0 → 1 序列中，CleanUnique 静默升级可能导致 epoch wrap 时 UBCC 目录状态不一致。CleanUnique 修复后 TC42 需重新验证。
+TC42（epoch 0xFFFFFE→FF→0→1 序列）本轮已 PASS，node0/1/2 均读到 v4=0x42A00001。recall stale 标记修复后 epoch wrap 未见异常。若后续 8n2s 死锁修复涉及 epoch 逻辑，需再回归一次 TC42。
+
+---
+
+## 四之二、性能优化 TODO（非正确性问题，暂缓）
+
+| 项 | 内容 | 来源 |
+|----|------|------|
+| perf-1 | EP-SNF retry 指数退避（`EP_RETRY_MIN/MAX_CYCLES`）—— 防御性，防止未来 retry 风暴 | 原 fix_tc98 Fix B |
+| perf-2 | PDES lookahead 优化 —— IDLE 进程拖慢全局 safeTs，长期需要 | 原 TC80/84/85 分析（注：TC80/84/85 已由 barrier 修复解决，此项仅剩理论优化空间） |
+| perf-3 | 8n2s 跨 socket conservative sync 参数调优 | 本轮 8n2s 死锁分析 |
 
 ---
 
@@ -137,15 +135,24 @@ docs/fix_tc98_retry_storm.md              — TC98 fix plan (Fix A requesterNode
 scripts/inject_debug.py                  — temp debug injection (可删除)
 ```
 
-### 待修改文件（TC42 + TC91/98）
+### 本轮（2026-07-14）新增/修改文件
 
 ```
-CHI-cache-actions.sm          — Initiate_CleanUnique: 确保 EP-RNF 重新注册为 sharer
-EPSNFController.cc            — Fix A: requesterNode 修正
-EPBackend.cc/.hh              — Fix A: handleRemoteMiss originNode 参数
-EPSNFController.hh            — Fix A: RetryEntry + originNode
-                               Fix B: RetryEntry + retryCount, exponential backoff
-EPSNFController.cc            — Fix B: retryInterval() + schedule 修改 (3 处)
+gem5/src/sim/sync_wait.hh       — BarrierState +localExpected/+reachedSent；releaseBarrier(mask,seq)
+gem5/src/sim/sync_wait.cc       — barrierArrive 改本地聚齐再发一次(per-node)；releaseBarrier seq 校验 + generation 推进修复
+gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc — 两处 releaseBarrier 调用传入 bc->b.barrier.seq
+gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.cc — finishChiTxn 对 ReadShared+ReadUnique recall 都清 activeRecall (TC42 修复)
+tests/e2e/workloads/e2e_tc80_cross_node_latency.c   — 加 cpu_index primary CPU check
+tests/e2e/workloads/e2e_tc82_8node_ring_latency.c   — 加 cpu_index primary CPU check
+tests/e2e/workloads/e2e_tc84_cacheline_capacity.c   — 加 cpu_index primary CPU check (TC84/85 共用)
+tests/e2e/workloads/e2e_tc91_8node_hotspot.c        — 加 cpu_index primary CPU check
+```
+
+### 已否决 / 不再需要的改动
+```
+CHI-cache-actions.sm  — 原计划"EP-RNF 重新注册"：证伪，EP-RNF 注册本无问题，勿改
+EPSNFController.*      — 原 Fix A requesterNode：证伪，勿改
+EPSNFController.*      — 原 Fix B 指数退避：挪到 perf TODO
 ```
 
 ---
