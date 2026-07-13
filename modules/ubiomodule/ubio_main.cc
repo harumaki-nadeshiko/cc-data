@@ -850,9 +850,31 @@ main(int argc, char **argv)
         while (m && st == ReceiveStatus::kMessage) {
             if (++drain_cnt > 200) break;  // prevent starvation of other ports
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
-                std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu\n", nid, m->hdr.timestamp);
-                *doneFlag = true;
-                break;
+                std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu from_net=%d\n",
+                             nid, m->hdr.timestamp, fromNetwork);
+                if (!fromNetwork) {
+                    // TERMINATE from local gem5: mark gem5 done and forward
+                    // to networksim so other nodes can exclude this peer from
+                    // PDES safeTs (TC90/TC98 deadlock fix).
+                    *doneFlag = true;
+                    if (netPort) {
+                        framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
+                        if (fwd) {
+                            *fwd = *m;
+                            fwd->hdr.timestamp = tick;
+                            fwd->hdr.targetId = 0;
+                            netPort->send(fwd);
+                            std::fprintf(stderr, "[ubio:%d] TERMINATE forwarded to networksim\n", nid);
+                        }
+                    }
+                } else {
+                    // TERMINATE from another node via networksim: do NOT set
+                    // netDone=true — other nodes may still be active. Ignore
+                    // and continue polling.
+                }
+                if (!fromNetwork) break;
+                m = port->recv(tick, &st);
+                continue;
             }
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
                 m = port->recv(tick, &st);
