@@ -649,16 +649,8 @@ UBCCController::processOuterRequest(
                     oreq->intendedSharersMask = entry.sharersMask | (1ULL << requesterNode);
                     oreq->intendedOwnerNode = -1;
                     oreq->intendedDirty = false;
-                    auto cacheIt = _lineDataCache.find(line_pa);
-                    if (cacheIt != _lineDataCache.end()) {
-                        oreq->dataValid = true;
-                        memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                        oreq->dataSource = GrantDataSource::RecallBuffer;
-                        if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                    } else {
-                        oreq->dataSource = GrantDataSource::HomeMemory;
-                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                    }
+                    oreq->dataSource = GrantDataSource::HomeMemory;
+                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                     if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                 }
 
