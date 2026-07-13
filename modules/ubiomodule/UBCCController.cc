@@ -588,19 +588,8 @@ UBCCController::processOuterRequest(
                     oreq->intendedSharersMask = (1ULL << requesterNode);
                     oreq->intendedOwnerNode = -1;
                     oreq->intendedDirty = false;
-                    // TC101: Check _lineDataCache for warm data (e.g. from prior recall)
-                    {
-                        auto cacheIt = _lineDataCache.find(line_pa);
-                        if (cacheIt != _lineDataCache.end()) {
-                            oreq->dataValid = true;
-                            memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                            oreq->dataSource = GrantDataSource::RecallBuffer;
-                            if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                        } else {
-                            oreq->dataSource = GrantDataSource::HomeMemory;
-                            if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                        }
-                    }
+                    oreq->dataSource = GrantDataSource::HomeMemory;
+                    if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                     if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                 }
             } else { // GlobalReadUnique
@@ -617,19 +606,8 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = false;
-                        // TC101: Check _lineDataCache for warm data
-                        {
-                            auto cacheIt = _lineDataCache.find(line_pa);
-                            if (cacheIt != _lineDataCache.end()) {
-                                oreq->dataValid = true;
-                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                                oreq->dataSource = GrantDataSource::RecallBuffer;
-                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                            } else {
-                                oreq->dataSource = GrantDataSource::HomeMemory;
-                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                            }
-                        }
+                        oreq->dataSource = GrantDataSource::HomeMemory;
+                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 } else {
@@ -645,19 +623,8 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = true;
-                        // TC101: Check _lineDataCache for warm data
-                        {
-                            auto cacheIt = _lineDataCache.find(line_pa);
-                            if (cacheIt != _lineDataCache.end()) {
-                                oreq->dataValid = true;
-                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                                oreq->dataSource = GrantDataSource::RecallBuffer;
-                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                            } else {
-                                oreq->dataSource = GrantDataSource::HomeMemory;
-                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                            }
-                        }
+                        oreq->dataSource = GrantDataSource::HomeMemory;
+                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 }
@@ -770,19 +737,8 @@ UBCCController::processOuterRequest(
                         oreq->intendedSharersMask = 0;
                         oreq->intendedOwnerNode = requesterNode;
                         oreq->intendedDirty = writeIntent;
-                        // TC101: Check _lineDataCache (warm data from existing G_S)
-                        {
-                            auto cacheIt = _lineDataCache.find(line_pa);
-                            if (cacheIt != _lineDataCache.end()) {
-                                oreq->dataValid = true;
-                                memcpy(oreq->dataBuf, cacheIt->second.data(), 64);
-                                oreq->dataSource = GrantDataSource::RecallBuffer;
-                                if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
-                            } else {
-                                oreq->dataSource = GrantDataSource::HomeMemory;
-                                if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
-                            }
-                        }
+                        oreq->dataSource = GrantDataSource::HomeMemory;
+                        if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
                         if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                     }
                 }
