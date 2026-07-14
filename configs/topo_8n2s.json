@@ -8,7 +8,7 @@
     },
     {
       "id": "gem5_1",
-      "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=1 --num-nodes=8 --num-sockets=2 --workload={workload}"
+      "cmd": "{gem5_bin} --outdir={node_outdir} --debug-flags=ProtocolTrace,RubyGenerated --debug-start=18000000000 --debug-file=node1_chi.log {test_e2e} --node-id=1 --num-nodes=8 --num-sockets=2 --workload={workload}"
     },
     {
       "id": "gem5_2",

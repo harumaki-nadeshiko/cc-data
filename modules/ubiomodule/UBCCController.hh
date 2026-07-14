@@ -869,7 +869,8 @@ class UBCCController
     bool fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
                                  uint64_t committedEpoch, uint64_t reqId,
                                  int requesterNode,
-                                 UBCC_OuterReqType reqType, bool writeIntent);
+                                 UBCC_OuterReqType reqType, bool writeIntent,
+                                 uint64_t *outEffectiveMask = nullptr);
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,
                               int requesterNode);

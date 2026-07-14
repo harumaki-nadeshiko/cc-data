@@ -694,15 +694,25 @@ UBCCController::processOuterRequest(
                     OutstandingRequest *invOreq = createOutstanding(
                         line_pa, OpType::INVALIDATE, requesterNode, -1,
                         requesterSocket);
+                    // fix2: fan out FIRST so we learn the effective (live) target
+                    // set, then size the ack accounting to exactly what we sent.
+                    uint64_t effectiveMask = otherSharers;
+                    _invalidationCount++;
+                    fanoutInvalidateTargets(line_pa, otherSharers,
+                                             entry.epoch, reqId,
+                                             requesterNode,
+                                             reqType, writeIntent,
+                                             &effectiveMask);
                     if (invOreq) {
                         invOreq->reservedEpoch = reservedEpoch;
                         invOreq->reqId = reqId;
                         invOreq->baseEpoch = baseEpoch;
                         invOreq->reqType = reqType;
                         invOreq->stage = OpStage::WAITING_ALL_ACKS;
-                        invOreq->targetMask = otherSharers;
-                        invOreq->totalMask = otherSharers;
-                        invOreq->pendingAckCount = __builtin_popcountll(otherSharers);
+                        // fix2: ack accounting tracks the effective (live) mask
+                        invOreq->targetMask = effectiveMask;
+                        invOreq->totalMask = effectiveMask;
+                        invOreq->pendingAckCount = __builtin_popcountll(effectiveMask);
                         invOreq->ackMask = 0;
                         invOreq->writeIntent = writeIntent;
                         invOreq->intendedState = writeIntent ? MESIState::G_M : MESIState::G_E;
@@ -711,13 +721,38 @@ UBCCController::processOuterRequest(
                         invOreq->intendedDirty = writeIntent;
                         invOreq->dataSource = GrantDataSource::HomeMemory; // F3
                         if (outAuthEpoch) *outAuthEpoch = invOreq->baseEpoch;
+
+                        // fix2 corner case: if NO sharer remains live, there is
+                        // nothing to wait for — the invalidation is already
+                        // satisfied. Convert the INVALIDATE straight to a
+                        // GRANT_HANDSHAKE (mirroring the all-acks-done path) so
+                        // the grant proceeds immediately instead of hanging in
+                        // WAITING_ALL_ACKS with pendingAckCount==0 and no ack to
+                        // trigger the transition.
+                        if (effectiveMask == 0) {
+                            printf("[UBCC-INVALIDATE-EMPTY] home=%d pa=0x%lx "
+                                   "requester=%d — no live sharers, converting "
+                                   "to GRANT_HANDSHAKE immediately\n",
+                                   _nodeId, line_pa, requesterNode);
+                            invOreq->invalidateBarrierDone = true;
+                            invOreq->opType = OpType::GRANT_HANDSHAKE;
+                            invOreq->stage = OpStage::WAITING_CLEAR;
+                            invOreq->replayArmed = true;
+                            invOreq->recallBarrierDone = false;
+                            if (_outbound) {
+                                CoherenceMessage push;
+                                buildGrantResponse(*invOreq, push);
+                                _outbound->sendGrantPush(push);
+                                printf("[PUSH-GRANT] INVALIDATE-EMPTY home=%d "
+                                       "pa=0x%lx requester=%d sock=%d reqId=%lu "
+                                       "grantType=%d\n",
+                                       _nodeId, line_pa, invOreq->requesterNode,
+                                       invOreq->requesterSocket, invOreq->reqId,
+                                       static_cast<int>(
+                                          grantTypeFromIntended(invOreq->intendedState)));
+                            }
+                        }
                     }
-                    _invalidationCount++;
-                    // Fanout InvalidateReq to all sharers
-                    fanoutInvalidateTargets(line_pa, otherSharers,
-                                             entry.epoch, reqId,
-                                             requesterNode,
-                                             reqType, writeIntent);
                     // Return BUSY — invalidation must complete before grant
                     return static_cast<UBCC_OuterGrantType>(-1);
                 } else {
@@ -1975,25 +2010,45 @@ UBCCController::processOuterUpgradeReq(
     oreq->intendedSharersMask = 0;
     oreq->intendedDirty = writeIntent;
 
+    // fix1 (home-owned invalidation fanout): the home that CREATES the
+    // WAITING_ALL_ACKS outstanding MUST also emit the InvalidateReq to each
+    // target sharer. Previously the upgrade path left the fanout to the
+    // requester's EPBackend (EPBackend.cc notifyLocalWriteUpgrade), which in the
+    // hot-line RS/RU + recall + batch-RS-replay interleaving could fail to fire
+    // — leaving an orphan outstanding whose acks never arrive (WAITING_ALL_ACKS
+    // forever) and blocking all later upgrades (TC98 deadlock at transfer #10).
+    // Unifying with the INVALIDATE path guarantees "whoever creates the
+    // outstanding owns the fanout".
+    //
+    // fix2 (send-time directory): fan out FIRST so we learn the effective (live)
+    // sharer set, then size the ack accounting to exactly what we sent.
+    uint64_t effectiveMask = targetMask;
     if (targetMask != 0) {
+        fanoutInvalidateTargets(line_pa, targetMask, entry.epoch, reqId,
+                                requesterNode,
+                                UBCC_OuterReqType::GlobalReadUnique,
+                                writeIntent, &effectiveMask);
+    }
+
+    if (effectiveMask != 0) {
         // upgrade_invalidate_fix D1/D2: other sharers exist → must invalidate first
         oreq->stage = OpStage::WAITING_ALL_ACKS;
         oreq->accepted = false;  // not yet ready to Ack(true)
-        oreq->upgradeTargetMask = targetMask;
-        oreq->totalMask = targetMask;
-        oreq->upgradePendingAckCount = __builtin_popcountll(targetMask);
+        oreq->upgradeTargetMask = effectiveMask;
+        oreq->totalMask = effectiveMask;
+        oreq->upgradePendingAckCount = __builtin_popcountll(effectiveMask);
         oreq->upgradeAckMask = 0;
         oreq->invalidateBarrierDone = false;
 
         printf("[UBCC-UPGRADE] pa=0x%lx requester=%d stage=WAITING_ALL_ACKS "
                "targetMask=0x%lx pendingAckCount=%d\n",
-               line_pa, requesterNode, targetMask, oreq->upgradePendingAckCount);
+               line_pa, requesterNode, effectiveMask, oreq->upgradePendingAckCount);
 
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade accepted pending PA=0x%lx "
                 "reservedEpoch=%lu reqId=%lu targetMask=0x%lx — "
                 "waiting for invalidation acks before Ack(true)\n",
-                _nodeId, line_pa, reservedEpoch, reqId, targetMask);
+                _nodeId, line_pa, reservedEpoch, reqId, effectiveMask);
     } else {
         // upgrade_invalidate_fix: no other sharers — fast path
         oreq->stage = OpStage::WAITING_LOCAL_DONE;
@@ -2896,7 +2951,8 @@ bool
 UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
                                         uint64_t committedEpoch, uint64_t reqId,
                                         int requesterNode,
-                                        UBCC_OuterReqType reqType, bool writeIntent)
+                                        UBCC_OuterReqType reqType, bool writeIntent,
+                                        uint64_t *outEffectiveMask)
 {
     if (!_outbound) {
         warn("UBCC node_id=%d: fanoutInvalidateTargets called with no outbound sender\n",
@@ -2905,7 +2961,33 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
     }
 
     const uint64_t offset = _addrMap.dsmOffset(linePa);
-    uint64_t remaining = targetMask;
+
+    // fix2 (send-time directory): recompute the effective target set from the
+    // CURRENT committed directory sharers, not the mask captured earlier. A
+    // sharer that was recalled/evicted between outstanding-creation and this
+    // fanout is no longer a real sharer; sending it an InvalidateReq would only
+    // rely on the requester-side "no local copy → immediate ack" path. Dropping
+    // it here keeps the InvalidateReq set aligned with the live directory. The
+    // caller must set pendingAckCount from *outEffectiveMask (see below) so the
+    // ack accounting matches exactly what we send.
+    uint64_t effectiveMask = targetMask;
+    {
+        DirEntry curEntry;
+        if (_directory.lookup(linePa, curEntry)) {
+            uint64_t liveSharers = curEntry.sharersMask;
+            uint64_t dropped = targetMask & ~liveSharers;
+            if (dropped) {
+                printf("[UBCC-FANOUT-STALE] home=%d pa=0x%lx requested=0x%lx "
+                       "liveSharers=0x%lx dropped=0x%lx (not current sharers)\n",
+                       _nodeId, linePa, targetMask, liveSharers, dropped);
+            }
+            effectiveMask = targetMask & liveSharers;
+        }
+    }
+    if (outEffectiveMask)
+        *outEffectiveMask = effectiveMask;
+
+    uint64_t remaining = effectiveMask;
 
     while (remaining) {
         int target = __builtin_ctzll(remaining);

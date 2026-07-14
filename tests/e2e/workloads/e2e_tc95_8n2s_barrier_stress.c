@@ -28,7 +28,11 @@ int main(int argc, char **argv)
     if (argc >= 2) node_id = parse_int(argv[1]);
     if (argc >= 3) cpu_index = parse_int(argv[2]);
     int socket_id = cpu_index % NUM_SOCKETS;
-    int primary = (cpu_index % 4 == 0);
+    // cpu_index is GLOBAL (per-node offset = node_id * CPUS_PER_NODE=4).
+    // Need ONE primary per SOCKET (2 per node) so all 16 socket-planes
+    // participate in the 0xFFFF barrier mask. (cpu_index % 4 < N_SOCKETS)
+    // selects cpu0(socket0) and cpu1(socket1) per node (TC96 pattern).
+    int primary = ((cpu_index % 4) < NUM_SOCKETS);
 
     if (!primary) { _exit_program(0); return 0; }
 
@@ -37,9 +41,17 @@ int main(int argc, char **argv)
             uint32_t val = any_hash((uint32_t)(node_id * NUM_SOCKETS + socket_id),
                                     (uint32_t)(iter * SEGMENTS + seg)) % 8;
             emit_sync_marker(node_id * NUM_SOCKETS + socket_id, iter, seg, val);
-            uint32_t active = any_hash((uint32_t)node_id,
-                                       (uint32_t)(socket_id * 1000 + iter)) % 4 + 1;
-            sync_wait(BARRIER_ALL, (unsigned)active);
+            /* Each node has exactly NUM_SOCKETS primary threads (one per
+             * socket plane) that call this barrier — see primary check above
+             * (cpu%4 < NUM_SOCKETS). activeThreads MUST equal the number of
+             * local threads that actually arrive, otherwise localExpected is
+             * set higher than waiting.size() can ever reach and the node never
+             * fires BarrierReached (deadlock). The old `hash%4+1` value (1..4)
+             * did not match the fixed 2 arriving primaries.
+             * NOTE: testing a *dynamically varying* active-thread count would
+             * require dynamically spawning/exiting that many threads (and a
+             * barrier-semantics change); deferred as a TODO. */
+            sync_wait(BARRIER_ALL, (unsigned)NUM_SOCKETS);
         }
     }
     emit_phase_done(node_id * NUM_SOCKETS + socket_id, "done");
