@@ -53,3 +53,17 @@
   - `ubio_main.cc` 在处理来自网络的 `RecallResp` 后，额外镜像一份到本地 gem5 `UBAdapter`，仅作为 `RECALL.DONE` 唤醒通知；
   - `UBAdapter.cc` 为 `RecallResp` 增加 wake-only 分支，直接触发 `_onResponseWired()`，不把它当成普通响应缓存/匹配。
 - 保持 `EPSNFController.cc` 的 20000-cycle backoff 不变，作为真正 BUSY / 远端未完成时的 fallback。
+
+## 2026-07-14 Autonomous update (TC42 vs 8n2s activeRecall 冲突排查)
+- 先回退 `EPRNFController::finishChiTxn()` 到“仅 ReadShared completion 清理 activeRecall”，并在 docker 内复测：
+  - `--1s 42`：失败（wrap-window 最终值不收敛，Node1 读旧值）。
+  - `--8n2s 96 97`：两例均 TIMEOUT（本工作区当前基线未恢复到历史 8n2s PASS 状态）。
+- 关键日志（`logs/20260713_231759_8n2s` / `logs/20260713_233934_1s`）显示：
+  - recall 完成后仍会出现后续 `SnpCleanInvalid`；若 activeRecall 已在 completion 点清掉，会走 `first SnpCleanInvalid` 的 upgrade 路径。
+  - TC42 路径存在 ReadUnique recall 后 marker 滞留并污染后续本地升级的问题。
+- 实施方向X实验：在 `EPBackend::handleGrant()` 增加“line re-acquire 时清理 activeRecall（localPA + homePA）”，并把 `clearActiveRecall()` 改成仅在命中时打印，避免噪声。
+- 实验结果：
+  - 保留 `finishChiTxn` 的 ReadShared 清理 + 新增 handleGrant 清理：
+    - `--1s 42` PASS；`--1s 2 3 5 8` PASS。
+    - `--8n2s 96 97 100 101 99`：仅 TC99 PASS，其余 TIMEOUT。
+  - 进一步尝试“取消 finishChiTxn 的 ReadShared 清理”虽可保持 TC42 PASS，但会引入 `--1s 8` FAIL，已回退该尝试。
