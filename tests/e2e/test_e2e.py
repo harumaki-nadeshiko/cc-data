@@ -1450,7 +1450,37 @@ def gem5_config_main():
     _parser.add_argument("--node-id", type=int, default=-1)
     _parser.add_argument("--num-nodes", type=int, default=0)
     _parser.add_argument("--num-sockets", type=int, default=0)
+    # Phase 0.3: EP controller params (mapped to env for SimObject; argv planned)
+    _parser.add_argument("--silent-upgrade", type=int, default=-1,
+                         help="EP: silent upgrade (0=off, 1=on, -1=env/defaults)")
+    _parser.add_argument("--ep-retry-cycles", type=int, default=-1)
+    _parser.add_argument("--ep-compack-retry", type=int, default=-1)
+    _parser.add_argument("--ep-wakeup-retry", type=int, default=-1)
+    _parser.add_argument("--ep-upgrade-retry-min", type=int, default=-1)
+    _parser.add_argument("--ep-upgrade-retry-max", type=int, default=-1)
+    _parser.add_argument("--ep-delta-noc", type=int, default=-1)
+    _parser.add_argument("--ep-wait-cap", type=int, default=-1)
+    _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
+    _parser.add_argument("--ubcc-batch-rs", type=int, default=-1)
     _args, _ = _parser.parse_known_args()
+
+    # Phase 0.3: map script args to env vars for SimObject params
+    # (precedes Ruby system creation so SimObjects see them in init)
+    _ep_env_map = [
+        ("EP_SILENT_UPGRADE", _args.silent_upgrade),
+        ("EP_RETRY_CYCLES", _args.ep_retry_cycles),
+        ("EPRN_COMPACK_RETRY_CYCLES", _args.ep_compack_retry),
+        ("EPRN_WAKEUP_RETRY_CYCLES", _args.ep_wakeup_retry),
+        ("EP_UPGRADE_RETRY_MIN_CYCLES", _args.ep_upgrade_retry_min),
+        ("EP_UPGRADE_RETRY_MAX_CYCLES", _args.ep_upgrade_retry_max),
+        ("EP_DELTA_NOC_CYCLES", _args.ep_delta_noc),
+        ("UB_WAIT_CAP", _args.ep_wait_cap),
+        ("UBCC_BLOOM_BYTES", _args.ubcc_bloom_bytes),
+        ("UBCC_BATCH_RS", _args.ubcc_batch_rs),
+    ]
+    for _ek, _ev in _ep_env_map:
+        if _ev >= 0:
+            os.environ[_ek] = str(_ev)
 
     # Workload selection: --workload (decoupled launcher path) wins; else
     # fall back to --tc-driven compilation (legacy / single-process path).
