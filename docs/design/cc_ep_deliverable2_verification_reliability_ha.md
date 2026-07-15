@@ -40,7 +40,7 @@
 | **丢包** | EP_RETRY_CYCLES 超时重发 + STALE-retry 兜底 + Clear WAITING_CLEAR 幂等重试 | `EPSNFController.cc:29`, `EPRNFController.cc:1406`, `UBCCController.cc:476` | TLA+ ✅ / E2E drop TC 待补 |
 | **重复** | InvalidateAck 去重（`effAckMask`）、Clear tombstone duplicate detection | `UBCCController.cc:1391`, `UBCCController.cc:558` | TLA+ ✅ / E2E TC47-49 ✅ |
 | **乱序** | UBCC epoch 单调递增，`checkEpochForLine` 半程比较拒绝旧 epoch 消息 | `UBCCController.cc:1352` | TLA+ ✅ / E2E 未覆盖 |
-| **节点故障** | **无实现**——home 节点故障导致其管理 PA 范围的所有缓存行不可访问（分布式目录的固有限制） | — | 文档标注 |
+| **节点故障** | **无实现**——home 节点故障导致其管理 PA 范围的所有缓存行不可访问（分布式目录的固有限制） | — | 文档标注<br>FaultPipeline/hop-scheduler/JSON architecture documented in `docs/recovery/ras_fault_injection_plan.md` is not yet implemented — planned for next phase. |
 
 ### 2.2 Clear 的两阶段提交：丢包自愈性
 

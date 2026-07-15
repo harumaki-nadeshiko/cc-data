@@ -94,6 +94,7 @@ def make_html(data, target_ns=None):
         segs = build_segments(ch["events"])
         tq_hops = sum(1 for s in segs if s["type"] in
                       ("gem5→ubio", "ubio→gem5", "ubio→nsim", "nsim→ubio"))
+        crit_ps = ch.get("critical_path_ps", 0)
         chain_list.append({
             "rid": rid,
             "pa": ch.get("pa", "?"),
@@ -102,6 +103,8 @@ def make_html(data, target_ns=None):
             "last_tick": ch.get("last_tick", 0),
             "dur_ns": round(ch.get("duration_ps", 0) * TICK2NS, 1),
             "dur_ps": ch.get("duration_ps", 0),
+            "crit_ns": round(crit_ps * TICK2NS, 1),
+            "crit_ps": crit_ps,
             "ev_count": len(ch["events"]),
             "tq_hops": tq_hops,
             "segments": segs,
@@ -223,10 +226,10 @@ def make_html(data, target_ns=None):
 <b>Swimlane label:</b><br>
 <span style="background:#3b82f6;color:#fff;padding:0 4px;border-radius:3px;font-size:10px">ReadReq</span>
 <span style="color:#3b82f6;font-weight:600">rid=72057...</span>
-<span style="color:#f59e0b;font-weight:600">2401ns</span>
+<span style="color:#f59e0b;font-weight:600">2401ns</span> crit=405ns
 <span style="background:#ef4444;color:#fff;padding:0 3px;border-radius:2px;font-size:9px">OVER</span>
 pa=... ev=44 hops=19<br>
-  type badge | rid | duration | OVER tag if dur > target<br>
+  type badge | rid | duration | crit=nsim_link critical path | OVER tag if dur > target<br>
   pa = physical address | ev = event count | hops = ZMQ Tq hops
 </div>
 <div style="flex:0 0 280px">
@@ -349,8 +352,9 @@ function render() {{
         durSpan.className = "dur"; durSpan.textContent = ns(ch.dur_ns);
         label.appendChild(durSpan);
 
+        var critStr = ch.crit_ns > 0 ? " crit=" + ns(ch.crit_ns) : "";
         label.appendChild(document.createTextNode(
-            " pa=" + (ch.pa || "?") + " ev=" + ch.ev_count + " hops=" + ch.tq_hops));
+            " pa=" + (ch.pa || "?") + " ev=" + ch.ev_count + " hops=" + ch.tq_hops + critStr));
         row.appendChild(label);
 
         var canvas = document.createElement("div");
@@ -514,13 +518,13 @@ function exportCSV() {{
     var frid = document.getElementById("f-rid").value;
     var mh = parseInt(document.getElementById("f-hops").value) || 2;
     var mev = parseInt(document.getElementById("f-ev").value) || 1;
-    var lines = ["rid,pa,type,dur_ns,tq_hops,ev_count"];
+    var lines = ["rid,pa,type,dur_ns,crit_ns,tq_hops,ev_count"];
     for (var i = 0; i < CHAINS.length; i++) {{
         var ch = CHAINS[i];
         if (fpa && (ch.pa || "").toLowerCase().indexOf(fpa) < 0) continue;
         if (frid && String(ch.rid).indexOf(frid) !== 0) continue;
         if (ch.tq_hops < mh) continue;
-        lines.push([ch.rid, ch.pa||"", ch.primary_type, ch.dur_ns, ch.tq_hops, ch.ev_count].join(","));
+        lines.push([ch.rid, ch.pa||"", ch.primary_type, ch.dur_ns, ch.crit_ns||0, ch.tq_hops, ch.ev_count].join(","));
     }}
     var blob = new Blob([lines.join("\\n")], {{type:"text/csv"}});
     var a = document.createElement("a"); a.href = URL.createObjectURL(blob);

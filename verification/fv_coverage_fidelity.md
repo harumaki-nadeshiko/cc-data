@@ -83,6 +83,7 @@ honestly, exactly what has been *exhaustively* covered and what has NOT.
 | **≥3 sockets & cross-socket message routing** | Multi-socket coherence routing (1-hop vs 2-hop latency) | Planned formal (Stage D2); currently E2E |
 | **Bloom filter / backstore / MetaRNF** | Performance/infra layer | Abstracted by design (see A3); resident-dir is authoritative — argued in CONSOLIDATED_REPORT §7.2 |
 | **Real time / latency / ZMQ timing** | Timeout tuning, message ordering under delay | Not a formal target — E2E simulation (`docs/measure/`) |
+| **EP-RNF snoop conflict arbitration (STALE/IMMED matrix)** | Per-cacheline snoop conflict resolution between stale and immediate states | Deferred to next phase, currently covered by E2E 71/71 TC |
 | ~~**Fault types beyond Clear drop/dup**~~ | InvAck/RecallResp/UpgradeAck loss/reorder | **DONE (Stage B1-B3)**: `ubcc_transport_faults.tla` now exhaustively enumerates Clear/InvAck/RecallResp/UpgradeAck × drop/dup/reorder; safety PASS (23.2M states) + liveness PASS. See CONSOLIDATED_REPORT §5.1 |
 
 ### Coverage claim (defensible wording)

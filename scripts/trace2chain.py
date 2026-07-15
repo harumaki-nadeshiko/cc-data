@@ -188,6 +188,17 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
             ch["first_tick"] = first["tick"]
             ch["last_tick"] = last["tick"]
             ch["duration_ps"] = last["tick"] - first["tick"]
+
+            # 3.5: Critical path = sum of nsim_link segments only
+            # (real configured link latency, excludes PDES sync alignment tails)
+            crit_ps = 0
+            for i in range(len(ch["events"]) - 1):
+                a, b = ch["events"][i], ch["events"][i + 1]
+                fa, ta = a["comp"], b["comp"]
+                fe, te = a["event"], b["event"]
+                if fa == "nsim" and ta == "nsim" and fe == "RECV" and te == "FWD":
+                    crit_ps += b["tick"] - a["tick"]
+            ch["critical_path_ps"] = crit_ps
             # Extract primary message type from first gem5/ubio event (skip nsim)
             primary_type = "?"
             for e in ch["events"]:

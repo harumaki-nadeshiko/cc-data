@@ -73,7 +73,7 @@ isGem5Ingress(CoherenceMessageType t)
 //   name:type:src:dst:pa:action[:delayTicks[:matchCount]]
 // action ∈ {drop, dup, delay}. Matching messages emit a [UBFAULT] marker that
 // the split-mode verifier scans for as fault evidence.
-enum class UbioFaultAction { Drop, Duplicate, Delay };
+enum class UbioFaultAction { Drop, Duplicate, Delay, Reorder };
 
 struct UbioFaultRule {
     std::string name;
@@ -116,6 +116,51 @@ parseMsgTypeName(const std::string &s)
 
 std::vector<UbioFaultRule> g_faultRules;
 
+// ── Delayed message queue (3.3 reorder + 4.6 delay real) ──────────────
+struct DelayedMsg {
+    uint64_t fireTick;          // tick when this message should be delivered
+    CoherenceMessage coh;       // the buffered message
+    bool fromNetwork;           // original ingress direction
+    int faultCopies;            // copies to apply at delivery time
+};
+static std::deque<DelayedMsg> g_delayedQueue;
+
+// Drain delayed messages whose fireTick has arrived. Each message is re-injected
+// as if it were a fresh network ingress (fromNetwork=true) so it goes through
+// the normal handleUbccMessage / forwarding path.
+static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
+                               UBCCController &ubcc, UbioBackstoreHost &host,
+                               uint64_t tick) {
+    while (!g_delayedQueue.empty() && g_delayedQueue.front().fireTick <= tick) {
+        DelayedMsg dm = g_delayedQueue.front();
+        g_delayedQueue.pop_front();
+        const CoherenceMessage &coh = dm.coh;
+        std::fprintf(stderr, "[UBFAULT-DELIVER] node=%d delivering delayed "
+                     "type=%s reqId=%lu pa=0x%lx fireTick=%lu currentTick=%lu\n",
+                     nid, coherenceMsgTypeName(coh.h.type), coh.h.reqId,
+                     coh.h.homeLinePa, dm.fireTick, tick);
+        // Re-inject: if it was from network, process as network message; else as gem5 message.
+        // We push through the same handleUbccMessage path.
+        for (int rep = 0; rep < dm.faultCopies; ++rep) {
+            CoherenceMessage response;
+            bool hasResponse = false;
+            bool handled = handleUbccMessage(ubcc, host, nid, coh, response, hasResponse);
+            if (dm.fromNetwork) {
+                if (handled && hasResponse) {
+                    sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
+                            response, true);
+                } else if (!handled && isGem5Ingress(coh.h.type)) {
+                    sendCoh(gem5Port, tick, gidOf(coh.h.srcNode, coh.h.srcSocket), coh);
+                }
+            } else {
+                if (handled && hasResponse) {
+                    sendCoh(gem5Port, tick, (uint32_t)nid, response, false);
+                }
+            }
+        }
+    }
+}
+
 void
 parseFaultRules(const std::string &all)
 {
@@ -153,6 +198,10 @@ parseFaultRules(const std::string &all)
             r.action = UbioFaultAction::Delay;
             r.delayTicks = (parts.size() > 6 && !parts[6].empty())
                            ? std::stoull(parts[6]) : 1000;
+        } else if (a == "reorder" || a == "Reorder") {
+            r.action = UbioFaultAction::Reorder;
+            r.delayTicks = (parts.size() > 6 && !parts[6].empty())
+                           ? std::stoull(parts[6]) : 1000;
         } else r.action = UbioFaultAction::Duplicate;  // dup default
         if (parts.size() > 7 && !parts[7].empty())
             r.matchCount = std::stoi(parts[7]);
@@ -165,8 +214,9 @@ parseFaultRules(const std::string &all)
 
 // Returns number of times the message should be processed:
 //   0 = drop, 1 = normal, 2 = duplicate. Emits [UBFAULT] on a match.
+// For Delay/Reorder actions, enqueues to g_delayedQueue and returns 0.
 int
-applyUbioFault(const CoherenceMessage &coh, int nid)
+applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick)
 {
     if (g_faultRules.empty()) return 1;
     int copies = 1;
@@ -194,14 +244,22 @@ applyUbioFault(const CoherenceMessage &coh, int nid)
             copies = 2;
             break;
           case UbioFaultAction::Delay:
-            // Deferred enqueue not implemented in split mode; emit evidence and
-            // pass through (the value still converges).
+            // 4.6: real delay — enqueue to delayed queue, drop original copy
             std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Delay "
                          "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
                          nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
                          coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
-            copies = 1;
+            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, false, 1});
+            copies = 0;
             break;
+          case UbioFaultAction::Reorder:
+            // 3.3: reorder — buffer and deliver after delayTicks
+            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Reorder "
+                         "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
+                         nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
+                         coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
+            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, false, 1});
+            copies = 0;
         }
     }
     return copies;
@@ -1045,7 +1103,7 @@ main(int argc, char **argv)
             // per-node semantics.
             int faultCopies = 1;
             if (!g_faultRules.empty() && (int)coh->h.dstNode == nid) {
-                faultCopies = applyUbioFault(*coh, nid);
+                faultCopies = applyUbioFault(*coh, nid, tick);
                 if (faultCopies == 0) {
                     // Dropped — neither processed nor forwarded.
                     m = port->recv(tick, &st);
@@ -1282,11 +1340,17 @@ main(int argc, char **argv)
             // we stay clock-locked to the slowest peer.
             std::this_thread::yield();
         }
+        // 3.3/4.6: Drain delayed fault-injection queue (reorder/delay)
+        drainDelayedQueue(gem5Port, netPort, nid, sid, ubcc, host, tick);
+
         // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
         // callbacks simulate real DRAM read latency.
         host.drainPendingFills(tick);
         host.dsmData.drain(tick);
     }
+
+    // 3.4: Dump ResidentDir performance counters
+    ubcc.directory().dumpStatsJson();
 
     return 0;
 }

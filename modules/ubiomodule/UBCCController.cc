@@ -222,6 +222,9 @@ UBCCController::handleResidentMiss(
         return ResidentAccessResult::Ready;
     }
 
+    // 3.4: Bloom reported positive but directory missed → false positive count
+    _directory.incrementBloomFp();
+
     _directory.setFillPending(line_pa, true);
     _directory.setPinned(line_pa, true);
     PendingRequester pr;

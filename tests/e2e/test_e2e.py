@@ -93,6 +93,10 @@ TESTCASES = {
     100: "e2e_tc100_8n2s_batch_rs",
     101: "e2e_tc101_8n2s_direct_fwd",
     102: "e2e_tc102_writeback_data_persist",
+    110: "e2e_tc110_drop_clear",
+    111: "e2e_tc111_silent_upgrade_drop",
+    112: "e2e_tc112_tbe_interference",
+    113: "e2e_tc113_silent_upgrade_micro",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1239,6 +1243,72 @@ def verify_tc102(reads, lines):
     return True, f"TC102 PASSED: writeback dirty data persisted ({len(reads)} reads OK)", []
 
 
+def verify_tc110(reads, lines):
+    """TC110: drop ClearReq fault injection (3.1 P1).
+    All 3 nodes must agree on final value ∈ {0x11000001, 0x11000002, 0x11000003}."""
+    if len(reads) < 3:
+        return False, f"TC110 FAILED: expected ≥3 READ_VAL, got {len(reads)}", reads
+    legal = {0x11000001, 0x11000002, 0x11000003}
+    node_last = {}
+    for r in reads:
+        node_last[r["node"]] = int(r["actual"], 16)
+    if len(node_last) < 3:
+        return False, f"TC110 FAILED: only {len(node_last)} nodes produced READ_VAL", reads
+    values = set(node_last.values())
+    if len(values) != 1:
+        return False, f"TC110 FAILED: nodes disagree on final value: {node_last}", reads
+    final_val = list(values)[0]
+    if final_val not in legal:
+        return False, f"TC110 FAILED: final value 0x{final_val:X} not in legal set", reads
+    fault_seen = _fault_evidence_seen(lines, 110)
+    if not fault_seen:
+        return False, "TC110 FAILED: no [UBFAULT] evidence in ubio logs", []
+    return True, f"TC110 PASSED: ClearReq dropped, all nodes converged to 0x{final_val:X}", []
+
+
+def verify_tc111(reads, lines):
+    """TC111: silent upgrade fault immunity — 3.2 P1.
+    All nodes must converge to 0x1110BBB2 after node1 upgrade write."""
+    if len(reads) < 4:
+        return False, f"TC111 FAILED: expected ≥4 READ_VAL, got {len(reads)}", reads
+    target = 0x1110BBB2
+    for r in reads:
+        if int(r["actual"], 16) != target:
+            return False, f"TC111 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
+    fault_seen = _fault_evidence_seen(lines, 111)
+    # Under EP_SILENT_UPGRADE=1, no fault should be seen (zero cross-node).
+    # Under EP_SILENT_UPGRADE=0, fault should be seen + retry self-heals.
+    return True, f"TC111 PASSED: converged to 0x{target:X} (fault_evidence={fault_seen})", []
+
+
+def verify_tc112(reads, lines):
+    """TC112: TBE interference — 3.6 P1.
+    Cross-node DSM writes must converge. Local progress markers must exist."""
+    if len(reads) < 1:
+        return False, "TC112 FAILED: no READ_VAL", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC112 FAILED: {len(mismatches)} mismatches", mismatches
+    local_lines = [l for l in lines if "[TC112_LOCAL]" in l]
+    if len(local_lines) < 3:
+        return False, f"TC112 FAILED: insufficient local progress ({len(local_lines)} markers)", []
+    return True, f"TC112 PASSED: cross-node converged, {len(local_lines)} local-progress markers", []
+
+
+def verify_tc113(reads, lines):
+    """TC113: silent upgrade micro-bench — 4.5 P2.
+    Final value must be 0x11300000 | ((ITERS-1) & 0xFFF) = 0x113003E7."""
+    if len(reads) < 3:
+        return False, f"TC113 FAILED: expected ≥3 READ_VAL, got {len(reads)}", reads
+    target = 0x11300000 | (999 & 0xFFF)  # ITERS=1000, last iter = 999
+    for r in reads:
+        if int(r["actual"], 16) != target:
+            return False, f"TC113 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
+    upg_markers = [l for l in lines if "[TC113_UPG]" in l]
+    done_markers = [l for l in lines if "[TC113_DONE]" in l]
+    return True, f"TC113 PASSED: {len(upg_markers)} upgrade markers, {len(done_markers)} done", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1297,6 +1367,8 @@ VERIFIERS = {
     95: verify_tc95,
     96: verify_tc96, 97: verify_tc97, 98: verify_tc98, 99: verify_tc99,
     100: verify_tc100, 101: verify_tc101, 102: verify_tc102,
+    110: verify_tc110, 111: verify_tc111,
+    112: verify_tc112, 113: verify_tc113,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1328,6 +1400,7 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc99_8n2s_perplane_slots",
         "e2e_tc100_8n2s_batch_rs",
         "e2e_tc101_8n2s_direct_fwd",
+        "e2e_tc112_tbe_interference",
     }
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [

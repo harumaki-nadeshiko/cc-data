@@ -144,6 +144,15 @@ class ResidentDir
     // ---- Diagnostics ----
     double estimateFPR(int group = -1) const;
 
+    // 3.4: Performance counters
+    uint64_t _dirHits = 0;
+    uint64_t _dirMisses = 0;
+    uint64_t _dirEvictions = 0;
+    uint64_t _bloomFpCount = 0;
+
+    void incrementBloomFp() { _bloomFpCount++; }
+    void dumpStatsJson() const;
+
     // Legacy compat: `control` (slot-based) no longer meaningful; return 0
     uint8_t control(size_t) const { return 0; }
 

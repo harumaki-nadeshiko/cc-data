@@ -58,6 +58,8 @@ fault_rules_for_tc() {
         47) echo "tc47_dup_clear:ClearReq:1:0:0:dup::1" ;;
         48) echo "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1" ;;
         49) echo "tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1" ;;
+        110) echo "tc110_drop_clear:ClearReq:1:1:0:drop::1" ;;
+        111) echo "tc111_silent_upgrade_drop:OuterUpgradeReq:1:1:0:drop::1" ;;
         *)  echo "" ;;
     esac
 }

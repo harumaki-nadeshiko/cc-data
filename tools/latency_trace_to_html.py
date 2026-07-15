@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Latency Trace to HTML Timeline Generator.
+DEPRECATED: [UBLAT] 埋点已从代码中移除（UBLatency debug flag 不再 emit），
+此工具仅保留供历史日志回放。新 trace 请使用 TRACE-PERF + trace2chain/chain2html。
 
 Reads a combined UBLatency + UBST debug log, groups events by physical
 address (PA), and renders an interactive HTML timeline with:

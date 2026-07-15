@@ -1,6 +1,7 @@
 #include "ResidentDir.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -305,6 +306,12 @@ void ResidentDir::setEpoch(int set, int way, uint64_t ep)
 void
 ResidentDir::encodeEntry(int set, int way, uint64_t pa, const UBCCDirEntry &in)
 {
+    // 4.1 CompactCodec guard: backstore CompactCodec uses 10-bit sharers mask
+    // (kMask10 in BackstoreTypes.hh). SRAM default is 8-bit — verified safe for
+    // 8 nodes (no overflow). For 16-node expansion, --sharers-bits=10 MUST be
+    // passed or this assert fires and backstore data loses high sharer bits.
+    assert(_layout.sharers_bits <= 10 &&
+           "sharers_bits exceeds CompactCodec kMask10 capacity");
     validateCanonical(in, pa);
     setValid(set, way, true);
     setTag(set, way, tagOf(pa));
@@ -423,9 +430,11 @@ ResidentDir::lookup(uint64_t pa, UBCCDirEntry &out) const
     for (int w = 0; w < _layout.ways; w++) {
         if (getValid(set, w) && getTag(set, w) == tag) {
             decodeEntry(set, w, out);
+            const_cast<ResidentDir*>(this)->_dirHits++;
             return true;
         }
     }
+    const_cast<ResidentDir*>(this)->_dirMisses++;
     return false;
 }
 
@@ -438,9 +447,11 @@ ResidentDir::lookupWithSlot(uint64_t pa, UBCCDirEntry &out, size_t &slot) const
         if (getValid(set, w) && getTag(set, w) == tag) {
             decodeEntry(set, w, out);
             slot = globalSlot(set, w);
+            const_cast<ResidentDir*>(this)->_dirHits++;
             return true;
         }
     }
+    const_cast<ResidentDir*>(this)->_dirMisses++;
     return false;
 }
 
@@ -501,6 +512,7 @@ ResidentDir::remove(uint64_t pa)
             for (int b = 0; b < _layout.entry_bits; b++)
                 writeBits(base + b, 1, 0);
             _count--;
+            _dirEvictions++;  // 3.4 counter
             return true;
         }
     }
@@ -857,6 +869,17 @@ ResidentDir::validateCanonical(const UBCCDirEntry &in, uint64_t pa) const
                  "ResidentDir invalid G_I entry PA=0x%lx sharers=0x%lx",
                  pa, in.sharersMask);
     }
+}
+
+void
+ResidentDir::dumpStatsJson() const
+{
+    std::fprintf(stderr,
+        "[ResidentDirStats] {\"dir_hits\":%lu,\"dir_misses\":%lu,"
+        "\"dir_evictions\":%lu,\"bloom_fp_count\":%lu,"
+        "\"capacity\":%zu,\"count\":%zu}\n",
+        _dirHits, _dirMisses, _dirEvictions, _bloomFpCount,
+        _layout.capacity, _count);
 }
 
 } // namespace glob
