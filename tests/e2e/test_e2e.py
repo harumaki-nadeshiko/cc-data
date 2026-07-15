@@ -1400,7 +1400,6 @@ def compile_workload(tc_name, num_nodes=3):
         "e2e_tc99_8n2s_perplane_slots",
         "e2e_tc100_8n2s_batch_rs",
         "e2e_tc101_8n2s_direct_fwd",
-        "e2e_tc112_tbe_interference",
     }
     num_sockets = "2" if tc_name in dual_socket_tcs else "1"
     cmd = [
