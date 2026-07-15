@@ -195,6 +195,24 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
                     primary_type = e["extra"].split("|")[0]
                     break
             ch["primary_type"] = primary_type
+
+            # --- Phase 1.4: category field ---
+            # Category is derived from the first gem5 SEND event's first extra token.
+            # For ReadReq, distinguish write=1 (write intent) vs write=0 (read only)
+            # by scanning the full extra string for the write=N field.
+            category = "?"
+            for e in ch["events"]:
+                if e["comp"] == "gem5" and e["event"] == "SEND":
+                    extra = e.get("extra", "")
+                    cat = extra.split("|")[0].strip() if extra else "?"
+                    if cat == "ReadReq":
+                        if "write=1" in extra:
+                            cat = "ReadReq(write=1)"
+                        elif "write=0" in extra:
+                            cat = "ReadReq(write=0)"
+                    category = cat
+                    break
+            ch["category"] = category
             # Compact summary
             hops = []
             for e in ch["events"]:
