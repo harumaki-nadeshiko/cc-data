@@ -71,7 +71,7 @@ int main(int argc, char **argv)
     uint32_t done_val = 0x98DD0000u | ((uint32_t)node_id << 8) | (uint32_t)socket_id;
     *done_addr(node_id, socket_id) = done_val;
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
 
     /* Node 0 socket 0 reads all done markers */
     if (node_id == 0 && socket_id == 0) {
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
         }
     }
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

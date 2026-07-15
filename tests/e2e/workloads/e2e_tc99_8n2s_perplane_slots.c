@@ -54,7 +54,7 @@ int main(int argc, char **argv)
     uint32_t done_val = 0x99DD0000u | ((uint32_t)node_id << 8) | (uint32_t)socket_id;
     *my_slot(node_id, socket_id) = done_val;
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
 
     if (node_id == 0 && socket_id == 0) {
         for (int n = 0; n < NUM_NODES; n++) {
@@ -67,7 +67,7 @@ int main(int argc, char **argv)
         }
     }
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

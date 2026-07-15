@@ -40,7 +40,7 @@ int main(int argc, char **argv)
         *hot_addr() = 0xCAFE0000u;
     }
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
 
     /* Phase 2: ALL 16 CPUs read same line ROUNDS times simultaneously.
      * This triggers RS contention → batch grant via replayPendingRequesters. */
@@ -53,7 +53,7 @@ int main(int argc, char **argv)
     /* Use the read value to ensure pipeline drain */
     __asm__ volatile("" : : "r"(v) : "memory");
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
 
     /* Phase 3: node0 verifies seed value survived all concurrent reads */
     int fail = 0;
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
         if (got != 0xCAFE0000u) fail++;
     }
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

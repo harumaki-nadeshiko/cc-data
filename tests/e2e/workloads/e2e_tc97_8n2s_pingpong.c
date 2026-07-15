@@ -44,7 +44,7 @@ int main(int argc, char **argv)
     if (my_pos == 0) {
         *token_addr() = 0x97000000u;
     }
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
 
     int fail = 0;
     for (int r = 0; r < ROUNDS; r++) {
@@ -55,14 +55,14 @@ int main(int argc, char **argv)
             /* I am the writer: claim the token */
             *token_addr() = new_val;
         }
-        sync_wait((1u << TOTAL_SEGS) - 1);
+        sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
 
         /* Everyone reads: did the writer's value land? */
         uint32_t got = *token_addr();
         if (got != new_val) {
             fail++;
         }
-        sync_wait((1u << TOTAL_SEGS) - 1);
+        sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     }
 
     /* Final verification: node 0 reads the token after all rounds */
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
         emit_read_val(node_id, 0, expected, got, got == expected);
     }
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

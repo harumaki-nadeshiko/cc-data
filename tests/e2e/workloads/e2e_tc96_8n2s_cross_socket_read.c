@@ -54,7 +54,7 @@ int main(int argc, char **argv)
 
     /* Step 1: each socket-plane primary writes to its own sub-segment */
     dsm_store2(node_id, socket_id, off, val);
-    sync_wait((1u << TOTAL_SEGS) - 1);  /* 0xFFFF for 8n2s */
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);  /* 0xFFFF for 8n2s */
 
     int fail = 0;
     /* Step 2: node 0 socket 0 reads every sub-segment */
@@ -69,7 +69,7 @@ int main(int argc, char **argv)
         }
     }
 
-    sync_wait((1u << TOTAL_SEGS) - 1);
+    sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }

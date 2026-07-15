@@ -38,7 +38,7 @@ int main(int argc, char **argv)
     /* Init: each node writes its own slot once to establish ownership */
     *slot_addr(node_id, socket_id) = 0xA1010000u | ((uint32_t)node_id << 4) | (uint32_t)socket_id;
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
 
     /* Chain rounds: node i reads node (i-1)'s slot, writes own slot.
      * Node 0 only participates when i==0: reads node 7's slot but this
@@ -57,7 +57,7 @@ int main(int argc, char **argv)
         __asm__ volatile("" : : : "memory");
     }
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
 
     /* Verify: node 0 reads all done markers */
     int fail = 0;
@@ -71,7 +71,7 @@ int main(int argc, char **argv)
         }
     }
 
-    sync_wait((1u << TOTAL_CPUS) - 1);
+    sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
     _exit_program(fail ? 1 : 0);
     return 0;
 }
