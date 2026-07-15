@@ -241,14 +241,15 @@ class UBCCController
     // the push-grant fast path.
     static constexpr size_t MAX_PENDING_PER_PA = 32;
 
-    // v4-dual-socket: constructor now takes socket_id.
-     UBCCController(int node_id, int socket_id = 0,
-                    RubySystem *ruby_system = nullptr,
-                    uint32_t epoch_bits = 64,
-                    uint32_t resident_bf_bytes = ResidentDir::DefaultBloomBytes,
-                    uint32_t resident_force_entries = 0,
-                    int num_sockets = 1,
-                    int num_nodes = 3);
+     // v4-dual-socket: constructor now takes socket_id.
+      UBCCController(int node_id, int socket_id = 0,
+                     RubySystem *ruby_system = nullptr,
+                     uint32_t epoch_bits = 64,
+                     uint32_t resident_bf_bytes = ResidentDir::DefaultBloomBytes,
+                     uint32_t resident_force_entries = 0,
+                     int num_sockets = 1,
+                     int num_nodes = 3,
+                     const ResidentDirConfig *rdcfg = nullptr);
     ~UBCCController();
 
     int nodeId() const { return _nodeId; }
@@ -685,6 +686,10 @@ class UBCCController
 
     // C3 batch RS grant env switch
     bool _batchRsEnabled;
+    bool _batchRsOverridden = false;
+
+public:
+    void setBatchRsEnabled(bool v) { _batchRsEnabled = v; _batchRsOverridden = true; }
 
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;

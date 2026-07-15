@@ -212,6 +212,9 @@ applyUbioFault(const CoherenceMessage &coh, int nid)
 // degenerates to gid == node (legacy per-node behavior).
 static int g_numSockets = 1;
 static int g_numNodes = 3;
+static ResidentDirConfig g_rdcfg;    // may be overridden by argv
+static uint64_t g_dramDelayPs = 0;   // argv override, else UBIO_DRAM_DELAY_PS env
+static bool g_batchRs = true;        // argv override, else UBCC_BATCH_RS env
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -806,6 +809,24 @@ main(int argc, char **argv)
             const char *rules = argv[i] + 14;
             parseFaultRules(rules);
         }
+        // ResidentDir config (argv override env/defaults, §7.3)
+        if (!std::strncmp(argv[i], "--bloom-bytes=", 14))
+            g_rdcfg.bloom_bytes = (size_t)std::strtoull(argv[i] + 14, nullptr, 10);
+        if (!std::strncmp(argv[i], "--sram-bytes=", 13))
+            g_rdcfg.sram_bytes = (size_t)std::strtoull(argv[i] + 13, nullptr, 10);
+        if (!std::strncmp(argv[i], "--sharers-bits=", 15))
+            g_rdcfg.sharers_bits = std::atoi(argv[i] + 15);
+        if (!std::strncmp(argv[i], "--epoch-bits=", 13))
+            g_rdcfg.epoch_bits = std::atoi(argv[i] + 13);
+        if (!std::strncmp(argv[i], "--ways=", 7))
+            g_rdcfg.ways = std::atoi(argv[i] + 7);
+        if (!std::strncmp(argv[i], "--set-bits=", 11))
+            g_rdcfg.set_bits = std::atoi(argv[i] + 11);
+        // UBCC runtime params
+        if (!std::strncmp(argv[i], "--dram-delay-ps=", 16))
+            g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
+        if (!std::strncmp(argv[i], "--batch-rs=", 11))
+            g_batchRs = (std::atoi(argv[i] + 11) != 0);
     }
 
     if (nid < 0 || nid > 31) {
@@ -843,13 +864,18 @@ main(int argc, char **argv)
     uint64_t tick = 0;
 
     UBCCController ubcc(nid, sid, nullptr, 64,
-                          ResidentDir::DefaultBloomBytes, 0, g_numSockets, g_numNodes);
+                          g_rdcfg.bloom_bytes > 0 ? g_rdcfg.bloom_bytes
+                              : ResidentDir::DefaultBloomBytes,
+                          0, g_numSockets, g_numNodes, &g_rdcfg);
+    ubcc.setBatchRsEnabled(g_batchRs);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
-    // T_ubio_dram: backstore read delay (ps).  When set, backstore reads are
-    // deferred by this amount to model real DRAM latency instead of returning
-    // instantaneously.  See docs/measure/latency_tuning_constraints.md §6.2.
-    const char* envDramDelay = std::getenv("UBIO_DRAM_DELAY_PS");
-    if (envDramDelay) host._ubioDramDelayPs = std::strtoull(envDramDelay, nullptr, 10);
+    // T_ubio_dram: argv has priority, then env UBIO_DRAM_DELAY_PS
+    if (g_dramDelayPs > 0) {
+        host._ubioDramDelayPs = g_dramDelayPs;
+    } else {
+        const char* envDramDelay = std::getenv("UBIO_DRAM_DELAY_PS");
+        if (envDramDelay) host._ubioDramDelayPs = std::strtoull(envDramDelay, nullptr, 10);
+    }
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
     bool gem5Done = false, netDone = false;

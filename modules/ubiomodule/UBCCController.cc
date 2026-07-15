@@ -59,11 +59,13 @@ UBCCController::UBCCController(int node_id, int socket_id,
                                 uint32_t resident_bf_bytes,
                                 uint32_t resident_force_entries,
                                 int num_sockets,
-                                int num_nodes)
+                                int num_nodes,
+                                const ResidentDirConfig *rdcfg)
   : _nodeId(node_id),
     _socketId(socket_id),
     _interconnectLatency(200),
-    _directory(resident_bf_bytes, resident_force_entries),
+    _directory(rdcfg ? ResidentDir(*rdcfg)
+                     : ResidentDir(resident_bf_bytes, resident_force_entries)),
     _epochBits(epoch_bits),
     _recallCount(0),
     _recallResponseCount(0),
@@ -109,7 +111,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
             kNumSockets);
 
     const char *env = std::getenv("UBCC_BATCH_RS");
-    if (env) _batchRsEnabled = (std::atoi(env) != 0);
+    if (env && !_batchRsOverridden) _batchRsEnabled = (std::atoi(env) != 0);
     framework::LogInfo("UBCC", "UBCC node_id=%d socket=%d: C3 batch RS %s\n",
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
 
