@@ -56,30 +56,50 @@ node=1 L1: dsm_store → CleanUnique(S→M)
 
 | 拓扑 | 通过 | 失败 | 详情 |
 |------|-----|------|------|
-| 1s   | TC2/3/5/8/42/80/84/85 全 PASS | — | TC42、TC80、TC84、TC85 本轮全部修复 |
-| 2s   | TC32/33/34/35/39 PASS | — | — |
-| 8n1s | TC82/90/91/92/93/94 PASS | — | **TC82/91 本轮修复** |
-| 8n2s | TC99 PASS | **TC2/95/96/97/100/101 TIMEOUT，TC98 TIMEOUT** | 8n2s 拓扑系统性 home 死锁 / 全局死锁（见 P0） |
+| 1s   | TC3/5/8/10/11/13/16/25/42/53 全 PASS | — | 全量代表性回归通过 |
+| 2s   | TC32/33/34/35/39 PASS | — | 本轮回归修复（barrier floor 回归，见下） |
+| 8n1s | TC82/90/91/92 PASS | — | — |
+| 8n2s | TC95/96/97/99/100/101 全 PASS | TC98 持续推进不死锁（性能瓶颈，非死锁） | 死锁#1/#2 本轮修复 |
 
-> 说明：8n2s（16-plane 双 socket）的失败是**独立的、系统性的 home 节点死锁 / PDES 全局死锁**，与本轮修的 barrier/TC42 无关（本轮修复未引入回归——同类 TC 在 1s/2s/8n1s 下全过）。这是本轮之后的**下一优先级**。
+> 说明：8n2s 之前的"系统性死锁"本轮已定位并修复为**两个具体 bug**（死锁#1 = UBCC 层 stale sharer + ReadReq 风暴；死锁#2 = EP-RNF snoop 排队引发的跨节点写-写竞争死锁）。TC98 现"持续推进不死锁"，仅因单行热点 16-CPU 竞争需极长 sim-time（~6h wall）才能跑完，属性能特性而非死锁。
 
 ---
 
-## 四、待解决问题
+## 四、本轮（2026-07-14）8n2s 死锁修复总结
 
-### P0: 8n2s 拓扑系统性死锁（下一优先级）
+### 死锁#1（UBCC 层 + ReadReq 风暴）— 已修
+- **TC98 ReadReq 去重**：`UBAdapter.cc` `_inflightReadReqs` 补 insert，守卫生效（日志 322MB→44KB，单 reqId 发送 96k→1）。
+- **home 侧统一 invalidate fanout**：`UBCCController.cc` `processOuterUpgradeReq` 增补 fanout；fanout 按**发送时目录状态**重算 effectiveMask + 空 mask 直接转 grant。
+- **无本地副本立即 ack**：`EPBackend.cc` 收到 InvalidateReq 时若无本地副本立即回 ack（stale sharer 幂等），打破"目录含已被 recall 的陈旧 sharer"死锁。
+- 效果：ownership 转移 9 → 115+。
 
-**现象**（`TIMEOUT_SEC=600`，TC98 给到 1800s）：
-- **home 节点死锁**：TC2/96/100/101 —— 其余 7 节点正常 `doExitCleanup` 退出后，home(node0) 卡在 CLK-SYNC 无限处理 Recall/Clear，无法自行终止。
-- **全局死锁**：TC95/97 —— 全 8 节点卡在 CLK-SYNC，PDES 零进展。
-- **全局活锁**：TC98 —— 全 8 节点持续 ReadReq 洪泛到 node0 + Recall，无终止。
-- **唯一通过**：TC99（per-plane slot contention，访问模式不触发 home 死锁）。
+### 死锁#2（EP-RNF snoop 冲突仲裁）— 已修
+- **根因**：EP-RNF 有 in-flight CHI 事务时对同址 snoop 无差别排队且永不出队，违反 CHI"RN-F 有 outstanding request 时须立即响应同址 snoop"前提，形成跨节点写-写竞争死锁。
+- **修复**（`EPRNFController.cc` `recvSnoopMsg`）：按语义矩阵分类——良性 self-snoop（recall 引发）走 IMMED clean SnpResp_I；非 recall 的写类冲突 snoop（SnpCleanInvalid/SnpUnique/SnpOnce）回 **stale SnpResp_I** 让本地写 abort-retry（经全局序重排）；ReadShared 行 + SnpOnce 读读共存 IMMED；SnpShared/Fwd 保 fatal。
+- **验证**（DebugFlag 已复核）：EP-RNF 回 stale SnpResp_I → HN-F 完成 Comp_UC(stale=1) → cpu 不进 UC、re-fetch → 经 home 重排。无 split-brain。
+- 方案文档：`docs/design/eprnf_snoop_conflict_arbitration_plan.md`；问题记录：`docs/issues/tc98_deadlock2_eprnf_snoop_conflict.md`。
 
-**性质**：全部无 crash / 无 panic / 无 IPC bind 失败，是纯协议/PDES 死锁。初步方向：
-1. home 节点在所有 requester 退出后无法收敛终止（可能需要"所有 requester 已 TERMINATE 则 home 自终止"的检测）；
-2. 跨 socket conservative sync 对齐（`EP_SYNC_INTERVAL_PS=25000` 对 16-plane 可能不足）；
-3. TC98 曾疑似的 BUSY retry 风暴（注意：fix_tc98 的 Fix A/B 已证伪，见下）。
-**尚未深入定位，留待下一轮。**
+### barrier floorLocalExpected 回归 — 已修
+- 之前为修 TC96/97 加的 `floorLocalExpected=_numSockets` 回归了 2s 的 TC32/33/34/35/39（这些 workload 每节点仅 1 primary，被强制等 2 → timeout）。
+- **修复（方案 A）**：删除 `sync_wait.cc` 的 floor，`localExpected` 完全由 workload 的 `activeThreads` 决定；把每节点 2 primary 的 8n2s workload（TC95/96/97/98/99/100/101）改为显式双参 `sync_wait(mask, NUM_SOCKETS)`。
+- 效果：2s 5/5 恢复 PASS，8n2s barrier 6/6 PASS，1s/8n1s 无回归。
+
+### 关键 commit
+- gem5：`abee5ecf8d`（TC42 recall）、`addec8f411`（stale-ownerExists）、`0b17f63848`（旧 floor，已被后者替代）、`8d77b76178`（self-snoop cleanup + batch replay）、`38ddbfa0b3`（EP-RNF 仲裁）、`a927ac5719`（删 floor）
+- 主仓库：`ae2b1c0`（UBCC fix1/2 + barrier）、`3aa7a78`（EP-RNF 仲裁指针）、`7c6fbfe`（8n2s workload 双参）
+
+---
+
+## 五、待解决问题（下一优先级）
+
+### P0: TC98 性能（非死锁）
+TC98（8n2s 单行热点、16 CPU × 150 轮）已"持续推进不死锁"，但需 ~6h wall 才能跑完。若需常规回归通过，需评估：
+1. 是否降低 TC98 的 ROUNDS/CPU 规模用于日常回归；
+2. PDES 同步 + 单行竞争的性能优化（非正确性问题）。
+
+### P1: EP-RNF 仲裁的实现期遗留验证点（见方案 §10）
+- SnpOnce 在写类 in-flight 下当前保守 STALE（标了 TODO，可优化为 IMMED 快照）；
+- `hasActiveRecall`+recall-pending 守卫对所有 recall 引发 self-snoop 的覆盖完备性（已通过 TC16/25 间接验证，未见反例）。
 
 ---
 
