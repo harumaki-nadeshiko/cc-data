@@ -237,6 +237,14 @@ ResidentDir::tagOf(uint64_t pa) const
     return (pa >> (6 + _layout.set_bits)) & ((1ULL << _layout.tag_bits) - 1);
 }
 
+uint64_t
+ResidentDir::rebuildPA(int set, int way) const
+{
+    // Reverse of setIndex+tagOf: pa = (tag << (6+set_bits)) | (set << 6)
+    uint64_t tag = getTag(set, way);
+    return (tag << (6 + _layout.set_bits)) | ((uint64_t)set << 6);
+}
+
 size_t
 ResidentDir::entryBitOffset(int set, int way) const
 {

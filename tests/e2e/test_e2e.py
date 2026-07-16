@@ -1346,7 +1346,7 @@ def verify_tc116(reads, lines):
     if len(node1_reads) < 2:
         return False, f"TC116 FAILED: expected 2 Node1 reads, got {len(node1_reads)}", node1_reads
     expected_first = 0x11600000
-    expected_last = 0x1160003F
+    expected_last = 0x116000FF
     mismatches = []
     for r in node1_reads:
         actual = int(r["actual"], 16)

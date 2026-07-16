@@ -125,6 +125,18 @@ class ResidentDir
     size_t capacity() const { return _layout.capacity; }
     size_t count() const { return _count; }
     const ResidentDirLayout& layout() const { return _layout; }
+    int numSets() const { return _layout.num_sets; }
+    int numWays() const { return _layout.ways; }
+
+    // ---- Low-level entry field access (for async writeback scan) ----
+    bool     getValid(int set, int way) const;
+    bool     getDirty(int set, int way) const;
+    uint64_t getTag(int set, int way) const;
+    uint64_t getEpoch(int set, int way) const;
+    void     setDirty(int set, int way, bool v);
+
+    // Reconstruct full PA from set/way (requires valid entry)
+    uint64_t rebuildPA(int set, int way) const;
 
     // ---- Bloom Filter (grouped) ----
     bool bloomMayContain(uint64_t pa) const;
@@ -178,20 +190,15 @@ class ResidentDir
     size_t entryBitOffset(int set, int way) const;
     size_t plruBitOffset(int set) const;
 
-    // Entry field read/write
-    bool     getValid(int set, int way) const;
+    // Entry field read/write (remaining private)
     void     setValid(int set, int way, bool v);
-    uint64_t getTag(int set, int way) const;
     void     setTag(int set, int way, uint64_t tag);
     uint8_t  getMesi(int set, int way) const;
     void     setMesi(int set, int way, uint8_t mesi);
-    bool     getDirty(int set, int way) const;
-    void     setDirty(int set, int way, bool v);
     uint8_t  getCtrl(int set, int way) const;
     void     setCtrl(int set, int way, uint8_t ctrl);
     uint64_t getSharers(int set, int way) const;
     void     setSharers(int set, int way, uint64_t sh);
-    uint64_t getEpoch(int set, int way) const;
     void     setEpoch(int set, int way, uint64_t ep);
 
     void encodeEntry(int set, int way, uint64_t pa, const UBCCDirEntry &in);

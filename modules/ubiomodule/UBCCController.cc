@@ -135,6 +135,11 @@ UBCCController::wakeup()
                 _directory.reconstructGroup(g);
         }
     }
+    // Async writeback: periodically scan dirty ResidentDir entries
+    if (++_asyncWbCounter >= _asyncWbInterval) {
+        _asyncWbCounter = 0;
+        doAsyncWriteback();
+    }
 }
 
 // ---- isDsmAddr (pure computation, no SentinelHelper) ----
@@ -320,6 +325,68 @@ UBCCController::scheduleBackstoreDelete(uint64_t linePa)
         _host->hostIssueBackstoreDelete(linePa);
     } else {
         onBackstoreDeleteAck(linePa, true);
+    }
+}
+
+void
+UBCCController::doAsyncWriteback()
+{
+    const int maxPerRound = 16;
+    int count = 0;
+    int numSets = _directory.numSets();
+    int numWays = _directory.numWays();
+
+    for (int set = 0; set < numSets && count < maxPerRound; ++set) {
+        for (int way = 0; way < numWays && count < maxPerRound; ++way) {
+            if (!_directory.getValid(set, way))
+                continue;
+            if (!_directory.getDirty(set, way))
+                continue;
+
+            uint64_t pa = _directory.rebuildPA(set, way);
+
+            // Skip if already pending writeback (eviction in flight)
+            if (_directory.wbPending(pa))
+                continue;
+
+            // Skip if already in async writeback snapshot map
+            if (_asyncWbSnapshots.count(pa) > 0)
+                continue;
+
+            uint64_t epoch = _directory.getEpoch(set, way);
+            _asyncWbSnapshots[pa] = epoch;
+
+            scheduleBackstoreWrite(pa);
+            count++;
+        }
+    }
+}
+
+void
+UBCCController::onAsyncWritebackAck(uint64_t linePa)
+{
+    auto it = _asyncWbSnapshots.find(linePa);
+    if (it == _asyncWbSnapshots.end())
+        return;
+
+    uint64_t snapshotEpoch = it->second;
+    _asyncWbSnapshots.erase(it);
+
+    DirEntry entry;
+    if (!_directory.lookup(linePa, entry))
+        return;
+
+    // Epoch check: if unchanged, entry was not modified → safe to clear dirty
+    if (entry.epoch == snapshotEpoch) {
+        entry.residentDirty = false;
+        _directory.update(linePa, entry);
+        _asyncWbCount++;
+        printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
+               _nodeId, linePa, snapshotEpoch);
+    } else {
+        printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx snapshotEpoch=%lu currentEpoch=%lu "
+               "— dirty kept (entry modified)\n",
+               _nodeId, linePa, snapshotEpoch, entry.epoch);
     }
 }
 
@@ -1083,7 +1150,8 @@ UBCCController::inspectUbccDirForTest(uint64_t line_pa)
         << "\"staleRejectedCount\":" << _staleRejectedCount << ","
         << "\"ownerMismatchRejectedCount\":" << _ownerMismatchRejectedCount << ","
         << "\"invalidationCount\":" << _invalidationCount << ","
-        << "\"invalidationAckCount\":" << _invalidationAckCount;
+        << "\"invalidationAckCount\":" << _invalidationAckCount << ","
+        << "\"asyncWbCount\":" << _asyncWbCount;
     oss << "}";
     return oss.str();
 }
@@ -2683,6 +2751,12 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa)
 {
+    // Check if this was an async writeback (not an eviction writeback)
+    if (_asyncWbSnapshots.count(linePa) > 0) {
+        onAsyncWritebackAck(linePa);
+        return;
+    }
+
     DirEntry e;
     if (!_directory.lookup(linePa, e)) {
         return;

@@ -501,6 +501,12 @@ class UBCCController
     void resetWritebackCount() { _writebackCount = 0; }
 
     /**
+     * Get the async writeback count (for test observation).
+     */
+    uint64_t getAsyncWbCount() const { return _asyncWbCount; }
+    void resetAsyncWbCount() { _asyncWbCount = 0; }
+
+    /**
      * Get the evict count (for test observation).
      */
     uint64_t getEvictCount() const { return _evictCount; }
@@ -724,6 +730,12 @@ public:
     uint64_t _staleRejectedCount;
     uint64_t _ownerMismatchRejectedCount;
 
+    // ---- Async Writeback ----
+    int _asyncWbInterval = 10000;
+    int _asyncWbCounter = 0;
+    std::map<uint64_t, uint64_t> _asyncWbSnapshots; // pa → snapshot epoch
+    uint64_t _asyncWbCount = 0;
+
     // ---- M8: Invalidation counters ----
     uint64_t _invalidationCount;
     uint64_t _invalidationAckCount;
@@ -760,6 +772,8 @@ public:
     bool evictOneVictim(uint64_t avoidPa);
     void scheduleBackstoreWrite(uint64_t linePa);
     void scheduleBackstoreDelete(uint64_t linePa);
+    void doAsyncWriteback();
+    void onAsyncWritebackAck(uint64_t linePa);
     const char* mesiStateName(MESIState s) const;
 
     // ---- M6 private helpers ----

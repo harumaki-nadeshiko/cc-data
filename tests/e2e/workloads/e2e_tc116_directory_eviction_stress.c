@@ -13,10 +13,10 @@
 #include "dsm_access.h"
 #include "e2e_common.h"
 
-#define NUM_LINES       64
+#define NUM_LINES       256
 #define FIRST_VAL       0x11600000u
-/* LAST_VAL = 0x11600000 | (NUM_LINES - 1) = 0x1160003F */
-#define LAST_VAL        0x1160003Fu
+/* LAST_VAL = 0x11600000 | (NUM_LINES - 1) = 0x116000FF */
+#define LAST_VAL        0x116000FFu
 
 int main(int argc, char **argv)
 {
@@ -32,6 +32,12 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /* Node2 is a bystander — skip all barriers and exit immediately. */
+    if (node_id == 2) {
+        _exit_program(0);
+        return 0;
+    }
+
     /* ── Phase 1: Node0 fills ResidentDir with NUM_LINES unique writes ── */
     if (node_id == 0) {
         for (int i = 0; i < NUM_LINES; i++) {
@@ -43,7 +49,7 @@ int main(int argc, char **argv)
         emit_phase_done(0, "fill");
     }
 
-    /* Barrier: node0 and node1 only (node2 not needed) */
+    /* Barrier: node0 and node1 only (node2 already exited) */
     sync_wait(0b11);  /* nodes 0,1 */
 
     /* ── Phase 2: Node1 reads back first and last lines ── */

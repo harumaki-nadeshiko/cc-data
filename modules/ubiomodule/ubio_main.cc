@@ -1351,6 +1351,8 @@ main(int argc, char **argv)
 
     // 3.4: Dump ResidentDir performance counters
     ubcc.directory().dumpStatsJson();
+    fprintf(stderr, "[UBCC-STATS] {\"asyncWbCount\":%lu}\n",
+            ubcc.getAsyncWbCount());
 
     return 0;
 }
