@@ -1,6 +1,14 @@
-# Clock Drift Diagnosis — In Progress (2026-06-28)
+# Clock Drift Diagnosis — In Progress (2026-07-16)
 
-## State
+## State (updated 2026-07-16)
+- ZMQ latency fixed: 100ns→2.5ns per solve_latency_params.py --x-ns 2.5
+  - Port.hh: kDefaultSyncInterval/kDefaultLinkLatency 100000→2500 ps
+  - gen_topo.py: cross-node 405000→410000, cross-socket 25000→220000 ps
+  - run_multi.sh: EP_SYNC_INTERVAL_PS/EP_LINK_LATENCY_PS 25000→2500 ps
+- TC3 verified with new latency (PASSED)
+- ubio_main.cc: fixed drainDelayedQueue forward declaration (moved to end of anon ns)
+
+## Previous State (2026-06-28)
 - Port syncWindow merged into syncInterval (default 100000 ticks = 100ns).
 - Port linkLatency default = 10000 ticks = 10ns.
 - nsim internal latency = 100000 ticks = 100ns (topo3.json).
