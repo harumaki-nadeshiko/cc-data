@@ -1275,7 +1275,21 @@ def verify_tc111(reads, lines):
     if len(reads) < 4:
         return False, f"TC111 FAILED: expected ≥4 READ_VAL, got {len(reads)}", reads
     target = 0x1110BBB2
-    for r in reads:
+    # Each read must match its OWN expected value. The workload has an
+    # intentional Phase-2 pre-upgrade read (expected=0x1110AAA1) plus the
+    # Phase-4 post-upgrade convergence reads (expected=0x1110BBB2); enforcing a
+    # single global target would wrongly flag the legitimate Phase-2 read.
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, (f"TC111 FAILED: {len(mismatches)} read(s) did not match "
+                       f"their expected value"), mismatches
+    # Convergence: the post-upgrade reads (expected==target) must exist for
+    # every participating node and all read the upgraded value.
+    conv = [r for r in reads if int(r["expected"], 16) == target]
+    if not conv:
+        return False, (f"TC111 FAILED: no post-upgrade convergence read "
+                       f"(expected 0x{target:X})"), reads
+    for r in conv:
         if int(r["actual"], 16) != target:
             return False, f"TC111 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
     fault_seen = _fault_evidence_seen(lines, 111)
