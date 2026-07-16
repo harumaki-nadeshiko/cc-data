@@ -97,6 +97,7 @@ TESTCASES = {
     111: "e2e_tc111_silent_upgrade_drop",
     112: "e2e_tc112_tbe_interference",
     113: "e2e_tc113_silent_upgrade_micro",
+    114: "e2e_tc114_silent_upgrade_minimal",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1309,6 +1310,16 @@ def verify_tc113(reads, lines):
     return True, f"TC113 PASSED: {len(upg_markers)} upgrade markers, {len(done_markers)} done", []
 
 
+def verify_tc114(reads, lines):
+    """TC114: minimal silent upgrade from R_M → M."""
+    target = 0x1140B000
+    target_hex = f"0x{target:X}"
+    for r in reads:
+        if int(r["actual"], 16) != target:
+            return False, f"TC114 FAILED: expected {target_hex}, got {r['actual']}", [r]
+    return True, "TC114 PASSED: silent upgrade minimal RM→M converged", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1369,6 +1380,7 @@ VERIFIERS = {
     100: verify_tc100, 101: verify_tc101, 102: verify_tc102,
     110: verify_tc110, 111: verify_tc111,
     112: verify_tc112, 113: verify_tc113,
+    114: verify_tc114,
 }
 
 def verify_testcase(tc_id, reads, lines):
