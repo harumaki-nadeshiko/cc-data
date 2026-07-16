@@ -49,7 +49,7 @@ def main():
         if os.path.exists(path):
             with open(path, errors="replace") as f:
                 for line in f:
-                    if "[UBFAULT]" in line:
+                    if "[UBFAULT]" in line or "[ResidentDirStats]" in line:
                         raw_lines.append(line.rstrip("\n"))
 
     print(f"[verify] TC{args.tc}: aggregated {found}/{expected} simout files, "

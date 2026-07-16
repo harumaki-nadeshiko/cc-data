@@ -35,10 +35,11 @@ export EP_LINK_LATENCY_PS="${EP_LINK_LATENCY_PS:-2500}"
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
 case "${1:-}" in
-    --1s)   TOPO_KIND="1s"; shift ;;
-    --2s)   TOPO_KIND="2s"; shift ;;
-    --8n1s) TOPO_KIND="8n1s"; shift ;;
-    --8n2s) TOPO_KIND="8n2s"; shift ;;
+    --1s)          TOPO_KIND="1s"; shift ;;
+    --1s-tinydir)  TOPO_KIND="1s_tinydir"; shift ;;
+    --2s)          TOPO_KIND="2s"; shift ;;
+    --8n1s)        TOPO_KIND="8n1s"; shift ;;
+    --8n2s)        TOPO_KIND="8n2s"; shift ;;
 esac
 JSON="$ROOT_DIR/configs/topo_${TOPO_KIND}.json"
 [ -f "$JSON" ] || { echo "FATAL: config $JSON not found" >&2; exit 2; }

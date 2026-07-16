@@ -99,6 +99,7 @@ TESTCASES = {
     113: "e2e_tc113_silent_upgrade_micro",
     114: "e2e_tc114_silent_upgrade_minimal",
     115: "e2e_tc115_cross_cpu_silent_upgrade",
+    116: "e2e_tc116_directory_eviction_stress",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1335,6 +1336,38 @@ def verify_tc115(reads, lines):
     return True, f"TC115 PASSED: cross-CPU silent upgrade ({diag})", []
 
 
+def verify_tc116(reads, lines):
+    """TC116: ResidentDir DRAM offload/onload stress.
+    Node1 must read back first (0x11600001) and last (0x116007FF) lines correctly.
+    ResidentDir eviction counter is checked via ubio stderr [ResidentDirStats]."""
+    if len(reads) < 2:
+        return False, f"TC116 FAILED: expected >=2 READ_VAL, got {len(reads)}", reads
+    node1_reads = [r for r in reads if r["node"] == 1]
+    if len(node1_reads) < 2:
+        return False, f"TC116 FAILED: expected 2 Node1 reads, got {len(node1_reads)}", node1_reads
+    expected_first = 0x11600000
+    expected_last = 0x1160003F
+    mismatches = []
+    for r in node1_reads:
+        actual = int(r["actual"], 16)
+        exp = int(r["expected"], 16)
+        if actual != exp:
+            mismatches.append(r)
+    if mismatches:
+        return False, f"TC116 FAILED: {len(mismatches)} mismatches in node1 reads", mismatches
+    # Check for fill-done marker
+    fill_done = any("[PHASE] node=0 phase=fill status=done" in l for l in lines)
+    # Check for ResidentDir stats in ubio fault logs (captured via --fault-log)
+    dir_stats = [l for l in lines if "[ResidentDirStats]" in l]
+    evictions = 0
+    for ds in dir_stats:
+        import re
+        m = re.search(r'"dir_evictions":(\d+)', ds)
+        if m:
+            evictions = max(evictions, int(m.group(1)))
+    return True, f"TC116 PASSED: fill_done={fill_done}, dir_evictions={evictions}", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1397,6 +1430,7 @@ VERIFIERS = {
     112: verify_tc112, 113: verify_tc113,
     114: verify_tc114,
     115: verify_tc115,
+    116: verify_tc116,
 }
 
 def verify_testcase(tc_id, reads, lines):

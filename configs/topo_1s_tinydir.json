@@ -1,0 +1,22 @@
+{
+  "_comment": "Single-socket topology with tiny ResidentDir (~128 entries) for eviction stress testing. --bloom-bytes=0 --sram-bytes=6144 --ways=1",
+  "num_nodes": 3,
+  "num_sockets": 1,
+  "modules": [
+    {"id": "gem5_0",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=0 --num-nodes=3 --num-sockets=1 --workload={workload}"},
+    {"id": "gem5_1",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=1 --num-nodes=3 --num-sockets=1 --workload={workload}"},
+    {"id": "gem5_2",  "cmd": "{gem5_bin} --outdir={node_outdir} {test_e2e} --node-id=2 --num-nodes=3 --num-sockets=1 --workload={workload}"},
+    {"id": "ubio_0",  "cmd": "{ubio_bin} --node=0 --socket=0 --num-sockets=1 --num-nodes=3 --bloom-bytes=0 --sram-bytes=6144 --ways=1 {fault_rules_args}"},
+    {"id": "ubio_1",  "cmd": "{ubio_bin} --node=1 --socket=0 --num-sockets=1 --num-nodes=3 --bloom-bytes=0 --sram-bytes=6144 --ways=1 {fault_rules_args}"},
+    {"id": "ubio_2",  "cmd": "{ubio_bin} --node=2 --socket=0 --num-sockets=1 --num-nodes=3 --bloom-bytes=0 --sram-bytes=6144 --ways=1 {fault_rules_args}"},
+    {"id": "networksim", "cmd": "{nsim_bin} {topo_json}"}
+  ],
+  "links": [
+    ["gem5_0", "mem-0", "ubio_0", "mem-0"],
+    ["gem5_1", "mem-0", "ubio_1", "mem-0"],
+    ["gem5_2", "mem-0", "ubio_2", "mem-0"],
+    ["ubio_0", "mem-1", "networksim", "mem-0"],
+    ["ubio_1", "mem-1", "networksim", "mem-1"],
+    ["ubio_2", "mem-1", "networksim", "mem-2"]
+  ]
+}
