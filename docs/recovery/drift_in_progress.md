@@ -1,5 +1,16 @@
 # Clock Drift Diagnosis — In Progress (2026-07-16)
 
+## 2026-07-16: Silent Upgrade trigger extended from R_E to R_E+R_M
+- **Commit**: `69234852e3` (gem5), `43ab3d6` (cc-ep)
+- **Problem**: `hasRequesterExclusive()` only checked `state == R_E`, but TC8's
+  `_requesterLines` state is always `R_M` (cold store → GrantModified), never `R_E`.
+  R_M is also an exclusive holder, so silent upgrade was never triggered for TC8.
+- **Fix**: Extended check to `state == R_E || state == R_M` in:
+  - `EPBackend.cc:hasRequesterExclusive()` — the core logic
+  - `EPBackend.hh` — comment updated to "R_E or R_M"
+  - `EPRNFController.cc` — diagnostic messages updated to "R_E/R_M→M"
+- **Verification pending**: TC8 baseline vs optimized comparison
+
 ## State (updated 2026-07-16)
 - ZMQ latency fixed: 100ns→2.5ns per solve_latency_params.py --x-ns 2.5
   - Port.hh: kDefaultSyncInterval/kDefaultLinkLatency 100000→2500 ps
