@@ -98,6 +98,7 @@ TESTCASES = {
     112: "e2e_tc112_tbe_interference",
     113: "e2e_tc113_silent_upgrade_micro",
     114: "e2e_tc114_silent_upgrade_minimal",
+    115: "e2e_tc115_cross_cpu_silent_upgrade",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1320,6 +1321,20 @@ def verify_tc114(reads, lines):
     return True, "TC114 PASSED: silent upgrade minimal RM→M converged", []
 
 
+def verify_tc115(reads, lines):
+    """TC115: Cross-CPU silend upgrade across different L2 clusters.
+    All nodes must converge to 0x1150B000."""
+    target = 0x1150B000
+    for r in reads:
+        if int(r["actual"], 16) != target:
+            return False, f"TC115 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
+    # Check for diagnostic markers (CPU2 is in different cluster from CPU0)
+    cpu0_signal = any("[TC115_CPU0] signal CPU2" in l for l in lines)
+    cpu2_store  = any("[TC115_CPU2] flag seen, store v2" in l for l in lines)
+    diag = f"cpu0_signal={cpu0_signal}, cpu2_store={cpu2_store}"
+    return True, f"TC115 PASSED: cross-CPU silent upgrade ({diag})", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1381,6 +1396,7 @@ VERIFIERS = {
     110: verify_tc110, 111: verify_tc111,
     112: verify_tc112, 113: verify_tc113,
     114: verify_tc114,
+    115: verify_tc115,
 }
 
 def verify_testcase(tc_id, reads, lines):
