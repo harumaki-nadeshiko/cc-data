@@ -125,42 +125,6 @@ struct DelayedMsg {
 };
 static std::deque<DelayedMsg> g_delayedQueue;
 
-// Drain delayed messages whose fireTick has arrived. Each message is re-injected
-// as if it were a fresh network ingress (fromNetwork=true) so it goes through
-// the normal handleUbccMessage / forwarding path.
-static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
-                               UBCCController &ubcc, UbioBackstoreHost &host,
-                               uint64_t tick) {
-    while (!g_delayedQueue.empty() && g_delayedQueue.front().fireTick <= tick) {
-        DelayedMsg dm = g_delayedQueue.front();
-        g_delayedQueue.pop_front();
-        const CoherenceMessage &coh = dm.coh;
-        std::fprintf(stderr, "[UBFAULT-DELIVER] node=%d delivering delayed "
-                     "type=%s reqId=%lu pa=0x%lx fireTick=%lu currentTick=%lu\n",
-                     nid, coherenceMsgTypeName(coh.h.type), coh.h.reqId,
-                     coh.h.homeLinePa, dm.fireTick, tick);
-        // Re-inject: if it was from network, process as network message; else as gem5 message.
-        // We push through the same handleUbccMessage path.
-        for (int rep = 0; rep < dm.faultCopies; ++rep) {
-            CoherenceMessage response;
-            bool hasResponse = false;
-            bool handled = handleUbccMessage(ubcc, host, nid, coh, response, hasResponse);
-            if (dm.fromNetwork) {
-                if (handled && hasResponse) {
-                    sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
-                            response, true);
-                } else if (!handled && isGem5Ingress(coh.h.type)) {
-                    sendCoh(gem5Port, tick, gidOf(coh.h.srcNode, coh.h.srcSocket), coh);
-                }
-            } else {
-                if (handled && hasResponse) {
-                    sendCoh(gem5Port, tick, (uint32_t)nid, response, false);
-                }
-            }
-        }
-    }
-}
-
 void
 parseFaultRules(const std::string &all)
 {
@@ -845,6 +809,42 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
 
       default:
         return false;
+    }
+}
+
+// Drain delayed messages whose fireTick has arrived. Each message is re-injected
+// as if it were a fresh network ingress (fromNetwork=true) so it goes through
+// the normal handleUbccMessage / forwarding path.
+static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
+                               UBCCController &ubcc, UbioBackstoreHost &host,
+                               uint64_t tick) {
+    while (!g_delayedQueue.empty() && g_delayedQueue.front().fireTick <= tick) {
+        DelayedMsg dm = g_delayedQueue.front();
+        g_delayedQueue.pop_front();
+        const CoherenceMessage &coh = dm.coh;
+        std::fprintf(stderr, "[UBFAULT-DELIVER] node=%d delivering delayed "
+                     "type=%s reqId=%lu pa=0x%lx fireTick=%lu currentTick=%lu\n",
+                     nid, coherenceMsgTypeName(coh.h.type), coh.h.reqId,
+                     coh.h.homeLinePa, dm.fireTick, tick);
+        // Re-inject: if it was from network, process as network message; else as gem5 message.
+        // We push through the same handleUbccMessage path.
+        for (int rep = 0; rep < dm.faultCopies; ++rep) {
+            CoherenceMessage response;
+            bool hasResponse = false;
+            bool handled = handleUbccMessage(ubcc, host, nid, coh, response, hasResponse);
+            if (dm.fromNetwork) {
+                if (handled && hasResponse) {
+                    sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
+                            response, true);
+                } else if (!handled && isGem5Ingress(coh.h.type)) {
+                    sendCoh(gem5Port, tick, gidOf(coh.h.srcNode, coh.h.srcSocket), coh);
+                }
+            } else {
+                if (handled && hasResponse) {
+                    sendCoh(gem5Port, tick, (uint32_t)nid, response, false);
+                }
+            }
+        }
     }
 }
 

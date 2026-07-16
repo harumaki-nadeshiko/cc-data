@@ -36,10 +36,10 @@ def main():
                    help="number of nodes (default 3)")
     p.add_argument("--sockets", type=int,
                    help="sockets per node (default derived from --type)")
-    p.add_argument("--cross-node-latency", type=int, default=405000,
-                   help="cross-node same-socket link latency in ps (default 405000)")
-    p.add_argument("--cross-socket-latency", type=int, default=25000,
-                   help="same-node cross-socket link latency in ps (default 25000)")
+    p.add_argument("--cross-node-latency", type=int, default=410000,
+                    help="cross-node same-socket link latency in ps (default 410000)")
+    p.add_argument("--cross-socket-latency", type=int, default=220000,
+                    help="same-node cross-socket link latency in ps (default 220000)")
     p.add_argument("--out", required=True, help="output topo.json path")
     args = p.parse_args()
 

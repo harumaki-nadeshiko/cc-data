@@ -38,8 +38,8 @@ namespace framework {
 //   time resolution / lower alignment error, but MORE sync heartbeats =>
 //   higher IPC overhead and slower wall-clock simulation. Must stay
 //   >= linkLatency (see invariant above).
-static constexpr uint64_t kDefaultSyncInterval = 100000;
-static constexpr uint64_t kDefaultLinkLatency  = 100000;
+static constexpr uint64_t kDefaultSyncInterval = 2500;
+static constexpr uint64_t kDefaultLinkLatency  = 2500;
 
 enum class ReceiveStatus {
     kMessage,        // a message is visible (timestamp <= curT); may be a
