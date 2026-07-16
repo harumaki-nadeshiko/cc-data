@@ -1,15 +1,27 @@
 # Clock Drift Diagnosis — In Progress (2026-07-16)
 
 ## 2026-07-16: Silent Upgrade trigger extended from R_E to R_E+R_M
-- **Commit**: `69234852e3` (gem5), `43ab3d6` (cc-ep)
-- **Problem**: `hasRequesterExclusive()` only checked `state == R_E`, but TC8's
-  `_requesterLines` state is always `R_M` (cold store → GrantModified), never `R_E`.
-  R_M is also an exclusive holder, so silent upgrade was never triggered for TC8.
+- **Commit**: `602d120068` (gem5), `43ab3d6` (cc-ep)
+- **Problem**: `hasRequesterExclusive()` only checked `state == R_E`, but cold stores
+  via GrantModified set state to `R_M`. R_M is also an exclusive holder, so silent
+  upgrade should apply.
 - **Fix**: Extended check to `state == R_E || state == R_M` in:
-  - `EPBackend.cc:hasRequesterExclusive()` — the core logic
+  - `EPBackend.cc:hasRequesterExclusive()` — the core logic, with detailed diag
   - `EPBackend.hh` — comment updated to "R_E or R_M"
-  - `EPRNFController.cc` — diagnostic messages updated to "R_E/R_M→M"
-- **Verification pending**: TC8 baseline vs optimized comparison
+  - `EPRNFController.cc` — comments/diagnostics updated to "R_E/R_M→M"
+- **TC8 Verification results**:
+  - Baseline (EP_SILENT_UPGRADE=0): PASSED, 0 silent upgrades triggered
+  - Optimized (EP_SILENT_UPGRADE=1): PASSED, **0 silent upgrades triggered**
+  - **Root cause**: TC8 Phase 2 (Node1/Node2 shared read) downgrades Node0's
+    R_M → R_S _before_ Phase 3's SnpCleanInvalid arrives.  The
+    SnpCleanInvalid sees `state=R_S (2)`, not R_E (3) or R_M (4).
+  - Latency comparison: 0.0% reduction (identical P50/P99: ReadReq 2161.50ns,
+    UpgradeReq 2551.50ns)
+  - The R_E+R_M fix is **conceptually correct** but TC8's specific sequence
+    (shared→downgrade→upgrade) never presents R_E or R_M at the
+    SnpCleanInvalid point.
+  - **Recommendation**: Test against TC36 (owner_upgrade_ge_window) or TC37
+    (owner_upgrade_gm_window) which exercise the R_E/R_M silent upgrade path.
 
 ## State (updated 2026-07-16)
 - ZMQ latency fixed: 100ns→2.5ns per solve_latency_params.py --x-ns 2.5
