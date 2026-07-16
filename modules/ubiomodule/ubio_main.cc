@@ -235,8 +235,8 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick)
 static int g_numSockets = 1;
 static int g_numNodes = 3;
 static ResidentDirConfig g_rdcfg;    // may be overridden by argv
-static uint64_t g_dramDelayPs = 0;   // argv override, else UBIO_DRAM_DELAY_PS env
-static bool g_batchRs = true;        // argv override, else UBCC_BATCH_RS env
+static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
+static bool g_batchRs = true;        // argv --batch-rs= override
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -927,13 +927,8 @@ main(int argc, char **argv)
                           0, g_numSockets, g_numNodes, &g_rdcfg);
     ubcc.setBatchRsEnabled(g_batchRs);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
-    // T_ubio_dram: argv has priority, then env UBIO_DRAM_DELAY_PS
-    if (g_dramDelayPs > 0) {
-        host._ubioDramDelayPs = g_dramDelayPs;
-    } else {
-        const char* envDramDelay = std::getenv("UBIO_DRAM_DELAY_PS");
-        if (envDramDelay) host._ubioDramDelayPs = std::strtoull(envDramDelay, nullptr, 10);
-    }
+    // T_ubio_dram: argv --dram-delay-ps= has priority (no env fallback)
+    host._ubioDramDelayPs = g_dramDelayPs;
     ubcc.setHost(&host);
     ubcc.setOutbound(&host);
     bool gem5Done = false, netDone = false;
@@ -1306,14 +1301,9 @@ main(int argc, char **argv)
         }
     };
 
-    bool ubioDebug = []{ const char* e = std::getenv("EP_DEBUG_PORT"); return e && e[0]=='1'; }();
     uint64_t loop_count = 0;
     while (!(gem5Done && (netPort == nullptr || netDone))) {
         loop_count++;
-        if (ubioDebug && loop_count % 1000000 == 0) {
-            std::fprintf(stderr, "[UBIO-LOOP] tick=%lu loop=%lu\n", tick, loop_count);
-            fflush(stderr);
-        }
         // 1. Heartbeat: emitSync for all ports (even silent ones)
         if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-PRE-EMIT] tick=%lu\n", tick); fflush(stderr); }
         if (!gem5Done) gem5Port->emitSync(tick);
