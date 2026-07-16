@@ -98,3 +98,57 @@
     - `--1s 42` PASS；`--1s 2 3 5 8` PASS。
     - `--8n2s 96 97 100 101 99`：仅 TC99 PASS，其余 TIMEOUT。
   - 进一步尝试“取消 finishChiTxn 的 ReadShared 清理”虽可保持 TC42 PASS，但会引入 `--1s 8` FAIL，已回退该尝试。
+
+## 2026-07-16: TC36/37/114 Silent Upgrade 对照实验
+
+### 实验目的
+验证 EP_SILENT_UPGRADE=0/1 对"独占持有者重复写入"场景的实际效果。
+
+### TC36 (owner_upgrade_ge_window) 对照
+- **Baseline (EP_SILENT_UPGRADE=0)**: PASSED
+- **Optimized (EP_SILENT_UPGRADE=1)**: PASSED
+- **静默升级触发**: **0 次**（两版本完全一致）
+- **Node1 协议消息**: EPSNF-RECV:1, SnpCleanInvalid:1, UPGRADE-DIAG:6, RE-DIAG(state=2=R_S)
+- **根因**: TC36 中 Node1 先用 dsm_load (ldr -> ReadShared) 获取 line，得到 state=R_S（共享），不是 R_E（独占）。第二条 dsm_store 触发 SnpCleanInvalid 时，hasRequesterExclusive(R_S)=FALSE，走 OuterUpgradeReq 标准路径。
+
+### TC37 (owner_upgrade_gm_window) 对照
+- **Baseline (EP_SILENT_UPGRADE=0)**: PASSED
+- **Optimized (EP_SILENT_UPGRADE=1)**: PASSED
+- **静默升级触发**: **0 次**（两版本完全一致）
+- **Node1 协议消息**: EPSNF-RECV:1, SnpCleanInvalid:1, UPGRADE-DIAG:7, RE-DIAG(state=2=R_S), RECALL-ENTRY:2
+- **根因**: 第一条 dsm_store 得到 grantTypeVar=2 (GlobalGrantModified -> R_M)，但同一 sync 窗口内 Node2 的 dsm_load 触发 ReadShared recall，将 Node1 的 state 从 R_M 降级为 R_S。第二条 store 时 hasRequesterExclusive(R_S)=FALSE。
+
+### TC114 (新建: silent_upgrade_minimal) 对照
+- **设计**: Node1 第一次 store -> R_M -> sync -> 第二次 store（相同 line），无其他节点访问。
+- **Baseline (EP_SILENT_UPGRADE=0)**: PASSED
+- **Optimized (EP_SILENT_UPGRADE=1)**: PASSED
+- **静默升级触发**: **0 次**（两版本完全一致）
+- **协议消息**: EPSNF-RECV:1（仅第一次 store），无 SnpCleanInvalid，无 UPGRADE-DIAG
+- **根因**: 第二次 store 是 CPU L1 cache HIT（line 已是 Modified），完全没有任何 CHI 协议消息。无消息需要优化。
+
+### 架构分析总结
+
+**handleSnpCleanInvalid 路径**（EPRNFController.cc:843-858）:
+- 此路径检测 hasRequesterExclusive(msg->m_addr)，当 state 为 R_E 或 R_M 时跳过 OuterUpgradeReq
+- 在当前代码中从未被触发，因为：
+  1. dsm_load (ldr) 永远产生 ReadShared -> R_S，不是 R_E
+  2. GlobalGrantExclusive (R_E) 在 UBCC 协议中从未被授予标准 ARM load/store
+  3. 有 R_M 时收到外部 SnpCleanInvalid 前，recall 先把 state 降级为 R_S
+  4. 同节点第二次 store 是 cache hit，根本不产生 SnpCleanInvalid
+
+**handleRemoteMiss 路径**（EPBackend.cc:517 新增）:
+- 在 handleRemoteMiss 中，当 neededPerm=1 且已有 R_E/R_M 时，跳过 CHI 请求返回成功
+- 架构上正确——这是 MESI E->M 的跨节点类比
+- 当前无法被覆盖：第二次 store 是 cache hit，handleRemoteMiss 根本不被调用
+- 需要 dsm_flush 或跨 CPU core 测试才能触发 cache miss -> handleRemoteMiss
+
+### 结论
+EP_SILENT_UPGRADE=0 vs =1 在 TC36/37 上无任何差异：协议消息数量、时序、功能完全相同。降幅 **0.0%**。
+
+当前静默升级的两个代码入口：
+1. handleSnpCleanInvalid：死代码——hasRequesterExclusive 在已知 workload 下永不为 TRUE
+2. handleRemoteMiss（新增）：正确但需 cache miss 才能触发——同节点重复写入的 cache hit 使此路径不可达
+
+### 后续建议
+- 若需验证 handleRemoteMiss 静默升级效果，需构造跨 CPU core 的测试（core0 存 R_E/R_M，core1 同节点再次写入 -> 必然 cache miss）
+- 或接受当前状态：独占持有者重复写入本身就是零消息操作，EP_SILENT_UPGRADE 针对的是 SnpCleanInvalid 的外部触发场景
