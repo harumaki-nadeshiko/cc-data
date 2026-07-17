@@ -101,6 +101,7 @@ TESTCASES = {
     115: "e2e_tc115_cross_cpu_silent_upgrade",
     116: "e2e_tc116_directory_eviction_stress",
     117: "e2e_tc117_clear_reorder",
+    118: "e2e_tc118_mixed_fault",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1408,6 +1409,18 @@ def verify_tc117(reads, lines):
     return True, f"TC117 PASSED: reordered ClearReq handled (fault_evidence={fault_seen})", []
 
 
+def verify_tc118(reads, lines):
+    """TC118: Combined fault — Drop Clear + Delay Clear on same home.
+    Both DSM lines must converge despite concurrent faults on the same home."""
+    if len(reads) < 2:
+        return False, f"TC118 FAILED: expected ≥2 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC118 FAILED: {len(mismatches)} mismatches", mismatches
+    fault_seen = _fault_evidence_seen(lines, 118)
+    return True, f"TC118 PASSED: combined faults converged (fault_evidence={fault_seen})", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1472,6 +1485,7 @@ VERIFIERS = {
     115: verify_tc115,
     116: verify_tc116,
     117: verify_tc117,
+    118: verify_tc118,
 }
 
 def verify_testcase(tc_id, reads, lines):

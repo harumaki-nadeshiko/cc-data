@@ -60,7 +60,7 @@ fault_rules_for_tc() {
         49) echo "tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1" ;;
         110) echo "tc110_drop_clear:ClearReq:1:1:0:drop::1" ;;
         111) echo "tc111_silent_upgrade_drop:UpgradeReq:1:1:0:drop::1" ;;
-        117) echo "tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1" ;;
+        118) echo "tc118_drop:ClearReq:0:1:0x10018011800:drop::1;tc118_delay:ClearReq:0:1:0x10018011900:delay:100000:1" ;;
         *)  echo "" ;;
     esac
 }
