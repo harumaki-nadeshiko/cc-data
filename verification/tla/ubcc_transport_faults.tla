@@ -12,6 +12,7 @@ EXTENDS ubcc_protocol_core, Sequences, TLC
 (*   -------      -------------------        --------------                 *)
 (*   Clear        explicit transport queue   drop, duplicate, reorder       *)
 (*   PushGrant    explicit transport queue   drop, duplicate, reorder       *)
+(*   UpgradeReq   explicit transport queue   drop, dup, reorder, watchdog   *)
 (*   InvAck       BarrierAck action envelope drop(unfair), dup, reorder     *)
 (*   RecallResp   RecallResponse envelope    drop(unfair), dup              *)
 (*   UpgradeAck   BarrierAck (UPGRADE) env.  drop(unfair), dup, reorder     *)
@@ -37,11 +38,12 @@ EXTENDS ubcc_protocol_core, Sequences, TLC
 (*                     set / no-outstanding rejection).                      *)
 (***************************************************************************)
 
-VARIABLES transport, transportRecord
+VARIABLES transport, transportRecord, upgradeWatchdog
 
 TVars == <<dir, ost, tombstone, commitLog, epochLog, tick, transport, transportRecord>>
+TFAllVars == <<dir, ost, tombstone, commitLog, epochLog, tick, transport, transportRecord, upgradeWatchdog>>
 
-MsgKind == {"Clear", "InvAck", "RecallResp", "UpgradeAck", "PushGrant"}
+MsgKind == {"Clear", "InvAck", "RecallResp", "UpgradeAck", "PushGrant", "UpgradeReq"}
 
 Audit(action, kind, epoch, reqId, outcome) ==
     [action |-> action, kind |-> kind, epoch |-> epoch, reqId |-> reqId, outcome |-> outcome]
@@ -63,6 +65,7 @@ TFInit ==
     /\ Init
     /\ transport = <<>>
     /\ transportRecord = <<>>
+    /\ upgradeWatchdog = 0
 
 CopyCount(msg) == Cardinality({i \in 1..Len(transport) : transport[i] = msg})
 
@@ -70,33 +73,33 @@ CopyCount(msg) == Cardinality({i \in 1..Len(transport) : transport[i] = msg})
 CoreGrantShared ==
     /\ ~ReplayDrainBarrier
     /\ GrantShared(0, 0)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 CoreGrantExclusive ==
     /\ ~ReplayDrainBarrier
     /\ GrantExclusive(0, FALSE, 0)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 CoreRecallBarrier ==
     /\ ~ReplayDrainBarrier
     /\ RecallBarrier(1, "RS", FALSE, 0)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 CoreInvalidateBarrier ==
     /\ ~ReplayDrainBarrier
     /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : InvalidationBarrier(req, wi, reqId)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 CoreUpgradeBarrier ==
     /\ ~ReplayDrainBarrier
     /\ \E req \in Nodes : \E wi \in BOOLEAN : \E reqId \in ReqIds : UpgradeBarrier(req, wi, reqId)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
-CoreUpgradeCommit == /\ ~ReplayDrainBarrier /\ UpgradeCommit /\ UNCHANGED <<transport, transportRecord>>
-CoreWriteback == /\ ~ReplayDrainBarrier /\ Writeback(0, FALSE) /\ UNCHANGED <<transport, transportRecord>>
-CoreEvict == /\ ~ReplayDrainBarrier /\ Evict(0) /\ UNCHANGED <<transport, transportRecord>>
-CoreTick == /\ ~ReplayDrainBarrier /\ TickOnly /\ UNCHANGED <<transport, transportRecord>>
-CoreRecallToGrant == /\ ~ReplayDrainBarrier /\ RecallToGrant /\ UNCHANGED <<transport, transportRecord>>
+CoreUpgradeCommit == /\ ~ReplayDrainBarrier /\ UpgradeCommit /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
+CoreWriteback == /\ ~ReplayDrainBarrier /\ Writeback(0, FALSE) /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
+CoreEvict == /\ ~ReplayDrainBarrier /\ Evict(0) /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
+CoreTick == /\ ~ReplayDrainBarrier /\ TickOnly /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
+CoreRecallToGrant == /\ ~ReplayDrainBarrier /\ RecallToGrant /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 RecallOrphanWithAudit ==
     /\ ~ReplayDrainBarrier
@@ -104,6 +107,7 @@ RecallOrphanWithAudit ==
     /\ transport' = transport
     /\ transportRecord' = Append(transportRecord,
            Audit("cleanup", "RecallResp", ost.baseEpoch, ost.reqId, "orphan_discard"))
+    /\ upgradeWatchdog' = upgradeWatchdog
 
 (* ── InvAck / UpgradeAck faults: reorder is FREE (\E node + monotonic       *)
 (*    ackMask in BarrierAck); drop is FREE (BarrierAck simply not forced);   *)
@@ -121,6 +125,7 @@ DupInvAck ==
         /\ transportRecord' = Append(transportRecord,
                Audit("dup", IF ost.opType = "INVALIDATE" THEN "InvAck" ELSE "UpgradeAck",
                      ost.baseEpoch, ost.reqId, "idempotent_ignored"))
+        /\ upgradeWatchdog' = upgradeWatchdog
         /\ tick' = tick + 1
 
 (* Duplicate RecallResp: a second response after RECALL already moved to     *)
@@ -136,6 +141,7 @@ DupRecallResp ==
     /\ transport' = transport
     /\ transportRecord' = Append(transportRecord,
            Audit("dup", "RecallResp", ost.baseEpoch, ost.reqId, "idempotent_ignored"))
+    /\ upgradeWatchdog' = upgradeWatchdog
     /\ tick' = tick + 1
 
 (* ── The forward ack actions themselves (wrapped). Left OUT of any fairness *)
@@ -144,12 +150,12 @@ DupRecallResp ==
 CoreRecallResp ==
     /\ ~ReplayDrainBarrier
     /\ RecallResponse
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 CoreInvAck ==
     /\ ~ReplayDrainBarrier
     /\ \E n \in Nodes : BarrierAck(n)
-    /\ UNCHANGED <<transport, transportRecord>>
+    /\ UNCHANGED <<transport, transportRecord, upgradeWatchdog>>
 
 (* ── PushGrant message: explicit transport queue with drop/dup/reorder ─── *)
 (* RecallToGrant normally creates a GRANT_HANDSHAKE atomically.  Under        *)
@@ -163,7 +169,7 @@ QueuePushGrant ==
     /\ ~HasQueued("PushGrant", ost.baseEpoch, ost.reqId)
     /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
     /\ transport' = Append(transport, [kind |-> "PushGrant", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
-    /\ UNCHANGED transportRecord
+    /\ UNCHANGED <<transportRecord, upgradeWatchdog>>
     /\ tick' = tick + 1
 
 DeliverPushGrant ==
@@ -178,7 +184,7 @@ DeliverPushGrant ==
         /\ transport' = RemoveAt(transport, i)
         /\ transportRecord' = Append(transportRecord,
                Audit("deliver", "PushGrant", transport[i].epoch, transport[i].reqId, "grant_installed"))
-    /\ UNCHANGED <<commitLog, epochLog>>
+    /\ UNCHANGED <<commitLog, epochLog, upgradeWatchdog>>
 
 (* ── Clear message: explicit transport queue with drop/dup/REORDER ─────── *)
 QueueClear ==
@@ -189,7 +195,7 @@ QueueClear ==
     /\ ~HasQueued("Clear", ost.baseEpoch, ost.reqId)
     /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
     /\ transport' = Append(transport, [kind |-> "Clear", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
-    /\ UNCHANGED transportRecord
+    /\ UNCHANGED <<transportRecord, upgradeWatchdog>>
     /\ tick' = tick + 1
 
 DeliverClear ==
@@ -200,7 +206,7 @@ DeliverClear ==
               THEN /\ dir' = dir
                    /\ ost' = ost
                    /\ tombstone' = AgeTrackedTombstone(tombstone)
-                   /\ UNCHANGED <<commitLog, epochLog>>
+                   /\ UNCHANGED <<commitLog, epochLog, upgradeWatchdog>>
                    /\ transport' = RemoveAt(transport, i)
                    /\ transportRecord' = Append(transportRecord,
                           Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId,
@@ -213,37 +219,97 @@ DeliverClear ==
               THEN /\ ClearCommit
                    /\ transport' = RemoveAt(transport, i)
                    /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "commit_accept"))
+                   /\ upgradeWatchdog' = upgradeWatchdog
               ELSE /\ dir' = dir
                    /\ ost' = ost
                    /\ tombstone' = AgeTrackedTombstone(tombstone)
-                   /\ UNCHANGED <<commitLog, epochLog>>
+                   /\ UNCHANGED <<commitLog, epochLog, upgradeWatchdog>>
                    /\ transport' = RemoveAt(transport, i)
                    /\ transportRecord' = Append(transportRecord, Audit("deliver", "Clear", transport[i].epoch, transport[i].reqId, "reject"))
                    /\ tick' = tick + 1
 
+(* ── UpgradeReq message: explicit transport queue with drop/dup/reorder     *)
+(*    + watchdog-based retransmission (commit 63bc49e9ce).                     *)
+(*    When an UPGRADE_PENDING is in WAITING_ALL_ACKS, the requester sends      *)
+(*    an UpgradeReq to Home. If dropped, the held-upgrade watchdog fires       *)
+(*    and retransmits with the same reqId; Home idempotently returns cached    *)
+(*    grant.  Modeled as a transport queued message with watchdog resend.      *)
+QueueUpgradeReq ==
+    /\ tick < MaxTick
+    /\ ~ReplayDrainBarrier
+    /\ Len(transport) = 0
+    /\ ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS"
+    /\ ~HasQueued("UpgradeReq", ost.baseEpoch, ost.reqId)
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+    /\ transport' = Append(transport, [kind |-> "UpgradeReq", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+    /\ UNCHANGED <<transportRecord, upgradeWatchdog>>
+    /\ tick' = tick + 1
+
+DeliverUpgradeReq ==
+    /\ tick < MaxTick
+    /\ \E i \in 1..Len(transport) :
+        /\ transport[i].kind = "UpgradeReq"
+        /\ ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS"
+        /\ transport[i].src = ost.requester
+        /\ transport[i].epoch = ost.baseEpoch
+        /\ transport[i].reqId = ost.reqId
+        /\ \E n \in (ost.target \ ost.acked) : BarrierAck(n)
+        /\ transport' = RemoveAt(transport, i)
+        /\ transportRecord' = Append(transportRecord,
+               Audit("deliver", "UpgradeReq", transport[i].epoch, transport[i].reqId, "upgrade_ack_collected"))
+        /\ upgradeWatchdog' = 0     \* progress resets watchdog
+    /\ UNCHANGED <<commitLog, epochLog>>
+
+(* Held-upgrade watchdog resend (commit 63bc49e9ce).  When an UPGRADE_PENDING  *)
+(* upgrade stalls (OuterUpgradeReq dropped), the watchdog increments and       *)
+(* after the horizon the request is re-queued with the same reqId.             *)
+UpgradeWatchdogResend ==
+    /\ tick < MaxTick
+    /\ ~ReplayDrainBarrier
+    /\ ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS"
+    /\ ~HasQueued("UpgradeReq", ost.baseEpoch, ost.reqId)
+    /\ upgradeWatchdog >= 2       \* timeout horizon reached
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
+    /\ transport' = Append(transport, [kind |-> "UpgradeReq", src |-> ost.requester, epoch |-> ost.baseEpoch, reqId |-> ost.reqId])
+    /\ transportRecord' = Append(transportRecord,
+           Audit("watchdog", "UpgradeReq", ost.baseEpoch, ost.reqId, "resend"))
+    /\ upgradeWatchdog' = 0
+    /\ tick' = tick + 1
+
+UpgradeWatchdogTick ==
+    /\ tick < MaxTick
+    /\ ~ReplayDrainBarrier
+    /\ ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS"
+    /\ ~HasQueued("UpgradeReq", ost.baseEpoch, ost.reqId)
+    /\ upgradeWatchdog' = upgradeWatchdog + 1
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog, transport, transportRecord>>
+    /\ tick' = tick + 1
+
+(* ── Drop / Duplicate / Reorder actions (extended for UpgradeReq) ─────── *)
 DropMsg ==
     /\ tick < MaxTick
     /\ Len(transport) > 0
     /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind \in {"Clear", "PushGrant"}
+        /\ transport[i].kind \in {"Clear", "PushGrant", "UpgradeReq"}
         /\ dir' = dir
         /\ ost' = ost
         /\ tombstone' = AgeTrackedTombstone(tombstone)
-        /\ UNCHANGED <<commitLog, epochLog>>
+        /\ UNCHANGED <<commitLog, epochLog, upgradeWatchdog>>
         /\ transport' = RemoveAt(transport, i)
         /\ transportRecord' = Append(transportRecord,
                Audit("drop", transport[i].kind, transport[i].epoch, transport[i].reqId, "lost"))
+        /\ upgradeWatchdog' = upgradeWatchdog
         /\ tick' = tick + 1
 
 DuplicateMsg ==
     /\ tick < MaxTick
     /\ Len(transport) = 1
     /\ \E i \in 1..Len(transport) :
-        /\ transport[i].kind \in {"Clear", "PushGrant"}
+        /\ transport[i].kind \in {"Clear", "PushGrant", "UpgradeReq"}
         /\ CopyCount(transport[i]) = 1
         /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog>>
         /\ transport' = Append(transport, transport[i])
-        /\ UNCHANGED transportRecord
+        /\ UNCHANGED <<transportRecord, upgradeWatchdog>>
         /\ tick' = tick + 1
 
 (* Explicit REORDER of the Clear queue: swap two queued messages. With a     *)
@@ -256,10 +322,10 @@ ReorderMsg ==
         /\ i < j
         /\ LET swapped == [transport EXCEPT ![i] = transport[j], ![j] = transport[i]] IN
              transport' = swapped
-    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog, transportRecord>>
+    /\ UNCHANGED <<dir, ost, tombstone, commitLog, epochLog, transportRecord, upgradeWatchdog>>
     /\ tick' = tick + 1
 
-TFStutter == /\ tick = MaxTick /\ UNCHANGED TVars
+TFStutter == /\ tick = MaxTick /\ UNCHANGED TFAllVars
 
 TFNext ==
     \/ CoreGrantShared
@@ -273,11 +339,15 @@ TFNext ==
     \/ DeliverClear
     \/ QueuePushGrant
     \/ DeliverPushGrant
+    \/ QueueUpgradeReq
+    \/ DeliverUpgradeReq
     \/ DuplicateMsg
     \/ DropMsg
     \/ ReorderMsg
     \/ DupInvAck
     \/ DupRecallResp
+    \/ UpgradeWatchdogResend
+    \/ UpgradeWatchdogTick
     \/ CoreRecallToGrant
     \/ RecallOrphanWithAudit
     \/ CoreUpgradeCommit
@@ -299,7 +369,8 @@ TFFairSpec ==
     /\ WF_TVars(DeliverPushGrant)
     /\ WF_TVars(CoreRecallToGrant)
     /\ WF_TVars(RecallOrphanWithAudit)
-    /\ WF_TVars(CoreUpgradeCommit)
+    /\ WF_TVars(DeliverUpgradeReq)
+    /\ WF_TVars(UpgradeWatchdogResend)
     /\ WF_TVars(CoreTick)
 
 (* ══ B2: SAFETY invariants that must hold under ALL fault combinations ═══ *)
@@ -349,5 +420,15 @@ RecallDONE_WritebackSafety ==
 FaultRecallProgress ==
     [](  (ost.valid /\ ost.opType = "RECALL")
        ~> (~(ost.valid /\ ost.opType = "RECALL")) )
+
+(* ══ B4: UpgradeReq LIVENESS under faults (commit 63bc49e9ce) ═════════════ *)
+(* A dropped UpgradeReq must not wedge the upgrade forever. Either the         *)
+(* watchdog retransmits and the upgrade completes, or (if the slot can be      *)
+(* reclaimed by higher-priority operations) the outstanding is eventually      *)
+(* cleared. The property asserts that an UPGRADE_PENDING does not stay in      *)
+(* WAITING_ALL_ACKS forever when under fault injection.                        *)
+FaultUpgradeRecovery ==
+    [](  (ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS")
+       ~> (~(ost.valid /\ ost.opType = "UPGRADE_PENDING" /\ ost.stage = "WAITING_ALL_ACKS")) )
 
 =============================================================================

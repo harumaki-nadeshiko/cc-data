@@ -48,7 +48,7 @@ Init ==
     /\ rnf = [c \in CPUs |-> "IDLE"]
     /\ hnfState = "H_IDLE"
     /\ inflight = [valid |-> FALSE, cpu |-> 0, op |-> "NONE"]
-    /\ queuedSnoop = [valid |-> FALSE, typ |-> "SnpOnce"]
+    /\ queuedSnoop = [valid |-> FALSE, typ |-> "SnpOnce", stale |-> FALSE]
     /\ deferredReq = [valid |-> FALSE, cpu |-> 0, op |-> "NONE"]
     /\ callbackPending = [valid |-> FALSE, cpu |-> 0]
     /\ postFinish = FALSE
@@ -105,28 +105,69 @@ QueueDeferred(cpu, op) ==
     /\ UNCHANGED <<rnf, hnfState, inflight, queuedSnoop, callbackPending, postFinish, upgradeWait>>
     /\ tick' = tick + 1
 
-RecvSnoopQueued(typ) ==
+(***************************************************************************)
+(* 2x2 STALE/IMMED snoop matrix (commit 38ddbfa0b3).                        *)
+(* Replaces the single RecvSnoopQueued with four cases:                     *)
+(*                                                                          *)
+(*           SnpCleanInvalid                  SnpUnique                      *)
+(* STALE     SnpResp_I(stale=1) + abandon      Queue (existing behaviour)    *)
+(*           upgrade (RecvSnoopStaleCI)        (RecvSnoopQueuedSnpUnique)    *)
+(* IMMED     Apply immediately + ack           Stash to deferred              *)
+(*           (RecvSnoopImmedCI)                (RecvSnoopImmedSnpUnique)     *)
+(***************************************************************************)
+
+(* STALE + SnpCleanInvalid: inflight.valid, send SnpResp_I with stale=1,
+   abandon the upgrade (clear upgradeWait, don't transition to H_WAIT_COMP). *)
+RecvSnoopStaleCI ==
     /\ tick < MaxTick
-    /\ typ \in SnoopTypes
     /\ inflight.valid
     /\ ~queuedSnoop.valid
-    /\ queuedSnoop' = [valid |-> TRUE, typ |-> typ]
+    /\ rnf' = ApplyIncomingSnoop(rnf, "SnpCleanInvalid")
+    /\ hnfState' = "H_IDLE"     \* abandon upgrade, no ack needed
+    /\ queuedSnoop' = [valid |-> TRUE, typ |-> "SnpCleanInvalid", stale |-> TRUE]
+    /\ UNCHANGED <<inflight, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
+
+(* STALE + SnpUnique: inflight.valid, queue as before (no change from old model). *)
+RecvSnoopQueuedSnpUnique ==
+    /\ tick < MaxTick
+    /\ inflight.valid
+    /\ ~queuedSnoop.valid
+    /\ queuedSnoop' = [valid |-> TRUE, typ |-> "SnpUnique", stale |-> FALSE]
     /\ UNCHANGED <<rnf, hnfState, inflight, deferredReq, callbackPending, postFinish, upgradeWait>>
     /\ tick' = tick + 1
 
-RecvSnoopImmediate(typ) ==
+(* IMMED + SnpCleanInvalid: no inflight, apply immediately + set upgrade ack wait. *)
+RecvSnoopImmedCI ==
     /\ tick < MaxTick
-    /\ typ \in SnoopTypes
     /\ ~inflight.valid
     /\ ~postFinish
+    /\ rnf' = ApplyIncomingSnoop(rnf, "SnpCleanInvalid")
+    /\ hnfState' = IF upgradeWait THEN "H_WAIT_COMP" ELSE "H_IDLE"
     /\ queuedSnoop' = queuedSnoop
-    /\ inflight' = inflight
-    /\ deferredReq' = deferredReq
-    /\ callbackPending' = callbackPending
-    /\ rnf' = ApplyIncomingSnoop(rnf, typ)
-    /\ hnfState' = IF typ = "SnpCleanInvalid" /\ upgradeWait THEN "H_WAIT_COMP" ELSE "H_IDLE"
-    /\ postFinish' = postFinish
-    /\ upgradeWait' = upgradeWait
+    /\ UNCHANGED <<inflight, deferredReq, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
+
+(* IMMED + SnpUnique: no inflight, stash to deferred instead of applying
+   immediately (commit 38ddbfa0b3). *)
+RecvSnoopImmedSnpUnique ==
+    /\ tick < MaxTick
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ ~deferredReq.valid
+    /\ deferredReq' = [valid |-> TRUE, cpu |-> 0, op |-> "RU"]
+    /\ UNCHANGED <<rnf, hnfState, inflight, queuedSnoop, callbackPending, postFinish, upgradeWait>>
+    /\ tick' = tick + 1
+
+(* IMMED + SnpOnce (and other non-special snoops): apply immediately. *)
+RecvSnoopImmedOther ==
+    /\ tick < MaxTick
+    /\ ~inflight.valid
+    /\ ~postFinish
+    /\ rnf' = ApplyIncomingSnoop(rnf, "SnpOnce")
+    /\ hnfState' = "H_IDLE"
+    /\ queuedSnoop' = queuedSnoop
+    /\ UNCHANGED <<inflight, deferredReq, callbackPending, postFinish, upgradeWait>>
     /\ tick' = tick + 1
 
 FinishChiTxn ==
@@ -153,10 +194,16 @@ ProcessQueuedSnoop ==
     /\ inflight' = inflight
     /\ deferredReq' = deferredReq
     /\ callbackPending' = callbackPending
-    /\ queuedSnoop' = [valid |-> FALSE, typ |-> queuedSnoop.typ]
-    /\ hnfState' = IF queuedSnoop.typ = "SnpCleanInvalid" THEN "H_WAIT_COMP" ELSE "H_IDLE"
+    /\ queuedSnoop' = [valid |-> FALSE, typ |-> queuedSnoop.typ, stale |-> FALSE]
+    /\ hnfState' = IF queuedSnoop.stale \* STALE: abandon upgrade, no H_WAIT_COMP
+                     THEN "H_IDLE"
+                     ELSE IF queuedSnoop.typ = "SnpCleanInvalid"
+                             THEN "H_WAIT_COMP"
+                             ELSE "H_IDLE"
     /\ postFinish' = TRUE
-    /\ upgradeWait' = IF queuedSnoop.typ = "SnpCleanInvalid" THEN TRUE ELSE upgradeWait
+    /\ upgradeWait' = IF queuedSnoop.typ = "SnpCleanInvalid" /\ ~queuedSnoop.stale
+                       THEN TRUE
+                       ELSE upgradeWait
     /\ tick' = tick + 1
 
 LaunchDeferredReq ==
@@ -207,8 +254,11 @@ Next ==
     \/ \E c \in CPUs : StartReadUnique(c)
     \/ \E c \in CPUs : StartCleanUnique(c)
     \/ \E c \in CPUs : \E op \in {"RS", "RU"} : QueueDeferred(c, op)
-    \/ \E t \in SnoopTypes : RecvSnoopQueued(t)
-    \/ \E t \in SnoopTypes : RecvSnoopImmediate(t)
+    \/ RecvSnoopStaleCI
+    \/ RecvSnoopQueuedSnpUnique
+    \/ RecvSnoopImmedCI
+    \/ RecvSnoopImmedSnpUnique
+    \/ RecvSnoopImmedOther
     \/ FinishChiTxn
     \/ ProcessQueuedSnoop
     \/ LaunchDeferredReq
