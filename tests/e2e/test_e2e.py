@@ -1314,11 +1314,23 @@ def verify_tc112(reads, lines):
 
 def verify_tc113(reads, lines):
     """TC113: silent upgrade micro-bench — 4.5 P2.
-    Final value must be 0x11300000 | ((ITERS-1) & 0xFFF) = 0x113003E7."""
-    if len(reads) < 3:
-        return False, f"TC113 FAILED: expected ≥3 READ_VAL, got {len(reads)}", reads
+    Final value must be 0x11300000 | ((ITERS-1) & 0xFFF) = 0x113003E7.
+    Phase 2 has an intentional pre-upgrade read (expected=0x11300000) that
+    must NOT be compared against the post-upgrade target."""
+    if len(reads) < 4:
+        return False, f"TC113 FAILED: expected ≥4 READ_VAL, got {len(reads)}", reads
     target = 0x11300000 | (999 & 0xFFF)  # ITERS=1000, last iter = 999
-    for r in reads:
+    # Each read must match its own expected value
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, (f"TC113 FAILED: {len(mismatches)} read(s) did not match "
+                       f"their expected value"), mismatches
+    # Post-upgrade convergence reads must all see the target
+    conv = [r for r in reads if int(r["expected"], 16) == target]
+    if len(conv) < 3:
+        return False, (f"TC113 FAILED: expected ≥3 convergence reads "
+                       f"(expected 0x{target:X}), got {len(conv)}"), reads
+    for r in conv:
         if int(r["actual"], 16) != target:
             return False, f"TC113 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
     upg_markers = [l for l in lines if "[TC113_UPG]" in l]
