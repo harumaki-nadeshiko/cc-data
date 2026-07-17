@@ -200,20 +200,23 @@ Round 2: Node1 读 → HOME RECALL Node0 → Node0 降级为 R_S
 
 ---
 
-## 3. TC3 时延分解（实测）
+## 3. TC3 时延分解（实测 TRACE-PERF）
 
-### ReadShared (reqId=72057594037927937, 1883ns)
+### ReadShared (reqId=72057594037927939, **897ns**)
 
 | 组件 | 延迟 | 占比 |
-|------|------|------|
-| nsim 网络 (2×405ns) | 810ns | 43% |
-| gem5/ubio 内部处理 | 833ns | 44% |
-| PDES 同步对齐 | ~200ns | 11% |
-| ZMQ Tq (~10×2.5ns) | ~25ns | 1% |
+|------|:---:|:---:|
+| nsim cross-node (2×410ns) | **820ns** | **91%** |
+| gem5 CHI pipeline (RECALL→RecallResp→Clear) | ~57ns | 6% |
+| ubio UBCC 处理 (3×2.5ns) | ~8ns | 1% |
+| ZMQ (同 tick 打点，间隙 ~0-5ps) | ~0ns | 0% |
+| PDES 同步对齐 | **0** | 0% |
 
-### ReadUnique (reqId=2, 3256ns)
+**注**: `EP_SYNC_INTERVAL_PS=2500ps=2.5ns`，`EP_LINK_LATENCY_PS=2500ps=2.5ns`。TRACE-PERF 显示 ZMQ 收发在同一 tick 完成（0ps gap），nsim 跨节点跳精确 410ns（gen_topo.py 配置）。不存在 200ns 的 PDES 对齐延迟——之前报告中 1883ns 分解中的 ~200ns 是减法舍入误差。
 
-比 RS 多 1373ns = Clear 跨节点往返 (+810ns) + PDES 开销 (+563ns)
+### ReadUnique (reqId=2, ~3256ns)
+
+比 RS 多 ~2359ns = Clear 跨节点往返 (+820ns nsim) + 写独占的额外 RECALL/INVALIDATE 循环
 
 ---
 
