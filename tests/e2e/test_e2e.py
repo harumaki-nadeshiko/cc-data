@@ -1967,6 +1967,27 @@ def gem5_config_main():
                     _proc.map(_va, _pa, _page_size, cacheable=True)
                     _total_pages += 1
 
+    # ── Map local_private_range for workloads that need direct
+    #     local-memory access (TC112 TBE interference, etc.).
+    #     VA 0x40000000 maps to the node's local_private physical base.
+    #     Map 16 MB (4096 pages) — enough for any cache-line striding.
+    _local_va_base = 0x01000000   # 16 MB — well below mmap_end=0x40000000
+    _local_map_bytes = 16 * 1024 * 1024  # 16 MB
+    _local_pages = 0
+    for _cpu_idx, _cpu in enumerate(cpus):
+        _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
+        _local_pa_base = _node_id << _NODE_ADDR_SHIFT
+        for _proc in _cpu.workload:
+            if _proc is None:
+                continue
+            for _va in range(_local_va_base,
+                             _local_va_base + _local_map_bytes,
+                             _page_size):
+                _pa = _local_pa_base + (_va - _local_va_base)
+                _proc.map(_va, _pa, _page_size, cacheable=True)
+                _local_pages += 1
+    _total_pages += _local_pages
+
     print(f"[E2E-Q2] Pre-mapped {_total_pages} pages ({_total_pages * _page_size} bytes)"
            f" for {len(cpus)} CPUs (per-node PA ranges)",
            flush=True)
