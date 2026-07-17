@@ -143,19 +143,52 @@ evictOneVictim → scheduleBackstoreWrite → hostIssueBackstoreWrite
 | **B. 静默升级** | 890ns | **3-10%** | **~50ns** | ✅ 真实协议优化 |
 | **C. 指数退避 504µs→5µs** | 499µs | **1-3%** (仅争用) | **~5000ns**² | ✅ 工程调优 |
 | **D. C4 Direct-Forward** | 405ns | **50-70%** | **~240ns** | ✅ 真实协议优化 |
+| **E. Batch RS Grant** | 810ns (Clear往返) | **1-5%** (仅争用) | **~20ns** | ✅ 真实协议优化 |
 
-² 仅在争用场景有效，方差极大
+### 按覆盖面的真实排名
 
-### 2.4 按覆盖面的真实排名
-
-| 排名 | 优化 | 覆盖面 | 硬件真实 |
-|:----:|------|:------:|:------:|
-| 1 | C4 Direct-Forward | 50-70% 远程操作 | ✅ |
-| 2 | 指数退避 | 1-3% 但单次巨大 | ✅ |
-| 3 | 静默升级 | 3-10% | ✅ |
+| 排名 | 优化 | 覆盖面 | 硬件真实 | 说明 |
+|:----:|------|:------:|:------:|------|
+| 1 | C4 Direct-Forward | 50-70% 远程操作 | ✅ | 省 owner→requester nsim 跳 |
+| 2 | 指数退避 | 1-3% 但单次巨大 | ✅ | TEMP-REJECT: 504µs→5µs |
+| 3 | Batch RS Grant | 1-5% 争用 | ✅ | 队列 RS 跳过 Clear |
+| 4 | 静默升级 | 3-10% | ✅ | R_E/R_M holder → 0 跨节点消息 |
 | 4 | ZMQ 降低 | 100% | ❌模拟器 |
 
-### 2.5 为什么 TC3 pingpong 静默升级几乎不触发
+#### E. Batch RS Grant（覆盖争用队列中的 ReadShared）
+
+### 2.6 Batch RS Grant 详细分析
+
+**机制**：当多个 ReadShared 请求排队（PA 已有 outstanding）时，第一个请求完成后目录变 G_S。Batch RS 直接为队列中的后续 RS 完成提交+Push-Grant，不走完整的 OUTSTANDING → GRANT_HANDSHAKE → Clear 流水线。
+
+**对比**：
+
+| 路径 | G_S + RS (无 Batch) | G_S + RS (Batch) | 节省 |
+|------|---------------------|-------------------|------|
+| Outstanding allocation | ✅ 分配 TBE | ❌ 不分配 | 省 TBE 占用 |
+| INVALIDATE 周期 | ❌ 无需 (sharer 兼容) | ❌ 无需 | 相同 |
+| GRANT_HANDSHAKE | ✅ | ❌ 跳过 | 省 1 outstanding lifecycle |
+| ClearReq → ClearResp | ✅ 1+ 跳 | ❌ 跳过 | 省 ≥405ns (跨节点) |
+| Push-grant | ❌ | ✅ 直接推送 | requester 立即收到 |
+
+**G_S+RS fast path** (C3-bis, 始终生效) 和 **Batch RS** (C3, 仅队列中) 的区别：
+
+```
+非队列场景 (新请求直接到达):
+  G_S + RS → createOutstanding(GRANT_HANDSHAKE) → WAITING_CLEAR → Clear→commit
+  (C3-bis: 无 INVALIDATE 需要, 因为 RS 与已有 sharer 兼容)
+
+队列场景 (请求排队,outstanding完成后):
+  无 Batch: replay → INVALIDATE + GRANT_HANDSHAKE → Clear → commit → grant
+  有 Batch: replay → commitIntendedResult 直接 → PushGrant 立即
+  (跳过 INVALIDATE + GRANT_HANDSHAKE + Clear 全部三段)
+```
+
+**典型受益场景**：TC53 (cache contention storm)、TC98 (16路同址热点)、TC10 (concurrent atomic reads)。
+
+**Batch RS 覆盖率**：仅争用场景（请求排队）生效，约 1-5% 的 CC 操作。单次节省约 810ns（跨节点 Clear 往返）+ 避免 TBE 占用。
+
+### 2.7 为什么 TC3 pingpong 静默升级几乎不触发
 
 ```
 Round 1: Node0 写 → 获得 R_M
@@ -206,4 +239,5 @@ Round 2: Node1 读 → HOME RECALL Node0 → Node0 降级为 R_S
 | HN-F L3 data | 5ns (10 cycles) | |
 | Silent Upgrade 降幅 | 90.4% | 仅 R_E/R_M 场景 |
 | C4 DirectForward | 省 405ns/跳 | 50-70% 远程操作 |
+| Batch RS Grant | 省 810ns/操作 | 1-5% 争用队列 |
 | 指数退避 min | 5µs | 降 504µs→5µs |
