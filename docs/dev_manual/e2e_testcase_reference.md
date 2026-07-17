@@ -88,6 +88,9 @@
 | 114 | e2e_tc114_silent_upgrade_minimal | 1s | — | 最小化 silent upgrade (R_M→M) | 读=0x1140B000 |
 | 115 | e2e_tc115_cross_cpu_silent_upgrade | 1s | — | 跨 CPU silent upgrade (不同 L2 cluster) | 读=0x1150B000 |
 | 116 | e2e_tc116_directory_eviction_stress | 1s | — | ResidentDir DRAM offload/onload 压力 | Node1 首末值正确, dir_evictions 统计 |
+| 117 | e2e_tc117_clear_reorder | 1s | **fault:** ClearReq reorder | ClearReq 乱序恢复 (3.3 P1) | 全部读 MATCH, [UBFAULT] 证据 |
+| 118 | e2e_tc118_mixed_fault | 1s | **fault:** drop+delay ClearReq (同一 home) | 混合故障双 Clear (3.3 P1) | 全部读 MATCH, [UBFAULT] 证据 |
+| 119 | e2e_tc119_triple_fault | 1s | **fault:** drop+dup+delay ClearReq (同一 home) | 三合一故障 (3.3 P1) | ≥3 读全部 MATCH, [UBFAULT] 证据 |
 
 ---
 
@@ -876,6 +879,32 @@
 - **Timeout**: 600s (默认)
 - **状态**: PASS ✅
 
+### TC117: ClearReq 乱序故障
+- **Workload**: `e2e_tc117_clear_reorder.c`
+- **拓扑**: 3n1s
+- **目的**: 测试 ClearReq 被 Reorder（延迟后到达）时协议的乱序恢复能力——首个 reorder fault 测试，覆盖之前仅有的 drop/dup 之外的 fault 类型
+- **故障规则**: `tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1` — 将 node0→home1 的第一个 ClearReq 缓冲 100µs 后投递
+- **通过标准**: 两条 DSM line 全部 MATCH; [UBFAULT] 证据
+- **状态**: PASS ✅
+
+### TC118: 混合故障 — Drop + Delay (同 home)
+- **Workload**: `e2e_tc118_mixed_fault.c`
+- **拓扑**: 3n1s
+- **目的**: 测试 Drop + Delay 双故障同时作用于同一 UBCC 进程——epoch 单调性 + tombstone 重放下并发故障正确性
+- **故障规则**: 分号分隔 `tc118_drop:ClearReq:0:1:0x10018011800:drop::1;tc118_delay:ClearReq:0:1:0x10018011900:delay:100000:1`
+- **覆盖**: Drop→RECALL 恢复; Delay→epoch 提交顺序保护
+- **通过标准**: 两条 DSM line 全部 MATCH; [UBFAULT] 证据
+- **状态**: PASS ✅
+
+### TC119: 三合一故障 — Drop + Dup + Delay (同 home)
+- **Workload**: `e2e_tc119_triple_fault.c`
+- **拓扑**: 3n1s
+- **目的**: 测试 drop/duplicate/delay 三种故障同时作用于同一 UBCC——最严苛的多类型并发故障场景
+- **故障规则**: 分号分隔三规则（三个不同 PA 匹配）`tc119_drop:ClearReq:0:1:...:drop::1;tc119_dup:ClearReq:0:1:...:dup::1;tc119_delay:ClearReq:0:1:...:delay:100000:1`
+- **覆盖**: Drop→RECALL 恢复; Dup→tombstone 幂等拒绝; Delay→epoch 提交乱序保护
+- **通过标准**: ≥3 读全部 MATCH; [UBFAULT] 证据
+- **状态**: PASS ✅
+
 ---
 
 ## Fault Injection 策略汇总
@@ -886,7 +915,10 @@
 | 48 | `tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1` | InvalidateAck (Node2) | duplicate | 幂等 ack 处理 |
 | 49 | `tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1` | InvalidateAck (Node1) | duplicate | 重排序 ack 收敛 |
 | 110 | `tc110_drop_clear:ClearReq:1:1:0:drop::1` | ClearReq | drop (完全丢弃) | Self-heal 恢复 |
-| 111 | `tc111_silent_upgrade_drop:OuterUpgradeReq:1:1:0:drop::1` | OuterUpgradeReq | drop | Silent upgrade 免疫 |
+| 111 | `tc111_silent_upgrade_drop:UpgradeReq:1:1:0:drop::1` | UpgradeReq | drop | UpgradeReq 丢包 watchdog 恢复 |
+| 117 | `tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1` | ClearReq | reorder (延迟投递) | 乱序恢复——首个 reorder 覆盖 |
+| 118 | `tc118_drop:...:drop::1;tc118_delay:...:delay:100000:1` | ClearReq ×2 | drop+delay (双故障) | epoch 单调性 + tombstone |
+| 119 | `tc119_drop/dup/delay:...` (三规则) | ClearReq ×3 | drop+dup+delay (三合一) | 最严苛多类型并发故障 |
 
 **Fault 规则格式**: `name:msgType:srcNode:dstNode:plane:action:reserved:maxCount`
 
