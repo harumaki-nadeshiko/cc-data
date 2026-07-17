@@ -100,6 +100,7 @@ TESTCASES = {
     114: "e2e_tc114_silent_upgrade_minimal",
     115: "e2e_tc115_cross_cpu_silent_upgrade",
     116: "e2e_tc116_directory_eviction_stress",
+    117: "e2e_tc117_clear_reorder",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1394,6 +1395,19 @@ def verify_tc116(reads, lines):
     return True, f"TC116 PASSED: fill_done={fill_done}, dir_evictions={evictions}", []
 
 
+def verify_tc117(reads, lines):
+    """TC117: ClearReq reorder fault — 3.3 P1.
+    Both DSM lines must converge to their expected values despite a reordered
+    ClearReq. Check fault evidence is present in ubio stderr."""
+    if len(reads) < 2:
+        return False, f"TC117 FAILED: expected ≥2 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC117 FAILED: {len(mismatches)} mismatches", mismatches
+    fault_seen = _fault_evidence_seen(lines, 117)
+    return True, f"TC117 PASSED: reordered ClearReq handled (fault_evidence={fault_seen})", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1457,6 +1471,7 @@ VERIFIERS = {
     114: verify_tc114,
     115: verify_tc115,
     116: verify_tc116,
+    117: verify_tc117,
 }
 
 def verify_testcase(tc_id, reads, lines):
