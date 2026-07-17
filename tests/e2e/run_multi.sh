@@ -64,14 +64,23 @@ fault_rules_for_tc() {
     esac
 }
 
+# ── Per-TC extra ubio args (ResidentDir params, etc.) ──────────────
+ubio_extra_args_for_tc() {
+    case "$1" in
+        116) echo "--bloom-bytes=0 --sram-bytes=6144 --ways=1" ;;
+        98)  echo "--ways=1" ;;
+        *)   echo "" ;;
+    esac
+}
+
 # ─── Lookup json module command (placeholder substitution) ────────────
-# expand_cmd <module_id> <fault_rules> [node_outdir]
+# expand_cmd <module_id> <fault_rules> <ubio_extra_args> [node_outdir]
 # Env: NODE_OUTDIR (used to substitute {node_outdir}; only meaningful for gem5_*)
 expand_cmd() {
-    local mod_id="$1"; local frules="$2"; local node_od="${3:-}"
-    NODE_OUTDIR="$node_od" python3 - "$JSON" "$mod_id" "$frules" <<'PY'
+    local mod_id="$1"; local frules="$2"; local uextra="$3"; local node_od="${4:-}"
+    NODE_OUTDIR="$node_od" python3 - "$JSON" "$mod_id" "$frules" "$uextra" <<'PY'
 import json, os, sys
-cfg_path, mod_id, frules = sys.argv[1], sys.argv[2], sys.argv[3]
+cfg_path, mod_id, frules, uextra = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(cfg_path)))
 c = json.load(open(cfg_path))
 mod = next((m for m in c["modules"] if m["id"]==mod_id), None)
@@ -87,6 +96,7 @@ def r(s):
     s = s.replace("{topo_json}", os.path.join(ROOT,"build/run/topo.json"))
     s = s.replace("{node_outdir}", os.environ.get("NODE_OUTDIR",""))
     s = s.replace("{fault_rules_args}", frules)
+    s = s.replace("{ubio_extra_args}", uextra)
     return s
 print(r(mod["cmd"]))
 PY
@@ -145,7 +155,7 @@ run_tc() {
 
     # 3. Start networksim (must bind before ubio connects)
     local nsim_cmd
-    nsim_cmd="$(expand_cmd networksim '')"
+    nsim_cmd="$(expand_cmd networksim '' '')"
     echo "[launch] networksim (NMOD=$NMOD)"
     eval "$nsim_cmd" >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
     NSIM_PID=$!
@@ -158,7 +168,7 @@ run_tc() {
         local node_od="$m5outdir/node${nid}"
         mkdir -p "$gdir" "$node_od"
         local cmd
-        cmd="$(expand_cmd gem5_${nid} '' "$node_od")"
+        cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
         echo "[launch] gem5 node=$nid (outdir=$node_od)"
         eval "$cmd" 2>"$gdir/stderr.log" >"$gdir/stdout.log" &
         local pid=$!
@@ -190,15 +200,16 @@ run_tc() {
     local frargs=""
     [ -n "$frules" ] && frargs="--fault-rules=$frules"
     [ -n "$frules" ] && echo "[launch] fault rules (TC${tc}): $frules"
+    local uextra; uextra="$(ubio_extra_args_for_tc "$tc")"
+    [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
             local mod_id="ubio_${nid}_s${sid}"
-            # In 1s the JSON uses ubio_<nid> (no _s0 suffix); fall back.
             local cmd
             if python3 -c "import json,sys;sys.exit(0 if any(m['id']==sys.argv[1] for m in json.load(open('$JSON'))['modules']) else 1)" "$mod_id" 2>/dev/null; then
-                cmd="$(expand_cmd "$mod_id" "$frargs")"
+                cmd="$(expand_cmd "$mod_id" "$frargs" "$uextra")"
             else
-                cmd="$(expand_cmd "ubio_${nid}" "$frargs")"
+                cmd="$(expand_cmd "ubio_${nid}" "$frargs" "$uextra")"
             fi
             local logdir="$LOG_BASE/ubio_n${nid}_s${sid}"
             mkdir -p "$logdir"

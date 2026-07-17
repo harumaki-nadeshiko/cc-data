@@ -36,67 +36,67 @@
     },
     {
       "id": "ubio_0_s0",
-      "cmd": "{ubio_bin} --node=0 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=0 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_0_s1",
-      "cmd": "{ubio_bin} --node=0 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=0 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_1_s0",
-      "cmd": "{ubio_bin} --node=1 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=1 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_1_s1",
-      "cmd": "{ubio_bin} --node=1 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=1 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_2_s0",
-      "cmd": "{ubio_bin} --node=2 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=2 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_2_s1",
-      "cmd": "{ubio_bin} --node=2 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=2 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_3_s0",
-      "cmd": "{ubio_bin} --node=3 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=3 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_3_s1",
-      "cmd": "{ubio_bin} --node=3 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=3 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_4_s0",
-      "cmd": "{ubio_bin} --node=4 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=4 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_4_s1",
-      "cmd": "{ubio_bin} --node=4 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=4 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_5_s0",
-      "cmd": "{ubio_bin} --node=5 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=5 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_5_s1",
-      "cmd": "{ubio_bin} --node=5 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=5 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_6_s0",
-      "cmd": "{ubio_bin} --node=6 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=6 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_6_s1",
-      "cmd": "{ubio_bin} --node=6 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=6 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_7_s0",
-      "cmd": "{ubio_bin} --node=7 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=7 --socket=0 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "ubio_7_s1",
-      "cmd": "{ubio_bin} --node=7 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args}"
+      "cmd": "{ubio_bin} --node=7 --socket=1 --num-sockets=2 --num-nodes=8 {fault_rules_args} {ubio_extra_args}"
     },
     {
       "id": "networksim",
