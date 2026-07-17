@@ -102,6 +102,7 @@ TESTCASES = {
     116: "e2e_tc116_directory_eviction_stress",
     117: "e2e_tc117_clear_reorder",
     118: "e2e_tc118_mixed_fault",
+    119: "e2e_tc119_triple_fault",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1421,6 +1422,17 @@ def verify_tc118(reads, lines):
     return True, f"TC118 PASSED: combined faults converged (fault_evidence={fault_seen})", []
 
 
+def verify_tc119(reads, lines):
+    """TC119: Triple fault — Drop + Dup + Delay on same home."""
+    if len(reads) < 3:
+        return False, f"TC119 FAILED: expected ≥3 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC119 FAILED: {len(mismatches)} mismatches", mismatches
+    fault_seen = _fault_evidence_seen(lines, 119)
+    return True, f"TC119 PASSED: triple fault converged (fault_evidence={fault_seen})", []
+
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1486,6 +1498,7 @@ VERIFIERS = {
     116: verify_tc116,
     117: verify_tc117,
     118: verify_tc118,
+    119: verify_tc119,
 }
 
 def verify_testcase(tc_id, reads, lines):
