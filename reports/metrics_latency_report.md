@@ -200,23 +200,93 @@ Round 2: Node1 读 → HOME RECALL Node0 → Node0 降级为 R_S
 
 ---
 
-## 3. TC3 时延分解（实测 TRACE-PERF）
+## 3. 时延分解（实测 TRACE-PERF，多场景）
 
-### ReadShared (reqId=72057594037927939, **897ns**)
+### 3.1 TC3: ReadShared (跨节点共享读) — 896ns
+
+**路径**: requester→home→RECALL owner→RecallResp→回到 requester
+
+```
++    0ps  gem5  → ReadReq
++    0ps  ubio  ⇢ ReadReq              ZMQ: 同tick, 0ns
++ 2500ps  ubio  →net RecallReq         ubio: 2.5ns
++410000ps nsim  >>FWD→owner           nsim: 410ns
++ 2500ps  ubio  ⇢net RecallReq
++ 2500ps  gem5  ⇠ RecallReq            ← dest ubio→gem5
++53500ps  gem5  → RecallResp           CHI: owner L2→HN-F→EP-RNF, 53.5ns
++410000ps nsim  >>FWD→requester       nsim: 410ns
++ 2500ps  ubio  →g5 ReadResp + RecallResp
++ 3000ps  gem5  → ClearReq
++ 2500ps  gem5  ⇠ ClearResp            Clear: 本地 home, 无 nsim
+```
 
 | 组件 | 延迟 | 占比 |
 |------|:---:|:---:|
-| nsim cross-node (2×410ns) | **820ns** | **91%** |
-| gem5 CHI pipeline (RECALL→RecallResp→Clear) | ~57ns | 6% |
-| ubio UBCC 处理 (3×2.5ns) | ~8ns | 1% |
-| ZMQ (同 tick 打点，间隙 ~0-5ps) | ~0ns | 0% |
-| PDES 同步对齐 | **0** | 0% |
+| nsim 跨节点 (2×410ns) | **820ns** | **92%** |
+| gem5 CHI pipeline (RECALL) | ~54ns | 6% |
+| ubio UBCC 处理 | ~22ns | 2% |
+| ZMQ | 0ns (同tick) | 0% |
 
-**注**: `EP_SYNC_INTERVAL_PS=2500ps=2.5ns`，`EP_LINK_LATENCY_PS=2500ps=2.5ns`。TRACE-PERF 显示 ZMQ 收发在同一 tick 完成（0ps gap），nsim 跨节点跳精确 410ns（gen_topo.py 配置）。不存在 200ns 的 PDES 对齐延迟——之前报告中 1883ns 分解中的 ~200ns 是减法舍入误差。
+### 3.2 TC3: ReadUnique (跨节点独占写) — 1728ns
 
-### ReadUnique (reqId=2, ~3256ns)
+**与 RS 差异**: Clear 也需要跨节点（owner≠home→requester≠home），多 2 nsim hop
 
-比 RS 多 ~2359ns = Clear 跨节点往返 (+820ns nsim) + 写独占的额外 RECALL/INVALIDATE 循环
+| 组件 | RS | RU | Δ |
+|------|:---:|:---:|:---:|
+| nsim hops | 2 | **4** | +820ns |
+| gem5 CHI | 54ns | 58ns | +4ns |
+| ubio | 22ns | 30ns | +8ns |
+| **总** | **896ns** | **1728ns** | **+832ns** |
+
+### 3.3 TC3 Upgrade (共享态写升级) — 890ns
+
+InvaliDateReq→owner→InvalidateAck→home, 2 nsim hops, 92% nsim 占比。
+
+### 3.4 TC111: Upgrade + Drop 恢复 — 892ns
+
+UpgradeReq 被 fault 规则 drop → watchdog 同 reqId 重传 → 恢复。延迟与正常 Upgrade 几乎一致（+2ns），证明 retransmit 开销被 nsim 主导延迟吸收。
+
+### 3.5 TC5: 广播写
+
+RS=896ns, RU=1732ns（与 TC3 相同）。nsim 跳数决定延迟，广播无额外开销。
+
+### 3.6 TC53: 争用风暴 (198 数据链)
+
+| P25 | P50 | P75 | P90 | P99 | 最长 |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 898ns | 1730ns | 2550ns | 3077ns | 3077ns | 3077ns |
+
+- 正常 RS: ~898ns (2-hop)。正常 RU: ~1730ns (4-hop)
+- 高争用: 2550-3077ns (6-9 hop) — 多出的 hops 来自 TEMP-REJECT 重试的额外 Invalidate 循环
+- nsim hops avg=4.6，min=0, max=9
+
+### 3.7 TC90: 8 节点 all-to-all (64 数据链)
+
+| P25 | P50 | P75 | P99 |
+|:---:|:---:|:---:|:---:|
+| 1730ns | 2168ns | 2566ns | 2928ns |
+
+- 8 节点 P50=2168ns vs 3 节点 P50=1730ns，增加 ~440ns（≈1 nsim hop）
+- 额外 hop 来自 owner 不在 home 也不在 requester 时的路由
+- nsim hops avg=4.7, min=0, max=10
+
+### 3.8 核心发现
+
+```
+所有场景的延迟 = nsim 跳数 × 410ns + ~50-80ns (gem5/ubio overhead)
+nsim 跳数 = 协议消息数 × (1跨节点跳/消息)
+ZMQ = 0 (同tick完成, EP_SYNC_INTERVAL=2.5ns)
+PDES 对齐 = 0 (紧密耦合, 无等待)
+```
+
+| 操作 | nsim 跳 | 端到端 | nsim 占比 |
+|------|:---:|:---:|:---:|
+| 本地 (TC1) | 0 | **8ns** | 0% |
+| ReadShared (2-hop) | 2 | **896ns** | 92% |
+| Upgrade (2-hop) | 2 | **890ns** | 92% |
+| ReadUnique (4-hop) | 4 | **1728ns** | 95% |
+| RU + contention (6-9 hop) | 6-9 | **2550-3077ns** | 96% |
+| 8-node (4-6 hop) | 4-6 | **1670-2928ns** | 94% |
 
 ---
 
