@@ -49,7 +49,15 @@ def main():
         if os.path.exists(path):
             with open(path, errors="replace") as f:
                 for line in f:
-                    if "[UBFAULT]" in line or "[ResidentDirStats]" in line:
+                    if ("[UBFAULT]" in line or
+                        "[ResidentDirStats]" in line or
+                        "[UBCC-STATS]" in line or
+                        "[UBCC-NAIVE-EVICT]" in line or
+                        "[UBCC-NAIVE-EVICT-DONE]" in line or
+                        "BATCH-RS" in line or
+                        "SILENT" in line or
+                        "C4" in line or
+                        "DIRECT-FWD" in line):
                         raw_lines.append(line.rstrip("\n"))
 
     print(f"[verify] TC{args.tc}: aggregated {found}/{expected} simout files, "

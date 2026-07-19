@@ -266,6 +266,20 @@ static inline void emit_e2e_meta(int node_id, const char *test_name)
     _raw_write(buf, p);
 }
 
+static inline void emit_progress(int node_id, const char *phase_name, int iter)
+{
+    char buf[192]; int p = 0;
+    char *s = (char *)"[PROGRESS] node=";
+    while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, node_id);
+    s = (char *)" phase="; while (*s) buf[p++] = *s++;
+    while (*phase_name) buf[p++] = *phase_name++;
+    s = (char *)" iter="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, iter);
+    buf[p++] = '\n';
+    _raw_write(buf, p);
+}
+
 static inline void _exit_program(int code)
 {
     _syscall1(SYS_EXIT, (long)code);

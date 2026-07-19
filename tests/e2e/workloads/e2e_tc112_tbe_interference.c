@@ -1,7 +1,7 @@
 /* TC112: TBE interference workload — 3.6 P1.
  *
  * cpu0 (lane 0): dense local private writes to the local_private_range.
- *   test_e2e.py pre-maps VA 0x40000000 → per-node local_private PA,
+ *   test_e2e.py pre-maps VA 0x01000000 → per-node local_private PA,
  *   so raw pointer accesses route through local HN-F → local_mem.
  *   Zero DSM directory — pure local cache-to-DRAM traffic.
  *
@@ -28,10 +28,8 @@ int main(int argc, char **argv)
             uint32_t seed = 0x12000000u | ((uint32_t)node_id << 16) | 1u;
             for (int r = 0; r < ROUNDS; r++) {
                 uint32_t off = (uint32_t)((r * 13 + node_id * 7) % 512) * 64u;
-                volatile uint32_t *ptr =
-                    (volatile uint32_t *)(0x01000000ULL + off);
-                *ptr = seed ^ (uint32_t)r;
-                uint32_t dummy = *ptr;
+                local_dram_store(off, seed ^ (uint32_t)r);
+                uint32_t dummy = local_dram_load(off);
                 (void)dummy;
                 if ((r % 64) == 0) {
                     char b[128]; int p = 0;

@@ -103,6 +103,11 @@ TESTCASES = {
     117: "e2e_tc117_clear_reorder",
     118: "e2e_tc118_mixed_fault",
     119: "e2e_tc119_triple_fault",
+    120: "e2e_tc120_baseline_perf_mix",
+    121: "e2e_tc121_perf_cold_stream",
+    122: "e2e_tc122_perf_hot_reuse",
+    123: "e2e_tc123_perf_shared_upgrade",
+    124: "e2e_tc124_perf_direct_fwd",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1366,35 +1371,34 @@ def verify_tc115(reads, lines):
 
 
 def verify_tc116(reads, lines):
-    """TC116: ResidentDir DRAM offload/onload stress.
-    Node1 must read back first (0x11600001) and last (0x116007FF) lines correctly.
-    ResidentDir eviction counter is checked via ubio stderr [ResidentDirStats]."""
-    if len(reads) < 2:
-        return False, f"TC116 FAILED: expected >=2 READ_VAL, got {len(reads)}", reads
-    node1_reads = [r for r in reads if r["node"] == 1]
-    if len(node1_reads) < 2:
-        return False, f"TC116 FAILED: expected 2 Node1 reads, got {len(node1_reads)}", node1_reads
-    expected_first = 0x11600000
-    expected_last = 0x116000FF
-    mismatches = []
-    for r in node1_reads:
-        actual = int(r["actual"], 16)
-        exp = int(r["expected"], 16)
-        if actual != exp:
-            mismatches.append(r)
+    """TC116: ResidentDir eviction/reload performance stress."""
+    if len(reads) < 9:
+        return False, f"TC116 FAILED: expected >=9 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
-        return False, f"TC116 FAILED: {len(mismatches)} mismatches in node1 reads", mismatches
-    # Check for fill-done marker
-    fill_done = any("[PHASE] node=0 phase=fill status=done" in l for l in lines)
-    # Check for ResidentDir stats in ubio fault logs (captured via --fault-log)
+        return False, f"TC116 FAILED: {len(mismatches)} mismatches", mismatches
+    phases = [
+        "hot_populate", "hot_shared", "cold_overflow",
+        "hot_reuse_reload", "hot_upgrade", "tc116_done",
+    ]
+    missing = [p for p in phases
+               if not any(f"[PHASE]" in l and f"phase={p}" in l for l in lines)]
+    if missing:
+        return False, f"TC116 FAILED: missing phase markers {missing}", []
+
     dir_stats = [l for l in lines if "[ResidentDirStats]" in l]
     evictions = 0
+    misses = 0
     for ds in dir_stats:
         import re
         m = re.search(r'"dir_evictions":(\d+)', ds)
         if m:
             evictions = max(evictions, int(m.group(1)))
-    return True, f"TC116 PASSED: fill_done={fill_done}, dir_evictions={evictions}", []
+        m = re.search(r'"dir_misses":(\d+)', ds)
+        if m:
+            misses = max(misses, int(m.group(1)))
+    return True, (f"TC116 PASSED: reads={len(reads)}, dir_evictions={evictions}, "
+                  f"dir_misses={misses}"), []
 
 
 def verify_tc117(reads, lines):
@@ -1408,6 +1412,52 @@ def verify_tc117(reads, lines):
         return False, f"TC117 FAILED: {len(mismatches)} mismatches", mismatches
     fault_seen = _fault_evidence_seen(lines, 117)
     return True, f"TC117 PASSED: reordered ClearReq handled (fault_evidence={fault_seen})", []
+
+
+def verify_tc120(reads, lines):
+    """TC120: baseline/optimized performance mix smoke verifier."""
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC120 FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    phase_done = any("[PHASE]" in l and "phase=tc120_done" in l
+                     for l in lines)
+    stats = [l for l in lines if "[ResidentDirStats]" in l or "[UBCC-STATS]" in l]
+    naive = any("naiveDirEvictions" in l for l in stats)
+    return True, (f"TC120 PASSED: reads={len(reads)}, phase_done={phase_done}, "
+                  f"stats_lines={len(stats)}, naive_stats={naive}"), []
+
+
+def verify_perf_workload(tc_id, reads, lines):
+    if len(reads) < 1:
+        return False, f"TC{tc_id} FAILED: no READ_VAL", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    phase_count = sum(1 for l in lines if "[PHASE]" in l and "status=done" in l)
+    stats_count = sum(1 for l in lines if "[ResidentDirStats]" in l or "[UBCC-STATS]" in l)
+    naive_count = sum(1 for l in lines if "[UBCC-NAIVE-EVICT]" in l)
+    opt_count = sum(1 for l in lines
+                    if "BATCH-RS" in l or "SILENT" in l or "C4" in l or "DIRECT-FWD" in l)
+    if phase_count < 2:
+        return False, f"TC{tc_id} FAILED: insufficient phase markers ({phase_count})", []
+    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, phases={phase_count}, "
+                  f"stats={stats_count}, naive={naive_count}, opt_markers={opt_count}"), []
+
+
+def verify_tc121(reads, lines):
+    return verify_perf_workload(121, reads, lines)
+
+
+def verify_tc122(reads, lines):
+    return verify_perf_workload(122, reads, lines)
+
+
+def verify_tc123(reads, lines):
+    return verify_perf_workload(123, reads, lines)
+
+
+def verify_tc124(reads, lines):
+    return verify_perf_workload(124, reads, lines)
 
 
 def verify_tc118(reads, lines):
@@ -1499,6 +1549,11 @@ VERIFIERS = {
     117: verify_tc117,
     118: verify_tc118,
     119: verify_tc119,
+    120: verify_tc120,
+    121: verify_tc121,
+    122: verify_tc122,
+    123: verify_tc123,
+    124: verify_tc124,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -1655,6 +1710,8 @@ def gem5_config_main():
     # Phase 0.3: EP controller params (mapped to env for SimObject; argv planned)
     _parser.add_argument("--silent-upgrade", type=int, default=-1,
                          help="EP: silent upgrade (0=off, 1=on, -1=env/defaults)")
+    _parser.add_argument("--direct-fwd", type=int, default=-1,
+                         help="EP: direct-forward (0=off, 1=on, -1=env/defaults)")
     _parser.add_argument("--ep-retry-cycles", type=int, default=-1)
     _parser.add_argument("--ep-compack-retry", type=int, default=-1)
     _parser.add_argument("--ep-wakeup-retry", type=int, default=-1)
@@ -1670,6 +1727,7 @@ def gem5_config_main():
     # (precedes Ruby system creation so SimObjects see them in init)
     _ep_env_map = [
         ("EP_SILENT_UPGRADE", _args.silent_upgrade),
+        ("EP_DIRECT_FWD", _args.direct_fwd),
         ("EP_RETRY_CYCLES", _args.ep_retry_cycles),
         ("EPRN_COMPACK_RETRY_CYCLES", _args.ep_compack_retry),
         ("EPRN_WAKEUP_RETRY_CYCLES", _args.ep_wakeup_retry),
@@ -2011,7 +2069,7 @@ def gem5_config_main():
 
     # ── Map local_private_range for workloads that need direct
     #     local-memory access (TC112 TBE interference, etc.).
-    #     VA 0x40000000 maps to the node's local_private physical base.
+    #     VA 0x01000000 maps to the node's local_private physical base.
     #     Map 16 MB (4096 pages) — enough for any cache-line striding.
     _local_va_base = 0x01000000   # 16 MB — well below mmap_end=0x40000000
     _local_map_bytes = 16 * 1024 * 1024  # 16 MB
@@ -2324,7 +2382,15 @@ def verify_split_main():
         if os.path.exists(path):
             with open(path, errors="replace") as f:
                 for line in f:
-                    if "[UBFAULT]" in line:
+                    if ("[UBFAULT]" in line or
+                        "[ResidentDirStats]" in line or
+                        "[UBCC-STATS]" in line or
+                        "[UBCC-NAIVE-EVICT]" in line or
+                        "[UBCC-NAIVE-EVICT-DONE]" in line or
+                        "BATCH-RS" in line or
+                        "SILENT" in line or
+                        "C4" in line or
+                        "DIRECT-FWD" in line):
                         raw_lines.append(line.rstrip("\n"))
     print(f"[verify-split] TC{args.tc}: aggregated {found}/{expected} "
           f"simout files, {len(raw_lines)} lines", flush=True)

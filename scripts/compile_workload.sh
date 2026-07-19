@@ -64,7 +64,7 @@ if [ -z "${NUM_SOCKETS:-}" ]; then
 fi
 
 cc="aarch64-linux-gnu-gcc"
-cflags="-static -O0 -g -DNUM_NODES=${NUM_NODES:-3} -DNUM_SOCKETS=${NUM_SOCKETS:-1} -I${WL_DIR}"
+cflags="-static -O0 -g -DNUM_NODES=${NUM_NODES:-3} -DNUM_SOCKETS=${NUM_SOCKETS:-1} ${WORKLOAD_CFLAGS:-} -I${WL_DIR}"
 echo "[compile_workload] tc=$TC_ID name=$TC_NAME sockets=$NUM_SOCKETS nodes=${NUM_NODES:-3}"
 echo "[compile_workload] $cc $cflags -o $OUT $SRC"
 $cc $cflags -o "$OUT" "$SRC"

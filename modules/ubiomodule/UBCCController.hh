@@ -75,6 +75,11 @@ enum class UBCC_OuterGrantType {
     GlobalGrantModified
 };
 
+enum class ResidentOverflowPolicy {
+    Spill,
+    NaiveEvict
+};
+
 // ---- M6: Recall result codes ----
 enum class UBCC_RecallResult {
     RecallInProgress,    // Recall has been initiated, caller must wait
@@ -226,10 +231,12 @@ class UBCCController
         bool writeIntent;          // True for RU with write intent
         uint64_t epoch;            // Observed epoch at enqueue time
         uint64_t reqId;            // Requester-allocated ID, reused on replay
+        bool hasData;              // Writeback payload captured while waiting for resident metadata
+        std::array<uint8_t, 64> data;
 
         PendingRequester()
             : node(-1), socket(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
-              writeIntent(false), epoch(0), reqId(0) {}
+              writeIntent(false), epoch(0), reqId(0), hasData(false), data{} {}
     };
 
     // Maximum pending requesters per PA (configurable queue depth)
@@ -449,6 +456,9 @@ class UBCCController
      */
     bool processWriteback(uint64_t line_pa, int requesterNode,
                           uint64_t epochVal, bool keepAsClean);
+    bool processWritebackWithData(uint64_t line_pa, int requesterNode,
+                                  uint64_t epochVal, bool keepAsClean,
+                                  const uint8_t *data);
 
     /**
      * Notify UBCC that dirty data for a home PA has been written to DRAM
@@ -694,8 +704,17 @@ class UBCCController
     bool _batchRsEnabled;
     bool _batchRsOverridden = false;
 
+    ResidentOverflowPolicy _overflowPolicy = ResidentOverflowPolicy::Spill;
+    uint64_t _naiveDirEvictions = 0;
+    uint64_t _naiveForcedInvalidations = 0;
+    uint64_t _naiveForcedWritebacks = 0;
+    uint64_t _naiveDirtyVictims = 0;
+
 public:
     void setBatchRsEnabled(bool v) { _batchRsEnabled = v; _batchRsOverridden = true; }
+    void setResidentOverflowPolicy(ResidentOverflowPolicy p) { _overflowPolicy = p; }
+    ResidentOverflowPolicy residentOverflowPolicy() const { return _overflowPolicy; }
+    std::string dumpStatsJson() const;
 
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
@@ -890,6 +909,8 @@ public:
                                  int requesterNode,
                                  UBCC_OuterReqType reqType, bool writeIntent,
                                  uint64_t *outEffectiveMask = nullptr);
+    bool evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim);
+    void replayResidentWaitersForCapacity();
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,
                               int requesterNode);

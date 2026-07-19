@@ -70,7 +70,31 @@ fault_rules_for_tc() {
 # ── Per-TC extra ubio args (ResidentDir params, etc.) ──────────────
 ubio_extra_args_for_tc() {
     case "$1" in
-        116) echo "--bloom-bytes=0 --sram-bytes=6144 --ways=1" ;;
+        116) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 ${UBCC_POLICY:+--dir-overflow-policy=$UBCC_POLICY} ${UBCC_OPTS:-}" ;;
+        120)
+            case "${EP_PERF_PROFILE:-optimized}" in
+                baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
+            esac
+            ;;
+        121)
+            case "${EP_PERF_PROFILE:-optimized}" in
+                baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
+            esac
+            ;;
+        122|123)
+            case "${EP_PERF_PROFILE:-optimized}" in
+                baseline) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
+            esac
+            ;;
+        124)
+            case "${EP_PERF_PROFILE:-optimized}" in
+                baseline) echo "--batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--batch-rs=1 ${UBCC_OPTS:-}" ;;
+            esac
+            ;;
         98)  echo "--ways=1" ;;
         *)   echo "" ;;
     esac
@@ -111,9 +135,9 @@ mkdir -p "$LOG_BASE" "$ROOT_DIR/build/run"
 
 # Kill any leftover infra from a previous TC / abort.
 _kill_infra() {
-    pkill -9 -f "gem5.opt.*test_e2e" 2>/dev/null || true
-    pkill -9 -f "/build/bin/ubio" 2>/dev/null || true
-    pkill -9 -f "/build/bin/networksim" 2>/dev/null || true
+    ps aux | awk '/gem5\.opt.*test_e2e|\/build\/bin\/ubio|\/build\/bin\/networksim/ && !/awk/ {print $2}' | while read -r pid; do
+        kill -9 "$pid" 2>/dev/null || true
+    done
     for pid in ${UBIO_PIDS:-} ${NSIM_PID:-}; do
         kill -9 $pid 2>/dev/null || true
     done
@@ -172,6 +196,16 @@ run_tc() {
         mkdir -p "$gdir" "$node_od"
         local cmd
         cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
+        if [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
+            case "${EP_PERF_PROFILE:-optimized}" in
+                baseline)
+                    cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
+                    ;;
+                optimized|*)
+                    cmd="$cmd --silent-upgrade=1 --direct-fwd=1 --ubcc-batch-rs=1"
+                    ;;
+            esac
+        fi
         echo "[launch] gem5 node=$nid (outdir=$node_od)"
         eval "$cmd" 2>"$gdir/stderr.log" >"$gdir/stdout.log" &
         local pid=$!
@@ -272,7 +306,11 @@ run_tc() {
     # 7. Verify via independent verify.py
     local simouts=()
     for nid in $(seq 0 $((NUM_NODES-1))); do
-        simouts+=("$m5outdir/node${nid}/simout_n${nid}")
+        local simout="$m5outdir/node${nid}/simout_n${nid}"
+        simouts+=("$simout")
+        if [ -f "$simout" ]; then
+            cp "$simout" "$LOG_BASE/simout_tc${tc}_node${nid}.log" 2>/dev/null || true
+        fi
     done
     local faultlogs=()
     for nid in $(seq 0 $((NUM_NODES-1))); do

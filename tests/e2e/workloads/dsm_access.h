@@ -25,10 +25,32 @@
 /* DSM_VA_BASE = (MaxAddr+1) - (TOTAL_SEGS + 1) * SEG_SIZE */
 #define DSM_VA_BASE  ((0xFFFFFFFFFFFFULL + 1) - (TOTAL_SEGS + 1) * (uint64_t)SEG_SIZE)
 
+/* test_e2e.py pre-maps this VA window to each node's local_private PA
+ * (node_id << 40). Accesses through this helper route to local HN-F/local DRAM,
+ * not the DSM EP path. */
+#define LOCAL_DRAM_VA_BASE 0x01000000ULL
+
 static inline volatile uint32_t* dsm_addr(int home_node, uint32_t offset)
 {
     uint64_t va = DSM_VA_BASE + (uint64_t)home_node * SEG_SIZE + offset;
     return (volatile uint32_t*)va;
+}
+
+static inline volatile uint32_t* local_dram_addr(uint32_t offset)
+{
+    return (volatile uint32_t*)(LOCAL_DRAM_VA_BASE + (uint64_t)offset);
+}
+
+static inline uint32_t local_dram_load(uint32_t offset)
+{
+    uint32_t val;
+    __asm__ volatile("ldr %w0, [%1]" : "=r"(val) : "r"(local_dram_addr(offset)));
+    return val;
+}
+
+static inline void local_dram_store(uint32_t offset, uint32_t val)
+{
+    __asm__ volatile("str %w0, [%1]" : : "r"(val), "r"(local_dram_addr(offset)));
 }
 
 /* DSM load (32-bit) — issues real ldr through cache hierarchy */

@@ -201,7 +201,33 @@ UBCCController::handleResidentMiss(
     uint64_t baseEpoch, uint64_t reqId, DirEntry &entry)
 {
     const bool mayContain = _directory.bloomMayContain(line_pa);
-    if (!_directory.hasFreeSlotForPa(line_pa) && !evictOneVictim(line_pa)) {
+    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx req=%d requester=%d "
+           "mayContain=%d count=%zu capacity=%zu freeForPa=%d policy=%d\n",
+           _nodeId, line_pa, static_cast<int>(reqType), requesterNode,
+           mayContain ? 1 : 0, _directory.count(), _directory.capacity(),
+           _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
+           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
+    fflush(stderr);
+    if (!_directory.hasFreeSlotForPa(line_pa)) {
+        PendingRequester pr;
+        pr.node = requesterNode;
+        pr.socket = requesterSocket;
+        pr.reqType = reqType;
+        pr.writeIntent = writeIntent;
+        pr.epoch = baseEpoch;
+        pr.reqId = reqId;
+        enqueueResidentWaiter(line_pa, pr);
+        bool evictProgress = evictOneVictim(line_pa);
+        if (evictProgress) {
+            replayResidentWaiters(line_pa);
+        }
+        auto wit = _residentWaiters.find(line_pa);
+        size_t waiterDepth = (wit == _residentWaiters.end()) ? 0 : wit->second.size();
+        fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
+               "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu\n",
+               _nodeId, line_pa, evictProgress ? 1 : 0,
+               _directory.count(), _directory.capacity(), waiterDepth);
+        fflush(stderr);
         return ResidentAccessResult::Busy;
     }
 
@@ -221,6 +247,9 @@ UBCCController::handleResidentMiss(
 
     if (!mayContain) {
         entry = placeholder;
+        fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=bloom_negative\n",
+               _nodeId, line_pa);
+        fflush(stderr);
         refreshPinnedBit(line_pa);
         return ResidentAccessResult::Ready;
     }
@@ -242,6 +271,9 @@ UBCCController::handleResidentMiss(
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
     }
+    fprintf(stderr, "[RESIDENT-FILL-ISSUED] home=%d pa=0x%lx waiterDepth=%zu\n",
+           _nodeId, line_pa, _residentWaiters[line_pa].size());
+    fflush(stderr);
     return ResidentAccessResult::Queued;
 }
 
@@ -285,25 +317,107 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     uint64_t victimPa = 0;
     DirEntry victim;
     if (!_directory.pickVictim(avoidPa, victimPa, victim)) {
+        fprintf(stderr, "[RESIDENT-EVICT-PICK-FAIL] home=%d avoid=0x%lx count=%zu capacity=%zu\n",
+               _nodeId, avoidPa, _directory.count(), _directory.capacity());
+        fflush(stderr);
         return false;
+    }
+
+    fprintf(stderr, "[RESIDENT-EVICT-PICK] home=%d avoid=0x%lx victim=0x%lx "
+           "state=%s sharers=0x%lx dirty=%d residentDirty=%d policy=%d\n",
+           _nodeId, avoidPa, victimPa, mesiStateName(victim.state),
+           victim.sharersMask, DirEntry::protoDirty(victim) ? 1 : 0,
+           victim.residentDirty ? 1 : 0,
+           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
+    fflush(stderr);
+
+    if (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict) {
+        return evictOneVictimNaive(victimPa, victim);
     }
 
     if (!victim.residentDirty) {
         _directory.forceRemove(victimPa);
         _residentWaiters.erase(victimPa);
         _pendingRequesters.erase(victimPa);
+        replayResidentWaitersForCapacity();
         return true;
     }
 
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
     _evictionPendingRemoval.insert(victimPa);
+    fprintf(stderr, "[RESIDENT-SPILL-START] home=%d victim=0x%lx state=%s residentDirty=%d\n",
+           _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
+    fflush(stderr);
     if (victim.state == MESIState::G_I) {
         scheduleBackstoreDelete(victimPa);
     } else {
         scheduleBackstoreWrite(victimPa);
     }
     return false;
+}
+
+bool
+UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
+{
+    if (isLineBusy(victimPa)) {
+        return false;
+    }
+
+    uint64_t targetMask = victim.sharersMask;
+    const int owner = DirEntry::ownerFromSharers(victim);
+    if (owner >= 0 && owner < 64) {
+        targetMask |= (1ULL << owner);
+    }
+
+    _naiveDirEvictions++;
+    _naiveForcedInvalidations += __builtin_popcountll(targetMask);
+    if (DirEntry::protoDirty(victim)) {
+        _naiveDirtyVictims++;
+        _naiveForcedWritebacks++;
+    }
+
+    printf("[UBCC-NAIVE-EVICT] home=%d pa=0x%lx state=%s sharers=0x%lx "
+           "targets=0x%lx dirty=%d epoch=%lu\n",
+           _nodeId, victimPa, mesiStateName(victim.state), victim.sharersMask,
+           targetMask, DirEntry::protoDirty(victim) ? 1 : 0, victim.epoch);
+
+    if (DirEntry::protoDirty(victim) && owner >= 0) {
+        OutstandingRequest *recallOreq = createOutstanding(
+            victimPa, OpType::RECALL, -1, owner, _socketId);
+        if (!recallOreq) {
+            return false;
+        }
+        recallOreq->reservedEpoch = normalizeEpoch(victim.epoch + 1);
+        recallOreq->reqId = victim.epoch;
+        recallOreq->baseEpoch = victim.epoch;
+        recallOreq->reqType = UBCC_OuterReqType::GlobalInvalidate;
+        recallOreq->stage = OpStage::WAITING_TARGET_RESP;
+        recallOreq->intendedState = MESIState::G_I;
+        recallOreq->intendedSharersMask = 0;
+        recallOreq->intendedOwnerNode = -1;
+        recallOreq->intendedDirty = false;
+        if (!initiateRecall(victimPa, victim, *recallOreq)) {
+            removeOutstanding(victimPa);
+            return false;
+        }
+        return false;
+    }
+
+    if (targetMask != 0 && _outbound) {
+        uint64_t effectiveMask = targetMask;
+        fanoutInvalidateTargets(victimPa, targetMask, victim.epoch,
+                                victim.epoch,
+                                -1, UBCC_OuterReqType::GlobalInvalidate,
+                                DirEntry::protoDirty(victim), &effectiveMask);
+    }
+
+    _directory.forceRemove(victimPa);
+    _residentWaiters.erase(victimPa);
+    _pendingRequesters.erase(victimPa);
+    _evictionPendingRemoval.erase(victimPa);
+    replayResidentWaitersForCapacity();
+    return true;
 }
 
 void
@@ -388,6 +502,25 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
     }
 }
 
+std::string
+UBCCController::dumpStatsJson() const
+{
+    std::ostringstream oss;
+    oss << "{"
+        << "\"residentOverflowPolicy\":"
+        << (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0) << ","
+        << "\"naiveDirEvictions\":" << _naiveDirEvictions << ","
+        << "\"naiveForcedInvalidations\":" << _naiveForcedInvalidations << ","
+        << "\"naiveForcedWritebacks\":" << _naiveForcedWritebacks << ","
+        << "\"naiveDirtyVictims\":" << _naiveDirtyVictims << ","
+        << "\"asyncWbCount\":" << _asyncWbCount << ","
+        << "\"writebackCount\":" << _writebackCount << ","
+        << "\"evictCount\":" << _evictCount << ","
+        << "\"invalidationCount\":" << _invalidationCount
+        << "}";
+    return oss.str();
+}
+
 void
 UBCCController::replayResidentWaiters(uint64_t linePa)
 {
@@ -407,6 +540,14 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                 it->second.push_front(pr);
                 break;
             }
+            if (pr.hasData && _host) {
+                _host->writeDsmData(linePa, pr.data.data());
+                updateLineDataCache(linePa, pr.data.data());
+                std::fprintf(stderr,
+                             "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=resident_replay\n",
+                             _nodeId, linePa, pr.node);
+                std::fflush(stderr);
+            }
         } else if (pr.reqType == UBCC_OuterReqType::GlobalEvict) {
             if (!processEvict(linePa, pr.node, pr.epoch)) {
                 it->second.push_front(pr);
@@ -414,12 +555,24 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             }
         } else {
             auto g = processOuterRequest(linePa, pr.reqType, pr.writeIntent,
-                                         pr.node, pr.socket, pr.epoch, pr.reqId,
-                                         nullptr, nullptr, nullptr, nullptr,
-                                         nullptr, nullptr);
+                                          pr.node, pr.socket, pr.epoch, pr.reqId,
+                                          nullptr, nullptr, nullptr, nullptr,
+                                          nullptr, nullptr);
             if (static_cast<int>(g) == -1) {
                 it->second.push_front(pr);
                 break;
+            }
+            OutstandingRequest *ost = findOutstanding(linePa);
+            if (ost && ost->opType == OpType::GRANT_HANDSHAKE &&
+                ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
+                ost->stage == OpStage::WAITING_CLEAR && _outbound) {
+                CoherenceMessage push;
+                buildGrantResponse(*ost, push);
+                _outbound->sendGrantPush(push);
+                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] home=%d pa=0x%lx "
+                        "requester=%d reqId=%lu\n",
+                        _nodeId, linePa, pr.node, pr.reqId);
+                fflush(stderr);
             }
         }
         if (_directory.fillPending(linePa) || _directory.wbPending(linePa)) {
@@ -431,6 +584,24 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         _residentWaiters.erase(it);
     }
     refreshPinnedBit(linePa);
+}
+
+void
+UBCCController::replayResidentWaitersForCapacity()
+{
+    std::vector<uint64_t> keys;
+    keys.reserve(_residentWaiters.size());
+    for (const auto &kv : _residentWaiters) {
+        if (!_directory.fillPending(kv.first) && !_directory.wbPending(kv.first)) {
+            keys.push_back(kv.first);
+        }
+    }
+    for (uint64_t pa : keys) {
+        fprintf(stderr, "[RESIDENT-CAPACITY-REPLAY] home=%d pa=0x%lx\n",
+                _nodeId, pa);
+        fflush(stderr);
+        replayResidentWaiters(pa);
+    }
 }
 
 const char*
@@ -1149,7 +1320,13 @@ UBCCController::inspectUbccDirForTest(uint64_t line_pa)
         << "\"ownerMismatchRejectedCount\":" << _ownerMismatchRejectedCount << ","
         << "\"invalidationCount\":" << _invalidationCount << ","
         << "\"invalidationAckCount\":" << _invalidationAckCount << ","
-        << "\"asyncWbCount\":" << _asyncWbCount;
+        << "\"asyncWbCount\":" << _asyncWbCount << ","
+        << "\"residentOverflowPolicy\":"
+        << (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0) << ","
+        << "\"naiveDirEvictions\":" << _naiveDirEvictions << ","
+        << "\"naiveForcedInvalidations\":" << _naiveForcedInvalidations << ","
+        << "\"naiveForcedWritebacks\":" << _naiveForcedWritebacks << ","
+        << "\"naiveDirtyVictims\":" << _naiveDirtyVictims;
     oss << "}";
     return oss.str();
 }
@@ -1315,6 +1492,37 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     const bool writeIntent = recallDone.writeIntent;
 
     removeOutstanding(line_pa);
+
+    if (reqType == UBCC_OuterReqType::GlobalInvalidate) {
+        if (recallDone.dataValid && _host) {
+            std::array<uint8_t, 64> cached{};
+            memcpy(cached.data(), recallDone.dataBuf, 64);
+            _lineDataCache[line_pa] = cached;
+            _host->writeDsmData(line_pa, recallDone.dataBuf);
+            std::fprintf(stderr,
+                         "[NAIVE-DATA-PERSIST] home=%d pa=0x%lx owner=%d data=1\n",
+                         _nodeId, line_pa, ownerNode);
+            std::fflush(stderr);
+        } else {
+            std::fprintf(stderr,
+                         "[NAIVE-DATA-PERSIST] home=%d pa=0x%lx owner=%d data=0\n",
+                         _nodeId, line_pa, ownerNode);
+            std::fflush(stderr);
+        }
+        entry.state = MESIState::G_I;
+        entry.sharersMask = 0;
+        entry.residentDirty = false;
+        _directory.update(line_pa, entry);
+        _directory.forceRemove(line_pa);
+        _residentWaiters.erase(line_pa);
+        _pendingRequesters.erase(line_pa);
+        _evictionPendingRemoval.erase(line_pa);
+        replayResidentWaitersForCapacity();
+        _recallResponseCount++;
+        printf("[UBCC-NAIVE-EVICT-DONE] home=%d pa=0x%lx owner=%d data=%d\n",
+               _nodeId, line_pa, ownerNode, recallDone.dataValid ? 1 : 0);
+        return true;
+    }
 
     OutstandingRequest *grantOst = createOutstanding(
         line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1,
@@ -1832,6 +2040,47 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     // v4-A3: Don't force-delete G_I — let ResidentDir eviction handle cleanup
 
     return true;
+}
+
+bool
+UBCCController::processWritebackWithData(uint64_t line_pa, int requesterNode,
+                                         uint64_t epochVal, bool keepAsClean,
+                                         const uint8_t *data)
+{
+    bool success = processWriteback(line_pa, requesterNode, epochVal, keepAsClean);
+    if (success) {
+        if (data && _host) {
+            _host->writeDsmData(line_pa, data);
+            updateLineDataCache(line_pa, data);
+            std::fprintf(stderr,
+                         "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=resident\n",
+                         _nodeId, line_pa, requesterNode);
+            std::fflush(stderr);
+        }
+        return true;
+    }
+
+    if (!data) {
+        return false;
+    }
+
+    auto it = _residentWaiters.find(line_pa);
+    if (it == _residentWaiters.end()) {
+        return false;
+    }
+    for (auto &pr : it->second) {
+        if (pr.reqType == UBCC_OuterReqType::GlobalWriteback &&
+            pr.node == requesterNode && pr.epoch == normalizeEpoch(epochVal)) {
+            std::memcpy(pr.data.data(), data, 64);
+            pr.hasData = true;
+            std::fprintf(stderr,
+                         "[WB-DATA-QUEUED] home=%d pa=0x%lx node=%d waiters=%zu\n",
+                         _nodeId, line_pa, requesterNode, it->second.size());
+            std::fflush(stderr);
+            break;
+        }
+    }
+    return false;
 }
 
 // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----
@@ -2711,6 +2960,10 @@ void
 UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
+    fprintf(stderr, "[RESIDENT-FILL-DONE] home=%d pa=0x%lx found=%d waiters=%zu\n",
+           _nodeId, linePa, found ? 1 : 0,
+           _residentWaiters.count(linePa) ? _residentWaiters[linePa].size() : 0);
+    fflush(stderr);
     DirEntry e;
     if (!_directory.lookup(linePa, e)) {
         e.lineAddr = linePa;
@@ -2749,6 +3002,11 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa)
 {
+    fprintf(stderr, "[RESIDENT-WB-ACK] home=%d pa=0x%lx evictionPending=%d async=%d\n",
+           _nodeId, linePa,
+           _evictionPendingRemoval.count(linePa) ? 1 : 0,
+           _asyncWbSnapshots.count(linePa) ? 1 : 0);
+    fflush(stderr);
     // Check if this was an async writeback (not an eviction writeback)
     if (_asyncWbSnapshots.count(linePa) > 0) {
         onAsyncWritebackAck(linePa);
@@ -2768,6 +3026,7 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
 
     if (_evictionPendingRemoval.erase(linePa) != 0) {
         _directory.forceRemove(linePa);
+        replayResidentWaitersForCapacity();
     }
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
@@ -2792,6 +3051,7 @@ UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
     _evictionPendingRemoval.erase(linePa);
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
+    replayResidentWaitersForCapacity();
     (void)existed;
 }
 
@@ -3182,8 +3442,13 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.h.homeLinePa = grantOst.linePa;
     push.h.epoch = grantOst.baseEpoch;
     push.h.reqId = grantOst.reqId;
-    push.h.flags = grantOst.dataValid
-        ? static_cast<uint32_t>(CFLAG_HAS_DATA) : 0;
+    auto cachedData = _lineDataCache.end();
+    if (!grantOst.dataValid) {
+        cachedData = _lineDataCache.find(grantOst.linePa);
+    }
+    const bool hasGrantData = grantOst.dataValid || cachedData != _lineDataCache.end();
+
+    push.h.flags = hasGrantData ? static_cast<uint32_t>(CFLAG_HAS_DATA) : 0;
 
     // Grant type from intended MESI state (reuses existing helper)
     push.b.readResp.grantType =
@@ -3203,9 +3468,17 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.committedEpoch = 0;
     push.b.readResp.pendingInvMask = 0;
 
-    // Grant data: copy from grantOst dataBuf if dataValid
+    // Grant data: copy from grantOst dataBuf if dataValid, otherwise use the
+    // home-side recall/writeback cache populated by naive dirty eviction.
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
+    } else if (cachedData != _lineDataCache.end()) {
+        std::memcpy(push.b.readResp.grantData, cachedData->second.data(), 64);
+        push.b.readResp.dataSource = static_cast<int8_t>(GrantDataSource::RecallBuffer);
+        std::fprintf(stderr,
+                     "[DATA-CACHE-PUSH] home=%d pa=0x%lx requester=%d hit=1\n",
+                     _nodeId, grantOst.linePa, grantOst.requesterNode);
+        std::fflush(stderr);
     }
 
     push.h.seqNum = 0;

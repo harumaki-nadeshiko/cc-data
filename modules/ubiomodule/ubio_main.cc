@@ -237,6 +237,7 @@ static int g_numNodes = 3;
 static ResidentDirConfig g_rdcfg;    // may be overridden by argv
 static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
 static bool g_batchRs = true;        // argv --batch-rs= override
+static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -453,9 +454,23 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     }
 
     bool routeControlToTarget(const CoherenceMessage &msg) {
-        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
-            return sendCoh(gem5Port, tickRef, nodeId, msg);
-        return sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
+        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
+            bool ok = sendCoh(gem5Port, tickRef, nodeId, msg);
+            std::fprintf(stderr,
+                         "[CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu\n",
+                         nodeId, socketId, coherenceMsgTypeName(msg.h.type),
+                         msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef);
+            std::fflush(stderr);
+            return ok;
+        }
+        bool ok = sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
+        std::fprintf(stderr,
+                     "[CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d ok=%d tick=%lu\n",
+                     nodeId, socketId, coherenceMsgTypeName(msg.h.type),
+                     msg.h.reqId, msg.h.homeLinePa, msg.h.dstNode,
+                     msg.h.dstSocket, ok ? 1 : 0, tickRef);
+        std::fflush(stderr);
+        return ok;
     }
     bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
@@ -467,6 +482,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         bool found = false;
         int g = _schema.groupForPa(pa);
         std::vector<uint64_t> pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
+        std::fprintf(stderr, "[BACKSTORE-READ] pa=0x%lx group=%d candidates=%zu head=0x%lx tail=0x%lx\n",
+                     pa, g, pages.size(), _groupIdx[g].page_directory[0],
+                     _groupIdx[g].page_directory[1]);
 
         // Try local cache first (L1 cache role — keep _pages as write-through cache)
         for (auto pagePa : pages) {
@@ -488,6 +506,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
             else
                 ubcc.onBackstoreFillComplete(pa, found, e);
+            std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=1\n",
+                         pa, found ? 1 : 0);
             return;
         }
 
@@ -510,6 +530,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                     found2 = true;
                 }
             }
+            std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=0 page=0x%lx\n",
+                         pa, found2 ? 1 : 0, targetPagePa);
             ubcc.onBackstoreFillComplete(pa, found2, e2);
         });
     }
@@ -517,6 +539,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     void hostIssueBackstoreWrite(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
         if (!ubcc.snapshotResidentForBackstore(pa, e)) {
+            std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx snapshot=0\n", pa);
             ubcc.onBackstoreWriteAck(pa);
             return;
         }
@@ -530,18 +553,32 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         schemaEntry.deleted = false;
 
         auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
+        if (plan.needs_new_page) {
+            plan.target_page_pa = _nextPageId++;
+        }
+        std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx group=%d page=0x%lx new=%d state=%d sharers=0x%lx epoch=%lu\n",
+                     pa, g, plan.target_page_pa, plan.needs_new_page ? 1 : 0,
+                     static_cast<int>(schemaEntry.state), schemaEntry.sharersMask,
+                     schemaEntry.epoch);
         cc::glob::BackstorePage* p = nullptr;
         if (plan.needs_new_page) {
             cc::glob::BackstorePage np; np.clear();
-            np.hdr.page_id = _nextPageId++;
+            np.hdr.page_id = plan.target_page_pa;
             _pages[plan.target_page_pa] = np;
             p = &_pages[plan.target_page_pa];
         } else if (plan.needs_read_before) {
             p = _getPage(plan.target_page_pa);
         }
-        if (!p) { ubcc.onBackstoreWriteAck(pa); return; }
+        if (!p) {
+            std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=no_page\n",
+                         pa, plan.target_page_pa);
+            ubcc.onBackstoreWriteAck(pa); return;
+        }
         _schema.applyUpsert(*p, pa, schemaEntry, plan);
         _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
+        std::fprintf(stderr, "[BACKSTORE-WRITE-DONE] pa=0x%lx page=0x%lx head=0x%lx tail=0x%lx entries=%u\n",
+                     pa, plan.target_page_pa, _groupIdx[g].page_directory[0],
+                     _groupIdx[g].page_directory[1], p->hdr.entry_count);
         // Phase 3: Write-through to gem5 MetaRNF for persistence
         _metaRNF.writePage(plan.target_page_pa, *p);
         ubcc.onBackstoreWriteAck(pa);
@@ -630,6 +667,23 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
             ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
             ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
             ubcc.copyLineDataCache(msg.h.homeLinePa, grantData);
+        if (!hasGrantData) {
+            auto dsmIt = host.dsmData.data.find(msg.h.homeLinePa);
+            if (dsmIt != host.dsmData.data.end()) {
+                std::memcpy(grantData.data, dsmIt->second.data(), 64);
+                ubcc.updateLineDataCache(msg.h.homeLinePa, dsmIt->second.data());
+                hasGrantData = true;
+                std::fprintf(stderr,
+                             "[DATA-CACHE-READ] home=%d pa=0x%lx source=dsm hit=1\n",
+                             nid, msg.h.homeLinePa);
+                std::fflush(stderr);
+            } else {
+                std::fprintf(stderr,
+                             "[DATA-CACHE-READ] home=%d pa=0x%lx source=dsm hit=0\n",
+                             nid, msg.h.homeLinePa);
+                std::fflush(stderr);
+            }
+        }
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
@@ -661,13 +715,12 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
       case CoherenceMessageType::WritebackReq: {
         bool keepAsClean =
             (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0;
-        bool success = ubcc.processWriteback(
-            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, keepAsClean);
-        // Persist dirty data from writeback into DsmDataStore + _lineDataCache
-        if (success && msg.b.writebackReq.hasData) {
-            host.writeDsmData(msg.h.homeLinePa, msg.b.writebackReq.data);
-            ubcc.updateLineDataCache(msg.h.homeLinePa, msg.b.writebackReq.data);
-        }
+        bool success = msg.b.writebackReq.hasData
+            ? ubcc.processWritebackWithData(msg.h.homeLinePa, msg.h.requesterNode,
+                                            msg.h.epoch, keepAsClean,
+                                            msg.b.writebackReq.data)
+            : ubcc.processWriteback(msg.h.homeLinePa, msg.h.requesterNode,
+                                    msg.h.epoch, keepAsClean);
         response.h.type = CoherenceMessageType::WritebackResp;
         response.h.srcNode = nid;
         response.h.dstNode = msg.h.srcNode;
@@ -885,6 +938,14 @@ main(int argc, char **argv)
             g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
         if (!std::strncmp(argv[i], "--batch-rs=", 11))
             g_batchRs = (std::atoi(argv[i] + 11) != 0);
+        if (!std::strncmp(argv[i], "--dir-overflow-policy=", 22)) {
+            const char *p = argv[i] + 22;
+            if (!std::strcmp(p, "naive") || !std::strcmp(p, "naive-evict")) {
+                g_overflowPolicy = ResidentOverflowPolicy::NaiveEvict;
+            } else {
+                g_overflowPolicy = ResidentOverflowPolicy::Spill;
+            }
+        }
     }
 
     if (nid < 0 || nid > 31) {
@@ -926,6 +987,7 @@ main(int argc, char **argv)
                               : ResidentDir::DefaultBloomBytes,
                           0, g_numSockets, g_numNodes, &g_rdcfg);
     ubcc.setBatchRsEnabled(g_batchRs);
+    ubcc.setResidentOverflowPolicy(g_overflowPolicy);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
     // T_ubio_dram: argv --dram-delay-ps= has priority (no env fallback)
     host._ubioDramDelayPs = g_dramDelayPs;
@@ -947,6 +1009,8 @@ main(int argc, char **argv)
                     // TERMINATE from local gem5: mark gem5 done and forward
                     // to networksim so other nodes can exclude this peer from
                     // PDES safeTs (TC90/TC98 deadlock fix).
+                    ubcc.directory().dumpStatsJson();
+                    std::fprintf(stderr, "[UBCC-STATS] %s\n", ubcc.dumpStatsJson().c_str());
                     *doneFlag = true;
                     if (netPort) {
                         framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
@@ -1341,6 +1405,7 @@ main(int argc, char **argv)
 
     // 3.4: Dump ResidentDir performance counters
     ubcc.directory().dumpStatsJson();
+    fprintf(stderr, "[UBCC-STATS] %s\n", ubcc.dumpStatsJson().c_str());
     fprintf(stderr, "[UBCC-STATS] {\"asyncWbCount\":%lu}\n",
             ubcc.getAsyncWbCount());
 

@@ -1,22 +1,34 @@
-/* TC116: ResidentDir DRAM offload/onload stress.
+/* TC116: ResidentDir eviction/reload performance stress.
  *
- * Writes 256 unique cache lines from node0 to home=0.
- * In default mode (57K capacity), all entries fit → no eviction.
- * In small-dir mode (--bloom-bytes=0 --sram-bytes=6144 --ways=1,
- * capacity ~128), 256 lines >> 128 capacity → forced eviction.
+ * This is intentionally not a one-shot streaming fill.  It creates hot shared
+ * lines, evicts their directory metadata with a cold set, then reuses the hot
+ * lines from another requester.  Spill mode should reload precise directory
+ * metadata; naive mode eagerly invalidates/recalls cache copies at eviction
+ * time and pays future data-miss/rebuild cost.
  *
- * Node1 reads back the first (oldest, likely evicted in small-dir mode)
- * and last (newest, always resident) lines to verify data consistency.
- *
- * Runs with 3 nodes, 1 socket. Only CPUs 0 of nodes 0 and 1 participate.
+ * Small-dir run_multi parameters keep a tiny ResidentDir while preserving a
+ * Bloom filter, so resident misses can distinguish "was spilled" from "never
+ * seen" and exercise the reload path.
  */
 #include "dsm_access.h"
 #include "e2e_common.h"
 
-#define NUM_LINES       256
-#define FIRST_VAL       0x11600000u
-/* LAST_VAL = 0x11600000 | (NUM_LINES - 1) = 0x116000FF */
-#define LAST_VAL        0x116000FFu
+#define HOT_LINES      48
+#define COLD_LINES     144
+#define HOT_BASE       0x00000u
+#define COLD_BASE      0x20000u
+#define TC116_VAL      0x11600000u
+#define TC116_NEW      0x11610000u
+
+static uint32_t hot_off(int i)
+{
+    return HOT_BASE + (uint32_t)i * 64u;
+}
+
+static uint32_t cold_off(int i)
+{
+    return COLD_BASE + (uint32_t)i * 64u;
+}
 
 int main(int argc, char **argv)
 {
@@ -32,39 +44,74 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* Node2 is a bystander — skip all barriers and exit immediately. */
-    if (node_id == 2) {
-        _exit_program(0);
-        return 0;
-    }
-
-    /* ── Phase 1: Node0 fills ResidentDir with NUM_LINES unique writes ── */
+    /* Phase A: node0 owns hot lines on home0. */
     if (node_id == 0) {
-        for (int i = 0; i < NUM_LINES; i++) {
-            uint32_t val = 0x11600000u | (uint32_t)i;
-            uint32_t off = (uint32_t)(i * 64);  /* 64B-aligned cache line */
-            dsm_store(0, off, val);  /* home=node0 */
+        for (int i = 0; i < HOT_LINES; i++) {
+            dsm_store(0, hot_off(i), TC116_VAL | (uint32_t)i);
         }
-        /* Tell the harness that the fill phase is done */
-        emit_phase_done(0, "fill");
+        emit_phase_done(0, "hot_populate");
     }
+    sync_wait(0b111);
 
-    /* Barrier: node0 and node1 only (node2 already exited) */
-    sync_wait(0b11);  /* nodes 0,1 */
-
-    /* ── Phase 2: Node1 reads back first and last lines ── */
+    /* Phase B: node1 reads hot lines, creating useful shared/cache residency. */
     if (node_id == 1) {
-        /* Read first-written line (offset=0), may be evicted in small-dir mode */
-        uint32_t got_first = dsm_load(0, 0);
-        emit_read_val(1, 0, FIRST_VAL, got_first, got_first == FIRST_VAL);
-
-        /* Read last-written line (offset=(NUM_LINES-1)*64) */
-        uint32_t last_off = (uint32_t)((NUM_LINES - 1) * 64);
-        uint32_t got_last = dsm_load(0, last_off);
-        emit_read_val(1, 0, LAST_VAL, got_last, got_last == LAST_VAL);
+        for (int i = 0; i < HOT_LINES; i++) {
+            uint32_t expected = TC116_VAL | (uint32_t)i;
+            uint32_t got = dsm_load(0, hot_off(i));
+            if ((i % 16) == 0) {
+                emit_read_val(1, 0, expected, got, got == expected);
+            }
+        }
+        emit_phase_done(1, "hot_shared");
     }
+    sync_wait(0b111);
 
-    sync_wait(0b11);
+    /* Phase C: node0 streams cold lines to evict hot directory metadata. */
+    if (node_id == 0) {
+        for (int i = 0; i < COLD_LINES; i++) {
+            dsm_store(0, cold_off(i), TC116_VAL | 0x8000u | (uint32_t)i);
+        }
+        emit_phase_done(0, "cold_overflow");
+    }
+    sync_wait(0b111);
+
+    /* Phase D: node2 reuses hot lines.  Spill mode should reload directory
+     * metadata; naive mode has already invalidated/evicted copies. */
+    if (node_id == 2) {
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < HOT_LINES; i++) {
+                uint32_t expected = TC116_VAL | (uint32_t)i;
+                uint32_t got = dsm_load(0, hot_off(i));
+                if (round == 0 && (i % 16) == 0) {
+                    emit_read_val(2, 0, expected, got, got == expected);
+                }
+            }
+        }
+        emit_phase_done(2, "hot_reuse_reload");
+    }
+    sync_wait(0b111);
+
+    /* Phase E: node1 upgrades a subset. This exposes whether its hot copies
+     * survived directory pressure or were eagerly invalidated by naive mode. */
+    if (node_id == 1) {
+        for (int i = 0; i < HOT_LINES; i += 4) {
+            dsm_store(0, hot_off(i), TC116_NEW | (uint32_t)i);
+        }
+        emit_phase_done(1, "hot_upgrade");
+    }
+    sync_wait(0b111);
+
+    if (node_id == 2) {
+        for (int i = 0; i < HOT_LINES; i += 16) {
+            uint32_t expected = (i % 4) == 0
+                ? (TC116_NEW | (uint32_t)i)
+                : (TC116_VAL | (uint32_t)i);
+            uint32_t got = dsm_load(0, hot_off(i));
+            emit_read_val(2, 0, expected, got, got == expected);
+        }
+        emit_phase_done(0, "tc116_done");
+    }
+    sync_wait(0b111);
 
     _exit_program(0);
     return 0;
