@@ -221,6 +221,12 @@ struct GrantHandshakeTombstone {
 class UBCCController
 {
   public:
+    enum class ResidentWaitReason {
+        Capacity,
+        BackstoreFill,
+        MetadataWriteback,
+    };
+
     // §3.1: Pending requester atom — queued behind live outstanding.
     // Per recall_done_fix.md: RECALL.DONE is requester-private; foreign
     // requesters are queued here until the head requester's Clear commits.
@@ -231,12 +237,14 @@ class UBCCController
         bool writeIntent;          // True for RU with write intent
         uint64_t epoch;            // Observed epoch at enqueue time
         uint64_t reqId;            // Requester-allocated ID, reused on replay
+        ResidentWaitReason waitReason;
         bool hasData;              // Writeback payload captured while waiting for resident metadata
         std::array<uint8_t, 64> data;
 
         PendingRequester()
             : node(-1), socket(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
-              writeIntent(false), epoch(0), reqId(0), hasData(false), data{} {}
+              writeIntent(false), epoch(0), reqId(0),
+              waitReason(ResidentWaitReason::Capacity), hasData(false), data{} {}
     };
 
     // Maximum pending requesters per PA (configurable queue depth)
@@ -455,7 +463,8 @@ class UBCCController
      * @return               True if writeback accepted (epoch matched)
      */
     bool processWriteback(uint64_t line_pa, int requesterNode,
-                          uint64_t epochVal, bool keepAsClean);
+                          uint64_t epochVal, bool keepAsClean,
+                          const uint8_t *data = nullptr);
     bool processWritebackWithData(uint64_t line_pa, int requesterNode,
                                   uint64_t epochVal, bool keepAsClean,
                                   const uint8_t *data);
@@ -780,11 +789,13 @@ public:
     ResidentAccessResult ensureResidentForAccess(
         uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
         int requesterNode, int requesterSocket,
-        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
+        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
+        const uint8_t *writebackData = nullptr);
     ResidentAccessResult handleResidentMiss(
         uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
         int requesterNode, int requesterSocket,
-        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry);
+        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
+        const uint8_t *writebackData = nullptr);
     void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);

@@ -12,6 +12,7 @@
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -334,6 +335,13 @@ matchesNetEndpoint(const std::string &ep, int nid)
         UBCCController::BackstoreEntry entry;
     };
 
+    struct PendingBackstoreAck {
+        uint64_t fireTick;
+        uint64_t pa;
+        bool isDelete;
+        bool existed;
+    };
+
 struct DsmDataStore {
     std::map<uint64_t, std::array<uint8_t, 64>> data;
     struct PendingDataOp { uint64_t fireTick; uint64_t pa; bool isWrite;
@@ -437,6 +445,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
     uint64_t _ubioDramDelayPs = 0;
     std::vector<PendingBackstoreFill> _pendingFills;
+    std::vector<PendingBackstoreAck> _pendingBackstoreAcks;
     DsmDataStore dsmData;
     MetaRNFClient _metaRNF;
 
@@ -501,11 +510,11 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         }
 
         if (found || pages.empty()) {
-            // Local cache hit or no candidates — complete immediately
-            if (_ubioDramDelayPs > 0)
-                _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
-            else
-                ubcc.onBackstoreFillComplete(pa, found, e);
+            // Always defer completion at least one tick.  A synchronous fill
+            // can replay a waiter before its caller has finished enqueueing
+            // its writeback payload.
+            _pendingFills.push_back({tickRef + std::max<uint64_t>(1, _ubioDramDelayPs),
+                                     pa, found, e});
             std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=1\n",
                          pa, found ? 1 : 0);
             return;
@@ -540,7 +549,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         UBCCController::BackstoreEntry e{};
         if (!ubcc.snapshotResidentForBackstore(pa, e)) {
             std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx snapshot=0\n", pa);
-            ubcc.onBackstoreWriteAck(pa);
+            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
             return;
         }
         ubcc.directory().bloomInsert(pa);
@@ -572,7 +581,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (!p) {
             std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=no_page\n",
                          pa, plan.target_page_pa);
-            ubcc.onBackstoreWriteAck(pa); return;
+            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
+            return;
         }
         _schema.applyUpsert(*p, pa, schemaEntry, plan);
         _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
@@ -581,7 +591,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                      _groupIdx[g].page_directory[1], p->hdr.entry_count);
         // Phase 3: Write-through to gem5 MetaRNF for persistence
         _metaRNF.writePage(plan.target_page_pa, *p);
-        ubcc.onBackstoreWriteAck(pa);
+        _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, true});
     }
 
     void hostIssueBackstoreDelete(uint64_t pa) override {
@@ -594,7 +604,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (existed && p) {
             _metaRNF.writePage(plan.target_page_pa, *p);
         }
-        ubcc.onBackstoreDeleteAck(pa, existed);
+        _pendingBackstoreAcks.push_back({tickRef + 1, pa, true, existed});
     }
 
     void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
@@ -610,6 +620,21 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             if (tick >= it->fireTick) {
                 ubcc.onBackstoreFillComplete(it->pa, it->found, it->entry);
                 it = _pendingFills.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    void drainPendingBackstoreAcks(uint64_t tick) {
+        auto it = _pendingBackstoreAcks.begin();
+        while (it != _pendingBackstoreAcks.end()) {
+            if (tick >= it->fireTick) {
+                if (it->isDelete)
+                    ubcc.onBackstoreDeleteAck(it->pa, it->existed);
+                else
+                    ubcc.onBackstoreWriteAck(it->pa);
+                it = _pendingBackstoreAcks.erase(it);
             } else {
                 ++it;
             }
@@ -1400,6 +1425,7 @@ main(int argc, char **argv)
         // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
         // callbacks simulate real DRAM read latency.
         host.drainPendingFills(tick);
+        host.drainPendingBackstoreAcks(tick);
         host.dsmData.drain(tick);
     }
 
