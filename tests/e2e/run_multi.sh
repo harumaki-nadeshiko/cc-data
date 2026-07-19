@@ -202,7 +202,7 @@ run_tc() {
                     cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
                     ;;
                 optimized|*)
-                    cmd="$cmd --silent-upgrade=1 --direct-fwd=1 --ubcc-batch-rs=1"
+                    cmd="$cmd --silent-upgrade=1 --direct-fwd=0 --ubcc-batch-rs=1"
                     ;;
             esac
         fi
