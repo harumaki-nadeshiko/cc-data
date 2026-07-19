@@ -244,7 +244,7 @@ static ResidentDirConfig g_rdcfg;    // may be overridden by argv
 static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
 static bool g_batchRs = true;        // argv --batch-rs= override
 static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
-static bool g_debugUbioPerf = false;  // [DEBUG-UBIO-*] gate, set via UBIO_DEBUG_PERF=1
+
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -848,24 +848,21 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
             bool ok = sendCoh(gem5Port, tickRef, nodeId, msg);
-            if (g_debugUbioPerf) {
-                std::fprintf(stderr,
-                             "[DEBUG-CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu\n",
-                             nodeId, socketId, coherenceMsgTypeName(msg.h.type),
-                             msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef);
-                std::fflush(stderr);
-            }
+            std::fprintf(stderr,
+                         "[CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu\n",
+                         nodeId, socketId, coherenceMsgTypeName(msg.h.type),
+                         msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef);
+            std::fflush(stderr);
             return ok;
         }
         bool ok = sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
-        if (g_debugUbioPerf) {
-            std::fprintf(stderr,
-                         "[DEBUG-CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d ok=%d tick=%lu\n",
-                         nodeId, socketId, coherenceMsgTypeName(msg.h.type),
-                         msg.h.reqId, msg.h.homeLinePa, msg.h.dstNode,
-                         msg.h.dstSocket, ok ? 1 : 0, tickRef);
-            std::fflush(stderr);
-        }
+        std::fprintf(stderr,
+                     "[CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d ok=%d tick=%lu\n",
+                     nodeId, socketId, coherenceMsgTypeName(msg.h.type),
+                     msg.h.reqId, msg.h.homeLinePa, msg.h.dstNode,
+                     msg.h.dstSocket, ok ? 1 : 0, tickRef);
+        std::fflush(stderr);
+
         return ok;
     }
     bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
@@ -924,11 +921,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         }
 
         if (found || pages.empty()) {
-            // Always defer completion at least one tick.  A synchronous fill
-            // can replay a waiter before its caller has finished enqueueing
-            // its writeback payload.
-            _pendingFills.push_back({tickRef + std::max<uint64_t>(1, _ubioDramDelayPs),
-                                      pa, found, e});
+            // Local cache hit or no candidates — complete immediately
+            if (_ubioDramDelayPs > 0)
+                _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
+            else
+                ubcc.onBackstoreFillComplete(pa, found, e);
+
             std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=1\n",
                          pa, found ? 1 : 0);
             return;
@@ -945,25 +943,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 _deferredReadsByPage[pagePa].push_back(pa);
                 return;
             }
-        }
+            std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=0 page=0x%lx\n",
+                         pa, found2 ? 1 : 0, targetPagePa);
+            ubcc.onBackstoreFillComplete(pa, found2, e2);
 
-        // Phase D13: chain-walk MetaRNF reads across all candidate pages.
-        auto ctx = std::make_shared<ChainCtx>();
-        ctx->idx = 0; ctx->maxSteps = (int)pages.size() + 4;
-
-        // Store per-PA chain context so callback can access it
-        _chainCtx[pa] = ctx;
-        _chainPages[pa] = pages;
-        _chainGroup[pa] = g;
-
-        uint64_t firstPage = pages[0];
-        std::fprintf(stderr, "[BACKSTORE-CHAIN-READ] pa=0x%lx group=%d page=0x%lx idx=0/%zu\n",
-                     pa, g, firstPage, pages.size());
-        std::fflush(stderr);
-        ctx->idx = 1;
-
-        _metaRNF.readPage(firstPage, [this, pa](const uint8_t* data256) {
-            chainReadCallback(pa, data256);
         });
     }
 
@@ -1166,7 +1149,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         UBCCController::BackstoreEntry e{};
         if (!ubcc.snapshotResidentForBackstore(pa, e)) {
             std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx snapshot=0\n", pa);
-            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
+            ubcc.onBackstoreWriteAck(pa);
+
             return;
         }
 
@@ -1191,78 +1175,37 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         schemaEntry.deleted = false;
 
         auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
-        if (plan.needs_new_page) plan.target_page_pa = _nextPageId++;
+        if (plan.needs_new_page) {
+            plan.target_page_pa = _nextPageId++;
+        }
         std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx group=%d page=0x%lx new=%d state=%d sharers=0x%lx epoch=%lu\n",
                      pa, g, plan.target_page_pa, plan.needs_new_page ? 1 : 0,
-                     static_cast<int>(schemaEntry.state), schemaEntry.sharersMask, schemaEntry.epoch);
+                     static_cast<int>(schemaEntry.state), schemaEntry.sharersMask,
+                     schemaEntry.epoch);
         cc::glob::BackstorePage* p = nullptr;
         if (plan.needs_new_page) {
-            cc::glob::BackstorePage np; np.clear(); np.hdr.page_id = plan.target_page_pa;
-            _pages[plan.target_page_pa] = np; p = &_pages[plan.target_page_pa];
+            cc::glob::BackstorePage np; np.clear();
+            np.hdr.page_id = plan.target_page_pa;
+            _pages[plan.target_page_pa] = np;
+            p = &_pages[plan.target_page_pa];
+
         } else if (plan.needs_read_before) {
             p = _getPage(plan.target_page_pa);
         }
         if (!p) {
-            std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=no_page\n", pa, plan.target_page_pa);
-            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
-            return;
+            std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=no_page\n",
+                         pa, plan.target_page_pa);
+            ubcc.onBackstoreWriteAck(pa); return;
         }
-
-        // D1 overflow allocation
-        if (!plan.needs_new_page && p->isFull()) {
-            uint64_t oldPagePa = plan.target_page_pa;
-            uint64_t newPagePa = _nextPageId++;
-            p->hdr.next_page_ptr = newPagePa;
-            std::fprintf(stderr, "[BACKSTORE-OVERFLOW-ALLOC] pa=0x%lx group=%d oldPage=0x%lx newPage=0x%lx entries=%u\n",
-                         pa, g, oldPagePa, newPagePa, p->hdr.entry_count);
-            std::fflush(stderr);
-            _pagesDirty.insert(oldPagePa);
-            _metaRNF.writePage(oldPagePa, *p);
-            _pagesDirty.erase(oldPagePa);
-            cc::glob::BackstorePage np; np.clear(); np.hdr.page_id = newPagePa;
-            _pages[newPagePa] = np;
-            cc::glob::BackstorePage* newP = &_pages[newPagePa];
-            auto newPlan = plan;
-            newPlan.needs_new_page = true; newPlan.target_page_pa = newPagePa; newPlan.needs_read_before = false;
-            _schema.applyUpsert(*newP, pa, schemaEntry, newPlan);
-            _schema.updateIndexAfterWrite(_groupIdx[g], newPlan, newPagePa);
-            // D6: durable write of new overflow page via callback
-            std::fprintf(stderr, "[BACKSTORE-WRITE-PENDING] pa=0x%lx page=0x%lx\n", pa, newPagePa);
-            std::fflush(stderr);
-            _pagesDirty.insert(newPagePa);
-            uint64_t capPa = pa; uint64_t capPage = newPagePa;
-            _metaRNF.writePageD2(capPage, *newP, [this, capPa, capPage](bool durable) {
-                if (durable) {
-                    std::fprintf(stderr, "[BACKSTORE-WRITE-DURABLE] pa=0x%lx page=0x%lx\n", capPa, capPage);
-                    _pagesDirty.erase(capPage);
-                    replayDeferredReads(capPage);
-                    _pendingBackstoreAcks.push_back({tickRef + 1, capPa, false, true});
-                } else {
-                    std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=remote\n", capPa, capPage);
-                }
-                std::fflush(stderr);
-            });
-            return;
-        }
-
         _schema.applyUpsert(*p, pa, schemaEntry, plan);
         _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
-        // D6: durable write via callback
-        std::fprintf(stderr, "[BACKSTORE-WRITE-PENDING] pa=0x%lx page=0x%lx\n", pa, plan.target_page_pa);
-        std::fflush(stderr);
-        _pagesDirty.insert(plan.target_page_pa);
-        uint64_t capPa2 = pa; uint64_t capPage2 = plan.target_page_pa;
-        _metaRNF.writePageD2(capPage2, *p, [this, capPa2, capPage2](bool durable) {
-            if (durable) {
-                std::fprintf(stderr, "[BACKSTORE-WRITE-DURABLE] pa=0x%lx page=0x%lx\n", capPa2, capPage2);
-                _pagesDirty.erase(capPage2);
-                replayDeferredReads(capPage2);
-                _pendingBackstoreAcks.push_back({tickRef + 1, capPa2, false, true});
-            } else {
-                std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=remote\n", capPa2, capPage2);
-            }
-            std::fflush(stderr);
-        });
+        std::fprintf(stderr, "[BACKSTORE-WRITE-DONE] pa=0x%lx page=0x%lx head=0x%lx tail=0x%lx entries=%u\n",
+                     pa, plan.target_page_pa, _groupIdx[g].page_directory[0],
+                     _groupIdx[g].page_directory[1], p->hdr.entry_count);
+        // Phase 3: Write-through to gem5 MetaRNF for persistence
+        _metaRNF.writePage(plan.target_page_pa, *p);
+        ubcc.onBackstoreWriteAck(pa);
+
     }
 
 
@@ -1405,7 +1348,25 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
         hasGrantData =
             ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
             ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
-            host.dsmData.copyData(msg.h.homeLinePa, grantData.data);
+            ubcc.copyLineDataCache(msg.h.homeLinePa, grantData);
+        if (!hasGrantData) {
+            auto dsmIt = host.dsmData.data.find(msg.h.homeLinePa);
+            if (dsmIt != host.dsmData.data.end()) {
+                std::memcpy(grantData.data, dsmIt->second.data(), 64);
+                ubcc.updateLineDataCache(msg.h.homeLinePa, dsmIt->second.data());
+                hasGrantData = true;
+                std::fprintf(stderr,
+                             "[DATA-CACHE-READ] home=%d pa=0x%lx source=dsm hit=1\n",
+                             nid, msg.h.homeLinePa);
+                std::fflush(stderr);
+            } else {
+                std::fprintf(stderr,
+                             "[DATA-CACHE-READ] home=%d pa=0x%lx source=dsm hit=0\n",
+                             nid, msg.h.homeLinePa);
+                std::fflush(stderr);
+            }
+        }
+
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
@@ -1703,107 +1664,7 @@ main(int argc, char **argv)
                 g_overflowPolicy = ResidentOverflowPolicy::Spill;
             }
         }
-        // Phase 3: H64 is now active — no longer fatal
-        if (!std::strncmp(argv[i], "--backstore-schema=", 19)) {
-            const char *p = argv[i] + 19;
-            if (!std::strcmp(p, "h64") || !std::strcmp(p, "H64") ||
-                !std::strcmp(p, "h64_future")) {
-                g_schemaMode = BackstoreSchemaMode::H64;
-            } else if (!std::strcmp(p, "experimental_schema_c") ||
-                       !std::strcmp(p, "schema_c") ||
-                       !std::strcmp(p, "legacy_schema_c")) {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] --backstore-schema=%s: "
-                    "Schema C exists in source but is not wired in ubio_main. "
-                    "Use --backstore-schema=legacy_schema_a, h64, or disabled.\n", p);
-                std::exit(1);
-            } else if (!std::strcmp(p, "disabled") || !std::strcmp(p, "none"))
-                g_schemaMode = BackstoreSchemaMode::Disabled;
-            else if (!std::strcmp(p, "experimental_schema_a") ||
-                     !std::strcmp(p, "schema_a") ||
-                     !std::strcmp(p, "legacy_schema_a"))
-                g_schemaMode = BackstoreSchemaMode::LegacySchemaA;
-            else if (!std::strcmp(p, "auto"))
-                g_schemaMode = BackstoreSchemaMode::Auto;
-            else {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] --backstore-schema=%s: unrecognized. "
-                    "Valid: legacy_schema_a, h64, disabled, auto.\n", p);
-                std::exit(1);
-            }
-        }
-        // Phase 0: on-chip budget overrides (blc/desc only; group_index is fixed)
-        if (!std::strncmp(argv[i], "--blc-bytes=", 12))
-            g_rdcfg.blc_bytes = (size_t)std::strtoull(argv[i] + 12, nullptr, 10);
-        if (!std::strncmp(argv[i], "--desc-scratch-bytes=", 21))
-            g_rdcfg.desc_scratch_bytes = (size_t)std::strtoull(argv[i] + 21, nullptr, 10);
-        // Phase 0: metadata DRAM capacity (for startup manifest)
-        if (!std::strncmp(argv[i], "--metadata-dram-bytes=", 22))
-            g_metadataDramTotalBytes = std::strtoull(argv[i] + 22, nullptr, 10);
-    }
 
-    // Phase 0: Naive eviction never persists or probes metadata backstore,
-    // so it has no use for Bloom bits.  However, GroupIndex[16] is always
-    // an in-object member (4096 bytes).  We zero the bloom budget but
-    // DO NOT zero group_index_bytes — the GroupIndex storage still exists
-    // and must be counted in the on-chip budget.  (Previously zeroing
-    // index_bytes caused total on-chip to exceed sram_bytes by 4 KiB.)
-    if (g_rdcfg.bloom_bytes == 0) {
-        // Keep group_index_bytes at its true value (4096); it reflects the real
-        // in-object storage.  BLC and desc are not needed without bloom/backstore.
-        g_rdcfg.blc_bytes = 0;
-        g_rdcfg.desc_scratch_bytes = 0;
-    }
-
-    // Phase 3: resolve schema mode
-    if (g_schemaMode == BackstoreSchemaMode::Auto) {
-        // Phase 3: default spill → H64 (production); naive → Disabled
-        if (g_overflowPolicy == ResidentOverflowPolicy::Spill)
-            g_schemaMode = BackstoreSchemaMode::H64;
-        else
-            g_schemaMode = BackstoreSchemaMode::Disabled;
-    }
-
-    // Phase 3: budget constraints. H64 and LegacySchemaA both use
-    // Bloom + ResidentDir; BLC/desc_scratch reserved for future H64 profile.
-    // LegacySchemaA forces them to 0 (not implemented in Schema A).
-    if (g_schemaMode == BackstoreSchemaMode::LegacySchemaA) {
-        g_rdcfg.blc_bytes = 0;
-        g_rdcfg.desc_scratch_bytes = 0;
-    }
-
-    // Phase 0: group_index_bytes must match the real allocation.
-    // GroupIndex[16] is a fixed-size member (4096 B).  Any other value
-    // would misrepresent the on-chip budget.  Tiny test configs
-    // (sram < 64 KiB) are exempt from this check.
-    {
-        constexpr size_t kRealGroupIndexStorage = ResidentDir::BloomGroups
-                                                  * sizeof(GroupIndex);
-        static_assert(kRealGroupIndexStorage == 4096,
-                      "GroupIndex[16] must be exactly 4096 bytes");
-        if (g_rdcfg.sram_bytes >= 64 * 1024) {
-            // For production configs: config value must match reality.
-            size_t eff = g_rdcfg.effectiveGroupIndexBytes();
-            if (eff != kRealGroupIndexStorage) {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] group_index_bytes=%zu must equal %zu "
-                    "(sizeof(GroupIndex)*BloomGroups). "
-                    "Remove --group-index-bytes= override or use "
-                    "--sram-bytes < 65536 for tiny test configs.\n",
-                    eff, kRealGroupIndexStorage);
-                std::exit(1);
-            }
-        }
-    }
-
-    // ── Debug gates: default-off, opt-in via env vars ─────────────────
-    if (const char *env = std::getenv("UBIO_DEBUG_PERF")) {
-        g_debugUbioPerf = (std::atoi(env) != 0);
-        if (g_debugUbioPerf) std::fprintf(stderr, "[UBIO-DEBUG] perf tracing enabled\n");
-    }
-    bool ubccDebugClear = false;
-    if (const char *env = std::getenv("UBCC_DEBUG_CLEAR")) {
-        ubccDebugClear = (std::atoi(env) != 0);
     }
 
     if (nid < 0 || nid > 31) {
@@ -1846,35 +1707,8 @@ main(int argc, char **argv)
                            0, g_numSockets, g_numNodes, &g_rdcfg);
     ubcc.setBatchRsEnabled(g_batchRs);
     ubcc.setResidentOverflowPolicy(g_overflowPolicy);
-    if (ubccDebugClear) {
-        ubcc.setDebugClearTrace(true);
-    }
-    // Phase 3: H64 mode disables Bloom-negative shortcut
-    if (g_schemaMode == BackstoreSchemaMode::H64) {
-        ubcc.setH64BloomAllMisses(true);
-    }
+    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
 
-    // Phase 3: Build H64HostConfig if schema is H64 (production default)
-    bool useH64 = (g_schemaMode == BackstoreSchemaMode::H64);
-    cc::glob::H64HostConfig h64cfg;
-    if (useH64) {
-        // Logical metadata sizing: total 64B lines available in metadata DRAM.
-        // Control records occupy offsets 0..num_groups-1; table data starts at num_groups.
-        uint64_t perSocketLines = (g_metadataDramTotalBytes / ((uint64_t)g_numSockets)) / 64ULL;
-        h64cfg.num_groups = 256;
-        h64cfg.buckets_per_group = (perSocketLines >= h64cfg.num_groups)
-            ? (perSocketLines - h64cfg.num_groups) / h64cfg.num_groups : 1;
-        if (h64cfg.buckets_per_group < 1) h64cfg.buckets_per_group = 1;
-        if (h64cfg.buckets_per_group > 16384) h64cfg.buckets_per_group = 16384;
-        h64cfg.metadata_socket_lines = perSocketLines;
-        h64cfg.hash_seed = 0x9e3779b97f4a7c15ULL;
-        h64cfg.max_active_rmw = 8;
-        h64cfg.max_pending_ops = 128;
-        h64cfg.max_waiters_per_bucket = 8;
-    }
-
-    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick,
-                            useH64, useH64 ? &h64cfg : nullptr);
     // T_ubio_dram: argv --dram-delay-ps= has priority (no env fallback)
     host._ubioDramDelayPs = g_dramDelayPs;
     ubcc.setHost(&host);

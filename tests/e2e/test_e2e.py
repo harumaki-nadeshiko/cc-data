@@ -8,7 +8,7 @@ USAGE (Python runner mode):
     python3 tests/e2e/test_e2e.py --tc <N>           # Run single TC
 """
 
-import sys, os, re, subprocess, argparse, tempfile, shutil, json
+import sys, os, re, subprocess, argparse, tempfile, shutil
 
 # gem5 v25.1 SimObject hierarchy can be deep; increase recursion limit.
 sys.setrecursionlimit(20000)
@@ -103,13 +103,17 @@ TESTCASES = {
     117: "e2e_tc117_clear_reorder",
     118: "e2e_tc118_mixed_fault",
     119: "e2e_tc119_triple_fault",
+    120: "e2e_tc120_baseline_perf_mix",
+    121: "e2e_tc121_perf_cold_stream",
+    122: "e2e_tc122_perf_hot_reuse",
+    123: "e2e_tc123_perf_shared_upgrade",
+    124: "e2e_tc124_perf_direct_fwd",
     142: "e2e_tc142_db_oltp_buffer_pool",
     143: "e2e_tc143_db_btree_traversal",
     144: "e2e_tc144_db_wal_checkpoint",
     145: "e2e_tc145_faas_warm_invocation",
     146: "e2e_tc146_graph_frontier",
     147: "e2e_tc147_feature_store",
-
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -284,22 +288,6 @@ def verify_tc9(reads, lines):
     if len(reads) > 0:
         return False, "TC9 FAILED: unexpected [READ_VAL] in negative test", reads
     return False, "TC9 FAILED: no [FATAL] or rejection signal detected", []
-
-
-def verify_tc200(reads, lines):
-    """TC200: naive capacity eviction recalls and preserves dirty payload."""
-    target_reads = [r for r in reads if r["node"] == 2]
-    if len(target_reads) != 1:
-        return False, f"TC200 FAILED: expected one Node2 READ_VAL, got {len(target_reads)}", reads
-    read = target_reads[0]
-    if read["verdict"] != "MATCH" or int(read["actual"], 16) != 0xBEEFCAFE:
-        return False, "TC200 FAILED: dirty recall payload mismatch", [read]
-    required = ("[UBCC-NAIVE-EVICT]", "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]",
-                "[UBCC-NAIVE-EVICT-DONE]")
-    missing = [marker for marker in required if not any(marker in line for line in lines)]
-    if missing:
-        return False, f"TC200 FAILED: missing naive recall evidence {missing}", []
-    return True, "TC200 PASSED: naive dirty recall preserved payload", []
 
 
 def verify_tc10(reads, lines):
@@ -1328,14 +1316,15 @@ def verify_tc111(reads, lines):
 
 def verify_tc112(reads, lines):
     """TC112: TBE interference — 3.6 P1.
-    Cross-node DSM writes must converge. Local markers are observability-only
-    because concurrent raw writes can be truncated in split simout capture."""
-    if len(reads) < 3:
-        return False, f"TC112 FAILED: expected 3 READ_VAL, got {len(reads)}", reads
+    Cross-node DSM writes must converge. Local progress markers must exist."""
+    if len(reads) < 1:
+        return False, "TC112 FAILED: no READ_VAL", reads
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC112 FAILED: {len(mismatches)} mismatches", mismatches
     local_lines = [l for l in lines if "[TC112_LOCAL]" in l]
+    if len(local_lines) < 3:
+        return False, f"TC112 FAILED: insufficient local progress ({len(local_lines)} markers)", []
     return True, f"TC112 PASSED: cross-node converged, {len(local_lines)} local-progress markers", []
 
 
@@ -1477,385 +1466,6 @@ def verify_tc123(reads, lines):
 
 def verify_tc124(reads, lines):
     return verify_perf_workload(124, reads, lines)
-
-
-def verify_tc130(reads, lines):
-    """TC130: high-footprint naive-vs-spill directory benchmark."""
-    if len(reads) < 24:
-        return False, f"TC130 FAILED: expected >=24 hot-line checks, got {len(reads)}", reads
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC130 FAILED: {len(mismatches)} hot-line mismatches", mismatches[:10]
-    required = ("hot_populate", "hot_share", "overflow_pressure", "hot_reuse")
-    missing = [phase for phase in required
-               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
-    if missing:
-        return False, f"TC130 FAILED: missing phases {missing}", []
-    return True, f"TC130 PASSED: hot checks={len(reads)}", []
-
-
-def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
-    if len(reads) < min_reads:
-        return False, f"TC{tc_id} FAILED: expected >= {min_reads} READ_VAL, got {len(reads)}", reads
-    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
-    missing = [phase for phase in phases
-               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
-    if missing:
-        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
-    return True, f"TC{tc_id} PASSED: reads={len(reads)}, real-capacity pressure completed", []
-
-
-def verify_tc131(reads, lines):
-    return verify_real_capacity_workload(131, reads, lines,
-                                         ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse",
-                                          "exclusive_upgrade"), 8)
-
-
-def verify_tc132(reads, lines):
-    return verify_real_capacity_workload(132, reads, lines,
-                                         ("checkpoint_seed", "dirty_stream", "checkpoint_recover"), 16)
-
-
-def verify_tc133(reads, lines):
-    return verify_real_capacity_workload(133, reads, lines,
-                                         ("frontier_seed", "frontier_share", "frontier_pressure", "frontier_reuse"), 7)
-
-
-def verify_tc134(reads, lines):
-    return verify_real_capacity_workload(134, reads, lines,
-                                         ("window_seed", "window_share", "window_pressure", "window_reuse"), 7)
-
-
-def verify_tc201(reads, lines):
-    if len(reads) != 1:
-        return False, f"TC201 FAILED: expected one recall verification, got {len(reads)}", reads
-    if reads[0]['verdict'] != 'MATCH':
-        return False, "TC201 FAILED: recalled payload mismatch", reads
-    required = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-ISSUED", "RESIDENT-FILL-DONE")
-    missing = [marker for marker in required if not any(marker in line for line in lines)]
-    if missing:
-        return False, f"TC201 FAILED: missing H64 spill/fill evidence {missing}", []
-    return True, "TC201 PASSED: spill, H64 fill, and recalled payload verified", []
-
-
-def verify_tc202(reads, lines):
-    if len(reads) != 1:
-        return False, f"TC202 FAILED: expected one verification, got {len(reads)}", reads
-    if reads[0]['verdict'] != 'MATCH':
-        return False, "TC202 FAILED: payload mismatch", reads
-    if not any("RESIDENT-SPILL-DONE" in line for line in lines):
-        return False, "TC202 FAILED: missing spill completion", []
-    return True, "TC202 PASSED: spill and payload verification completed", []
-
-
-def verify_tc203(reads, lines):
-    """TC203: H64 metadata spill/onload regression, not Schema A overflow."""
-    if len(reads) != 1 or reads[0]["node"] != 2:
-        return False, f"TC203 FAILED: expected one Node2 READ_VAL, got {len(reads)}", reads
-    if reads[0]["verdict"] != "MATCH":
-        return False, "TC203 FAILED: H64 spill/onload payload mismatch", reads
-    required = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-ISSUED", "RESIDENT-FILL-DONE")
-    missing = [marker for marker in required if not any(marker in line for line in lines)]
-    if missing:
-        return False, f"TC203 FAILED: missing H64 spill/fill evidence {missing}", []
-    return True, "TC203 PASSED: H64 spill/onload regression completed", []
-
-
-def verify_tc126(reads, lines):
-    """TC126: Resident-waiter upgrade replay — upgrade must NOT downgrade to ReadUnique.
-
-    Checks:
-      1. At least 2 READ_VAL from node1 (Phase 2) and node2 (Phase 2, Phase 5).
-      2. Node2 final read must be TC126_V1 (0x1260BEEF).
-      3. Log evidence: the target Upgrade is resident-waited and replays once.
-      4. Log evidence: at least one RESIDENT-SPILL-START (victim=) or RESIDENT-FILL-ISSUED.
-      5. Log evidence: exactly one UBCC-UPGRADE-COMMIT (after duplicate stderr removal).
-      6. Regression guard: count of UBCC-OUTER-REQ req=1 (ReadUnique) for target PA
-         must NOT exceed 1 (the initial Phase 1 store may generate one ReadUnique;
-         a second occurrence would indicate a post-fill downgrade replay).
-    """
-    target_val = 0x1260BEEF
-    target_pa = 'pa=0x10001000'
-
-    # Check reads
-    node1_reads = [r for r in reads if r['node'] == 1]
-    node2_reads = [r for r in reads if r['node'] == 2]
-    if len(node1_reads) < 1:
-        return False, 'TC126 FAILED: no READ_VAL from Node1', reads
-    if len(node2_reads) < 2:
-        return False, f'TC126 FAILED: expected >=2 Node2 reads, got {len(node2_reads)}', reads
-
-    # Node2's last read must be the upgraded value
-    last_n2 = node2_reads[-1]
-    last_actual = int(last_n2['actual'], 16)
-    if last_actual != target_val:
-        return False, (f'TC126 FAILED: Node2 final read 0x{last_actual:X}, '
-                       f'expected 0x{target_val:X}'), [last_n2]
-
-    # Check for mismatches
-    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
-    if mismatches:
-        return False, f'TC126 FAILED: {len(mismatches)} mismatches', mismatches
-
-    # Log evidence checks
-    has_upgrade_waiter = any(
-        'RESIDENT-WAITER-ENQ' in l and target_pa in l and 'opKind=1' in l
-        for l in lines)
-    has_spill_or_fill = any(
-        target_pa in l and
-        ('RESIDENT-SPILL-START' in l or 'RESIDENT-FILL-ISSUED' in l)
-        for l in lines)
-    upgrade_commits = sum(
-        1 for l in lines
-        if 'UBCC-UPGRADE-COMMIT' in l and target_pa in l)
-    queued_replays = sum(
-        1 for l in lines
-        if 'RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED' in l and target_pa in l)
-
-    # Regression guard: ReadUnique (req=1) for target PA.
-    # Phase 1 store MAY generate one initial ReadUnique — that is normal.
-    # A second (post-fill) ReadUnique indicates the upgrade was downgraded.
-    ru_replay_count = sum(
-        1 for l in lines
-        if 'UBCC-OUTER-REQ' in l and target_pa in l and ' req=1 ' in l)
-
-    diag = (f'upgrade_waiter={has_upgrade_waiter}, '
-            f'spill_fill={has_spill_or_fill}, '
-            f'upgrade_commits={upgrade_commits}, '
-            f'queued_replays={queued_replays}, '
-            f'ru_replay_count={ru_replay_count}')
-
-    if not has_upgrade_waiter:
-        return False, f'TC126 FAILED: no RESIDENT-WAITER-ENQ with opKind=1 ({diag})', []
-    if not has_spill_or_fill:
-        return False, f'TC126 FAILED: no RESIDENT-SPILL-START or RESIDENT-FILL-ISSUED ({diag})', []
-    if upgrade_commits != 1:
-        return False, f'TC126 FAILED: expected exactly one upgrade commit ({diag})', []
-    if queued_replays != 1:
-        return False, f'TC126 FAILED: expected one queued replay transition ({diag})', []
-    if ru_replay_count > 1:
-        return False, (f'TC126 FAILED: {ru_replay_count} ReadUnique for target '
-                       f'(>1 indicates post-fill downgrade replay) ({diag})'), []
-
-    return True, f'TC126 PASSED: upgrade replay correct ({diag})', []
-
-
-def verify_tc125(reads, lines):
-    """TC125: Read offload/onload — shared read survives metadata spill+fill.
-
-    Checks:
-      1. At least 4 READ_VAL (Phase 2 node1, node0, Phase 4 node1, Phase 6 node0).
-      2. All reads MATCH their expected values (no mismatches).
-      3. Phase 4 node1 read confirms V0 after onload.
-      4. Phase 6 node0 read confirms V1 after ReadUnique.
-      5. Log evidence: at least one RESIDENT-SPILL-START and at least one
-         RESIDENT-FILL-ISSUED for the target PA.
-      Spill format: victim=0x... ; Fill format: pa=0x...
-    """
-    target_fill_pat = 'pa=0x10002000'
-    target_spill_pat = 'victim=0x10002000'
-    v0 = 0x12500000
-    v1 = 0x1250BEEF
-
-    # All reads must match
-    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
-    if mismatches:
-        return False, f'TC125 FAILED: {len(mismatches)} mismatches', mismatches
-
-    if len(reads) < 4:
-        return False, f'TC125 FAILED: expected >=4 READ_VAL, got {len(reads)}', reads
-
-    # Node1 post-spill read must be V0
-    node1_reads = [r for r in reads if r['node'] == 1]
-    if len(node1_reads) < 1:
-        return False, 'TC125 FAILED: no READ_VAL from Node1', reads
-    n1_post_spill = [r for r in node1_reads if int(r['expected'], 16) == v0]
-    if not n1_post_spill:
-        return False, 'TC125 FAILED: Node1 did not read V0 after spill', node1_reads
-
-    # Node0 final read must be V1
-    node0_v1 = [r for r in reads if r['node'] == 0 and int(r['expected'], 16) == v1]
-    if not node0_v1:
-        return False, 'TC125 FAILED: Node0 did not read V1', reads
-    for r in node0_v1:
-        if int(r['actual'], 16) != v1:
-            return False, f'TC125 FAILED: Node0 expected V1, got 0x{int(r["actual"],16):X}', [r]
-
-    # Log evidence: spill (victim=) + fill (pa=) for target PA
-    has_spill = any(
-        'RESIDENT-SPILL-START' in l and target_spill_pat in l
-        for l in lines)
-    has_fill = any(
-        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
-        for l in lines)
-
-    diag = f'spill={has_spill}, fill={has_fill}'
-    if not has_spill:
-        return False, f'TC125 FAILED: no RESIDENT-SPILL-START for target ({diag})', []
-    if not has_fill:
-        return False, f'TC125 FAILED: no RESIDENT-FILL-ISSUED for target ({diag})', []
-
-    return True, f'TC125 PASSED: read onload correct, V0→V1 transition OK ({diag})', []
-
-
-def verify_tc127(reads, lines):
-    """TC127: Writeback offload/onload — dirty writeback survives metadata spill.
-
-    Checks:
-      1. At least 2 READ_VAL from remote nodes after writeback.
-      2. All reads MATCH (both must see the nonzero payload V0).
-      3. Log evidence: UBCC-WB-REQ WritebackReq, WB-DATA-PERSIST,
-         RESIDENT-SPILL-START (victim=), and RESIDENT-FILL-ISSUED (pa=)
-         for the target PA.
-    """
-    target_fill_pat = 'pa=0x10004000'
-    target_spill_pat = 'victim=0x10004000'
-    v0 = 0x1270C0DE
-
-    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
-    if mismatches:
-        return False, f'TC127 FAILED: {len(mismatches)} mismatches', mismatches
-
-    if len(reads) < 2:
-        return False, f'TC127 FAILED: expected >=2 READ_VAL, got {len(reads)}', reads
-
-    # All reads must see V0
-    for r in reads:
-        if int(r['actual'], 16) != v0:
-            return False, (f'TC127 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
-                           f'expected 0x{v0:X}'), [r]
-
-    # Log evidence
-    has_spill = any(
-        'RESIDENT-SPILL-START' in l and target_spill_pat in l
-        for l in lines)
-    has_fill = any(
-        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
-        for l in lines)
-    has_wb_persist = any(
-        'WB-DATA-PERSIST' in l and target_fill_pat in l
-        for l in lines)
-    has_wb_req = any(
-        'UBCC-WB-REQ' in l and target_fill_pat in l and 'WritebackReq' in l
-        for l in lines)
-
-    diag = f'spill={has_spill}, fill={has_fill}, wb_req={has_wb_req}, wb_persist={has_wb_persist}'
-    if not has_spill:
-        return False, f'TC127 FAILED: no RESIDENT-SPILL-START victim=target ({diag})', []
-    if not has_fill:
-        return False, f'TC127 FAILED: no RESIDENT-FILL-ISSUED ({diag})', []
-    if not has_wb_req:
-        return False, f'TC127 FAILED: no UBCC-WB-REQ WritebackReq ({diag})', []
-    if not has_wb_persist:
-        return False, f'TC127 FAILED: no WB-DATA-PERSIST ({diag})', []
-
-    return True, f'TC127 PASSED: writeback offload/onload, data persisted ({diag})', []
-
-
-def verify_tc128(reads, lines):
-    """TC128: Clean evict offload/onload — data integrity after clean eviction.
-
-    Checks:
-      1. At least 2 READ_VAL (Phase 2 shared reads + Phase 5 verify).
-      2. All reads MATCH V0.
-      3. Log evidence: RESIDENT-SPILL-START + RESIDENT-FILL-ISSUED for target PA.
-      4. Clean eviction (EvictReq) evidence is SOFT/optional: checked and
-         reported but never causes a failure.  In the current CHI EP
-         implementation, a clean SC eviction is handled locally by the HN-F
-         and does NOT generate a ubio-level EvictReq.
-    """
-    target_fill_pat = 'pa=0x10006000'
-    target_spill_pat = 'victim=0x10006000'
-    v0 = 0x1280C1E0
-
-    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
-    if mismatches:
-        return False, f'TC128 FAILED: {len(mismatches)} mismatches', mismatches
-
-    if len(reads) < 2:
-        return False, f'TC128 FAILED: expected >=2 READ_VAL, got {len(reads)}', reads
-
-    for r in reads:
-        if int(r['actual'], 16) != v0:
-            return False, (f'TC128 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
-                           f'expected 0x{v0:X}'), [r]
-
-    # Log evidence: spill uses victim=, fill uses pa=
-    has_spill = any(
-        'RESIDENT-SPILL-START' in l and target_spill_pat in l
-        for l in lines)
-    has_fill = any(
-        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
-        for l in lines)
-    has_evict_req = any(
-        'EvictReq' in l and target_fill_pat in l
-        for l in lines)
-
-    diag = f'spill={has_spill}, fill={has_fill}, evict_req={has_evict_req}'
-    if not has_spill:
-        return False, f'TC128 FAILED: no RESIDENT-SPILL-START ({diag})', []
-    if not has_fill:
-        return False, f'TC128 FAILED: no RESIDENT-FILL-ISSUED ({diag})', []
-
-    # NOTE: Clean eviction does not generate ubio-level EvictReq in current
-    # CHI EP implementation. This check is diagnostic only.
-    return True, (f'TC128 PASSED: clean evict onload, data intact '
-                  f'(evict_req={has_evict_req}, {diag})'), []
-
-
-def verify_tc129(reads, lines):
-    """TC129: Long mixed integration — two spill/fill cycles validated.
-
-    Checks:
-      1. At least 3 READ_VAL (node1 V0, node2 V1, node0 V1).
-      2. All reads MATCH.
-      3. Node1 reads V0, both node2 and node0 read V1.
-      4. Log evidence: at least 2 RESIDENT-SPILL-START (victim=) and at least 2
-         RESIDENT-FILL-ISSUED (pa=) for the target PA.
-    """
-    target_fill_pat = 'pa=0x10008000'
-    target_spill_pat = 'victim=0x10008000'
-    v0 = 0x12900000
-    v1 = 0x1290FADE
-
-    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
-    if mismatches:
-        return False, f'TC129 FAILED: {len(mismatches)} mismatches', mismatches
-
-    if len(reads) < 3:
-        return False, f'TC129 FAILED: expected >=3 READ_VAL, got {len(reads)}', reads
-
-    # Node1 must see V0
-    n1_v0 = [r for r in reads if r['node'] == 1 and int(r['actual'], 16) == v0]
-    if not n1_v0:
-        return False, 'TC129 FAILED: Node1 did not read V0', reads
-
-    # Node2 must see V1
-    n2_v1 = [r for r in reads if r['node'] == 2 and int(r['actual'], 16) == v1]
-    if not n2_v1:
-        return False, 'TC129 FAILED: Node2 did not read V1', reads
-
-    # Node0 must see V1
-    n0_v1 = [r for r in reads if r['node'] == 0 and int(r['actual'], 16) == v1]
-    if not n0_v1:
-        return False, 'TC129 FAILED: Node0 did not read V1', reads
-
-    # Log evidence: count spill and fill events for target PA
-    spill_count = sum(1 for l in lines
-                      if 'RESIDENT-SPILL-START' in l and target_spill_pat in l)
-    fill_count = sum(1 for l in lines
-                     if 'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l)
-
-    diag = f'spills={spill_count}, fills={fill_count}'
-
-    if spill_count < 2:
-        return False, f'TC129 FAILED: expected two target spills ({diag})', []
-    if fill_count < 2:
-        return False, f'TC129 FAILED: expected two target fills ({diag})', []
-
-    return True, f'TC129 PASSED: two full spill/fill cycles, V0→V1 correct ({diag})', []
 
 
 def verify_tc118(reads, lines):
@@ -2340,68 +1950,102 @@ def verify_tc84(reads, lines):
     return True, f"TC84/85 PASSED: capacity test ({len(cap_lines)} markers)", []
 
 
-def verify_ha_2n1s(reads, lines):
-    validations = []
-    for line in lines:
-        if not line.startswith('{'):
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("kind") == "validation":
-            validations.append(record)
-    nodes = {r.get("node") for r in validations if r.get("errors") == 0}
-    if nodes != {0, 1}:
-        return False, ("2N1S FAILED: expected successful JSONL validation from "
-                       f"nodes 0 and 1, got {validations}"), []
-    scenarios = {r.get("scenario") for r in validations}
-    if len(scenarios) != 1:
-        return False, f"2N1S FAILED: inconsistent scenarios {scenarios}", []
-    return True, f"2N1S PASSED: {next(iter(scenarios))} validated on two nodes", []
-
 VERIFIERS = {
-    1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
-    5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
-    9: verify_tc9, 10: verify_tc10, 11: verify_tc11,
+    1: verify_tc1,
+    2: verify_tc2,
+    3: verify_tc3,
+    4: verify_tc4,
+    5: verify_tc5,
+    6: verify_tc6,
+    7: verify_tc7,
+    8: verify_tc8,
+    9: verify_tc9,
+    10: verify_tc10,
+    11: verify_tc11,
     12: verify_tc12,
-    13: verify_tc13, 14: verify_tc14, 15: verify_tc15,
-    16: verify_tc16, 17: verify_tc17,
-    18: verify_tc18, 19: verify_tc19,
-    20: verify_tc20, 21: verify_tc21,
-    22: verify_tc22, 23: verify_tc23, 24: verify_tc24,
-    25: verify_tc25, 26: verify_tc26, 27: verify_tc27, 28: verify_tc28,
-    29: verify_tc29, 30: verify_tc30, 31: verify_tc31, 32: verify_tc32,
-    33: verify_tc33, 34: verify_tc34, 35: verify_tc35,
-    36: verify_tc36, 37: verify_tc37, 38: verify_tc38, 39: verify_tc39,
-    40: verify_tc40, 41: verify_tc41, 42: verify_tc42, 43: verify_tc43,
-    44: verify_tc44, 45: verify_tc45, 46: verify_tc46,
-    47: verify_tc47, 48: verify_tc48, 49: verify_tc49,
-    50: verify_tc50, 51: verify_tc51, 52: verify_tc52,
-    53: verify_tc53, 54: verify_tc54,
-    63: verify_tc63, 64: verify_tc64,
-    80: verify_tc80, 81: verify_tc81, 82: verify_tc82,
-    84: verify_tc84, 85: verify_tc84,
+    13: verify_tc13,
+    14: verify_tc14,
+    15: verify_tc15,
+    16: verify_tc16,
+    17: verify_tc17,
+    18: verify_tc18,
+    19: verify_tc19,
+    20: verify_tc20,
+    21: verify_tc21,
+    22: verify_tc22,
+    23: verify_tc23,
+    24: verify_tc24,
+    25: verify_tc25,
+    26: verify_tc26,
+    27: verify_tc27,
+    28: verify_tc28,
+    29: verify_tc29,
+    30: verify_tc30,
+    31: verify_tc31,
+    32: verify_tc32,
+    33: verify_tc33,
+    34: verify_tc34,
+    35: verify_tc35,
+    36: verify_tc36,
+    37: verify_tc37,
+    38: verify_tc38,
+    39: verify_tc39,
+    40: verify_tc40,
+    41: verify_tc41,
+    42: verify_tc42,
+    43: verify_tc43,
+    44: verify_tc44,
+    45: verify_tc45,
+    46: verify_tc46,
+    47: verify_tc47,
+    48: verify_tc48,
+    49: verify_tc49,
+    50: verify_tc50,
+    51: verify_tc51,
+    52: verify_tc52,
+    53: verify_tc53,
+    54: verify_tc54,
+    63: verify_tc63,
+    64: verify_tc64,
+    80: verify_tc80,
+    81: verify_tc81,
+    82: verify_tc82,
+    84: verify_tc84,
+    85: verify_tc84,
     90: verify_tc90,
-    91: verify_tc91, 92: verify_tc92, 93: verify_tc93,     94: verify_tc94,
+    91: verify_tc91,
+    92: verify_tc92,
+    93: verify_tc93,
+    94: verify_tc94,
     95: verify_tc95,
-    96: verify_tc96, 97: verify_tc97, 98: verify_tc98, 99: verify_tc99,
-    100: verify_tc100, 101: verify_tc101, 102: verify_tc102,
-    110: verify_tc110, 111: verify_tc111,
-    112: verify_tc112, 113: verify_tc113,
+    96: verify_tc96,
+    97: verify_tc97,
+    98: verify_tc98,
+    99: verify_tc99,
+    100: verify_tc100,
+    101: verify_tc101,
+    102: verify_tc102,
+    110: verify_tc110,
+    111: verify_tc111,
+    112: verify_tc112,
+    113: verify_tc113,
     114: verify_tc114,
     115: verify_tc115,
     116: verify_tc116,
     117: verify_tc117,
     118: verify_tc118,
     119: verify_tc119,
+    120: verify_tc120,
+    121: verify_tc121,
+    122: verify_tc122,
+    123: verify_tc123,
+    124: verify_tc124,
     142: verify_tc142,
     143: verify_tc143,
     144: verify_tc144,
     145: verify_tc145,
     146: verify_tc146,
     147: verify_tc147,
-
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -2569,8 +2213,6 @@ def gem5_config_main():
     _parser.add_argument("--ep-wait-cap", type=int, default=-1)
     _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
     _parser.add_argument("--ubcc-batch-rs", type=int, default=-1)
-    # Accept but ignore: v5-freeze runs the 0717 pure-TimingSimpleCPU path
-    # so the frozen 0717 gem5 ArmSystem SE/workload quirk is never hit.
     _parser.add_argument("--cpu-model", choices=("timing", "o3"),
                          default="timing")
     _args, _ = _parser.parse_known_args()
@@ -2630,20 +2272,16 @@ def gem5_config_main():
 
     # Multi-process split configuration.
     _local_node = _args.node_id
-    # DEFAULT_N is imported below from CHI_basic_framework_config;
-    # use a sane fallback if the import hasn't happened yet.
-    try:
-        _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
-    except NameError:
-        _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else 3
+    _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
     # When this process owns a single node, only that node's UBAdapter binds
     # its Port (local_node = node id). -1 = all nodes (single-process mode).
 
     # ── Build gem5 system ──────────────────────────────────────────
     import m5
     from m5.objects import (
-        System, SrcClockDomain, VoltageDomain, RubySystem,
-        TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, ArmEmuLinux,
+        System, ArmSystem, SrcClockDomain, VoltageDomain, RubySystem,
+        ArmTimingSimpleCPU, ArmO3CPU, Process, SEWorkload, Root, AddrRange,
+        ArmEmuLinux,
     )
 
     gem5_root = os.path.dirname(os.path.dirname(os.path.dirname(GEM5_BIN)))
@@ -2671,7 +2309,14 @@ def gem5_config_main():
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    system = System(mem_mode="timing", cache_line_size=64)
+    local_external_ranges = []
+    for node_id in BUILD_NODES:
+        node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
+                              _cfg_num_sockets)
+        local_external_ranges.extend(node_cfg.all_local_private_ranges())
+    system = ArmSystem(
+        mem_mode="timing", cache_line_size=64,
+        external_memory_ranges=local_external_ranges)
     root.system = system
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
@@ -2681,7 +2326,8 @@ def gem5_config_main():
 
     cpus = []
     for i in range(TOTAL_CPUS):
-        cpu = TimingSimpleCPU(cpu_id=i)
+        cpu_class = ArmO3CPU if _args.cpu_model == "o3" else ArmTimingSimpleCPU
+        cpu = cpu_class(cpu_id=i)
         cpu.clk_domain = SrcClockDomain(
             clock="2GHz",
             voltage_domain=system.clk_domain.voltage_domain)
@@ -2714,9 +2360,7 @@ def gem5_config_main():
         # Q2 FIX: Redirect workload stdout/stderr to files in outdir
         # so the harness can parse [READ_VAL] markers.
         # Default "cout"/"cerr" map to simulator terminal (not files).
-        # Socket workers in the same gem5 process share one node-level simout.
-        # O_APPEND preserves each single-syscall workload marker atomically.
-        proc.output = f"append:simout_n{node_id}"
+        proc.output = f"simout_n{node_id}"
         proc.errout = "simerr"
         cpu.workload = [proc]
 
@@ -2771,7 +2415,8 @@ def gem5_config_main():
     options.access_backing_store = True
     options.enable_dram_powerdown = False
     options.protocol = "CHI"
-    options.cpu_type = "TimingSimpleCPU"
+    options.cpu_type = "ArmO3CPU" if _args.cpu_model == "o3" \
+        else "ArmTimingSimpleCPU"
     options.simple_physical_channels = []
     options.vcs_per_vnet = 1
     options.mesh_rows = 1
@@ -2802,12 +2447,10 @@ def gem5_config_main():
     # SimpleMemory.  Must cover ALL nodes' address spaces (up to
     # Node2 base + 5*SEG ≈ 2.2 TB) so that self-tests and grant-data
     # population can functional-read any PA.
-    # Per-node window = (2 + N*S) DSM/private segments + metadata DRAM.
-    # Phase 0: metadata default is now 128 MiB (was 16 MiB).
+    # Per-node window = (2 + N*S) DSM/private segments + 16MB metadata.
     _num_sockets_cfg = _cfg_num_sockets
     _segs_per_node = 2 + NODES * _num_sockets_cfg
-    _meta_size = getattr(options, "ubcc_metadata_size", 128 * 1024 * 1024)
-    _node_window = _segs_per_node * DEFAULT_SEG_SIZE + _meta_size
+    _node_window = _segs_per_node * DEFAULT_SEG_SIZE + 16 * 1024 * 1024
     _max_pa = (NODES - 1) * (1 << 40) + _node_window
     system.mem_ranges = [AddrRange(0, size=_max_pa)]
 
