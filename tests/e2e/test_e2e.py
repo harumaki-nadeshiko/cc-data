@@ -108,6 +108,16 @@ TESTCASES = {
     122: "e2e_tc122_perf_hot_reuse",
     123: "e2e_tc123_perf_shared_upgrade",
     124: "e2e_tc124_perf_direct_fwd",
+    125: "e2e_tc125_read_offload_onload",
+    126: "e2e_tc126_resident_upgrade_replay",
+    127: "e2e_tc127_writeback_offload_onload",
+    128: "e2e_tc128_clean_evict_offload_onload",
+    129: "e2e_tc129_long_mixed_integration",
+    130: "e2e_tc130_directory_overflow_benchmark",
+    131: "e2e_tc131_catalog_fullscan",
+    132: "e2e_tc132_dirty_checkpoint_stream",
+    133: "e2e_tc133_8n1s_shared_frontier",
+    134: "e2e_tc134_8n2s_sliding_window",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1308,15 +1318,14 @@ def verify_tc111(reads, lines):
 
 def verify_tc112(reads, lines):
     """TC112: TBE interference — 3.6 P1.
-    Cross-node DSM writes must converge. Local progress markers must exist."""
-    if len(reads) < 1:
-        return False, "TC112 FAILED: no READ_VAL", reads
+    Cross-node DSM writes must converge. Local markers are observability-only
+    because concurrent raw writes can be truncated in split simout capture."""
+    if len(reads) < 3:
+        return False, f"TC112 FAILED: expected 3 READ_VAL, got {len(reads)}", reads
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC112 FAILED: {len(mismatches)} mismatches", mismatches
     local_lines = [l for l in lines if "[TC112_LOCAL]" in l]
-    if len(local_lines) < 3:
-        return False, f"TC112 FAILED: insufficient local progress ({len(local_lines)} markers)", []
     return True, f"TC112 PASSED: cross-node converged, {len(local_lines)} local-progress markers", []
 
 
@@ -1460,6 +1469,349 @@ def verify_tc124(reads, lines):
     return verify_perf_workload(124, reads, lines)
 
 
+def verify_tc130(reads, lines):
+    """TC130: high-footprint naive-vs-spill directory benchmark."""
+    if len(reads) < 24:
+        return False, f"TC130 FAILED: expected >=24 hot-line checks, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC130 FAILED: {len(mismatches)} hot-line mismatches", mismatches[:10]
+    required = ("hot_populate", "hot_share", "overflow_pressure", "hot_reuse")
+    missing = [phase for phase in required
+               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
+    if missing:
+        return False, f"TC130 FAILED: missing phases {missing}", []
+    return True, f"TC130 PASSED: hot checks={len(reads)}", []
+
+
+def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
+    if len(reads) < min_reads:
+        return False, f"TC{tc_id} FAILED: expected >= {min_reads} READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    missing = [phase for phase in phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    return True, f"TC{tc_id} PASSED: reads={len(reads)}, real-capacity pressure completed", []
+
+
+def verify_tc131(reads, lines):
+    return verify_real_capacity_workload(131, reads, lines,
+                                         ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse"), 16)
+
+
+def verify_tc132(reads, lines):
+    return verify_real_capacity_workload(132, reads, lines,
+                                         ("checkpoint_seed", "dirty_stream", "checkpoint_recover"), 16)
+
+
+def verify_tc133(reads, lines):
+    return verify_real_capacity_workload(133, reads, lines,
+                                         ("frontier_seed", "frontier_share", "frontier_pressure", "frontier_reuse"), 7)
+
+
+def verify_tc134(reads, lines):
+    return verify_real_capacity_workload(134, reads, lines,
+                                         ("window_seed", "window_share", "window_pressure", "window_reuse"), 7)
+
+
+def verify_tc126(reads, lines):
+    """TC126: Resident-waiter upgrade replay — upgrade must NOT downgrade to ReadUnique.
+
+    Checks:
+      1. At least 2 READ_VAL from node1 (Phase 2) and node2 (Phase 2, Phase 5).
+      2. Node2 final read must be TC126_V1 (0x1260BEEF).
+      3. Log evidence: the target Upgrade is resident-waited and replays once.
+      4. Log evidence: at least one RESIDENT-SPILL-START (victim=) or RESIDENT-FILL-ISSUED.
+      5. Log evidence: exactly one UBCC-UPGRADE-COMMIT (after duplicate stderr removal).
+      6. Regression guard: count of UBCC-OUTER-REQ req=1 (ReadUnique) for target PA
+         must NOT exceed 1 (the initial Phase 1 store may generate one ReadUnique;
+         a second occurrence would indicate a post-fill downgrade replay).
+    """
+    target_val = 0x1260BEEF
+    target_pa = 'pa=0x10001000'
+
+    # Check reads
+    node1_reads = [r for r in reads if r['node'] == 1]
+    node2_reads = [r for r in reads if r['node'] == 2]
+    if len(node1_reads) < 1:
+        return False, 'TC126 FAILED: no READ_VAL from Node1', reads
+    if len(node2_reads) < 2:
+        return False, f'TC126 FAILED: expected >=2 Node2 reads, got {len(node2_reads)}', reads
+
+    # Node2's last read must be the upgraded value
+    last_n2 = node2_reads[-1]
+    last_actual = int(last_n2['actual'], 16)
+    if last_actual != target_val:
+        return False, (f'TC126 FAILED: Node2 final read 0x{last_actual:X}, '
+                       f'expected 0x{target_val:X}'), [last_n2]
+
+    # Check for mismatches
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC126 FAILED: {len(mismatches)} mismatches', mismatches
+
+    # Log evidence checks
+    has_upgrade_waiter = any(
+        'RESIDENT-WAITER-ENQ' in l and target_pa in l and 'opKind=1' in l
+        for l in lines)
+    has_spill_or_fill = any(
+        target_pa in l and
+        ('RESIDENT-SPILL-START' in l or 'RESIDENT-FILL-ISSUED' in l)
+        for l in lines)
+    upgrade_commits = sum(
+        1 for l in lines
+        if 'UBCC-UPGRADE-COMMIT' in l and target_pa in l)
+    queued_replays = sum(
+        1 for l in lines
+        if 'RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED' in l and target_pa in l)
+
+    # Regression guard: ReadUnique (req=1) for target PA.
+    # Phase 1 store MAY generate one initial ReadUnique — that is normal.
+    # A second (post-fill) ReadUnique indicates the upgrade was downgraded.
+    ru_replay_count = sum(
+        1 for l in lines
+        if 'UBCC-OUTER-REQ' in l and target_pa in l and ' req=1 ' in l)
+
+    diag = (f'upgrade_waiter={has_upgrade_waiter}, '
+            f'spill_fill={has_spill_or_fill}, '
+            f'upgrade_commits={upgrade_commits}, '
+            f'queued_replays={queued_replays}, '
+            f'ru_replay_count={ru_replay_count}')
+
+    if not has_upgrade_waiter:
+        return False, f'TC126 FAILED: no RESIDENT-WAITER-ENQ with opKind=1 ({diag})', []
+    if not has_spill_or_fill:
+        return False, f'TC126 FAILED: no RESIDENT-SPILL-START or RESIDENT-FILL-ISSUED ({diag})', []
+    if upgrade_commits != 1:
+        return False, f'TC126 FAILED: expected exactly one upgrade commit ({diag})', []
+    if queued_replays != 1:
+        return False, f'TC126 FAILED: expected one queued replay transition ({diag})', []
+    if ru_replay_count > 1:
+        return False, (f'TC126 FAILED: {ru_replay_count} ReadUnique for target '
+                       f'(>1 indicates post-fill downgrade replay) ({diag})'), []
+
+    return True, f'TC126 PASSED: upgrade replay correct ({diag})', []
+
+
+def verify_tc125(reads, lines):
+    """TC125: Read offload/onload — shared read survives metadata spill+fill.
+
+    Checks:
+      1. At least 4 READ_VAL (Phase 2 node1, node0, Phase 4 node1, Phase 6 node0).
+      2. All reads MATCH their expected values (no mismatches).
+      3. Phase 4 node1 read confirms V0 after onload.
+      4. Phase 6 node0 read confirms V1 after ReadUnique.
+      5. Log evidence: at least one RESIDENT-SPILL-START and at least one
+         RESIDENT-FILL-ISSUED for the target PA.
+      Spill format: victim=0x... ; Fill format: pa=0x...
+    """
+    target_fill_pat = 'pa=0x10002000'
+    target_spill_pat = 'victim=0x10002000'
+    v0 = 0x12500000
+    v1 = 0x1250BEEF
+
+    # All reads must match
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC125 FAILED: {len(mismatches)} mismatches', mismatches
+
+    if len(reads) < 4:
+        return False, f'TC125 FAILED: expected >=4 READ_VAL, got {len(reads)}', reads
+
+    # Node1 post-spill read must be V0
+    node1_reads = [r for r in reads if r['node'] == 1]
+    if len(node1_reads) < 1:
+        return False, 'TC125 FAILED: no READ_VAL from Node1', reads
+    n1_post_spill = [r for r in node1_reads if int(r['expected'], 16) == v0]
+    if not n1_post_spill:
+        return False, 'TC125 FAILED: Node1 did not read V0 after spill', node1_reads
+
+    # Node0 final read must be V1
+    node0_v1 = [r for r in reads if r['node'] == 0 and int(r['expected'], 16) == v1]
+    if not node0_v1:
+        return False, 'TC125 FAILED: Node0 did not read V1', reads
+    for r in node0_v1:
+        if int(r['actual'], 16) != v1:
+            return False, f'TC125 FAILED: Node0 expected V1, got 0x{int(r["actual"],16):X}', [r]
+
+    # Log evidence: spill (victim=) + fill (pa=) for target PA
+    has_spill = any(
+        'RESIDENT-SPILL-START' in l and target_spill_pat in l
+        for l in lines)
+    has_fill = any(
+        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
+        for l in lines)
+
+    diag = f'spill={has_spill}, fill={has_fill}'
+    if not has_spill:
+        return False, f'TC125 FAILED: no RESIDENT-SPILL-START for target ({diag})', []
+    if not has_fill:
+        return False, f'TC125 FAILED: no RESIDENT-FILL-ISSUED for target ({diag})', []
+
+    return True, f'TC125 PASSED: read onload correct, V0→V1 transition OK ({diag})', []
+
+
+def verify_tc127(reads, lines):
+    """TC127: Writeback offload/onload — dirty writeback survives metadata spill.
+
+    Checks:
+      1. At least 2 READ_VAL from remote nodes after writeback.
+      2. All reads MATCH (both must see the nonzero payload V0).
+      3. Log evidence: UBCC-WB-REQ WritebackReq, WB-DATA-PERSIST,
+         RESIDENT-SPILL-START (victim=), and RESIDENT-FILL-ISSUED (pa=)
+         for the target PA.
+    """
+    target_fill_pat = 'pa=0x10004000'
+    target_spill_pat = 'victim=0x10004000'
+    v0 = 0x1270C0DE
+
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC127 FAILED: {len(mismatches)} mismatches', mismatches
+
+    if len(reads) < 2:
+        return False, f'TC127 FAILED: expected >=2 READ_VAL, got {len(reads)}', reads
+
+    # All reads must see V0
+    for r in reads:
+        if int(r['actual'], 16) != v0:
+            return False, (f'TC127 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
+                           f'expected 0x{v0:X}'), [r]
+
+    # Log evidence
+    has_spill = any(
+        'RESIDENT-SPILL-START' in l and target_spill_pat in l
+        for l in lines)
+    has_fill = any(
+        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
+        for l in lines)
+    has_wb_persist = any(
+        'WB-DATA-PERSIST' in l and target_fill_pat in l
+        for l in lines)
+    has_wb_req = any(
+        'UBCC-WB-REQ' in l and target_fill_pat in l and 'WritebackReq' in l
+        for l in lines)
+
+    diag = f'spill={has_spill}, fill={has_fill}, wb_req={has_wb_req}, wb_persist={has_wb_persist}'
+    if not has_spill:
+        return False, f'TC127 FAILED: no RESIDENT-SPILL-START victim=target ({diag})', []
+    if not has_fill:
+        return False, f'TC127 FAILED: no RESIDENT-FILL-ISSUED ({diag})', []
+    if not has_wb_req:
+        return False, f'TC127 FAILED: no UBCC-WB-REQ WritebackReq ({diag})', []
+    if not has_wb_persist:
+        return False, f'TC127 FAILED: no WB-DATA-PERSIST ({diag})', []
+
+    return True, f'TC127 PASSED: writeback offload/onload, data persisted ({diag})', []
+
+
+def verify_tc128(reads, lines):
+    """TC128: Clean evict offload/onload — data integrity after clean eviction.
+
+    Checks:
+      1. At least 2 READ_VAL (Phase 2 shared reads + Phase 5 verify).
+      2. All reads MATCH V0.
+      3. Log evidence: RESIDENT-SPILL-START + RESIDENT-FILL-ISSUED for target PA.
+      4. Clean eviction (EvictReq) evidence is SOFT/optional: checked and
+         reported but never causes a failure.  In the current CHI EP
+         implementation, a clean SC eviction is handled locally by the HN-F
+         and does NOT generate a ubio-level EvictReq.
+    """
+    target_fill_pat = 'pa=0x10006000'
+    target_spill_pat = 'victim=0x10006000'
+    v0 = 0x1280C1E0
+
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC128 FAILED: {len(mismatches)} mismatches', mismatches
+
+    if len(reads) < 2:
+        return False, f'TC128 FAILED: expected >=2 READ_VAL, got {len(reads)}', reads
+
+    for r in reads:
+        if int(r['actual'], 16) != v0:
+            return False, (f'TC128 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
+                           f'expected 0x{v0:X}'), [r]
+
+    # Log evidence: spill uses victim=, fill uses pa=
+    has_spill = any(
+        'RESIDENT-SPILL-START' in l and target_spill_pat in l
+        for l in lines)
+    has_fill = any(
+        'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
+        for l in lines)
+    has_evict_req = any(
+        'EvictReq' in l and target_fill_pat in l
+        for l in lines)
+
+    diag = f'spill={has_spill}, fill={has_fill}, evict_req={has_evict_req}'
+    if not has_spill:
+        return False, f'TC128 FAILED: no RESIDENT-SPILL-START ({diag})', []
+    if not has_fill:
+        return False, f'TC128 FAILED: no RESIDENT-FILL-ISSUED ({diag})', []
+
+    # NOTE: Clean eviction does not generate ubio-level EvictReq in current
+    # CHI EP implementation. This check is diagnostic only.
+    return True, (f'TC128 PASSED: clean evict onload, data intact '
+                  f'(evict_req={has_evict_req}, {diag})'), []
+
+
+def verify_tc129(reads, lines):
+    """TC129: Long mixed integration — two spill/fill cycles validated.
+
+    Checks:
+      1. At least 3 READ_VAL (node1 V0, node2 V1, node0 V1).
+      2. All reads MATCH.
+      3. Node1 reads V0, both node2 and node0 read V1.
+      4. Log evidence: at least 2 RESIDENT-SPILL-START (victim=) and at least 2
+         RESIDENT-FILL-ISSUED (pa=) for the target PA.
+    """
+    target_fill_pat = 'pa=0x10008000'
+    target_spill_pat = 'victim=0x10008000'
+    v0 = 0x12900000
+    v1 = 0x1290FADE
+
+    mismatches = [r for r in reads if r['verdict'] != 'MATCH']
+    if mismatches:
+        return False, f'TC129 FAILED: {len(mismatches)} mismatches', mismatches
+
+    if len(reads) < 3:
+        return False, f'TC129 FAILED: expected >=3 READ_VAL, got {len(reads)}', reads
+
+    # Node1 must see V0
+    n1_v0 = [r for r in reads if r['node'] == 1 and int(r['actual'], 16) == v0]
+    if not n1_v0:
+        return False, 'TC129 FAILED: Node1 did not read V0', reads
+
+    # Node2 must see V1
+    n2_v1 = [r for r in reads if r['node'] == 2 and int(r['actual'], 16) == v1]
+    if not n2_v1:
+        return False, 'TC129 FAILED: Node2 did not read V1', reads
+
+    # Node0 must see V1
+    n0_v1 = [r for r in reads if r['node'] == 0 and int(r['actual'], 16) == v1]
+    if not n0_v1:
+        return False, 'TC129 FAILED: Node0 did not read V1', reads
+
+    # Log evidence: count spill and fill events for target PA
+    spill_count = sum(1 for l in lines
+                      if 'RESIDENT-SPILL-START' in l and target_spill_pat in l)
+    fill_count = sum(1 for l in lines
+                     if 'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l)
+
+    diag = f'spills={spill_count}, fills={fill_count}'
+
+    if spill_count < 2:
+        return False, f'TC129 FAILED: expected two target spills ({diag})', []
+    if fill_count < 2:
+        return False, f'TC129 FAILED: expected two target fills ({diag})', []
+
+    return True, f'TC129 PASSED: two full spill/fill cycles, V0→V1 correct ({diag})', []
+
+
 def verify_tc118(reads, lines):
     """TC118: Combined fault — Drop Clear + Delay Clear on same home.
     Both DSM lines must converge despite concurrent faults on the same home."""
@@ -1554,6 +1906,16 @@ VERIFIERS = {
     122: verify_tc122,
     123: verify_tc123,
     124: verify_tc124,
+    125: verify_tc125,
+    126: verify_tc126,
+    127: verify_tc127,
+    128: verify_tc128,
+    129: verify_tc129,
+    130: verify_tc130,
+    131: verify_tc131,
+    132: verify_tc132,
+    133: verify_tc133,
+    134: verify_tc134,
 }
 
 def verify_testcase(tc_id, reads, lines):

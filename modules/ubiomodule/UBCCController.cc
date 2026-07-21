@@ -164,30 +164,17 @@ UBCCController::ensureDirEntry(uint64_t line_pa)
 
 UBCCController::ResidentAccessResult
 UBCCController::ensureResidentForAccess(
-    uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-    int requesterNode, int requesterSocket,
-    uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
-    const uint8_t *writebackData)
+    uint64_t line_pa, const PendingRequester &pr, DirEntry &entry)
 {
     size_t slot = 0;
     if (_directory.lookupWithSlot(line_pa, entry, slot)) {
         _directory.touch(line_pa);
         if (_directory.fillPending(line_pa) || _directory.wbPending(line_pa)) {
-            PendingRequester pr;
-            pr.node = requesterNode;
-            pr.socket = requesterSocket;
-            pr.reqType = reqType;
-            pr.writeIntent = writeIntent;
-            pr.epoch = baseEpoch;
-            pr.reqId = reqId;
-            pr.waitReason = _directory.fillPending(line_pa)
+            PendingRequester pr2 = pr;  // copy caller's envelope
+            pr2.waitReason = _directory.fillPending(line_pa)
                 ? ResidentWaitReason::BackstoreFill
                 : ResidentWaitReason::MetadataWriteback;
-            if (writebackData) {
-                std::memcpy(pr.data.data(), writebackData, 64);
-                pr.hasData = true;
-            }
-            enqueueResidentWaiter(line_pa, pr);
+            enqueueResidentWaiter(line_pa, pr2);
             refreshPinnedBit(line_pa);
             return _directory.fillPending(line_pa)
                 ? ResidentAccessResult::Queued
@@ -197,50 +184,46 @@ UBCCController::ensureResidentForAccess(
         return ResidentAccessResult::Ready;
     }
 
-    return handleResidentMiss(line_pa, reqType, writeIntent,
-                               requesterNode, requesterSocket,
-                               baseEpoch, reqId, entry, writebackData);
+    return handleResidentMiss(line_pa, pr, entry);
 }
 
 UBCCController::ResidentAccessResult
 UBCCController::handleResidentMiss(
-    uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-    int requesterNode, int requesterSocket,
-    uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
-    const uint8_t *writebackData)
+    uint64_t line_pa, const PendingRequester &pr, DirEntry &entry)
 {
     const bool mayContain = _directory.bloomMayContain(line_pa);
-    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx req=%d requester=%d "
-           "mayContain=%d count=%zu capacity=%zu freeForPa=%d policy=%d\n",
-           _nodeId, line_pa, static_cast<int>(reqType), requesterNode,
-           mayContain ? 1 : 0, _directory.count(), _directory.capacity(),
+    const bool knownInBackstore = _backstoreMetadataPAs.count(line_pa) != 0;
+    const bool shouldFill = mayContain || knownInBackstore;
+
+    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx opKind=%d req=%d requester=%d "
+           "mayContain=%d knownInBackstore=%d count=%zu capacity=%zu freeForPa=%d policy=%d reqId=%lu\n",
+           _nodeId, line_pa, static_cast<int>(pr.opKind),
+           static_cast<int>(pr.reqType), pr.node,
+           mayContain ? 1 : 0, knownInBackstore ? 1 : 0,
+           _directory.count(), _directory.capacity(),
            _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
-           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
+           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0,
+           pr.reqId);
     fflush(stderr);
     if (!_directory.hasFreeSlotForPa(line_pa)) {
-        PendingRequester pr;
-        pr.node = requesterNode;
-        pr.socket = requesterSocket;
-        pr.reqType = reqType;
-        pr.writeIntent = writeIntent;
-        pr.epoch = baseEpoch;
-        pr.reqId = reqId;
-        pr.waitReason = ResidentWaitReason::Capacity;
-        if (writebackData) {
-            std::memcpy(pr.data.data(), writebackData, 64);
-            pr.hasData = true;
-        }
-        enqueueResidentWaiter(line_pa, pr);
-        bool evictProgress = evictOneVictim(line_pa);
-        if (evictProgress) {
-            replayResidentWaiters(line_pa);
+        PendingRequester pr2 = pr;  // copy caller's envelope
+        pr2.waitReason = ResidentWaitReason::Capacity;
+        bool enqueued = enqueueResidentWaiterIfNew(line_pa, pr2);
+        // Only attempt eviction if we actually have a new waiter;
+        // a dedup means the same operation is already waiting.
+        if (enqueued) {
+            bool evictProgress = evictOneVictim(line_pa);
+            if (evictProgress) {
+                replayResidentWaiters(line_pa);
+            }
         }
         auto wit = _residentWaiters.find(line_pa);
         size_t waiterDepth = (wit == _residentWaiters.end()) ? 0 : wit->second.size();
         fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
-               "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu\n",
-               _nodeId, line_pa, evictProgress ? 1 : 0,
-               _directory.count(), _directory.capacity(), waiterDepth);
+               "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu opKind=%d enqueued=%d\n",
+               _nodeId, line_pa, enqueued ? 1 : 0,
+               _directory.count(), _directory.capacity(), waiterDepth,
+               static_cast<int>(pr.opKind), enqueued ? 1 : 0);
         fflush(stderr);
         return ResidentAccessResult::Busy;
     }
@@ -259,10 +242,10 @@ UBCCController::handleResidentMiss(
     }
     _directory.touch(line_pa);
 
-    if (!mayContain) {
+    if (!shouldFill) {
         entry = placeholder;
-        fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=bloom_negative\n",
-               _nodeId, line_pa);
+        fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=bloom_negative opKind=%d\n",
+               _nodeId, line_pa, static_cast<int>(pr.opKind));
         fflush(stderr);
         refreshPinnedBit(line_pa);
         return ResidentAccessResult::Ready;
@@ -271,27 +254,26 @@ UBCCController::handleResidentMiss(
     // 3.4: Bloom reported positive but directory missed → false positive count
     _directory.incrementBloomFp();
 
+    if (knownInBackstore && !mayContain) {
+        fprintf(stderr, "[RESIDENT-BACKSTORE-KNOWN] home=%d pa=0x%lx "
+               "mayContain=0 knownInBackstore=1 — forcing fill\n",
+               _nodeId, line_pa);
+        fflush(stderr);
+    }
+
     _directory.setFillPending(line_pa, true);
     _directory.setPinned(line_pa, true);
-    PendingRequester pr;
-    pr.node = requesterNode;
-    pr.socket = requesterSocket;
-    pr.reqType = reqType;
-    pr.writeIntent = writeIntent;
-    pr.epoch = baseEpoch;
-    pr.reqId = reqId;
-    pr.waitReason = ResidentWaitReason::BackstoreFill;
-    if (writebackData) {
-        std::memcpy(pr.data.data(), writebackData, 64);
-        pr.hasData = true;
-    }
-    enqueueResidentWaiter(line_pa, pr);
+    PendingRequester pr2 = pr;  // copy caller's envelope
+    pr2.waitReason = ResidentWaitReason::BackstoreFill;
+    enqueueResidentWaiter(line_pa, pr2);
 
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
     }
-    fprintf(stderr, "[RESIDENT-FILL-ISSUED] home=%d pa=0x%lx waiterDepth=%zu\n",
-           _nodeId, line_pa, _residentWaiters[line_pa].size());
+    fprintf(stderr, "[RESIDENT-FILL-ISSUED] tick=%lu home=%d pa=0x%lx waiterDepth=%zu opKind=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, line_pa, _residentWaiters[line_pa].size(),
+            static_cast<int>(pr.opKind));
     fflush(stderr);
     return ResidentAccessResult::Queued;
 }
@@ -299,16 +281,50 @@ UBCCController::handleResidentMiss(
 void
 UBCCController::enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr)
 {
+    enqueueResidentWaiterIfNew(linePa, pr);
+}
+
+bool
+UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequester &pr)
+{
     auto &q = _residentWaiters[linePa];
     if (q.size() >= MAX_PENDING_PER_PA) {
-        return;
+        fprintf(stderr, "[RESIDENT-WAITER-DROP] home=%d pa=0x%lx opKind=%d node=%d "
+               "reqId=%lu reason=queue_full depth=%zu\n",
+               _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+               pr.reqId, q.size());
+        fflush(stderr);
+        return false;
     }
+    // Dedup by (opKind, node, socket, reqId). For writeback/evict with reqId==0,
+    // also compare opKind+node+epoch to prevent repeated enqueue of the same
+    // legacy operation tuple.
     for (const auto &e : q) {
-        if (e.node == pr.node && e.reqId == pr.reqId && e.reqType == pr.reqType) {
-            return;
+        if (e.opKind == pr.opKind && e.node == pr.node &&
+            e.socket == pr.socket) {
+            if (pr.reqId != 0 && e.reqId == pr.reqId) {
+                fprintf(stderr, "[RESIDENT-WAITER-DEDUP] home=%d pa=0x%lx opKind=%d "
+                       "node=%d reqId=%lu reason=exact_dup_reqId\n",
+                       _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.reqId);
+                fflush(stderr);
+                return false;
+            }
+            if (pr.reqId == 0 && e.reqId == 0 && e.epoch == pr.epoch) {
+                fprintf(stderr, "[RESIDENT-WAITER-DEDUP] home=%d pa=0x%lx opKind=%d "
+                       "node=%d epoch=%lu reason=legacy_dup_no_reqId\n",
+                       _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.epoch);
+                fflush(stderr);
+                return false;
+            }
         }
     }
     q.push_back(pr);
+    fprintf(stderr, "[RESIDENT-WAITER-ENQ] home=%d pa=0x%lx opKind=%d node=%d "
+           "socket=%d reqId=%lu epoch=%lu depth=%zu\n",
+           _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+           pr.socket, pr.reqId, pr.epoch, q.size());
+    fflush(stderr);
+    return true;
 }
 
 void
@@ -365,8 +381,9 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
     _evictionPendingRemoval.insert(victimPa);
-    fprintf(stderr, "[RESIDENT-SPILL-START] home=%d victim=0x%lx state=%s residentDirty=%d\n",
-           _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
+    fprintf(stderr, "[RESIDENT-SPILL-START] tick=%lu home=%d victim=0x%lx state=%s residentDirty=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
     fflush(stderr);
     if (victim.state == MESIState::G_I) {
         scheduleBackstoreDelete(victimPa);
@@ -554,52 +571,120 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
     while (!it->second.empty()) {
         PendingRequester pr = it->second.front();
         it->second.pop_front();
-        if (pr.reqType == UBCC_OuterReqType::GlobalWriteback) {
-            if (!processWriteback(linePa, pr.node, pr.epoch, pr.writeIntent,
-                                  pr.hasData ? pr.data.data() : nullptr)) {
-                // processWriteback may have re-enqueued this waiter while it
-                // started a fill/writeback.  Do not restore the old copy or
-                // the same dirty payload would commit twice on replay.
-                if (!_directory.fillPending(linePa) && !_directory.wbPending(linePa)) {
-                    it->second.push_front(pr);
+
+        fprintf(stderr, "[RESIDENT-WAITER-REPLAY] tick=%lu home=%d pa=0x%lx opKind=%d "
+                "node=%d socket=%d reqId=%lu epoch=%lu\n",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+               pr.socket, pr.reqId, pr.epoch);
+        fflush(stderr);
+
+        bool stop = false;
+        bool restore = false;  // whether to push the waiter back
+
+        switch (pr.opKind) {
+        case ResidentOpKind::Writeback: {
+            bool ok = processWriteback(linePa, pr.node, pr.epoch,
+                                       pr.wbKeepAsClean,
+                                       pr.hasData ? pr.data.data() : nullptr);
+            if (!ok) {
+                // If fill/wb is now pending, the operation re-enqueued itself
+                // behind a resident fill/writeback.  Do NOT restore the old
+                // popped copy — it would duplicate the waiter and corrupt the
+                // queue on later replay.
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
+            }
+            stop = !ok;
+            break;
+        }
+        case ResidentOpKind::Evict: {
+            bool ok = processEvict(linePa, pr.node, pr.epoch);
+            if (!ok) {
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
+            }
+            stop = !ok;
+            break;
+        }
+        case ResidentOpKind::Upgrade: {
+            bool ok = processOuterUpgradeReq(
+                linePa, pr.node, pr.epoch, pr.reqId,
+                pr.upgradeDesiredPerm, pr.upgradeCause);
+            if (!ok) {
+                // fillPending/wbPending guard: if the upgrade re-enqueued
+                // itself behind a resident fill/wb, do NOT push the stale
+                // popped copy back — the new copy (from handleResidentMiss)
+                // is already in the queue and will replay after the fill.
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
+                if (restore) {
+                    fprintf(stderr, "[RESIDENT-WAITER-REPLAY-UPGRADE-REJECT] home=%d "
+                           "pa=0x%lx node=%d reqId=%lu\n",
+                           _nodeId, linePa, pr.node, pr.reqId);
+                    fflush(stderr);
+                } else {
+                    fprintf(stderr, "[RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED] home=%d "
+                           "pa=0x%lx node=%d reqId=%lu — fill/wb pending, waiter "
+                           "already re-enqueued, discarding stale copy\n",
+                           _nodeId, linePa, pr.node, pr.reqId);
+                    fflush(stderr);
                 }
-                break;
             }
-        } else if (pr.reqType == UBCC_OuterReqType::GlobalEvict) {
-            if (!processEvict(linePa, pr.node, pr.epoch)) {
-                it->second.push_front(pr);
-                break;
+            stop = !ok;
+            // On success, if an outstanding was created, stop further replay
+            // (the outstanding blocks subsequent operations).
+            if (ok && findOutstanding(linePa)) {
+                stop = true;
             }
-        } else {
+            break;
+        }
+        case ResidentOpKind::Read:
+        default: {
             auto g = processOuterRequest(linePa, pr.reqType, pr.writeIntent,
                                           pr.node, pr.socket, pr.epoch, pr.reqId,
                                           nullptr, nullptr, nullptr, nullptr,
                                           nullptr, nullptr);
             if (static_cast<int>(g) == -1) {
-                it->second.push_front(pr);
-                break;
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
+            } else {
+                OutstandingRequest *ost = findOutstanding(linePa);
+                if (ost && ost->opType == OpType::GRANT_HANDSHAKE &&
+                    ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
+                    ost->stage == OpStage::WAITING_CLEAR && _outbound) {
+                    CoherenceMessage push;
+                    buildGrantResponse(*ost, push);
+                    _outbound->sendGrantPush(push);
+                    fprintf(stderr, "[RESIDENT-REPLAY-PUSH] tick=%lu home=%d pa=0x%lx "
+                            "requester=%d reqId=%lu\n",
+                            _host ? _host->hostCurrentTick() : 0,
+                            _nodeId, linePa, pr.node, pr.reqId);
+                    fflush(stderr);
+                }
             }
-            OutstandingRequest *ost = findOutstanding(linePa);
-            if (ost && ost->opType == OpType::GRANT_HANDSHAKE &&
-                ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
-                ost->stage == OpStage::WAITING_CLEAR && _outbound) {
-                CoherenceMessage push;
-                buildGrantResponse(*ost, push);
-                _outbound->sendGrantPush(push);
-                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] home=%d pa=0x%lx "
-                        "requester=%d reqId=%lu\n",
-                        _nodeId, linePa, pr.node, pr.reqId);
-                fflush(stderr);
-            }
+            stop = (static_cast<int>(g) == -1);
+            break;
+        }
+        } // switch
+
+        if (restore) {
+            it->second.push_front(pr);
+        }
+        if (stop) {
+            // Don't erase the queue — remaining waiters are still valid
+            refreshPinnedBit(linePa);
+            return;
         }
         if (_directory.fillPending(linePa) || _directory.wbPending(linePa)) {
-            break;
+            // A fill/wb was started mid-replay; stop iterating.
+            refreshPinnedBit(linePa);
+            return;
         }
     }
 
-    if (it->second.empty()) {
-        _residentWaiters.erase(it);
-    }
+    // Queue drained
+    _residentWaiters.erase(it);
     refreshPinnedBit(linePa);
 }
 
@@ -692,9 +777,16 @@ UBCCController::processOuterRequest(
     }
 
     DirEntry entry;
+    PendingRequester prCtx;
+    prCtx.opKind = ResidentOpKind::Read;
+    prCtx.node = requesterNode;
+    prCtx.socket = requesterSocket;
+    prCtx.reqType = reqType;
+    prCtx.writeIntent = writeIntent;
+    prCtx.epoch = baseEpoch;
+    prCtx.reqId = reqId;
     ResidentAccessResult r = ensureResidentForAccess(
-        line_pa, reqType, writeIntent, requesterNode, requesterSocket,
-        baseEpoch, reqId, entry);
+        line_pa, prCtx, entry);
     printf("[UBCC-OUTER-REQ] home=%d pa=0x%lx residentResult=%d state=%s "
            "sharers=0x%lx epoch=%lu\n",
            _nodeId, line_pa, static_cast<int>(r), mesiStateName(entry.state),
@@ -1983,11 +2075,26 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
             _nodeId, line_pa, requesterNode, epochVal, keepAsClean);
     printf("[UBCC-WB-ENTER] home=%d pa=0x%lx node=%d keepAsClean=%d epoch=%lu\n",
            _nodeId, line_pa, requesterNode, keepAsClean, epochVal);
+    fprintf(stderr, "[UBCC-WB-REQ] home=%d pa=0x%lx type=WritebackReq node=%d keepAsClean=%d\n",
+            _nodeId, line_pa, requesterNode, keepAsClean);
+    fflush(stderr);
 
     DirEntry entry;
+    PendingRequester prCtx;
+    prCtx.opKind = ResidentOpKind::Writeback;
+    prCtx.node = requesterNode;
+    prCtx.socket = -1;
+    prCtx.reqType = UBCC_OuterReqType::GlobalWriteback;
+    prCtx.writeIntent = false;
+    prCtx.epoch = epochVal;
+    prCtx.reqId = 0;
+    prCtx.wbKeepAsClean = keepAsClean;
+    if (data) {
+        std::memcpy(prCtx.data.data(), data, 64);
+        prCtx.hasData = true;
+    }
     ResidentAccessResult rr = ensureResidentForAccess(
-        line_pa, UBCC_OuterReqType::GlobalWriteback, keepAsClean,
-        requesterNode, -1, epochVal, 0, entry, data);
+        line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -2138,9 +2245,16 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
             _nodeId, line_pa, evictingNode, epochVal);
 
     DirEntry entry;
+    PendingRequester prCtx;
+    prCtx.opKind = ResidentOpKind::Evict;
+    prCtx.node = evictingNode;
+    prCtx.socket = -1;
+    prCtx.reqType = UBCC_OuterReqType::GlobalEvict;
+    prCtx.writeIntent = false;
+    prCtx.epoch = epochVal;
+    prCtx.reqId = 0;
     ResidentAccessResult rr = ensureResidentForAccess(
-        line_pa, UBCC_OuterReqType::GlobalEvict, false,
-        evictingNode, -1, epochVal, 0, entry);
+        line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -2264,9 +2378,18 @@ UBCCController::processOuterUpgradeReq(
             _nodeId, line_pa, requesterNode, epoch, reqId, desiredPerm);
 
     DirEntry entry;
+    PendingRequester prCtx;
+    prCtx.opKind = ResidentOpKind::Upgrade;
+    prCtx.node = requesterNode;
+    prCtx.socket = -1;
+    prCtx.reqType = UBCC_OuterReqType::GlobalReadUnique;
+    prCtx.writeIntent = true;
+    prCtx.epoch = epoch;
+    prCtx.reqId = reqId;
+    prCtx.upgradeDesiredPerm = desiredPerm;
+    prCtx.upgradeCause = cause;
     ResidentAccessResult rr = ensureResidentForAccess(
-        line_pa, UBCC_OuterReqType::GlobalReadUnique, true,
-        requesterNode, -1, epoch, reqId, entry);
+        line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
         return false;
     }
@@ -2277,7 +2400,7 @@ UBCCController::processOuterUpgradeReq(
         if (!(entry.sharersMask & reqBit)) {
             framework::LogInfo("UBCC",
                     "UBCC node_id=%d: upgrade rejected — "
-                    "requesterNode=%d not in sharersMask=0x%lx\n",
+                    "PA=0x%lx requesterNode=%d not in sharersMask=0x%lx\n",
                     _nodeId, line_pa, requesterNode, entry.sharersMask);
             // PERMANENT reject: requester was invalidated (lost the race). It
             // must abandon and re-fetch via ReadUnique instead of retrying.
@@ -2482,6 +2605,7 @@ UBCCController::processOuterUpgradeDone(
 
     printf("[UBCC-UPGRADE-COMMIT] pa=0x%lx owner=%d reservedEpoch=%lu\n",
            line_pa, intendedOwner, reservedEp);
+    fflush(stdout);
 
     framework::LogInfo("UBCC",
             "UBCC node_id=%d: upgrade committed PA=0x%lx "
@@ -2960,8 +3084,9 @@ void
 UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
-    fprintf(stderr, "[RESIDENT-FILL-DONE] home=%d pa=0x%lx found=%d waiters=%zu\n",
-           _nodeId, linePa, found ? 1 : 0,
+    fprintf(stderr, "[RESIDENT-FILL-DONE] tick=%lu home=%d pa=0x%lx found=%d waiters=%zu\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, linePa, found ? 1 : 0,
            _residentWaiters.count(linePa) ? _residentWaiters[linePa].size() : 0);
     fflush(stderr);
     DirEntry e;
@@ -2979,10 +3104,12 @@ UBCCController::onBackstoreFillComplete(
         e.sharersMask = entry.sharersMask;
         e.epoch = entry.epoch;
         e.residentDirty = false;
+        _backstoreMetadataPAs.insert(linePa);
     } else {
         e.state = MESIState::G_I;
         e.sharersMask = 0;
         e.residentDirty = false;
+        _backstoreMetadataPAs.erase(linePa);
     }
     appendTmpLog(
         "ubcc_fill_complete.log",
@@ -3002,11 +3129,16 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa)
 {
-    fprintf(stderr, "[RESIDENT-WB-ACK] home=%d pa=0x%lx evictionPending=%d async=%d\n",
-           _nodeId, linePa,
-           _evictionPendingRemoval.count(linePa) ? 1 : 0,
+    fprintf(stderr, "[RESIDENT-SPILL-DONE] tick=%lu home=%d pa=0x%lx evictionPending=%d async=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, linePa,
+            _evictionPendingRemoval.count(linePa) ? 1 : 0,
            _asyncWbSnapshots.count(linePa) ? 1 : 0);
     fflush(stderr);
+
+    // Successful backstore write means metadata now exists in the backstore.
+    _backstoreMetadataPAs.insert(linePa);
+
     // Check if this was an async writeback (not an eviction writeback)
     if (_asyncWbSnapshots.count(linePa) > 0) {
         onAsyncWritebackAck(linePa);
@@ -3038,6 +3170,7 @@ void
 UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
 {
     _directory.bloomRemove(linePa);
+    _backstoreMetadataPAs.erase(linePa);  // metadata no longer in backstore
 
     DirEntry e;
     if (_directory.lookup(linePa, e)) {

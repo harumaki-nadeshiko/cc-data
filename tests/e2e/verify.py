@@ -57,7 +57,23 @@ def main():
                         "BATCH-RS" in line or
                         "SILENT" in line or
                         "C4" in line or
-                        "DIRECT-FWD" in line):
+                        "DIRECT-FWD" in line or
+                        "RESIDENT-WAITER" in line or
+                        "RESIDENT-BACKSTORE-KNOWN" in line or
+                        "RESIDENT-SPILL-START" in line or
+                        "RESIDENT-FILL-ISSUED" in line or
+                        "RESIDENT-FILL-DONE" in line or
+                        "RESIDENT-MISS" in line or
+                        "RESIDENT-REPLAY" in line or
+                        "UBCC-UPGRADE-COMMIT" in line or
+                        "upgrade committed" in line or
+                        "UBCC-OUTER-REQ" in line or
+                        "UBCC-WB-REQ" in line or
+                        "UBCC-UPGRADE" in line or
+                        "UBCC-CLEAR" in line or
+                        "WB-DATA-PERSIST" in line or
+                        "RESIDENT-SPILL-DONE" in line or
+                        "EvictReq" in line):
                         raw_lines.append(line.rstrip("\n"))
 
     print(f"[verify] TC{args.tc}: aggregated {found}/{expected} simout files, "

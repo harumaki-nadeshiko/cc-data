@@ -95,6 +95,18 @@ ubio_extra_args_for_tc() {
                 optimized|*) echo "--batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
+        126)
+            echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
+        125|127|128|129)
+            echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
+        130)
+            echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
+        131|132|133|134)
+            echo "--bloom-bytes=61440 --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
         98)  echo "--ways=1" ;;
         *)   echo "" ;;
     esac
@@ -130,7 +142,7 @@ PY
 }
 
 # ─── per-TC run ─────────────────────────────────────────────────────
-LOG_BASE="$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}"
+LOG_BASE="${LOG_BASE:-$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}}"
 mkdir -p "$LOG_BASE" "$ROOT_DIR/build/run"
 
 # Kill any leftover infra from a previous TC / abort.
@@ -156,6 +168,11 @@ run_tc() {
     local TC_TIMEOUT="$TIMEOUT_SEC"
     case "$tc" in
         98) TC_TIMEOUT="${TIMEOUT_SEC_TC98:-1500}" ;;  # floor 1500s, overridable
+        128) TC_TIMEOUT="${TIMEOUT_SEC_TC128:-1800}" ;; # full cache sweep + onload
+        131) TC_TIMEOUT="${TIMEOUT_SEC_TC131:-7200}" ;;
+        132) TC_TIMEOUT="${TIMEOUT_SEC_TC132:-7200}" ;;
+        133) TC_TIMEOUT="${TIMEOUT_SEC_TC133:-7200}" ;;
+        134) TC_TIMEOUT="${TIMEOUT_SEC_TC134:-7200}" ;;
     esac
     # Always respect a higher value passed via TIMEOUT_SEC env var
     if [ "$TIMEOUT_SEC" -gt "$TC_TIMEOUT" ] 2>/dev/null; then
@@ -196,7 +213,19 @@ run_tc() {
         mkdir -p "$gdir" "$node_od"
         local cmd
         cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
-        if [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
+        # Optional per-node gem5 tracing for long-running E2E diagnosis.
+        # Keep the debug stream separate from stderr so runner diagnostics stay usable.
+        if [ -n "${GEM5_DEBUG_FLAGS:-}" ]; then
+            local debug_args="--debug-flags=${GEM5_DEBUG_FLAGS} --debug-file=$gdir/gem5_debug.log"
+            if [ -n "${GEM5_DEBUG_START:-}" ]; then
+                debug_args="$debug_args --debug-start=${GEM5_DEBUG_START}"
+            fi
+            cmd="$GEM5_BIN $debug_args${cmd#"$GEM5_BIN"}"
+        fi
+        if [ "$tc" = "130" ] || [ "$tc" = "131" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ]; then
+            # TC130 isolates directory policy; do not mix protocol optimizations.
+            cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
+        elif [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
             case "${EP_PERF_PROFILE:-optimized}" in
                 baseline)
                     cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
@@ -259,6 +288,10 @@ run_tc() {
 
     # 6. Wait for all gem5 processes to finish (or timeout)
     local waited=0
+    local progress_file="$m5outdir/node0/simout_n0"
+    local progress_size=-1
+    local progress_waited=0
+    local progress_watchdog="${PROGRESS_WATCHDOG_SEC:-0}"
     while true; do
         local any=0
         for pid in $GEM5_PIDS; do
@@ -266,6 +299,21 @@ run_tc() {
         done
         [ $any -eq 0 ] && break
         sleep 1; waited=$((waited + 1))
+        if [ "$progress_watchdog" -gt 0 ] 2>/dev/null; then
+            local current_size=0
+            [ -f "$progress_file" ] && current_size=$(stat -c %s "$progress_file")
+            if [ "$current_size" -ne "$progress_size" ]; then
+                progress_size="$current_size"
+                progress_waited=0
+            else
+                progress_waited=$((progress_waited + 1))
+                if [ "$progress_waited" -ge "$progress_watchdog" ]; then
+                    echo "  TC${tc} PROGRESS STALL after ${progress_watchdog}s (no node0 guest output)"
+                    for pid in $GEM5_PIDS; do kill $pid 2>/dev/null || true; done
+                    return 1
+                fi
+            fi
+        fi
         if [ $waited -ge "$TC_TIMEOUT" ]; then
             # TC9 is a negative test: node0 is expected to crash on non-DSM
             # access (Aborted/SIGSEGV). If that crash evidence exists, the
@@ -316,6 +364,7 @@ run_tc() {
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
             faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stderr.log")
+            faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stdout.log")
         done
     done
     local vlog="$LOG_BASE/verify_tc${tc}.log"
@@ -354,7 +403,7 @@ fi
 # Sanity: warn if an 8n2s-only TC is passed under 8n1s (or non-8n2s)
 if [ "$TOPO_KIND" = "8n1s" ]; then
     for tc in "$@"; do
-        case "$tc" in 95|96|97|98|99)
+        case "$tc" in 95|96|97|98|99|134)
             echo "FATAL: TC$tc requires --8n2s topology. Re-run with --8n2s." >&2
             exit 2
         ;; esac

@@ -485,6 +485,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeAckNotify(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendGrantPush(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    uint64_t hostCurrentTick() const override { return tickRef; }
 
     void hostIssueBackstoreRead(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};

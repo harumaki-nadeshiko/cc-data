@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_set>
 
 #include "modules/ubiomodule/ubio_base.hh"
 #include "DataBlock.hh"
@@ -28,6 +29,8 @@ class UBCCHostIf
 {
   public:
     virtual ~UBCCHostIf() = default;
+    // Simulated time lets ResidentDir diagnostics be correlated with TRACE-PERF.
+    virtual uint64_t hostCurrentTick() const = 0;
     virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
     virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
     virtual void hostIssueBackstoreDelete(uint64_t pa) = 0;
@@ -91,6 +94,16 @@ enum class UBCC_RecallResult {
 enum class UBCC_UpgradeCause {
     LocalCleanUnique,    // Local CleanUnique upgrade (sharer → exclusive)
     LocalStoreUpgrade    // Local store-triggered upgrade
+};
+
+// Resident-waiter operation identity for replay correctness.
+// Must be extended whenever a new operation kind that can call
+// ensureResidentForAccess is added.
+enum class ResidentOpKind : uint8_t {
+    Read,        // processOuterRequest (RS or RU)
+    Upgrade,     // processOuterUpgradeReq
+    Writeback,   // processWriteback
+    Evict,       // processEvict
 };
 
 using MESIState = UBCCMESIState;
@@ -227,24 +240,37 @@ class UBCCController
         MetadataWriteback,
     };
 
-    // §3.1: Pending requester atom — queued behind live outstanding.
+    // §3.1: Pending requester atom — queued behind resident metadata wait.
     // Per recall_done_fix.md: RECALL.DONE is requester-private; foreign
     // requesters are queued here until the head requester's Clear commits.
+    // ResidentOpKind generalization: each waiter remembers its original
+    // protocol operation identity so replayResidentWaiters can dispatch
+    // to the CORRECT entry point (Upgrade must NEVER replay as ReadUnique).
     struct PendingRequester {
         int node;                 // Requester node ID
         int socket;               // v4-dual-socket: requester's socket plane
-        UBCC_OuterReqType reqType; // RS or RU
-        bool writeIntent;          // True for RU with write intent
+        ResidentOpKind opKind;    // Original operation identity for replay
+        UBCC_OuterReqType reqType; // RS or RU (valid for opKind==Read)
+        bool writeIntent;          // True for RU with write intent (opKind==Read)
         uint64_t epoch;            // Observed epoch at enqueue time
         uint64_t reqId;            // Requester-allocated ID, reused on replay
         ResidentWaitReason waitReason;
         bool hasData;              // Writeback payload captured while waiting for resident metadata
         std::array<uint8_t, 64> data;
+        // Upgrade-specific replay fields (valid for opKind==Upgrade)
+        int         upgradeDesiredPerm;   // 0=Shared, 1=Unique
+        UBCC_UpgradeCause upgradeCause;   // Cause enumeration
+        // Writeback-specific replay field (valid for opKind==Writeback)
+        bool        wbKeepAsClean;        // keepAsClean flag
 
         PendingRequester()
-            : node(-1), socket(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
+            : node(-1), socket(-1), opKind(ResidentOpKind::Read),
+              reqType(UBCC_OuterReqType::GlobalReadShared),
               writeIntent(false), epoch(0), reqId(0),
-              waitReason(ResidentWaitReason::Capacity), hasData(false), data{} {}
+              waitReason(ResidentWaitReason::Capacity), hasData(false), data{},
+              upgradeDesiredPerm(0),
+              upgradeCause(UBCC_UpgradeCause::LocalCleanUnique),
+              wbKeepAsClean(false) {}
     };
 
     // Maximum pending requesters per PA (configurable queue depth)
@@ -709,6 +735,13 @@ class UBCCController
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
     std::set<uint64_t> _evictionPendingRemoval;
 
+    // Authoritative index of metadata known to exist in the backstore.
+    // Maintained across resident-directory eviction/reload cycles.
+    // Insert on successful backstore write/fill; erase on delete or fill-miss.
+    // Used by handleResidentMiss to force backstore read even when
+    // bloomMayContain returns false after reconstruction cleared the bits.
+    std::unordered_set<uint64_t> _backstoreMetadataPAs;
+
     // C3 batch RS grant env switch
     bool _batchRsEnabled;
     bool _batchRsOverridden = false;
@@ -787,16 +820,12 @@ public:
         Busy,
     };
     ResidentAccessResult ensureResidentForAccess(
-        uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-        int requesterNode, int requesterSocket,
-        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
-        const uint8_t *writebackData = nullptr);
+        uint64_t line_pa, const PendingRequester &pr, DirEntry &entry);
     ResidentAccessResult handleResidentMiss(
-        uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
-        int requesterNode, int requesterSocket,
-        uint64_t baseEpoch, uint64_t reqId, DirEntry &entry,
-        const uint8_t *writebackData = nullptr);
+        uint64_t line_pa, const PendingRequester &pr, DirEntry &entry);
     void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
+    /** Returns true if the waiter was actually enqueued (not dedup'd/dropped). */
+    bool enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequester &pr);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);
     bool evictOneVictim(uint64_t avoidPa);
