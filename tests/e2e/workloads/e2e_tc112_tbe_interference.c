@@ -5,7 +5,8 @@
  *   so raw pointer accesses route through local HN-F → local_mem.
  *   Zero DSM directory — pure local cache-to-DRAM traffic.
  *
- * cpu1 (lane 1): sparse cross-node DSM writes (home=1).
+ * cpu1 (lane 1): sparse cross-node DSM writes (home=1). Each writer uses
+ * a disjoint cache-line range, so readback does not race another writer.
  *
  * Verify: cross-node value convergence + TC112_LOCAL progress markers.
  */
@@ -21,9 +22,11 @@ int main(int argc, char **argv)
     int cpu_index = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
     if (argc >= 3) cpu_index = parse_int(argv[2]);
+    /* The harness passes a global CPU index; select this node's local lane. */
+    int local_lane = cpu_index % 4;
 
     /* cpu0: dense local private access — local HN-F TBE stress */
-    if (cpu_index == 0) {
+    if (local_lane == 0) {
         if (node_id != 2) {
             uint32_t seed = 0x12000000u | ((uint32_t)node_id << 16) | 1u;
             for (int r = 0; r < ROUNDS; r++) {
@@ -48,11 +51,13 @@ int main(int argc, char **argv)
     }
 
     /* cpu1: sparse cross-node DSM write */
-    if (cpu_index == 1) {
+    if (local_lane == 1) {
         uint32_t cv = 0x1200C000u | ((uint32_t)node_id << 8) | 1u;
+        uint32_t writer_off = CROSS_OFF + (uint32_t)node_id * 0x1000u;
         for (int r = 0; r < 32; r++) {
-            dsm_store(1, CROSS_OFF + (uint32_t)r * 64u, cv ^ (uint32_t)r);
-            uint32_t got = dsm_load(1, CROSS_OFF + (uint32_t)r * 64u);
+            uint32_t off = writer_off + (uint32_t)r * 64u;
+            dsm_store(1, off, cv ^ (uint32_t)r);
+            uint32_t got = dsm_load(1, off);
             if (got != (cv ^ (uint32_t)r)) {
                 emit_read_val(node_id, 1, cv ^ (uint32_t)r, got, 0);
                 _exit_program(1);
@@ -60,7 +65,7 @@ int main(int argc, char **argv)
             }
         }
         sync_wait(0b111);
-        uint32_t final_val = dsm_load(1, CROSS_OFF);
+        uint32_t final_val = dsm_load(1, writer_off);
         emit_read_val(node_id, 1, cv, final_val, 1);
         sync_wait(0b111);
         _exit_program(0);
