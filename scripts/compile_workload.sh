@@ -1,12 +1,12 @@
 #!/bin/bash
-# Compile an E2E workload by testcase id into a FIXED output path
-# tests/e2e/workloads/workload.elf so the gem5 command line can reference a
-# constant path regardless of TC number.
+# Compile an E2E workload by testcase id. The default output is
+# tests/e2e/workloads/workload.elf; WORKLOAD_OUT selects a run-private path
+# for concurrent E2E runs.
 #
 # usage:
 #   bash scripts/compile_workload.sh <tc_id> [workload_dir]
 #
-#  produces: <workload_dir>/workload.elf   (overwritten each call)
+#  produces: WORKLOAD_OUT or <workload_dir>/workload.elf
 #
 # The tc_name -> source mapping is queried from tests/e2e/test_e2e.py
 # (TESTCASES dict) to keep a single source of truth. Dual-socket TCs
@@ -48,7 +48,8 @@ if [ -z "$TC_NAME" ]; then
 fi
 
 SRC="$WL_DIR/${TC_NAME}.c"
-OUT="$WL_DIR/workload.elf"
+OUT="${WORKLOAD_OUT:-$WL_DIR/workload.elf}"
+mkdir -p "$(dirname "$OUT")"
 if [ ! -f "$SRC" ]; then
     echo "ERROR: workload source not found: $SRC" >&2
     exit 3

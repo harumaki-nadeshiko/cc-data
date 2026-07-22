@@ -1499,7 +1499,8 @@ def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
 
 def verify_tc131(reads, lines):
     return verify_real_capacity_workload(131, reads, lines,
-                                         ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse"), 16)
+                                         ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse",
+                                          "exclusive_upgrade"), 16)
 
 
 def verify_tc132(reads, lines):

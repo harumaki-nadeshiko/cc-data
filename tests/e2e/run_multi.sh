@@ -3,9 +3,9 @@
 #
 # This launcher reads a fixed JSON topology config (configs/topo_1s.json or
 # configs/topo_2s.json), generates the networksim topo.json, compiles the
-# workload into a FIXED path (tests/e2e/workloads/workload.elf), starts all
-# module processes per the JSON, waits for gem5 to finish, then invokes the
-# independent verifier tests/e2e/verify.py.
+# workload into a run-specific path, starts all module processes per the JSON,
+# waits for gem5 to finish, then invokes the independent verifier
+# tests/e2e/verify.py. Set E2E_RUN_ID to run independent TCs concurrently.
 #
 # Usage:
 #   bash tests/e2e/run_multi.sh [--1s|--2s] <tc> ... [<tc> ...]
@@ -23,8 +23,11 @@ GEM5_BIN="$ROOT_DIR/gem5/build/ARM/gem5.opt"
 UBIO_BIN="$ROOT_DIR/build/bin/ubio"
 NSIM_BIN="$ROOT_DIR/build/bin/networksim"
 TEST_E2E="$ROOT_DIR/tests/e2e/test_e2e.py"
-WORKLOAD="$ROOT_DIR/tests/e2e/workloads/workload.elf"
-TOPO_JSON="$ROOT_DIR/build/run/topo.json"
+RUN_ID="${E2E_RUN_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
+RUN_DIR="$ROOT_DIR/build/runs/$RUN_ID"
+WORKLOAD="$RUN_DIR/workload.elf"
+TOPO_JSON="$RUN_DIR/topo.json"
+IPC_DIR="$RUN_DIR/ipc"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 
 # C5: PDES sync interval (ps).  Lower values improve time-resolution but
@@ -105,7 +108,11 @@ ubio_extra_args_for_tc() {
             echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
         131|132|133|134)
-            echo "--bloom-bytes=61440 --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
+            local bloom_bytes=61440
+            if [ "${UBCC_POLICY:-spill}" = "naive" ]; then
+                bloom_bytes=0
+            fi
+            echo "--bloom-bytes=$bloom_bytes --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
         98)  echo "--ways=1" ;;
         *)   echo "" ;;
@@ -114,7 +121,7 @@ ubio_extra_args_for_tc() {
 
 # ─── Lookup json module command (placeholder substitution) ────────────
 # expand_cmd <module_id> <fault_rules> <ubio_extra_args> [node_outdir]
-# Env: NODE_OUTDIR (used to substitute {node_outdir}; only meaningful for gem5_*)
+# Env: runtime paths used to substitute runner-specific placeholders.
 expand_cmd() {
     local mod_id="$1"; local frules="$2"; local uextra="$3"; local node_od="${4:-}"
     NODE_OUTDIR="$node_od" python3 - "$JSON" "$mod_id" "$frules" "$uextra" <<'PY'
@@ -131,8 +138,8 @@ def r(s):
     s = s.replace("{ubio_bin}", os.path.join(ROOT,"build/bin/ubio"))
     s = s.replace("{nsim_bin}", os.path.join(ROOT,"build/bin/networksim"))
     s = s.replace("{test_e2e}", os.path.join(ROOT,"tests/e2e/test_e2e.py"))
-    s = s.replace("{workload}", os.path.join(ROOT,"tests/e2e/workloads/workload.elf"))
-    s = s.replace("{topo_json}", os.path.join(ROOT,"build/run/topo.json"))
+    s = s.replace("{workload}", os.environ["RUN_WORKLOAD"])
+    s = s.replace("{topo_json}", os.environ["RUN_TOPO_JSON"])
     s = s.replace("{node_outdir}", os.environ.get("NODE_OUTDIR",""))
     s = s.replace("{fault_rules_args}", frules)
     s = s.replace("{ubio_extra_args}", uextra)
@@ -143,24 +150,63 @@ PY
 
 # ─── per-TC run ─────────────────────────────────────────────────────
 LOG_BASE="${LOG_BASE:-$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}}"
-mkdir -p "$LOG_BASE" "$ROOT_DIR/build/run"
+mkdir -p "$LOG_BASE" "$RUN_DIR" "$IPC_DIR"
+export UBCC_IPC_DIR="$IPC_DIR"
+export RUN_WORKLOAD="$WORKLOAD"
+export RUN_TOPO_JSON="$TOPO_JSON"
 
 # Kill any leftover infra from a previous TC / abort.
 _kill_infra() {
-    ps aux | awk '/gem5\.opt.*test_e2e|\/build\/bin\/ubio|\/build\/bin\/networksim/ && !/awk/ {print $2}' | while read -r pid; do
-        kill -9 "$pid" 2>/dev/null || true
-    done
     for pid in ${UBIO_PIDS:-} ${NSIM_PID:-}; do
         kill -9 $pid 2>/dev/null || true
     done
+    if [ -n "${MEMORY_MONITOR_PID:-}" ]; then
+        kill "$MEMORY_MONITOR_PID" 2>/dev/null || true
+        MEMORY_MONITOR_PID=""
+    fi
     wait 2>/dev/null || true
     sleep 0.3
     UBIO_PIDS=""; NSIM_PID=""
 }
-trap '_kill_infra' EXIT
+_record_runner_signal() {
+    local signal=$1
+    printf '[runner] signal=%s pid=%s tc=%s\n' "$signal" "$$" "${CURRENT_TC:-none}" \
+        >>"${LOG_BASE:-/tmp}/runner_signals.log"
+}
+trap '_record_runner_signal EXIT; _kill_infra' EXIT
+trap '_record_runner_signal HUP; exit 129' HUP
+trap '_record_runner_signal INT; exit 130' INT
+trap '_record_runner_signal TERM; exit 143' TERM
+
+_start_memory_monitor() {
+    local tc=$1
+    local interval="${E2E_MEMORY_MONITOR_SEC:-0}"
+    [ "$interval" -gt 0 ] 2>/dev/null || return
+
+    local log="$LOG_BASE/memory_tc${tc}.log"
+    (
+        while true; do
+            date '+[MEMORY] %FT%T%z'
+            free -b
+            ps -eo pid=,ppid=,rss=,vsz=,comm= | \
+                while read -r pid ppid rss vsz comm; do
+                    case "$comm" in
+                        gem5.opt|ubio|networksim)
+                            printf '[MEMORY-PROC] pid=%s ppid=%s rss_kb=%s vsz_kb=%s cmd=%s\n' \
+                                "$pid" "$ppid" "$rss" "$vsz" "$comm"
+                            ;;
+                    esac
+                done
+            sleep "$interval"
+        done
+    ) >>"$log" 2>&1 &
+    MEMORY_MONITOR_PID=$!
+    echo "[monitor] memory sampling every ${interval}s -> $log"
+}
 
 run_tc() {
     local tc=$1
+    CURRENT_TC=$tc
     _kill_infra  # ensure clean state before each TC
 
     # TC98 fix: per-TC timeout override.  High-contention tests need much
@@ -179,23 +225,23 @@ run_tc() {
         TC_TIMEOUT="$TIMEOUT_SEC"
     fi
 
-    local m5base="$ROOT_DIR/build/run/tc${tc}"
+    local m5base="$RUN_DIR/tc${tc}"
     local m5outdir="$m5base/m5out"
     rm -rf "$m5base"; mkdir -p "$m5outdir"
 
     echo ""
     echo "=== TC${tc} (topo=$TOPO_KIND, ${NUM_NODES}nodes x ${NUM_SOCKETS}sockets) ==="
 
-    # 1. Compile workload → fixed path workload.elf
+    # 1. Compile workload into this run's private ELF path.
     NUM_NODES="$NUM_NODES" NUM_SOCKETS="$NUM_SOCKETS" \
-        bash "$ROOT_DIR/scripts/compile_workload.sh" "$tc" >/dev/null 2>&1 \
+        WORKLOAD_OUT="$WORKLOAD" bash "$ROOT_DIR/scripts/compile_workload.sh" "$tc" >/dev/null 2>&1 \
         || { echo "  TC${tc} COMPILE FAILED"; return 1; }
 
     # 2. Generate networksim topo.json (full mesh, --nodes/--sockets from JSON)
     python3 "$ROOT_DIR/scripts/gen_topo.py" --nodes "$NUM_NODES" --sockets "$NUM_SOCKETS" --out "$TOPO_JSON" >/dev/null 2>&1
-    # Clean sshd ipc endpoints
-    rm -rf /workspace/gem5/shared_ipc/ipc_* /tmp/ubio_n* /tmp/networksim_* 2>/dev/null || true
-    mkdir -p /workspace/gem5/shared_ipc 2>/dev/null || true
+    # Clean only this run's IPC endpoints. Other runs use distinct directories.
+    rm -rf "$IPC_DIR" 2>/dev/null || true
+    mkdir -p "$IPC_DIR"
 
     # 3. Start networksim (must bind before ubio connects)
     local nsim_cmd
@@ -222,9 +268,17 @@ run_tc() {
             fi
             cmd="$GEM5_BIN $debug_args${cmd#"$GEM5_BIN"}"
         fi
-        if [ "$tc" = "130" ] || [ "$tc" = "131" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ]; then
-            # TC130 isolates directory policy; do not mix protocol optimizations.
+        if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ]; then
+            # These tests isolate directory policy; do not mix protocol optimizations.
             cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
+        elif [ "$tc" = "131" ]; then
+            # TC131 is the capacity/latency comparison workload.  The baseline
+            # is naive with every latency optimization disabled; optimized uses
+            # spill and enables the latency optimization profile.
+            case "${EP_PERF_PROFILE:-baseline}" in
+                optimized) cmd="$cmd --silent-upgrade=1 --direct-fwd=0 --ubcc-batch-rs=1" ;;
+                *)         cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0" ;;
+            esac
         elif [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
             case "${EP_PERF_PROFILE:-optimized}" in
                 baseline)
@@ -285,6 +339,7 @@ run_tc() {
     done
     local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
     echo "[launch] $n_ubio ubio (${NUM_NODES}x${NUM_SOCKETS}) + $NUM_NODES gem5 running"
+    _start_memory_monitor "$tc"
 
     # 6. Wait for all gem5 processes to finish (or timeout)
     local waited=0
@@ -295,7 +350,18 @@ run_tc() {
     while true; do
         local any=0
         for pid in $GEM5_PIDS; do
-            if kill -0 $pid 2>/dev/null; then any=1; fi
+            # A completed child remains a zombie until the wait below reaps it.
+            # kill -0 succeeds for zombies, so do not mistake one for a running
+            # gem5 process and leave UBIO/networksim running indefinitely.
+            if kill -0 "$pid" 2>/dev/null; then
+                local state
+                state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+                state=${state#${state%%[![:space:]]*}}
+                case "$state" in
+                    Z*) ;;
+                    *) any=1 ;;
+                esac
+            fi
         done
         [ $any -eq 0 ] && break
         sleep 1; waited=$((waited + 1))
@@ -343,6 +409,10 @@ run_tc() {
     # Kill ubio/nsim
     for pid in $UBIO_PIDS; do kill -9 $pid 2>/dev/null || true; done
     kill -9 ${NSIM_PID:-} 2>/dev/null || true
+    if [ -n "${MEMORY_MONITOR_PID:-}" ]; then
+        kill "$MEMORY_MONITOR_PID" 2>/dev/null || true
+        MEMORY_MONITOR_PID=""
+    fi
     wait 2>/dev/null || true
     sleep 0.2
 
@@ -372,6 +442,10 @@ run_tc() {
         --simout "${simouts[@]}" --fault-log "${faultlogs[@]}" 2>&1 | tee "$vlog"
     # Last sentinel line decides
     if tail -n1 "$vlog" 2>/dev/null | grep -q ">>> TC${tc} PASSED <<<"; then
+        # Persist request issue-to-first-response chains for cross-run latency
+        # evaluation.  TRACE-PERF is emitted by gem5, UBIO, and networksim.
+        python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \
+            >"$LOG_BASE/trace_chains_tc${tc}.json" 2>/dev/null || true
         echo "  TC${tc} PASSED"
         return 0
     else

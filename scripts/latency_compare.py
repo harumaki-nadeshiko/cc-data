@@ -64,7 +64,8 @@ def compute_latencies(chains, tick_ns_factor=0.001):
         cat = category_from_chain(chain)
         if cat not in cat_lats:
             cat_lats[cat] = []
-        dur_ps = chain.get("duration_ps", 0)
+        # Prefer issue-to-first-response latency.  Fall back for legacy traces.
+        dur_ps = chain.get("e2e_latency_ps", chain.get("duration_ps", 0))
         dur_ns = dur_ps * tick_ns_factor
         cat_lats[cat].append(dur_ns)
     return cat_lats

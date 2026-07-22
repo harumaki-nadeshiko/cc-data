@@ -189,6 +189,22 @@ def build_chains(events, min_req_id=0, exclude_req_ids=None):
             ch["last_tick"] = last["tick"]
             ch["duration_ps"] = last["tick"] - first["tick"]
 
+            # A request's end-to-end completion is the first response received
+            # by gem5 after its issue.  The full lifecycle can include guest
+            # execution and a later ClearReq, neither of which is request
+            # service latency.
+            issue = next((e for e in ch["events"]
+                          if e["comp"] == "gem5" and e["event"] == "SEND"),
+                         None)
+            completion = None
+            if issue:
+                completion = next((e for e in ch["events"]
+                                   if e["tick"] >= issue["tick"]
+                                   and e["comp"] == "gem5"
+                                   and e["event"] == "RECV"), None)
+            if issue and completion:
+                ch["e2e_latency_ps"] = completion["tick"] - issue["tick"]
+
             # 3.5: Critical path = sum of nsim_link segments only
             # (real configured link latency, excludes PDES sync alignment tails)
             crit_ps = 0

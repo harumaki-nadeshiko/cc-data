@@ -15,7 +15,7 @@
 
 ### 2. 验收指标
 
-#### 指标 1：512KB SRAM 下 Cacheline 追踪数提升 ≥50%
+#### 指标 1：512KB SRAM 下 Cacheline 等效追踪数提升 ≥50%，平均端到端延迟增加 ≤50 cycles
 
 **方法**：底层为 Bloom Filter + ResidentDir 分层架构。纯 SRAM 基线无 DRAM 卸载，满则 evict 全局副本。当前方案允许 MetaRNF DRAM 卸载冷条目。
 
@@ -28,20 +28,21 @@
 
 纯 SRAM 基线（512KB 全作 Dir，无 Bloom）= ~69,000 条目。当前方案 SRAM 可存 ~57,344 条目，但通过 DRAM 卸载等效追踪容量远超基线。Bloom Filter 将等效覆盖从 ~4.3MB（纯 Dir）扩展到数十 MB（取决于 DRAM 规模和访问模式）。
 
-**达标**：等效追踪 > 50% 基线 ✅
+**验收口径**：以`naive + no latency optimization`作为基线。等效追踪数是每个Home中ResidentDir与已持久化Backstore元数据的去重并集；Backstore索引与ResidentDir存在重叠，禁止直接相加。Spill必须达到纯naive ResidentDir容量的150%，同时与`spill + no latency optimization`对照的压力后catalog复用load平均端到端时延增量不超过50 cycles（2GHz下25ns）。
 
-#### 指标 2：CC 同步时延降低 ≥10%
+#### 指标 2：相对 naive + no latency optimization，spill + latency optimization 的CC端到端时延降低 ≥10%
 
 **方法**：协议级优化——静默升级（Silent Upgrade）。R_E holder 的本地写升级不再发跨节点 OuterUpgradeReq，零跨节点消息。
 
-**Baseline**（EP_SILENT_UPGRADE=0）：R_E holder 写升级 → 发 OuterUpgradeReq → home → OuterUpgradeAck = 1 RTT ≈ 810ns
-**Optimized**（EP_SILENT_UPGRADE=1）：R_E holder 写升级 → 本地静默升级 → 立即 SnpResp_I ≈ 78ns
+**Baseline**：`naive + no latency optimization`，即`--dir-overflow-policy=naive --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0`。
+
+**Optimized**：`spill + latency optimization`，即`--dir-overflow-policy=spill --silent-upgrade=1 --ubcc-batch-rs=1`。普通外部请求的端到端样本从gem5发出请求开始，到gem5首次收到响应结束；不包含guest后续执行和ClearReq。静默升级没有外部请求，因此TC131另对同一批远端独占读后的store记录guest发起到store完成的cycle数，作为该关键路径的端到端边界。
 
 降幅：(810 − 78) / 810 ≈ **90.4%** >> 10%
 
 **注**：当前 TC29 workload（local_upgrade_from_exclusive）不使用 SnpCleanInvalid 路径（它通过 UpgradeReq 升级），因此 Baseline vs Optimized 在该 workload 上实测降幅为 0%。静默升级的生效场景为 **HN-F 通过 SnpCleanInvalid snoop EP-RNF 的独占持有者升级路径**（TC8、TC16、TC97 等跨节点写竞争场景可触发）。该路径下的降幅已通过代码级路径分析验证，需补充专用 workload 实测。
 
-**达标**：≥10% ✅
+**验收工具**：每次TC131运行自动生成`trace_chains_tc131.json`。使用`trace2chain.py`的`e2e_latency_ps`及`evaluate_capacity_latency.py`计算容量、平均延迟增加和指标2降幅。历史模型值不是验收结果，必须由对应对照运行生成。
 
 #### 指标 3：CC 同步 ≤ HA 理论时延 + 结构优势
 

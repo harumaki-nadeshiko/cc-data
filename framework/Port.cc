@@ -245,14 +245,21 @@ Port::emitSync(uint64_t curTick)
 }
 
 // ── PortEnvLoader ───────────────────────────────────────────────────
-static const std::string IPC_BASE = "/workspace/gem5/shared_ipc/ipc";
+static std::string
+ipcBase()
+{
+    const char *dir = std::getenv("UBCC_IPC_DIR");
+    return std::string((dir && *dir) ? dir : "/workspace/gem5/shared_ipc") +
+        "/ipc";
+}
 
 PortParams PortEnvLoader::gem5UbioPort(int nid) {
     PortParams p;
     p.name = "gem5_ubio";
     p.moduleId = nid; p.portId = 0;
-    p.localRxEndpoint = "ipc://" + IPC_BASE + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
-    p.peerRxEndpoint  = "ipc://" + IPC_BASE + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
+    const auto base = ipcBase();
+    p.localRxEndpoint = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
+    p.peerRxEndpoint  = "ipc://" + base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
     return p;
 }
 PortParams PortEnvLoader::ubioGem5Port(int nid, bool isUbio) {
@@ -260,8 +267,9 @@ PortParams PortEnvLoader::ubioGem5Port(int nid, bool isUbio) {
     p.name = isUbio ? "gem5" : "gem5_ubio";
     p.moduleId = nid; p.portId = 0;
     if (isUbio) {
-        p.localRxEndpoint = "ipc://" + IPC_BASE + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-        p.peerRxEndpoint  = "ipc://" + IPC_BASE + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
+        const auto base = ipcBase();
+        p.localRxEndpoint = "ipc://" + base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
+        p.peerRxEndpoint  = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
     } else {
         return gem5UbioPort(nid);
     }
@@ -270,15 +278,17 @@ PortParams PortEnvLoader::ubioGem5Port(int nid, bool isUbio) {
 PortParams PortEnvLoader::ubioNetPort(int nid) {
     PortParams p;
     p.name = "net"; p.moduleId = nid; p.portId = 1;
-    p.localRxEndpoint = "ipc://" + IPC_BASE + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-    p.peerRxEndpoint  = "ipc://" + IPC_BASE + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
+    const auto base = ipcBase();
+    p.localRxEndpoint = "ipc://" + base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
+    p.peerRxEndpoint  = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
     return p;
 }
 PortParams PortEnvLoader::nsimUbioPort(int mod) {
     PortParams p;
     p.name = "nsim_p" + std::to_string(mod); p.moduleId = mod; p.portId = 1;
-    p.localRxEndpoint = "ipc://" + IPC_BASE + "_ubio_" + std::to_string(mod) + "_to_networksim_m" + std::to_string(mod);
-    p.peerRxEndpoint  = "ipc://" + IPC_BASE + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
+    const auto base = ipcBase();
+    p.localRxEndpoint = "ipc://" + base + "_ubio_" + std::to_string(mod) + "_to_networksim_m" + std::to_string(mod);
+    p.peerRxEndpoint  = "ipc://" + base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
     return p;
 }
 PortParams PortEnvLoader::barrierPort(int n) {
