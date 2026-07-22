@@ -1,6 +1,7 @@
 #!/bin/bash
 # Serial naive-vs-spill comparisons for the long real-capacity workloads.
-# Each case uses 512KB SRAM / 60KB Bloom / 4KB index (57,344 entries).
+# Spill uses 512KB SRAM / 60KB Bloom / 4KB index. Naive disables Bloom and
+# devotes its entire metadata budget to resident directory entries.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"

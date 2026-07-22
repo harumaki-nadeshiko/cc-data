@@ -23,10 +23,12 @@ using NodeID = uint16_t;
 using Cycles = uint64_t;
 
 // The standalone ubio process advances its virtual clock in ubio_main's loop
-// (see Port::safeTs). Directory bookkeeping timestamps read curTick(); in the
-// process model there is no global event queue, so this returns 0 and callers
-// use it only for relative/debug bookkeeping.
-inline Tick curTick() { return 0; }
+// (see Port::safeTs). Directory bookkeeping uses this binding so timeouts and
+// tombstones share the same clock as IPC message timestamps.
+inline Tick *ubioTickSource = nullptr;
+
+inline void setUbioTickSource(Tick *tick) { ubioTickSource = tick; }
+inline Tick curTick() { return ubioTickSource ? *ubioTickSource : 0; }
 
 } // namespace cc
 

@@ -114,6 +114,7 @@ using DirEntry = UBCCDirEntry;
 enum class OpType {
     RECALL,            // Recall owner data before granting access
     INVALIDATE,        // Invalidate sharers before upgrading to unique
+    NAIVE_EVICT_INVALIDATE, // Invalidate resident victim before removing it
     GRANT_HANDSHAKE,   // Grant commit pending Clear from requester
     UPGRADE_PENDING    // Local upgrade four-message handshake in progress
 };
@@ -761,6 +762,7 @@ public:
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
     uint64_t _bloomReconstructCounter = 0;
+    Tick _lastStateLogTick = 0;
 
     // Phase 1: DSM Data Store coalescing (future use)
     std::map<uint64_t, std::vector<PendingRequester>> _pendingDataWaiters;

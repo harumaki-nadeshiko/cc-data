@@ -974,6 +974,11 @@ main(int argc, char **argv)
         }
     }
 
+    // Naive eviction never persists or probes metadata backstore, so it has
+    // no use for either Bloom bits or their group-index budget.
+    if (g_rdcfg.bloom_bytes == 0)
+        g_rdcfg.index_bytes = 0;
+
     if (nid < 0 || nid > 31) {
         std::fprintf(stderr, "[ubio:%d] ERROR: need --node=\n", nid);
         return 1;
@@ -1007,11 +1012,11 @@ main(int argc, char **argv)
                  netRx.c_str(), netTx.c_str());
 
     uint64_t tick = 0;
+    cc::setUbioTickSource(&tick);
 
     UBCCController ubcc(nid, sid, nullptr, 64,
-                          g_rdcfg.bloom_bytes > 0 ? g_rdcfg.bloom_bytes
-                              : ResidentDir::DefaultBloomBytes,
-                          0, g_numSockets, g_numNodes, &g_rdcfg);
+                           g_rdcfg.bloom_bytes,
+                           0, g_numSockets, g_numNodes, &g_rdcfg);
     ubcc.setBatchRsEnabled(g_batchRs);
     ubcc.setResidentOverflowPolicy(g_overflowPolicy);
     UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick);
@@ -1413,6 +1418,10 @@ main(int argc, char **argv)
         }
         if (minTs > tick) {
             tick = minTs;
+            // Run controller maintenance only when virtual time advances.
+            // This expires tombstones and recalls without repeatedly scanning
+            // state while PDES is parked at the same timestamp.
+            ubcc.wakeup();
         } else {
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message
