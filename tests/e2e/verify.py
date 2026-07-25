@@ -54,6 +54,9 @@ def main():
                         "[UBCC-STATS]" in line or
                         "[UBCC-NAIVE-EVICT]" in line or
                         "[UBCC-NAIVE-EVICT-DONE]" in line or
+                        "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]" in line or
+                        "[UBIO-POLICY]" in line or
+                        "[RUNNER-MANIFEST]" in line or
                         "BATCH-RS" in line or
                         "SILENT" in line or
                         "C4" in line or
@@ -61,6 +64,7 @@ def main():
                         "RESIDENT-WAITER" in line or
                         "RESIDENT-BACKSTORE-KNOWN" in line or
                         "RESIDENT-SPILL-START" in line or
+                        "RESIDENT-SPILL-DONE" in line or
                         "RESIDENT-FILL-ISSUED" in line or
                         "RESIDENT-FILL-DONE" in line or
                         "RESIDENT-MISS" in line or
@@ -72,7 +76,8 @@ def main():
                         "UBCC-UPGRADE" in line or
                         "UBCC-CLEAR" in line or
                         "WB-DATA-PERSIST" in line or
-                        "RESIDENT-SPILL-DONE" in line or
+                        "BACKSTORE-WRITE" in line or
+                        "BACKSTORE-READ" in line or
                         "EvictReq" in line):
                         raw_lines.append(line.rstrip("\n"))
 
@@ -92,6 +97,42 @@ def main():
         sys.exit(0)
 
     reads = parse_read_vals(raw_lines)
+
+    # ── Phase A1: Naive-policy configuration validation for TC131-134 ──
+    # When UBCC_POLICY=naive is selected (detected from [UBIO-POLICY] or
+    # [RUNNER-MANIFEST] markers), the run must NOT produce any spill or
+    # backstore activity.  Fail early if forbidden markers are found.
+    if args.tc in (131, 132, 133, 134):
+        is_naive = any("[UBIO-POLICY] effective=naive" in line
+                       for line in raw_lines)
+        if not is_naive:
+            is_naive = any("[RUNNER-MANIFEST]" in line and "policy=naive" in line
+                           for line in raw_lines)
+        if is_naive:
+            forbidden = []
+            for line in raw_lines:
+                if "BACKSTORE-WRITE" in line:
+                    forbidden.append(("BACKSTORE-WRITE", line))
+                elif "BACKSTORE-READ" in line:
+                    forbidden.append(("BACKSTORE-READ", line))
+                elif "RESIDENT-SPILL-" in line:
+                    forbidden.append(("RESIDENT-SPILL-", line))
+                elif "[UBCC-STATS]" in line and '"backstoreIndex"' in line:
+                    # Extract backstoreIndex value; nonzero is forbidden
+                    import re as _re
+                    m = _re.search(r'"backstoreIndex":(\d+)', line)
+                    if m and int(m.group(1)) != 0:
+                        forbidden.append(("nonzero backstoreIndex", line))
+            if forbidden:
+                msg = (f"TC{args.tc} FAILED: naive-policy invariant violation "
+                       f"({len(forbidden)} occurrences): " +
+                       ", ".join(kind for kind, _ in forbidden[:5]))
+                print(f"  {msg}", flush=True)
+                for kind, line in forbidden[:5]:
+                    print(f"    FORBIDDEN [{kind}]: {line[:120]}", flush=True)
+                print(f">>> TC{args.tc} FAILED <<<", flush=True)
+                sys.exit(1)
+
     passed, msg, failures = verify_testcase(args.tc, reads, raw_lines)
     print(f"  {msg}", flush=True)
     for f in failures:

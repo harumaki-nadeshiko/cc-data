@@ -29,7 +29,6 @@ class UBCCHostIf
 {
   public:
     virtual ~UBCCHostIf() = default;
-    // Simulated time lets ResidentDir diagnostics be correlated with TRACE-PERF.
     virtual uint64_t hostCurrentTick() const = 0;
     virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
     virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
@@ -37,6 +36,14 @@ class UBCCHostIf
     virtual void readDsmData(uint64_t pa,
                              std::function<void(const uint8_t*)> cb) = 0;
     virtual void writeDsmData(uint64_t pa, const uint8_t *buf) = 0;
+    // H64 async persistence: completion fires when data is visible to
+    // subsequent readDsmData (not just enqueued).
+    virtual void writeDsmDataAsync(uint64_t pa, const uint8_t *buf,
+                                   std::function<void(bool)> completion) {
+        // Legacy default: synchronous fallback
+        writeDsmData(pa, buf);
+        if (completion) completion(true);
+    }
 };
 
 /**
@@ -164,6 +171,7 @@ struct OutstandingRequest {
     Tick     createTick;
     Tick     respTick;
     Tick     deadlineTick;
+    uint8_t  recallRetries;
 
     bool     accepted;           // True if upgrade ack was true
 
@@ -201,7 +209,7 @@ struct OutstandingRequest {
           writeIntent(false),
           recallBarrierDone(false), invalidateBarrierDone(false),
           replayArmed(false),
-          createTick(0), respTick(0), deadlineTick(0),
+           createTick(0), respTick(0), deadlineTick(0), recallRetries(0),
           accepted(false), dataValid(false),
           dataSource(GrantDataSource::HomeMemory),  // F3
           pendingAckCount(0), ackMask(0), totalMask(0),
@@ -282,6 +290,11 @@ class UBCCController
     // edge cases and forcing costly EP_RETRY_CYCLES polling instead of
     // the push-grant fast path.
     static constexpr size_t MAX_PENDING_PER_PA = 32;
+    // Bounds apply across PAs too.  Per-PA limits alone permit an unbounded
+    // address flood to consume host memory.
+    static constexpr size_t MAX_OUTSTANDING_TOTAL = 128;
+    static constexpr size_t MAX_PENDING_REQUESTERS_TOTAL = 256;
+    static constexpr size_t MAX_RESIDENT_WAITERS_TOTAL = 256;
 
      // v4-dual-socket: constructor now takes socket_id.
       UBCCController(int node_id, int socket_id = 0,
@@ -436,8 +449,12 @@ class UBCCController
 
     bool copyOutstandingGrantData(uint64_t line_pa, DataBlock &outBlk) const;
 
-    /** Update _lineDataCache with externally-provided data (e.g. writeback). */
+    /** Update the bounded legacy compatibility cache. */
     void updateLineDataCache(uint64_t line_pa, const uint8_t *data) {
+        if (_lineDataCache.find(line_pa) == _lineDataCache.end() &&
+            _lineDataCache.size() >= kMaxLineDataCacheLines) {
+            return;
+        }
         std::array<uint8_t, 64> a{}; std::memcpy(a.data(), data, 64);
         _lineDataCache[line_pa] = a;
     }
@@ -684,9 +701,12 @@ class UBCCController
     void removeOutstanding(uint64_t linePa);
 
     void onBackstoreFillComplete(uint64_t linePa, bool found,
-                                 const BackstoreEntry &entry);
+                                  const BackstoreEntry &entry);
     void onBackstoreWriteAck(uint64_t linePa);
     void onBackstoreDeleteAck(uint64_t linePa, bool existed);
+
+    // Phase 3: typed H64 completion handler
+    void onBackstoreH64Complete(const BackstoreCompletion &comp);
     bool snapshotResidentForBackstore(uint64_t linePa, BackstoreEntry &entry) const;
 
     std::string inspectOffloadLineForTest(uint64_t linePa) const;
@@ -735,13 +755,14 @@ class UBCCController
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
     std::set<uint64_t> _evictionPendingRemoval;
+    // Replay can synchronously execute another protocol path. Suppress nested
+    // capacity sweeps; the outer pass owns the current finite snapshot.
+    bool _capacityReplayActive = false;
 
-    // Authoritative index of metadata known to exist in the backstore.
-    // Maintained across resident-directory eviction/reload cycles.
-    // Insert on successful backstore write/fill; erase on delete or fill-miss.
-    // Used by handleResidentMiss to force backstore read even when
-    // bloomMayContain returns false after reconstruction cleared the bits.
-    std::unordered_set<uint64_t> _backstoreMetadataPAs;
+    // Phase 3: _backstoreMetadataPAs REMOVED (was forbidden exact-PA shadow set).
+    // Resident miss now uses Bloom advisory negative shortcut + H64 lookup;
+    // Bloom false negatives after rebuild are handled by the actual H64 table,
+    // not by a UBCC-side shadow.
 
     // C3 batch RS grant env switch
     bool _batchRsEnabled;
@@ -756,8 +777,34 @@ class UBCCController
 public:
     void setBatchRsEnabled(bool v) { _batchRsEnabled = v; _batchRsOverridden = true; }
     void setResidentOverflowPolicy(ResidentOverflowPolicy p) { _overflowPolicy = p; }
+    void setDebugClearTrace(bool v) { _debugClearTrace = v; }
     ResidentOverflowPolicy residentOverflowPolicy() const { return _overflowPolicy; }
     std::string dumpStatsJson() const;
+
+    // Phase 3: H64 mode forces all ResidentDir misses to issue H64 lookup
+    // regardless of Bloom result.  Set by ubio_main when H64 schema is active.
+    void setH64BloomAllMisses(bool v) { _h64BloomAllMisses = v; }
+    bool h64BloomAllMisses() const { return _h64BloomAllMisses; }
+
+    // H64 async DSM persistence: called by host when writeDsmDataAsync completes.
+    void onDsmPersistComplete(uint64_t linePa);
+    void onDsmPersistFailed(uint64_t linePa);
+
+    // Phase 3: H64 bloom bypass flag (private)
+    bool _h64BloomAllMisses = false;
+
+    // H64 async DSM persistence gate: bounded set of PAs with in-flight writes.
+    // HARD caps: explicit limits prevent unbounded growth.
+    static constexpr int kMaxH64DsmPending = 32;  // max concurrent DSM writes
+    static constexpr int kMaxH64PersistenceWaitersPerPA = 8;
+    static constexpr int kMaxH64PersistenceWaitersTotal = 64;
+    std::set<uint64_t> _h64DsmPending;
+    // Pending requesters waiting for DSM persistence to complete (per PA).
+    std::map<uint64_t, std::deque<PendingRequester>> _h64PersistenceWaiters;
+    int _h64PersistenceWaitersTotal = 0;  // explicit total counter
+    bool _debugLog = false;       // [DEBUG-H64-*] gate
+    bool _debugClearTrace = false; // [DEBUG-TC5-CLEAR-TRACE], [DEBUG-UBCC-CLEAR] gate
+    bool _verboseLog = false;      // Phase 4: general debug/diagnostic gate (§I14)
 
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
@@ -769,9 +816,9 @@ public:
     std::set<uint64_t> _pendingDataReads;
     bool _coalesceRsReads = false;
 
-    // Split-mode data persistence: when a line transitions through recall
-    // (owner -> requester), cache the recalled 64B payload at home so that
-    // later shared grants can carry correct data instead of stale HomeMemory.
+    // Legacy-only compatibility cache. H64 never reads or writes it; cap it at
+    // 512 KiB so an explicitly selected legacy run cannot grow without bound.
+    static constexpr size_t kMaxLineDataCacheLines = 8192;
     std::map<uint64_t, std::array<uint8_t, 64>> _lineDataCache;
 
     // ---- v4: Tombstone window (configurable, default 100000 ticks) ----
@@ -796,6 +843,7 @@ public:
     // ---- Async Writeback ----
     int _asyncWbInterval = 10000;
     int _asyncWbCounter = 0;
+    static constexpr size_t kMaxAsyncWbSnapshots = 128;
     std::map<uint64_t, uint64_t> _asyncWbSnapshots; // pa → snapshot epoch
     uint64_t _asyncWbCount = 0;
 
@@ -952,7 +1000,7 @@ public:
                                  UBCC_OuterReqType reqType, bool writeIntent,
                                  uint64_t *outEffectiveMask = nullptr);
     bool evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim);
-    void replayResidentWaitersForCapacity();
+    void replayResidentWaitersForCapacity(uint64_t triggerPa);
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,
                               int requesterNode);

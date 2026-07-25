@@ -36,7 +36,7 @@
 
 **Baseline**：`naive + no latency optimization`，即`--dir-overflow-policy=naive --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0`。
 
-**Optimized**：`spill + latency optimization`，即`--dir-overflow-policy=spill --silent-upgrade=1 --ubcc-batch-rs=1`。普通外部请求的端到端样本从gem5发出请求开始，到gem5首次收到响应结束；不包含guest后续执行和ClearReq。静默升级没有外部请求，因此TC131另对同一批远端独占读后的store记录guest发起到store完成的cycle数，作为该关键路径的端到端边界。
+**Optimized**：`spill + latency optimization`，即`--dir-overflow-policy=spill --silent-upgrade=1 --ubcc-batch-rs=1`。TC131以EPBackend记录的Outer事务协议端到端时间作为共同边界：从首次外部请求发出，到Clear被home确认。比较同一容量压力工作负载中的`naive + no latency optimization`与`spill + latency optimization`的平均时延；没有触发静默升级的场景仍是有效的真实工作负载样本。
 
 降幅：(810 − 78) / 810 ≈ **90.4%** >> 10%
 

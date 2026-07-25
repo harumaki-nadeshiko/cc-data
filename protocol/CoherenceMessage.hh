@@ -20,6 +20,29 @@ enum class GrantDataSource : uint8_t {
     NoData = 2,
 };
 
+// ---- Typed line operation status (Phase 2: MetaRNF 64B line transport) ----
+enum class MetaRNFLineStatus : uint8_t {
+    Ok            = 0,
+    RetryableBusy = 1,
+    IoError       = 2,
+    Corrupt       = 3,
+    RangeError    = 4,  // PA outside metadata DRAM range
+    InvalidArgument = 5,
+};
+
+static constexpr const char* metaRNFLineStatusName(MetaRNFLineStatus s)
+{
+    switch (s) {
+        case MetaRNFLineStatus::Ok:             return "Ok";
+        case MetaRNFLineStatus::RetryableBusy:  return "RetryableBusy";
+        case MetaRNFLineStatus::IoError:        return "IoError";
+        case MetaRNFLineStatus::Corrupt:        return "Corrupt";
+        case MetaRNFLineStatus::RangeError:     return "RangeError";
+        case MetaRNFLineStatus::InvalidArgument:return "InvalidArgument";
+    }
+    return "Unknown";
+}
+
 // ---- Message Type Enumeration ----
 enum class CoherenceMessageType : uint16_t {
     ReadReq,
@@ -47,6 +70,13 @@ enum class CoherenceMessageType : uint16_t {
     MetaRNFReadReq,          // Phase 3: ubio → gem5, read a 256B metadata page via MetaRNF
     MetaRNFReadResp,         // Phase 3: gem5 → ubio, response with 256B page data
     MetaRNFWriteReq,         // Phase 3: ubio → gem5, write a 256B metadata page via MetaRNF
+    MetaRNFWriteResp,        // Phase D2: gem5 → ubio, write ack (success/failure)
+
+    // Phase 2: 64B line operations with typed status
+    MetaRNFLineReadReq,      // ubio → gem5, read a single 64B metadata line
+    MetaRNFLineReadResp,     // gem5 → ubio, response with 64B data + typed status
+    MetaRNFLineWriteReq,     // ubio → gem5, write a single 64B metadata line
+    MetaRNFLineWriteResp,    // gem5 → ubio, write ack with typed status
 };
 
 // ---- Message Flags ----
@@ -223,6 +253,36 @@ struct UBMetaRNFBody {
     UBMetaRNFBody() : pagePa(0) { memset(data, 0, 256); }
 };
 
+// Phase 2: MetaRNF 64B line read request
+struct UBMetaRNFLineReadReqBody {
+    uint64_t bucketOffset;  // Req B: logical flat-bucket index; UBAdapter maps to physical
+    UBMetaRNFLineReadReqBody() : bucketOffset(0) {}
+};
+
+// Phase 2: MetaRNF 64B line read response
+struct UBMetaRNFLineReadRespBody {
+    MetaRNFLineStatus status;   // typed: Ok, RetryableBusy, IoError, Corrupt, RangeError, InvalidArgument
+    uint64_t bucketOffset;      // Req B: echoed logical offset from request
+    uint8_t  data[64];          // valid only when status == Ok
+    // padding implicit at end
+    UBMetaRNFLineReadRespBody() : status(MetaRNFLineStatus::IoError),
+        bucketOffset(0) { memset(data, 0, 64); }
+};
+
+// Phase 2: MetaRNF 64B line write request
+struct UBMetaRNFLineWriteReqBody {
+    uint64_t bucketOffset;  // Req B: logical flat-bucket index
+    uint8_t  data[64];
+    UBMetaRNFLineWriteReqBody() : bucketOffset(0) { memset(data, 0, 64); }
+};
+
+// Phase 2: MetaRNF 64B line write response
+struct UBMetaRNFLineWriteRespBody {
+    MetaRNFLineStatus status;   // typed: Ok, RetryableBusy, IoError, Corrupt, RangeError, InvalidArgument
+    uint64_t bucketOffset;      // Req B: echoed logical offset from request
+    UBMetaRNFLineWriteRespBody() : status(MetaRNFLineStatus::IoError), bucketOffset(0) {}
+};
+
 union CoherenceMessageBody {
     UBReadReqBody readReq;
     UBReadRespBody readResp;
@@ -246,6 +306,10 @@ union CoherenceMessageBody {
     UBUpgradeAckNotifyBody upgradeAckNotify;  // v4-P0 fix: FV-9 gap
     UBBarrierBody barrier;                    // BarrierReached / BarrierRelease
     UBMetaRNFBody  metaRNF;                    // MetaRNFReadReq/Resp, MetaRNFWriteReq
+    UBMetaRNFLineReadReqBody  metaRNFLineReadReq;    // Phase 2: MetaRNFLineReadReq
+    UBMetaRNFLineReadRespBody metaRNFLineReadResp;   // Phase 2: MetaRNFLineReadResp
+    UBMetaRNFLineWriteReqBody metaRNFLineWriteReq;   // Phase 2: MetaRNFLineWriteReq
+    UBMetaRNFLineWriteRespBody metaRNFLineWriteResp; // Phase 2: MetaRNFLineWriteResp
 
     CoherenceMessageBody() {} // value-initialized by CoherenceMessage default ctor
 };
@@ -288,6 +352,11 @@ coherenceMsgTypeName(CoherenceMessageType t)
         case CoherenceMessageType::MetaRNFReadReq:   return "MetaRNFReadReq";
         case CoherenceMessageType::MetaRNFReadResp:  return "MetaRNFReadResp";
         case CoherenceMessageType::MetaRNFWriteReq:  return "MetaRNFWriteReq";
+        case CoherenceMessageType::MetaRNFWriteResp: return "MetaRNFWriteResp";
+        case CoherenceMessageType::MetaRNFLineReadReq:  return "MetaRNFLineReadReq";
+        case CoherenceMessageType::MetaRNFLineReadResp: return "MetaRNFLineReadResp";
+        case CoherenceMessageType::MetaRNFLineWriteReq: return "MetaRNFLineWriteReq";
+        case CoherenceMessageType::MetaRNFLineWriteResp:return "MetaRNFLineWriteResp";
         default:                           return "Unknown";
     }
 }
@@ -297,18 +366,22 @@ ubMsgToString(const CoherenceMessage &msg)
 {
     char buf[512];
     snprintf(buf, sizeof(buf),
-             "CoherenceMessage{src=(%u,%u) dst=(%u,%u) home=(%u,%u) ingress=%u "
+             "CoherenceMessage{type=%s src=(%u,%u) dst=(%u,%u) home=(%u,%u) ingress=%u "
              "reqNode=%u tgt=%u "
-             "flags=0x%x homePA=0x%lx localPA=0x%lx "
-             "epoch=%lu reqId=%lu seq=%lu}",
+             "flags=0x%x homePA=0x%llx localPA=0x%llx "
+             "epoch=%llu reqId=%llu seq=%llu}",
              coherenceMsgTypeName(msg.h.type),
              msg.h.srcNode, msg.h.srcSocket,
              msg.h.dstNode, msg.h.dstSocket,
              msg.h.homeNode, msg.h.homeSocket,
              msg.h.ingressSocket,
              msg.h.requesterNode, msg.h.targetNode,
-             msg.h.flags, msg.h.homeLinePa, msg.h.localLinePa,
-             msg.h.epoch, msg.h.reqId, msg.h.seqNum);
+             msg.h.flags,
+             static_cast<unsigned long long>(msg.h.homeLinePa),
+             static_cast<unsigned long long>(msg.h.localLinePa),
+             static_cast<unsigned long long>(msg.h.epoch),
+             static_cast<unsigned long long>(msg.h.reqId),
+             static_cast<unsigned long long>(msg.h.seqNum));
     return std::string(buf);
 }
 

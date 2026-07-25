@@ -46,7 +46,24 @@ int ResidentDir::nextPow2(int v)
 ResidentDirLayout
 ResidentDir::searchOptimalLayout(const ResidentDirConfig &cfg)
 {
-    const size_t avail_bytes = cfg.sram_bytes - cfg.bloom_bytes - cfg.index_bytes;
+    // avail_bytes for _dirBits = sram - bloom - groupIndex - blc - desc
+    // GroupIndex[16] is an in-object member (not in _dirBits), so we
+    // subtract its budget to prevent _dirBits from consuming it.
+    // BLC and desc_scratch are reserved future budgets.
+    // For tiny test configs (sram < 64 KiB), skip blc/desc reservation
+    // to avoid negative avail_bytes (e.g. evict_test.cc with sram=1024).
+    const size_t group_idx_budget = cfg.effectiveGroupIndexBytes();
+    const bool full_budget = (cfg.sram_bytes >= 64 * 1024);
+    const size_t blc_effective = full_budget ? cfg.blc_bytes : 0;
+    const size_t desc_effective = full_budget ? cfg.desc_scratch_bytes : 0;
+    // For tiny test configs (sram < 64 KiB), skip group_index_budget as well
+    // to prevent unsigned underflow (group_index_budget = 4096 > sram_bytes).
+    const size_t group_idx_effective = full_budget ? group_idx_budget : 0;
+    const size_t avail_bytes = cfg.sram_bytes
+                               - cfg.bloom_bytes
+                               - group_idx_effective
+                               - blc_effective
+                               - desc_effective;
     const uint64_t avail_bits = (uint64_t)avail_bytes * 8;
     const int cl_addr_bits = cfg.pa_bits - 6; // cacheline address bits
 
@@ -173,12 +190,45 @@ ResidentDir::init(const ResidentDirConfig &cfg)
     size_t total_dir_bytes = (total_dir_bits + 7) / 8;
     _dirBits.assign(total_dir_bytes, 0);
 
+    // Override layout.dir_bytes with the actual allocation (which may be
+    // slightly smaller than set_bytes*num_sets due to bit-packing precision).
+    _layout.dir_bytes = total_dir_bytes;
+
     // Bloom filter
     _bloomBytes = cfg.bloom_bytes;
     _bloomBitCount = _bloomBytes * 8;
     _bloomBits.assign(_bloomBytes, 0);
     for (int g = 0; g < BloomGroups; g++)
         _groupIndex[g] = GroupIndex();
+
+    // In-object GroupIndex storage: BloomGroups * sizeof(GroupIndex)
+    constexpr size_t groupIndexStorage = BloomGroups * sizeof(GroupIndex);
+    static_assert(groupIndexStorage == 16 * 256,
+                  "GroupIndex[16] must be exactly 4096 bytes");
+
+    // Issue 4: validate group_index_bytes matches physical reality.
+    // Tiny test configs (sram < 64 KiB) are exempt.
+    if (cfg.sram_bytes >= 64 * 1024) {
+        size_t gb = cfg.effectiveGroupIndexBytes();
+        if (gb != groupIndexStorage) {
+            std::fprintf(stderr,
+                "[ResidentDir-FATAL] group_index_bytes=%zu != %zu "
+                "(sizeof(GroupIndex)*BloomGroups). "
+                "Fix config or use sram < 65536 for tiny test mode.\n",
+                gb, groupIndexStorage);
+            std::abort();
+        }
+    }
+
+    // Phase 0: on-chip budget accounting (design §4.1)
+    const bool full_budget = (cfg.sram_bytes >= 64 * 1024);
+    const size_t blc_reserved = full_budget ? cfg.blc_bytes : 0;
+    const size_t desc_reserved = full_budget ? cfg.desc_scratch_bytes : 0;
+    const size_t total_on_chip = total_dir_bytes
+                                 + _bloomBytes
+                                 + groupIndexStorage
+                                 + blc_reserved
+                                 + desc_reserved;
 
     std::fprintf(stderr,
         "[ResidentDir] layout: %d sets x %d ways = %zu entries, "
@@ -188,6 +238,53 @@ ResidentDir::init(const ResidentDirConfig &cfg)
         _layout.tag_bits, _layout.entry_bits, _layout.set_total_bits,
         total_dir_bytes / 1024, _bloomBytes / 1024,
         _layout.sharers_bits, _layout.epoch_bits, _layout.pa_bits);
+
+    // Budget assertion: total on-chip ≤ sram_bytes ≤ 512 KiB.
+    // Only enforced for production-scale configs (sram ≥ 64 KiB).
+    // Tiny test configs (evict_test, resident_dir_bench small modes) are
+    // exempt to avoid aborting on GroupIndex storage that the test
+    // doesn't use but must still allocate as an in-object member.
+    std::fprintf(stderr,
+        "[ResidentDir-BUDGET] total_on_chip=%zu KiB  breakdown: "
+        "dir=%zu KiB  bloom=%zu KiB  groupIndex[16]=%zu KiB  "
+        "blc_reserved=%zu KiB  desc_reserved=%zu KiB  "
+        "sram_budget=%zu KiB  limit=512 KiB %s\n",
+        total_on_chip / 1024,
+        total_dir_bytes / 1024,
+        _bloomBytes / 1024,
+        groupIndexStorage / 1024,
+        blc_reserved / 1024,
+        desc_reserved / 1024,
+        cfg.sram_bytes / 1024,
+        cfg.sram_bytes < 64 * 1024 ? "(tiny-test: assertion skipped)" : "");
+
+    if (cfg.sram_bytes >= 64 * 1024) {
+        if (cfg.sram_bytes > 512 * 1024) {
+            std::fprintf(stderr, "[ResidentDir-BUDGET] ERROR: sram_bytes=%zu exceeds 512 KiB hard limit\n",
+                         cfg.sram_bytes);
+            std::abort();
+        }
+        if (total_on_chip > cfg.sram_bytes) {
+            std::fprintf(stderr,
+                "[ResidentDir-BUDGET] ERROR: total_on_chip=%zu > sram_budget=%zu — "
+                "reduce bloom, group_index, blc, or desc_scratch\n",
+                total_on_chip, cfg.sram_bytes);
+            std::abort();
+        }
+        if (total_on_chip > 512 * 1024) {
+            std::fprintf(stderr,
+                "[ResidentDir-BUDGET] ERROR: total_on_chip=%zu > 512 KiB hard limit\n",
+                total_on_chip);
+            std::abort();
+        }
+    } else {
+        // Tiny test: just report the numbers, don't enforce.
+        std::fprintf(stderr,
+            "[ResidentDir-BUDGET] tiny-test mode: assertion skipped "
+            "(sram=%zu < 64KiB)\n", cfg.sram_bytes);
+    }
+
+    std::fflush(stderr);
 }
 
 // ========================================================================
@@ -650,6 +747,12 @@ ResidentDir::hasFreeSlotForPa(uint64_t pa) const
         if (!getValid(set, w)) return true;
     }
     return false;
+}
+
+bool
+ResidentDir::sameSet(uint64_t lhs, uint64_t rhs) const
+{
+    return setIndex(lhs) == setIndex(rhs);
 }
 
 bool

@@ -31,6 +31,7 @@ ar rcs "$OUT/lib/libframework.a" "$OUT/obj"/*.o
 cp "$FW/Port.hh" "$OUT/include/framework/Port.hh"
 cp "$FW/MemMessage.hh" "$OUT/include/framework/MemMessage.hh"
 cp "$FW/Log.hh" "$OUT/include/framework/Log.hh"
+cp "$FW/TracePerfPolicy.hh" "$OUT/include/framework/TracePerfPolicy.hh"
 
 cat > "$OUT/manifest.txt" <<EOF
 libframework.a

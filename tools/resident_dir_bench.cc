@@ -233,8 +233,10 @@ int main(int argc, char **argv)
             cfg.bloom_bytes = (size_t)std::strtoull(arg + 14, nullptr, 10);
         else if (std::strncmp(arg, "--sram-bytes=", 13) == 0)
             cfg.sram_bytes = (size_t)std::strtoull(arg + 13, nullptr, 10);
-        else if (std::strncmp(arg, "--index-bytes=", 14) == 0)
+        else if (std::strncmp(arg, "--index-bytes=", 14) == 0) {
             cfg.index_bytes = (size_t)std::strtoull(arg + 14, nullptr, 10);
+            cfg.group_index_bytes = cfg.index_bytes;  // sync to new field
+        }
         else if (std::strncmp(arg, "--sharers-bits=", 15) == 0)
             cfg.sharers_bits = (int)std::strtol(arg + 15, nullptr, 10);
         else if (std::strncmp(arg, "--epoch-bits=", 13) == 0)
@@ -266,6 +268,8 @@ int main(int argc, char **argv)
         std::fprintf(stdout, "  sram_bytes   = %zu\n", cfg.sram_bytes);
         std::fprintf(stdout, "  bloom_bytes  = %zu\n", cfg.bloom_bytes);
         std::fprintf(stdout, "  index_bytes  = %zu\n", cfg.index_bytes);
+        std::fprintf(stdout, "  blc_bytes    = %zu\n", cfg.blc_bytes);
+        std::fprintf(stdout, "  desc_scratch_bytes = %zu\n", cfg.desc_scratch_bytes);
         std::fprintf(stdout, "  sharers_bits = %d\n", cfg.sharers_bits);
         std::fprintf(stdout, "  epoch_bits   = %d\n", cfg.epoch_bits);
         std::fprintf(stdout, "  pa_bits      = %d\n", cfg.pa_bits);

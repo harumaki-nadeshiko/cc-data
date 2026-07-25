@@ -1,7 +1,9 @@
 #include "framework/Port.hh"
 #include "framework/MemMessage.hh"
+#include "framework/TracePerfPolicy.hh"
 
 #include <cstdio>
+#include <csignal>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -12,8 +14,19 @@
 #include <fstream>
 #include <thread>
 #include <sstream>
+#include <cstdlib>
 
 using namespace framework;
+
+namespace {
+volatile std::sig_atomic_t g_shutdownRequested = 0;
+
+void
+requestShutdown(int)
+{
+    g_shutdownRequested = 1;
+}
+} // anonymous namespace
 
 struct Link {
     int src_mod, src_port, dst_mod, dst_port;
@@ -38,10 +51,18 @@ class NetworkSim {
     std::deque<PendingFwd> _fifo;
     uint64_t _tick = 0;
     std::set<int> _donePorts;
+    size_t _maxPendingFwd = 65536;
 
 public:
     NetworkSim(const std::string& topoPath)
-    { loadTopology(topoPath); buildPorts(); buildRoutes(); }
+    {
+        if (const char* env = std::getenv("EP_NSIM_MAX_PENDING")) {
+            const long requested = std::strtol(env, nullptr, 10);
+            if (requested > 0 && requested <= 1048576)
+                _maxPendingFwd = static_cast<size_t>(requested);
+        }
+        loadTopology(topoPath); buildPorts(); buildRoutes();
+    }
 
     void loadTopology(const std::string& path);
     void buildPorts();
@@ -108,12 +129,19 @@ void NetworkSim::step() {
         if (_donePorts.count(mod)) continue;
         Port* p = kv.second.get();
         p->emitSync(_tick);
-        while (MemMessage* m = p->recv(_tick)) {
+        // Stop receiving before the bounded FIFO is full. The bounded Port
+        // HWM then backpressures the source rather than allocating forever.
+        while (_fifo.size() < _maxPendingFwd) {
+            MemMessage* m = p->recv(_tick);
+            if (!m)
+                break;
             if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _donePorts.insert(mod); break; }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
-            std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
-                         m->hdr.timestamp, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
+            if (TracePerfPolicy::get().shouldEmit("nsim")) {
+                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
+                             m->hdr.timestamp, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
+            }
 
             uint64_t lat = 1;
             auto lit = _linkLatency.find({(int)m->hdr.sourceId,
@@ -142,8 +170,10 @@ void NetworkSim::step() {
                 *buf = pf.msg;
                 buf->hdr.timestamp = ts;
                 it->second->send(buf);
-                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
-                             pf.readyTick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
+                if (TracePerfPolicy::get().shouldEmit("nsim")) {
+                    std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
+                                 pf.readyTick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
+                }
             } else {
                 static int no_ct = 0;
                 if (++no_ct <= 3)
@@ -160,15 +190,16 @@ void NetworkSim::step() {
 
     if (totalRecv > 0 || totalFwd > 0 || _fifo.size() > 500) {
         static int stat_ct = 0;
-        if (++stat_ct <= 30 || _fifo.size() > 10000)
+        if (++stat_ct <= 30 || _fifo.size() > (_maxPendingFwd * 3) / 4)
             std::fprintf(stderr, "[NSIM-STAT] tick=%lu recv=%d fwd=%d fifo=%zu\n",
-                         _tick, totalRecv, totalFwd, _fifo.size());
+                          _tick, totalRecv, totalFwd, _fifo.size());
     }
 }
 
 void NetworkSim::run(int maxSteps) {
     int s = 0;
-    while (_donePorts.size() < _ports.size() && (maxSteps < 0 || s < maxSteps)) {
+    while (!g_shutdownRequested && _donePorts.size() < _ports.size() &&
+           (maxSteps < 0 || s < maxSteps)) {
         step();
         s++;
 
@@ -191,6 +222,8 @@ void NetworkSim::run(int maxSteps) {
 
 int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr,"usage: networksim <topology.json>\n"); return 1; }
+    std::signal(SIGTERM, requestShutdown);
+    std::signal(SIGINT, requestShutdown);
     NetworkSim nsim(argv[1]);
     nsim.run();
     return 0;

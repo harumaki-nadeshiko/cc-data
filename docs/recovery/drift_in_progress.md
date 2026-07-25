@@ -1,5 +1,34 @@
 # Clock Drift Diagnosis — In Progress (2026-07-16)
 
+## 2026-07-24: TC201/TC202 H64 MetaRNF Line Response Timestamp Fix (allocateSendBuffer(0) → curTick())
+
+- **问题**: UBAdapter 的 MetaRNFLine async 回调中所有 `tport->allocateSendBuffer(0)` 将响应时间戳设为 `0+linkLatency=2500`，而仿真时间已达 ~76M。导致 ubio 接收端 `_lastRxT` 临时降至 2500，虽后续 sync 可恢复，但在 PDES 保守推进语义下造成不必要的时钟阻塞。此外，`_lastRxT=2500` 在 deferred drain 链中会阻碍 safeTs 推进。
+- **根因**: `UBAdapter.cc` 中 7 处 MetaRNF Line 响应路径（sendMetaRNFLineErrorResponse、MetaRNFReadReq、MetaRNFWriteReq、MetaRNFLineReadReq×2、MetaRNFLineWriteReq×2）均使用 `allocateSendBuffer(0)` 而非 `curTick()`。
+- **修复**: 全部替换为 `allocateSendBuffer(curTick())`（6处直接替换 + 1处 sendMetaRNFLineErrorResponse）。
+- **附带修复**:
+  1. `MetaRNFController.hh`: `PendingLineOp` 结构体补充 `bool isWrite = false` 成员字段，修复编译错误
+  2. `M9SelfTest.cc`: 更新 static_assert 以适应新增 `bucketOffset` 字段后的结构体大小
+  3. `UBAdapter.cc`: 删除 orphan 代码块（行1484-1562, 旧 linePa-based handler 残留）
+  4. `sendMetaRNFLineErrorResponse`: 修复 `linePa` 未声明错误，改用 `bucketOffset`
+  5. `ubio_main.cc`: 增强 `[DEBUG-H64-PDES-*]` 诊断日志输出
+  6. `BackstoreHostH64.cc`: 增强无条件调试日志
+- **验证结果**:
+  - `build/ARM/gem5.opt`: ✅ 编译通过
+  - `build/bin/ubio`: ✅ 编译通过
+  - **TC201 (A5_SPILL_RECALL)**: ✅ **PASSED** — Node1 G_M 写入 → Node0 spill eviction → Node2 backstore fill + recall → `READ_VAL expected=cafedead actual=cafedead MATCH`
+  - **TC202 (C1_SPILL_FIX)**: ✅ **PASSED** — Node1 G_M 写入 → Node0 spill eviction → Node2 backstore fill → `READ_VAL expected=deadbeef actual=deadbeef MATCH`
+  - 确认 `resident_waiters` 从 1 → 0（fill 完成后正确重放），deferred drain 链完整执行（3次 DRAIN：control read → control write → bucket probe）
+  - 响应时间戳从 2500 纠正为 ~76M 范围的实际 tick（如 `RECV_GEM5|MetaRNFLineReadResp` ts=76311000）
+- **修改文件**:
+  - `gem5/src/mem/ruby/protocol/chi/ep/UBAdapter.cc` — allocateSendBuffer(0) → curTick()
+  - `gem5/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh` — PendingLineOp::isWrite
+  - `gem5/src/mem/ruby/protocol/chi/ep/M9SelfTest.cc` — 更新 static_assert
+  - `modules/ubiomodule/ubio_main.cc` — 增强 DEBUG-H64-PDES 诊断
+  - `modules/ubiomodule/BackstoreHostH64.cc` — 增强无条件调试日志
+  - `protocol/CoherenceMessage.hh` — (未修改，引用其已正确的结构体定义)
+- **待提交文件**: UBAdapter.cc, MetaRNFController.hh, M9SelfTest.cc, ubio_main.cc, BackstoreHostH64.cc
+- **未修改路径**: 旧版 MetaRNF page read/write（MetaRNFReadReq/MetaRNFWriteReq）也包含在 timestamp 修复中，但不在 TC201/TC202 测试路径中。sendMetaRNFLineErrorResponse 中也一并修复。
+
 ## 2026-07-16: Silent Upgrade trigger extended from R_E to R_E+R_M
 - **Commit**: `602d120068` (gem5), `43ab3d6` (cc-ep)
 - **Problem**: `hasRequesterExclusive()` only checked `state == R_E`, but cold stores
@@ -152,3 +181,67 @@ EP_SILENT_UPGRADE=0 vs =1 在 TC36/37 上无任何差异：协议消息数量、
 ### 后续建议
 - 若需验证 handleRemoteMiss 静默升级效果，需构造跨 CPU core 的测试（core0 存 R_E/R_M，core1 同节点再次写入 -> 必然 cache miss）
 - 或接受当前状态：独占持有者重复写入本身就是零消息操作，EP_SILENT_UPGRADE 针对的是 SnpCleanInvalid 的外部触发场景
+
+## 2026-07-24 Phase 2 实现完成 (MetaRNF 64B Line Transport) — 已审核修复
+- **状态**: ✅ 编译通过 (gem5.opt + ubio)，queue 调度测试通过
+- **审核修复 (6 blockers)**:
+  1. **UBIO bounded maps**: `_pendingLineReads`/`_pendingLineWrites` 加硬上限 (kMax=32)，超限时回调 RetryableBusy 不发送。回调 erase-before-invoke (reentrancy 安全)。异常响应仅空 return (no stderr)。
+  2. **UBAdapter error response helper**: 新增 `sendMetaRNFLineErrorResponse()`，无 controller/越界时发送 IoError/RangeError 响应；port/buffer 不可用时 DPRINTF(RubyEP) DEBUG 记录，不静默丢弃。
+  3. **MetaRNFController _maxFlights clamp**: 构造函数 `fatal_if(_maxFlights > kMaxLineFlightSlots=8)`，防止数组越界。物理数组 `_flightSlots[8]` 与 `_maxFlights` 一致。per-PA FIFO 保持 (扫描/重排队尾，同 PA 项连续)。
+  4. **Debug logging**: 移除 Phase2 引入的 `[META-TRACE]`，改用 `DPRINTF(RubyCHIGeneric, "[DEBUG-PHASE2] ...")`。未改动已有 legacy `[META-TRACE]` 标记。
+  5. **Runtime test**: `tools/phase2_queue_test.cc` — 零 gem5 依赖，测试 status 枚举、body layout、message 构造、bounded scanning queue 5 场景。Docker 内编译运行，全部 PASS。
+  6. **Docs**: 仅更新本条目，未改 H64/UBCC/legacy schema 路径。
+- **修改文件**: MetaRNFController.cc, UBAdapter.cc, ubio_main.cc, tools/phase2_queue_test.cc (new)
+- **编译**: `scons build/ARM/gem5.opt -j32` 通过, `build_ubio.sh` 通过。
+- **测试命令**:
+  ```
+  docker run --rm --network none -v ... ubcc-dev:ubuntu20.04 \
+    bash -c 'g++ -std=c++17 -I. -o /tmp/phase2_test tools/phase2_queue_test.cc && /tmp/phase2_test'
+  ```
+- **Phase 3 待做限制**: (a) 无 ZMQ/e2e 集成测试——仅编译+布局+queue算法验证; (b) UBIO pending map 无超时清理; (c) readLine/writeLine 无 Host 调用方——纯 API 暴露。
+
+## 2026-07-24 Phase 3 Implementation (H64 Backstore Host Integration) — In Progress
+
+- **目标**: 替换生产 spill/fill 路径从 Schema A 到 H64 64B line transport。
+- **编译**: ✅ `scripts/build_ubio.sh` 通过 (仅 warnings, 无 errors)。
+- **新增文件**: `BackstoreHostH64.hh/.cc` — 基于 MetaRNFClient::readLine/writeLine 的 H64 异步 Host。
+- **修改文件变化**:
+  1. **BackstoreTypes.hh**: 新增 `BackstoreOp`, `BackstoreStatus`, `BackstoreCompletion`, `backstoreOpName`, `backstoreStatusName`。
+   2. **UBCCController.hh/.cc**:
+     - ❌ 移除 `_backstoreMetadataPAs` (forbidden exact-PA shadow set)
+     - 新增 `onBackstoreH64Complete(const BackstoreCompletion&)` — typed completion handler
+     - `handleResidentMiss`: 移除 `knownInBackstore` 检查，只使用 Bloom (advisory negative)
+     - `evictOneVictim`: 移除 `_backstoreMetadataPAs` 检查，用 Bloom positive 替代
+     - `onBackstoreFillComplete`: 移除 `_backstoreMetadataPAs` insert/erase，Fill 后 Bloom insert
+     - `onBackstoreWriteAck`: 移除 `_backstoreMetadataPAs` insert
+     - `onBackstoreDeleteAck`: 移除 `_backstoreMetadataPAs` erase
+      - `_lineDataCache`: H64模式完全移除依赖(异步DSM持久化门控); 旧版保留。
+      - 新增 `_h64DsmPending`, `_h64PersistenceWaiters` 带显式硬上限
+      - 新增 `writeDsmDataAsync` 接口与 `onDsmPersistComplete/Failed` 回调
+  3. **ubio_main.cc**:
+     - 新增 include `BackstoreHostH64.hh`
+     - `MetaRNFClient` 继承 `MetaRNFClientIF` (为 BackstoreHostH64 提供接口)
+     - `BackstoreSchemaMode` 新增 `H64`, `ExperimentalSchemaC`
+     - `--backstore-schema=h64` 现在生效 (不再 fatal)
+     - Auto 模式: spill → H64 (之前是 legacy_schema_a)
+     - Legacy schema A: 保留为 explicit opt-in 选项
+     - `UbioBackstoreHost`: 新增 `_useH64`, `_h64Host` 成员
+     - `hostIssueBackstoreRead/Write/Delete`: 新增 H64 分发路径
+     - 启动 manifest: 报告 H64 活跃状态，H64 模式下 `hostLegacyGroupIndexDupe=0`
+     - 构建 H64HostConfig 并传递给 Host 构造函数
+  4. **scripts/build_ubio.sh**: 新增 `BackstoreSchemaH64.cc BackstoreHostH64.cc` 到编译列表
+
+- **待验证**:
+  - TC200 (Naive isolation) — 验证 Naive 路径未受影响
+  - TC201/TC202 — spilled G_M fill 和 Recall
+  - H64 end-to-end 功能: lookup/upsert/erase via MetaRNFLine I/O
+  - Bloom 生命周期: upsert ack insert, delete ack retain stale, rebuild from DRAM
+  - 无 Backstore I/O 错误转换为 NotFound/G_I
+  - 容量/反压测试
+
+- **已知限制 (Phase 3)**:
+  - E2E gate (TC200) 待验证 — 单进程模式存在预存问题
+  - 组重建 (group rebuild) 未集成 — Bloom all-misses 保持启用
+  - 无 BLC hint
+  - 聚焦测试 12/12 PASS; UBIO + gem5.opt 编译通过
+  - _lineDataCache 在H64模式下完全移除依赖(异步DSM持久化门控已实现)

@@ -10,12 +10,80 @@ namespace cc
 namespace glob
 {
 
+// ---- Phase 3: Backstore Completion Types (H64 Host integration) ----
+
 enum class UBCCMESIState : uint8_t {
     G_I = 0,
     G_S = 1,
     G_E = 2,
     G_M = 3,
 };
+
+// ---- Phase 3: Backstore Operation & Completion Types ----
+
+enum class BackstoreOp : uint8_t {
+    Lookup  = 0,
+    Upsert  = 1,
+    Erase   = 2,
+};
+
+enum class BackstoreStatus : uint8_t {
+    Ok              = 0,
+    AlreadyAbsent   = 1,
+    RetryableBusy   = 2,
+    IoError         = 3,
+    Corrupt         = 4,
+    StaleEpoch      = 5,
+    CapacityExhausted = 6,
+    InvalidArgument = 7,
+};
+
+/**
+ * Typed completion struct: carries PA, snapshot epoch, operation kind,
+ * and result status.  Eviction may force-remove only after
+ * status == Ok (BackstoreCommitted).  Async writeback only clears
+ * residentDirty for the matching snapshot epoch.
+ */
+struct BackstoreCompletion {
+    uint64_t         linePa;
+    uint64_t         snapshotEpoch;
+    BackstoreOp      op;
+    BackstoreStatus  status;
+    bool             found;
+    UBCCMESIState    state;
+    uint64_t         sharersMask;
+    uint64_t         epoch;
+    bool             existed;
+
+    BackstoreCompletion()
+        : linePa(0), snapshotEpoch(0),
+          op(BackstoreOp::Lookup), status(BackstoreStatus::IoError),
+          found(false), state(UBCCMESIState::G_I),
+          sharersMask(0), epoch(0), existed(false) {}
+};
+
+static constexpr const char* backstoreStatusName(BackstoreStatus s) {
+    switch (s) {
+        case BackstoreStatus::Ok:               return "Ok";
+        case BackstoreStatus::AlreadyAbsent:     return "AlreadyAbsent";
+        case BackstoreStatus::RetryableBusy:     return "RetryableBusy";
+        case BackstoreStatus::IoError:           return "IoError";
+        case BackstoreStatus::Corrupt:           return "Corrupt";
+        case BackstoreStatus::StaleEpoch:        return "StaleEpoch";
+        case BackstoreStatus::CapacityExhausted: return "CapacityExhausted";
+        case BackstoreStatus::InvalidArgument:   return "InvalidArgument";
+    }
+    return "Unknown";
+}
+
+static constexpr const char* backstoreOpName(BackstoreOp op) {
+    switch (op) {
+        case BackstoreOp::Lookup: return "Lookup";
+        case BackstoreOp::Upsert: return "Upsert";
+        case BackstoreOp::Erase:  return "Erase";
+    }
+    return "Unknown";
+}
 
 static constexpr size_t BackstorePageSize = 256;
 static constexpr size_t BackstorePageHeaderSize = 24;

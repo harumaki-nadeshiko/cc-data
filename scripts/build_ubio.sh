@@ -17,7 +17,7 @@ mkdir -p "$OUT"
 CXXFLAGS="-std=c++17 -O2 -Wall -pthread -I$MOD -I$MOD/mem/ruby -I$FW_INC -I$ROOT -I$ZMQ_INC"
 LDFLAGS="-L$ZMQ_LIB -lzmq -lpthread"
 
-SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/NodeAddressMap.cc"
+SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/BackstoreSchemaH64.cc $MOD/BackstoreHostH64.cc $MOD/NodeAddressMap.cc"
 
 g++ $CXXFLAGS "$MOD/ubio_main.cc" $SRCS "$FW_LIB" $LDFLAGS -o "$OUT/ubio"
 echo "[build_ubio] $(ls -lh "$OUT/ubio" | awk '{print $5}') -> $OUT/ubio"

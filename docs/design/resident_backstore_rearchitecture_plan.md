@@ -127,27 +127,44 @@ written to the home data store when coherence requires it. No unbounded
 All long-lived UBCC-side storage, including performance hints, is limited to
 512 KiB. Heap allocation does not exempt a structure from this accounting.
 
-The concrete initial 8-sharer budget is:
+#### Phase 0 legacy profile (active, TC132/133/134 baseline)
 
 | Long-lived structure | Budget | Role |
-|---|---:|---|
-| Set-associative ResidentDir, tags, control bits, PLRU | 468 KiB | 65,536 entries with the current 58-bit physical entry layout. |
-| Grouped Bloom filter | 40 KiB | Advisory negative filter only. |
-| Backstore Location Cache (BLC) | 2 KiB | Non-authoritative probe-distance hint. |
-| Group descriptors, counters, Bloom scratch | 2 KiB | Validity/generation/rebuild state. |
-| **Total** | **512 KiB** | Must be startup-asserted. |
+|---|---|---:|---|
+| Set-associative ResidentDir, tags, control bits, PLRU | ~427 KiB | 57,344 entries (7-way × 8192-set, 60-bit entry). |
+| Grouped Bloom filter | **60 KiB** | Advisory negative filter (legacy). |
+| ResidentDir GroupIndex[16] (in-object) | 4 KiB | Group metadata index. |
+| Host legacy GroupIndex[16] duplicate (transitional) | 4 KiB | Phase 3 will eliminate; see §4.1.1. |
+| BLC | 0 KiB | Not a legacy capability. |
+| Group descriptors / scratch | 0 KiB | Not a legacy capability. |
+| **Total** | **~495 KiB** | Verified at startup (≤ 512 KiB). |
 
-The 65,536-entry number follows the current format:
+#### Future H64 target profile (not active; H64 rejected at startup)
 
-```text
-valid 1 + MESI 2 + residentDirty 1 + control 3
-+ sharers 8 + epoch 24 + tag 19 = 58 bits
-```
+| Long-lived structure | Budget |
+|---|---|---:|
+| ResidentDir | ~457 KiB |
+| Bloom | **40 KiB** |
+| ResidentDir GroupIndex[16] | 4 KiB |
+| BLC (reserved) | 2 KiB |
+| Group descriptors / scratch (reserved) | 2 KiB |
+| Host GroupIndex duplicate | **0 KiB** (eliminated in Phase 3) |
+| **Total** | **~505 KiB** |
 
-For a 16-sharer build, recompute the layout at startup. Under the same 44 KiB
-auxiliary reservation, the current set-associative format yields approximately
-53,248 resident entries. The implementation must print and assert the actual
-sum; no table in this document overrides that check.
+#### §4.1.1 Host legacy GroupIndex duplicate (Phase 0 transitional)
+
+`UbioBackstoreHost` currently maintains its own `_groupIdx[16]` (4 KiB)
+separate from `ResidentDir::_groupIndex[16]`.  The two serve different roles:
+- ResidentDir copy: Bloom filter statistics and group reconstruction triggers.
+- Host copy: Schema A page-directory tracking (upsert, lookup, delete plans).
+
+Both are long-lived on-chip state totalling 8 KiB.  Phase 3 will eliminate
+the host copy by refactoring Host to use a single per-PA metadata index
+(Schema H64 bucket table); Bloom statistics will remain in ResidentDir.
+
+The naive-evict layout (bloom=0) yields 65,536 entries with the current
+58-bit physical entry layout (2-way × 32,768-set, 468 KiB dir + 4 KiB
+resident GroupIndex + 4 KiB host GroupIndex = 476 KiB ≤ 512 KiB).
 
 Forbidden long-lived Host/UBCC structures include:
 
@@ -566,6 +583,32 @@ No phase begins its long E2E test until the listed acceptance criteria pass.
 * Add startup accounting for every long-lived on-chip byte.
 * Do not change TC132/133/134 behavior in this phase.
 
+**Phase 0 implementation status (2026-07-23):**
+
+- [x] Metadata DRAM capacity: 128 MiB default (configurable via
+  `--ubcc_metadata_size` in gem5, `--metadata-dram-bytes=` in ubio).
+  Per-socket split verified.  Legacy 16 MiB available via explicit override.
+- [x] On-chip budget accounting: ResidentDir layout, Bloom, GroupIndex[16]
+  (resident + host legacy duplicate), BLC, descriptors all tracked.
+  Startup assertion enforces total ≤ 512 KiB for production configs.
+  Tiny test configs (sram < 64 KiB) exempt from assertion.
+- [x] Legacy profile: Bloom=60 KiB, BLC=0, desc_scratch=0.  Preserves
+  TC132/133/134 ResidentDir capacity (57,344 entries, 7-way × 8192-set).
+- [x] Future H64 profile defined (Bloom=40 KiB, BLC=2 KiB, desc=2 KiB)
+  but NOT active.  H64 startup rejected with fatal error.
+- [x] Schema selection: `--backstore-schema=legacy_schema_a` (active),
+  `disabled`.  `h64` and `experimental_schema_c` reject with clear errors.
+  Auto mode preserves legacy behavior.
+- [x] Host legacy GroupIndex duplicate (4 KiB) explicitly counted,
+  documented as Phase 3 removal target.
+- [x] Startup manifest: `[UBIO-MANIFEST]` and `[EPBACKEND-MANIFEST]`
+  report schema mode, metadata DRAM ranges, on-chip budget breakdown.
+- [x] No changes to BackstoreSchemaA/C, spill/fill protocol state machines,
+  or existing correctness/latency log markers.
+- [x] Schema H64 implementation (Phase 1 — reference validation).  See below.
+- [ ] BLC functionality (Phase 3+)
+- [ ] Host GroupIndex duplicate removal (Phase 3)
+
 ### Phase 1: Standalone Schema H64 reference validation
 
 Implement the 64B bucket codec, hash/probe rules, insert/update/delete, and
@@ -586,6 +629,107 @@ Bloom rebuild: no false negatives for all LIVE DRAM entries
 
 Run at least one million randomized operations across multiple hash seeds and
 explicitly record probe histograms.
+
+**Phase 1 implementation status (2026-07-23):**
+
+All items below verified by standalone unit test with no gem5, UBCC, MetaRNF,
+or E2E dependencies.
+
+- [x] New files: `modules/ubiomodule/BackstoreSchemaH64.{hh,cc}`,
+  `tests/phase1/test_schema_h64.cc`.  No existing source files modified.
+- [x] BucketLine layout: exactly 64 B = 4 B header + 5 × 12 B slots.
+  `static_assert` enforced.
+- [x] Slot bit layout (96 bits = 3 × uint32_t LE):
+  `PA[43:0]` (44b), `MESI` (2b), `SlotState` (2b), `Sharers` (16b),
+  `Epoch` (24b), `Integrity` (8b).
+- [x] Header bit layout (32 bits = 1 × uint32_t):
+  `format_version` (8b), `generation` (8b), `live_count` (4b),
+  `tombstone_count` (4b), `reserved` (8b).
+- [x] Slot states: `EMPTY(0)`, `LIVE(1)`, `HASH_TOMBSTONE(2)`,
+  `RESERVED(3)`.
+- [x] Status codes: `Found`, `NotFound`, `AlreadyAbsent`, `StaleEpoch`,
+  `CapacityExhausted`, `Corrupt`, `RetryableBusy`.
+- [x] Core API: `lookup`, `upsert`, `erase`, `rebuildGroup`.
+- [x] Hash: splitmix64 → group; splitmix64(different seed) → home bucket.
+  Linear probe within group; `EMPTY` terminates, `HASH_TOMBSTONE` does not.
+- [x] Upsert: epoch guard (smaller epoch rejected, same epoch idempotent).
+- [x] Erase: `LIVE` → `HASH_TOMBSTONE`; smaller delete-epoch → `StaleEpoch`;
+  absent → `AlreadyAbsent`.  `HASH_TOMBSTONE` never becomes `NotFound`.
+- [x] Insert: prefers first reusable tombstone, otherwise first `EMPTY`.
+- [x] Group rebuild: collect `LIVE` entries, clear buckets, increment
+  generation, re-insert.  Set equivalence preserved; no entry lost.
+- [x] No unbounded map as storage; fixed `std::vector<H64BucketLine>`
+  pre-allocated from `H64Config`.
+- [x] Configurable: `num_groups` (default 256), `buckets_per_group`
+  (default 1024).  Tests use tiny configs (e.g., 1 group × 2 buckets)
+  to force collisions and capacity exhaustion.
+- [x] All debug-only log markers use `[DEBUG-H64-...]` prefix and are
+  disabled by default.  (Phase 1 has no debug logs; placeholder policy
+  established.)
+- [x] No E2E-consumed markers, no timeout/functional-cache fallbacks,
+  no shadow directory.
+- [x] No Schema A/C, `_pages`, `_lineDataCache`, `_backstoreMetadataPAs`,
+  UBAdapter, MetaRNF, or gem5 dependency in any new file.
+
+**Test commands and results:**
+
+```bash
+# Build (from project root, inside ubcc-dev:ubuntu20.04):
+g++ -std=c++17 -O2 -Wall \
+    -I modules/ubiomodule -I modules/ubiomodule/mem/ruby -I . \
+    tests/phase1/test_schema_h64.cc modules/ubiomodule/BackstoreSchemaH64.cc \
+    -o build/test_schema_h64
+
+# Run:
+build/test_schema_h64 --verbose
+```
+
+**Test results (2026-07-23):**
+
+```text
+=== Schema H64 Phase 1 Reference Validation ===
+C++17, no external test framework
+BucketLine: 64 bytes (4 header + 5 slots × 12 bytes)
+
+  TEST codec round-trip                             ... OK
+  TEST bucket layout static assertions              ... OK
+  TEST basic CRUD                                  ... OK
+  TEST same-PA update / idempotent                 ... OK
+  TEST stale update / delete rejection             ... OK
+  TEST tombstone cluster lookup                    ... OK
+  TEST delete / reinsert (tombstone reuse)         ... OK
+  TEST collision + capacity exhaustion             ... OK
+  TEST per-group rebuild                           ... OK
+  TEST corrupt / input validation                  ... OK
+  TEST randomized ops seed=0x2A                    ... OK  (250,000 ops)
+  TEST randomized ops seed=0x3039                  ... OK  (250,000 ops)
+  TEST randomized ops seed=0xDEADBEEF              ... OK  (250,000 ops)
+  TEST randomized ops seed=0xCAFEBABE              ... OK  (250,000 ops)
+  TEST probe measurement                           ... OK  (1,500 / 2,560 slots)
+  TEST hash seed sensitivity                       ... OK
+  TEST failure status propagation                  ... OK
+  TEST epoch edge cases                            ... OK
+
+=== Results ===
+Passed: 18
+Failed: 0
+*** ALL TESTS PASSED ***
+```
+
+Randomized test configuration: 64 groups × 256 buckets/group = 81,920 slots.
+Total 1,000,000 operations (4 seeds × 250,000).  Load factor ~81.7%
+(~67,000 live entries at steady state).  Every operation cross-checked
+against `std::unordered_map` reference model with strict epoch semantics.
+`diff --check` clean.
+
+Probe statistics (16 groups × 32 buckets/group, 1,500 entries, 58.6% load):
+maxProbe=4 buckets, avgProbe=1.05 buckets.
+
+**Not yet done (Phase 2/3):**
+- Bloom rebuild validation (requires Bloom integration — Phase 3).
+- Probe histograms (instrumentation reserved for Phase 3 integration test).
+- MetaRNF line transport, bounded queues, BackstoreHost integration.
+- Production spill-path replacement.
 
 ### Phase 2: 64B MetaRNF line transport
 

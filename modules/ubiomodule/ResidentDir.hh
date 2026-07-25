@@ -43,14 +43,54 @@ struct UBCCDirEntry {
 // ---- Runtime layout configuration ----
 
 struct ResidentDirConfig {
+    // Total on-chip SRAM budget for all long-lived structures.
+    // The ResidentDir constructor asserts dir_bytes + bloom + groupIndex +
+    // blc_reserved + desc_scratch ≤ sram_bytes ≤ 512 KiB.
     size_t sram_bytes     = 512 * 1024;   // total SRAM budget
-    size_t bloom_bytes    = 60 * 1024;    // bloom filter budget
-    size_t index_bytes    = 4 * 1024;     // group index budget
+
+    // Bloom filter: grouped advisory negative filter.
+    // Legacy Phase 0 default: 60 KiB (preserves TC132/133/134 capacity).
+    // Future H64 target profile: 40 KiB (see docs/design/...plan.md §4.1).
+    size_t bloom_bytes    = 60 * 1024;    // legacy default: 60 KiB
+
+    // group_index_bytes: MUST equal sizeof(GroupIndex) * BloomGroups
+    // (= 4096).  This is the in-object storage for _groupIndex[16],
+    // NOT part of _dirBits.  It is subtracted from the dir-bit budget
+    // so _dirBits does not consume this reservation.
+    // Phase 0: this field is intentionally not a free parameter.
+    // Any deviation from 4096 is rejected at startup (except for
+    // tiny test configs with sram < 64 KiB).
+    size_t group_index_bytes = 4096;
+
+    // DEPRECATED: backward-compat alias for group_index_bytes.
+    // Kept for tools (evict_test, resident_dir_bench) that write
+    // cfg.index_bytes.  Sync'd to group_index_bytes at init time.
+    size_t index_bytes    = 4096;
+
+    // BLC (Backstore Location Cache): 2 KiB reserved in future H64 profile.
+    // Phase 0 legacy default: 0 — BLC is not implemented and not a legacy
+    // capability.  The H64 target profile reserves 2 KiB.
+    size_t blc_bytes      = 0;            // legacy default: 0
+
+    // Group descriptors + Bloom scratch: 2 KiB reserved in future H64 profile.
+    // Phase 0 legacy default: 0 — not implemented.
+    size_t desc_scratch_bytes = 0;        // legacy default: 0
+
     int    pa_bits        = 40;           // effective PA bits (1TB = 40)
     int    sharers_bits   = 8;            // width of sharers field
     int    epoch_bits     = 24;           // width of epoch field
     int    ways           = 0;            // 0 = auto-search optimal
     int    set_bits       = 0;            // 0 = auto-search optimal
+
+    // Effective group index budget (normalized from deprecated field or
+    // explicit group_index_bytes).  For production configs this must
+    // equal 4096.
+    size_t effectiveGroupIndexBytes() const {
+        // Explicit group_index_bytes takes priority if set.
+        // Backup: use index_bytes (for legacy tools).
+        if (group_index_bytes != 4096) return group_index_bytes;
+        return index_bytes;
+    }
 };
 
 // ---- Computed layout (derived from config at construction time) ----
@@ -121,6 +161,7 @@ class ResidentDir
     // ---- Capacity / eviction ----
     bool hasFreeSlot() const;
     bool hasFreeSlotForPa(uint64_t pa) const;
+    bool sameSet(uint64_t lhs, uint64_t rhs) const;
     bool pickVictim(uint64_t avoidPa, uint64_t &victimPa, UBCCDirEntry &victim) const;
     size_t capacity() const { return _layout.capacity; }
     size_t count() const { return _count; }

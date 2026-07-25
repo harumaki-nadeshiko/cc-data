@@ -5,7 +5,9 @@ using namespace cc::glob;
 using namespace std::chrono;
 int main(int argc, char**argv) {
     ResidentDirConfig cfg;
-    cfg.sram_bytes = 1024; cfg.bloom_bytes = 0; cfg.index_bytes = 64;
+    cfg.sram_bytes = 1024; cfg.bloom_bytes = 0;
+    cfg.group_index_bytes = 64; cfg.index_bytes = 64;
+    cfg.blc_bytes = 0; cfg.desc_scratch_bytes = 0;
     cfg.ways = 1; cfg.sharers_bits = 8; cfg.epoch_bits = 24; cfg.pa_bits = 40;
     ResidentDir dir(cfg);
     printf("capacity=%zu\n", dir.capacity());

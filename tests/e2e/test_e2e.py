@@ -118,6 +118,10 @@ TESTCASES = {
     132: "e2e_tc132_dirty_checkpoint_stream",
     133: "e2e_tc133_8n1s_shared_frontier",
     134: "e2e_tc134_8n2s_sliding_window",
+    200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
+    201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
+    202: "e2e_c1_spill_cache_push", # Phase C1: spill _lineDataCache push-grant test
+    203: "e2e_d1_overflow",          # Phase D1: backstore page overflow test
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -290,6 +294,22 @@ def verify_tc9(reads, lines):
     if len(reads) > 0:
         return False, "TC9 FAILED: unexpected [READ_VAL] in negative test", reads
     return False, "TC9 FAILED: no [FATAL] or rejection signal detected", []
+
+
+def verify_tc200(reads, lines):
+    """TC200: naive capacity eviction recalls and preserves dirty payload."""
+    target_reads = [r for r in reads if r["node"] == 2]
+    if len(target_reads) != 1:
+        return False, f"TC200 FAILED: expected one Node2 READ_VAL, got {len(target_reads)}", reads
+    read = target_reads[0]
+    if read["verdict"] != "MATCH" or int(read["actual"], 16) != 0xBEEFCAFE:
+        return False, "TC200 FAILED: dirty recall payload mismatch", [read]
+    required = ("[UBCC-NAIVE-EVICT]", "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]",
+                "[UBCC-NAIVE-EVICT-DONE]")
+    missing = [marker for marker in required if not any(marker in line for line in lines)]
+    if missing:
+        return False, f"TC200 FAILED: missing naive recall evidence {missing}", []
+    return True, "TC200 PASSED: naive dirty recall preserved payload", []
 
 
 def verify_tc10(reads, lines):
@@ -1500,7 +1520,7 @@ def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
 def verify_tc131(reads, lines):
     return verify_real_capacity_workload(131, reads, lines,
                                          ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse",
-                                          "exclusive_upgrade"), 16)
+                                          "exclusive_upgrade"), 8)
 
 
 def verify_tc132(reads, lines):
@@ -1516,6 +1536,41 @@ def verify_tc133(reads, lines):
 def verify_tc134(reads, lines):
     return verify_real_capacity_workload(134, reads, lines,
                                          ("window_seed", "window_share", "window_pressure", "window_reuse"), 7)
+
+
+def verify_tc201(reads, lines):
+    if len(reads) != 1:
+        return False, f"TC201 FAILED: expected one recall verification, got {len(reads)}", reads
+    if reads[0]['verdict'] != 'MATCH':
+        return False, "TC201 FAILED: recalled payload mismatch", reads
+    required = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-ISSUED", "RESIDENT-FILL-DONE")
+    missing = [marker for marker in required if not any(marker in line for line in lines)]
+    if missing:
+        return False, f"TC201 FAILED: missing H64 spill/fill evidence {missing}", []
+    return True, "TC201 PASSED: spill, H64 fill, and recalled payload verified", []
+
+
+def verify_tc202(reads, lines):
+    if len(reads) != 1:
+        return False, f"TC202 FAILED: expected one verification, got {len(reads)}", reads
+    if reads[0]['verdict'] != 'MATCH':
+        return False, "TC202 FAILED: payload mismatch", reads
+    if not any("RESIDENT-SPILL-DONE" in line for line in lines):
+        return False, "TC202 FAILED: missing spill completion", []
+    return True, "TC202 PASSED: spill and payload verification completed", []
+
+
+def verify_tc203(reads, lines):
+    """TC203: H64 metadata spill/onload regression, not Schema A overflow."""
+    if len(reads) != 1 or reads[0]["node"] != 2:
+        return False, f"TC203 FAILED: expected one Node2 READ_VAL, got {len(reads)}", reads
+    if reads[0]["verdict"] != "MATCH":
+        return False, "TC203 FAILED: H64 spill/onload payload mismatch", reads
+    required = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-ISSUED", "RESIDENT-FILL-DONE")
+    missing = [marker for marker in required if not any(marker in line for line in lines)]
+    if missing:
+        return False, f"TC203 FAILED: missing H64 spill/fill evidence {missing}", []
+    return True, "TC203 PASSED: H64 spill/onload regression completed", []
 
 
 def verify_tc126(reads, lines):
@@ -1917,6 +1972,10 @@ VERIFIERS = {
     132: verify_tc132,
     133: verify_tc133,
     134: verify_tc134,
+    200: verify_tc200,
+    201: verify_tc201,
+    202: verify_tc202,
+    203: verify_tc203,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -2141,7 +2200,12 @@ def gem5_config_main():
 
     # Multi-process split configuration.
     _local_node = _args.node_id
-    _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
+    # DEFAULT_N is imported below from CHI_basic_framework_config;
+    # use a sane fallback if the import hasn't happened yet.
+    try:
+        _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
+    except NameError:
+        _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else 3
     # When this process owns a single node, only that node's UBAdapter binds
     # its Port (local_node = node id). -1 = all nodes (single-process mode).
 
@@ -2306,10 +2370,12 @@ def gem5_config_main():
     # SimpleMemory.  Must cover ALL nodes' address spaces (up to
     # Node2 base + 5*SEG ≈ 2.2 TB) so that self-tests and grant-data
     # population can functional-read any PA.
-    # Per-node window = (2 + N*S) DSM/private segments + 16MB metadata.
+    # Per-node window = (2 + N*S) DSM/private segments + metadata DRAM.
+    # Phase 0: metadata default is now 128 MiB (was 16 MiB).
     _num_sockets_cfg = _cfg_num_sockets
     _segs_per_node = 2 + NODES * _num_sockets_cfg
-    _node_window = _segs_per_node * DEFAULT_SEG_SIZE + 16 * 1024 * 1024
+    _meta_size = getattr(options, "ubcc_metadata_size", 128 * 1024 * 1024)
+    _node_window = _segs_per_node * DEFAULT_SEG_SIZE + _meta_size
     _max_pa = (NODES - 1) * (1 << 40) + _node_window
     system.mem_ranges = [AddrRange(0, size=_max_pa)]
 

@@ -57,9 +57,17 @@ Port::init(const PortParams& params, const PortRuntime& runtime)
     _txSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);
     _rxSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);
 
-    int sndtimeo = 10;
+    // Bound every IPC socket. With HWM=0 a stalled peer lets protocol traffic
+    // accumulate until the host OOM-kills an unrelated process. Blocking here
+    // applies backpressure instead of silently dropping coherence messages.
+    int sndtimeo = -1;
     _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
-    int hwm = 0;  // unbounded — see clock-sync fix rationale
+    int hwm = 8192;
+    if (const char* env_hwm = std::getenv("EP_PORT_HWM")) {
+        const long requested = std::strtol(env_hwm, nullptr, 10);
+        if (requested > 0 && requested <= 1048576)
+            hwm = static_cast<int>(requested);
+    }
     _txSock->set(zmq::sockopt::sndhwm, hwm);
     _txSock->set(zmq::sockopt::rcvhwm, hwm);
     _rxSock->set(zmq::sockopt::sndhwm, hwm);
@@ -157,8 +165,7 @@ Port::send(MemMessage* msg)
             std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u\n",
                          _name.c_str(), msg->hdr.type, msg->hdr.timestamp,
                          msg->hdr.targetId);
-        sock.send(z, zmq::send_flags::none);
-        ok = true;
+        ok = sock.send(z, zmq::send_flags::none).has_value();
     } catch (const zmq::error_t& e) {
         std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
         ok = false;
