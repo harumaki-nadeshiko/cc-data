@@ -2284,7 +2284,9 @@ def gem5_config_main():
         # Q2 FIX: Redirect workload stdout/stderr to files in outdir
         # so the harness can parse [READ_VAL] markers.
         # Default "cout"/"cerr" map to simulator terminal (not files).
-        proc.output = f"simout_n{node_id}"
+        # Socket workers in the same gem5 process share one node-level simout.
+        # O_APPEND preserves each single-syscall workload marker atomically.
+        proc.output = f"append:simout_n{node_id}"
         proc.errout = "simerr"
         cpu.workload = [proc]
 

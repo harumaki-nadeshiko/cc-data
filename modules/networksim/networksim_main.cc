@@ -3,7 +3,7 @@
 #include "framework/TracePerfPolicy.hh"
 
 #include <cstdio>
-#include <csignal>
+#include <signal.h>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -19,12 +19,16 @@
 using namespace framework;
 
 namespace {
-volatile std::sig_atomic_t g_shutdownRequested = 0;
+volatile sig_atomic_t g_shutdownRequested = 0;
 
 void
 requestShutdown(int)
 {
     g_shutdownRequested = 1;
+    // The runner requests this only after every gem5 and UBIO child has
+    // completed successfully. networksim has no persistent state to drain,
+    // and a peer-disconnect can leave a ZeroMQ send uninterruptibly blocked.
+    _Exit(0);
 }
 } // anonymous namespace
 
@@ -222,8 +226,12 @@ void NetworkSim::run(int maxSteps) {
 
 int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr,"usage: networksim <topology.json>\n"); return 1; }
-    std::signal(SIGTERM, requestShutdown);
-    std::signal(SIGINT, requestShutdown);
+    struct sigaction shutdownAction {};
+    shutdownAction.sa_handler = requestShutdown;
+    sigemptyset(&shutdownAction.sa_mask);
+    // Do not restart a blocked ZeroMQ send after shutdown is requested.
+    sigaction(SIGTERM, &shutdownAction, nullptr);
+    sigaction(SIGINT, &shutdownAction, nullptr);
     NetworkSim nsim(argv[1]);
     nsim.run();
     return 0;

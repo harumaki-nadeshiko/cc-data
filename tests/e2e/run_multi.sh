@@ -514,28 +514,33 @@ run_tc() {
     mkdir -p "$IPC_DIR"
 
     # 3. Start networksim (must bind before ubio connects)
-    local nsim_cmd
-    nsim_cmd="$(expand_cmd networksim '' '')"
+    local nsim_pid_file="$child_status_dir/networksim.pid"
+    rm -f "$nsim_pid_file"
     echo "[launch] networksim (NMOD=$NMOD)"
     (
       set +e
-      local_nsim_child=""
-      graceful_nsim_stop() {
-        [ -n "$local_nsim_child" ] && kill -TERM "$local_nsim_child" 2>/dev/null || true
-        wait "$local_nsim_child" 2>/dev/null
-        status=$?
-        printf '%s\n' "$status" >"$child_status_dir/networksim.exit"
-        exit "$status"
-      }
-      trap graceful_nsim_stop TERM INT
-      eval "$nsim_cmd" >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
+      "$NSIM_BIN" "$TOPO_JSON" >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
       local_nsim_child=$!
+      printf '%s\n' "$local_nsim_child" >"$nsim_pid_file"
       wait "$local_nsim_child"
       status=$?
       printf '%s\n' "$status" >"$child_status_dir/networksim.exit"
       exit "$status"
     ) &
     NSIM_PID=$!
+    NSIM_CHILD_PID=""
+    for _ in $(seq 1 50); do
+        if [ -f "$nsim_pid_file" ]; then
+            NSIM_CHILD_PID=$(tr -d '[:space:]' <"$nsim_pid_file")
+            break
+        fi
+        sleep 0.1
+    done
+    if [ -z "$NSIM_CHILD_PID" ]; then
+        echo "[launch] networksim failed to report child PID"
+        _kill_infra
+        return 1
+    fi
     sleep 1
 
     # 4. Start N gem5 nodes, wait until each binds its ports (STEP5 marker)
@@ -761,10 +766,9 @@ run_tc() {
         for pid in $UBIO_PIDS ${NSIM_PID:-}; do kill "$pid" 2>/dev/null || true; done
         sleep 1
     elif [ -n "${NSIM_PID:-}" ]; then
-        # NSIM_PID is a status-recording shell wrapper. Its TERM trap forwards
-        # the graceful stop to networksim, waits for its real status, and writes
-        # networksim.exit.
-        kill -TERM "$NSIM_PID" 2>/dev/null || true
+        # Signal the recorded networksim child; its wrapper then reaps it and
+        # writes networksim.exit with the simulator's real status.
+        kill -TERM "$NSIM_CHILD_PID" 2>/dev/null || true
 
         shutdown_waited=0
         while [ "$shutdown_waited" -lt 15 ]; do
