@@ -44,6 +44,10 @@
 
 **验收工具**：每次TC131运行自动生成`trace_chains_tc131.json`。使用`trace2chain.py`的`e2e_latency_ps`及`evaluate_capacity_latency.py`计算容量、平均延迟增加和指标2降幅。历史模型值不是验收结果，必须由对应对照运行生成。
 
+**TC131 testcase 生命周期与完成条件**：TC131固定使用`--8n1s`，以`UBCC_POLICY=naive`、`UBCC_POLICY=spill`且无延迟优化、`UBCC_POLICY=spill`且开启延迟优化三次串行运行。同一 workload 中，node0 主线程写入4,096条catalog、执行98,304条full scan压力；node1和node2主线程共享并复用catalog，node1随后执行256个exclusive-upgrade样本；node3至node7的主线程在启动后立即退出。五次`sync_wait(0x7)`只要求node0、node1、node2参与，因此full scan与reuse期间先看到node1/node2完成、最后只剩node0仍运行是一个可观察的中间状态，不是成功完成。
+
+最终完成必须满足：node0也收到第五个barrier release并以0退出；所有8个gem5、8个UBIO和networksim均产生`exit=0`状态文件；验证器确认`catalog_seed`、`catalog_share`、`full_scan`、`catalog_reuse`、`exclusive_upgrade`五个阶段及至少8个数据读回。若node1/node2已退出而node0长期停留在第五个barrier，则为barrier release或传输故障，必须判为失败，不能通过放宽supervisor或超时伪造完成。
+
 #### 指标 3：CC 同步 ≤ HA 理论时延 + 结构优势
 
 见交付件 2 §3。

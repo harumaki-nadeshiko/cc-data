@@ -1800,6 +1800,44 @@ main(int argc, char **argv)
     // ── End Phase 0 manifest ─────────────────────────────────────────
 
     bool gem5Done = false, netDone = false;
+    using BarrierKey = std::pair<uint32_t, uint32_t>;
+    using BarrierArrivals = std::map<int, uint32_t>;
+    std::map<BarrierKey, BarrierArrivals> barrierArrivals;
+    auto releaseBarrier = [&](const BarrierKey &bk) {
+        const uint32_t expected = __builtin_popcount(bk.first) * g_numSockets;
+        auto it = barrierArrivals.find(bk);
+        if (it == barrierArrivals.end() || it->second.size() < expected)
+            return;
+
+        bool allSent = true;
+        for (const auto &arrival : it->second) {
+            const int targetPlane = arrival.first;
+            const int targetNode = targetPlane / g_numSockets;
+            const int targetSocket = targetPlane % g_numSockets;
+            Port *deliveryPort = (targetNode == nid && targetSocket == sid)
+                ? gem5Port : netPort;
+            framework::MemMessage* rel = deliveryPort->allocateSendBuffer(tick);
+            if (!rel) {
+                allSent = false;
+                continue;
+            }
+            rel->hdr.timestamp = tick;
+            rel->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
+            rel->hdr.targetId = gidOf(targetNode, targetSocket);
+            CoherenceMessage rmsg;
+            rmsg.h.type = CoherenceMessageType::BarrierRelease;
+            rmsg.b.barrier.mask = bk.first;
+            // Each isolated gem5 process may have an independently observed
+            // generation; release exactly the generation it reported.
+            rmsg.b.barrier.seq = arrival.second;
+            rel->setPayload(rmsg);
+            if (!deliveryPort->send(rel))
+                allSent = false;
+        }
+        if (allSent) {
+            barrierArrivals.erase(it);
+        }
+    };
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
         if (!port) return;
@@ -1811,6 +1849,15 @@ main(int argc, char **argv)
             if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
                 std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu from_net=%d\n",
                              nid, m->hdr.timestamp, fromNetwork);
+                const TerminatePayload *term = m->getPayload<TerminatePayload>();
+                if (fromNetwork && term && term->reason == 2) {
+                    const int peerPlane = static_cast<int>(term->sender);
+                    const int peerNode = peerPlane / g_numSockets;
+                    const int peerSocket = peerPlane % g_numSockets;
+                    ubcc.markPeerPlaneExited(peerNode, peerSocket);
+                    m = port->recv(tick, &st);
+                    continue;
+                }
                 if (!fromNetwork) {
                     // TERMINATE from local gem5: mark gem5 done and forward
                     // to networksim so other nodes can exclude this peer from
@@ -1897,68 +1944,34 @@ main(int argc, char **argv)
                 if (coh->h.type == CoherenceMessageType::BarrierReached) {
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
-                    int src = coh->h.srcNode;
-                    if (g_debugUbioPerf)
-                        std::fprintf(stderr,"[DEBUG-UBIO-BARRIER] n%d reached mask=0x%x seq=%u src=%d\n", nid, mask, seq, src);
-                    using BarrierKey = std::pair<uint32_t, uint32_t>;
-                    static std::map<BarrierKey, std::set<int>> barrierNodes;
-                    BarrierKey bk{mask, seq};
-                    barrierNodes[bk].insert(src);
-                    // Forward to ALL sockets of every node (per-socket barrier:
-                    // each socket independently fires BarrierReached).
-                    if (netPort && !fromNetwork) {
-                        int numNodes = g_numNodes;
-                        if (numNodes < 1) numNodes = 3;
-                        for (int i = 0; i < numNodes; ++i) {
-                            for (int s = 0; s < g_numSockets; ++s) {
-                                if (i == nid && s == sid) continue;
-                                framework::MemMessage* fwd = netPort->allocateSendBuffer(m->hdr.timestamp);
-                                if (fwd) {
-                                    *fwd = *m;
-                                    fwd->hdr.timestamp = tick;
-                                    fwd->hdr.targetId = gidOf(i, s);
-                                    netPort->send(fwd);
-                                }
-                            }
+                    int src = static_cast<int>(m->hdr.sourceId);
+                    // Arrival generations are local to isolated gem5
+                    // processes. Aggregate one in-flight generation per mask
+                    // and retain each plane's generation for its release.
+                    BarrierKey bk{mask, 0};
+                    const int leaderNode = __builtin_ctz(mask);
+                    if (nid == leaderNode && sid == 0) {
+                        const int sourceNode = src / g_numSockets;
+                        if (sourceNode < 0 || sourceNode >= 32 ||
+                            (mask & (1U << sourceNode)) == 0) {
+                            std::fprintf(stderr,
+                                         "[UBIO-BARRIER-WARN] n%d ignored source=%d mask=0x%x\n",
+                                         nid, src, mask);
+                            m = port->recv(tick, &st);
+                            continue;
                         }
-                    }
-                    uint32_t expected = __builtin_popcount(mask);
-                    if (barrierNodes[bk].size() >= expected) {
-                        // Send BarrierRelease to ALL local socket planes via netPort
-                        // (each local ubio will forward to its own gem5).
-                        bool allSent = true;
-                        for (int s = 0; s < g_numSockets; ++s) {
-                            framework::MemMessage* rel = netPort
-                                ? netPort->allocateSendBuffer(tick)
-                                : gem5Port->allocateSendBuffer(tick);
-                            if (rel) {
-                                rel->hdr.timestamp = tick;
-                                rel->hdr.type = (uint32_t)MemMessageType::PAYLOAD;
-                                CoherenceMessage rmsg;
-                                rmsg.h.type = CoherenceMessageType::BarrierRelease;
-                                rmsg.b.barrier.mask = mask;
-                                rmsg.b.barrier.seq = seq;
-                                rel->setPayload(rmsg);
-                                if (netPort && s != sid) {
-                                    // Send to other local sockets via nsim
-                                    rel->hdr.targetId = gidOf(nid, s);
-                                    if (!netPort->send(rel)) allSent = false;
-                                } else {
-                                    // Send to local UBAdapter via gem5Port
-                                    rel->hdr.targetId = gidOf(nid, s);
-                                    if (!gem5Port->send(rel)) allSent = false;
-                                }
-                            } else {
-                                allSent = false;
-                            }
-                        }
-                        if (allSent) {
-                            barrierNodes.erase(bk);
-                            if (g_debugUbioPerf)
-                                std::fprintf(stderr,"[DEBUG-UBIO-BARRIER] n%d release mask=0x%x seq=%u\n", nid, mask, seq);
-                        } else {
-                            if (g_debugUbioPerf)
-                                std::fprintf(stderr,"[DEBUG-UBIO-BARRIER] n%d release mask=0x%x seq=%u retry\n", nid, mask, seq);
+                        barrierArrivals[bk][src] = seq;
+                        releaseBarrier(bk);
+                    } else if (!fromNetwork && netPort) {
+                        // A single deterministic leader aggregates arrivals.
+                        // Broadcast coordination allowed different nodes to
+                        // independently release incompatible generations.
+                        framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
+                        if (fwd) {
+                            *fwd = *m;
+                            fwd->hdr.timestamp = tick;
+                            fwd->hdr.targetId = gidOf(leaderNode, 0);
+                            netPort->send(fwd);
                         }
                     }
                 m = port->recv(tick, &st);
@@ -2257,6 +2270,17 @@ main(int argc, char **argv)
                              nid, dd_cnt, host._metaRNF._deferredCount, tick);
             host._metaRNF.drainDeferred();
         }
+
+        // A release send can temporarily backpressure after all arrivals have
+        // been observed. Retry only those already-satisfied generations.
+        std::vector<BarrierKey> readyBarriers;
+        for (const auto &kv : barrierArrivals) {
+            if (kv.second.size() >= static_cast<size_t>(
+                    __builtin_popcount(kv.first.first) * g_numSockets))
+                readyBarriers.push_back(kv.first);
+        }
+        for (const BarrierKey &bk : readyBarriers)
+            releaseBarrier(bk);
 
         // 3. Advance tick via safeTs
         uint64_t minTs = UINT64_MAX;

@@ -310,6 +310,11 @@ class UBCCController
     int nodeId() const { return _nodeId; }
     int socketId() const { return _socketId; }
 
+    // A peer node is retired only after networksim reports termination for all
+    // of its socket planes. Clean sharers on that node no longer require an
+    // invalidate acknowledgement; dirty owners are never bypassed.
+    void markPeerPlaneExited(int node_id, int socket_id);
+
     void wakeup();
 
     void setHost(UBCCHostIf *host) { _host = host; }
@@ -724,6 +729,9 @@ class UBCCController
    private:
     const int _nodeId;
     int _socketId;                // v4-dual-socket
+    int _numSockets = 1;
+    std::array<uint64_t, 64> _exitedPeerSocketMasks{};
+    uint64_t _exitedPeerNodesMask = 0;
 
     UBCCHostIf *_host = nullptr;
     UBCCOutboundIf *_outbound = nullptr;

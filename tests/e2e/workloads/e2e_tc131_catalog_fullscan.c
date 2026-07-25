@@ -37,8 +37,11 @@ int main(int argc, char **argv) {
  int n = 0, c = 0;
  if (argc >= 2) n = parse_int(argv[1]);
  if (argc >= 3) c = parse_int(argv[2]);
- /* CPU2 on node1 is the second L2 cluster for the silent-upgrade samples. */
- if (c % 4 && !(n == 1 && c % 4 == 2)) { _exit_program(0); return 0; }
+ /* Only nodes 0, 1, and 2 participate in sync_wait(0x7). CPU2 on node1
+  * is the second L2 cluster for the silent-upgrade samples. */
+ if (n > 2 || (c % 4 && !(n == 1 && c % 4 == 2))) {
+  _exit_program(0); return 0;
+ }
  if (c % 4 == 0) emit_e2e_meta(n, "TC131");
  if (n == 0) {
   for (int i = 0; i < HOT; i++) dsm_store(0, hot_off(i), VALUE | (uint32_t)i);

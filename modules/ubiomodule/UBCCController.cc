@@ -63,6 +63,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
                                 const ResidentDirConfig *rdcfg)
   : _nodeId(node_id),
     _socketId(socket_id),
+    _numSockets(num_sockets),
     _interconnectLatency(200),
     _directory(rdcfg ? ResidentDir(*rdcfg)
                      : ResidentDir(resident_bf_bytes, resident_force_entries)),
@@ -114,6 +115,62 @@ UBCCController::UBCCController(int node_id, int socket_id,
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
 
     registerInstance(node_id, socket_id, this);
+}
+
+void
+UBCCController::markPeerPlaneExited(int node_id, int socket_id)
+{
+    if (node_id < 0 || node_id >= 64 || socket_id < 0 ||
+        socket_id >= _numSockets || socket_id >= 64) {
+        return;
+    }
+
+    _exitedPeerSocketMasks[node_id] |= (1ULL << socket_id);
+    const uint64_t expected = _numSockets == 64
+        ? ~0ULL : ((1ULL << _numSockets) - 1);
+    if ((_exitedPeerSocketMasks[node_id] & expected) == expected) {
+        const uint64_t nodeBit = 1ULL << node_id;
+        if (_exitedPeerNodesMask & nodeBit) {
+            return;
+        }
+        _exitedPeerNodesMask |= nodeBit;
+        std::fprintf(stderr,
+                     "[UBCC-PEER-EXIT] home=%d peer=%d all_socket_planes_exited\n",
+                     _nodeId, node_id);
+
+        // A networksim-observed normal termination proves every cache copy on
+        // this peer was destroyed. Retire only clean-sharer invalidate waits
+        // through the normal ack state machine so its existing directory and
+        // grant-continuation rules remain authoritative. Dirty owners still
+        // use recall and are never completed by peer exit.
+        struct PeerExitAck {
+            uint64_t linePa;
+            uint64_t epoch;
+            uint64_t reqId;
+        };
+        std::vector<PeerExitAck> completedAcks;
+        for (const auto &kv : _outstandingReqs) {
+            const OutstandingRequest &ost = kv.second;
+            DirEntry entry;
+            if (!_directory.lookup(kv.first, entry) ||
+                DirEntry::protoDirty(entry)) {
+                continue;
+            }
+            const bool invalidating =
+                ost.stage == OpStage::WAITING_ALL_ACKS &&
+                (ost.opType == OpType::INVALIDATE ||
+                 ost.opType == OpType::NAIVE_EVICT_INVALIDATE ||
+                 ost.opType == OpType::UPGRADE_PENDING);
+            if (!invalidating)
+                continue;
+            const uint64_t targets = ost.opType == OpType::UPGRADE_PENDING
+                ? ost.upgradeTargetMask : ost.totalMask;
+            if (targets & nodeBit)
+                completedAcks.push_back({kv.first, entry.epoch, ost.reqId});
+        }
+        for (const auto &ack : completedAcks)
+            processInvalidationAck(ack.linePa, node_id, ack.epoch, ack.reqId);
+    }
 }
 
 UBCCController::~UBCCController()
@@ -496,6 +553,14 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
     const int owner = DirEntry::ownerFromSharers(victim);
     if (owner >= 0 && owner < 64) {
         targetMask |= (1ULL << owner);
+    }
+
+    // A clean sharer vanished only after networksim observed TERM from every
+    // plane of that peer node. It cannot retain a cache line, so do not wait
+    // for an invalidate ack that can never arrive. A dirty owner still takes
+    // the recall path below and is never elided by this cleanup.
+    if (!DirEntry::protoDirty(victim)) {
+        targetMask &= ~_exitedPeerNodesMask;
     }
 
     _naiveDirEvictions++;
@@ -1257,6 +1322,7 @@ UBCCController::processOuterRequest(
                 uint64_t otherSharers = entry.sharersMask;
                 if (requesterNode >= 0)
                     otherSharers &= ~(1ULL << requesterNode);
+                otherSharers &= ~_exitedPeerNodesMask;
 
                 // F6: If requester is an existing sharer, this is a local
                 // upgrade. Defer to the UPGRADE_PENDING path (§4.1.3 G_S row).
@@ -2760,6 +2826,7 @@ UBCCController::processOuterUpgradeReq(
     // upgrade_invalidate_fix D3: freeze targetMask at acceptance time
     uint64_t reqBit = (1ULL << requesterNode);
     uint64_t targetMask = entry.sharersMask & ~reqBit;
+    targetMask &= ~_exitedPeerNodesMask;
 
     // Create UPGRADE_PENDING outstanding
     OutstandingRequest *oreq = createOutstanding(

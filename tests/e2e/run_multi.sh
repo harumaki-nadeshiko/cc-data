@@ -371,35 +371,38 @@ _supervisor_start() {
         while true; do
             sleep "$interval"
 
-            # ── 1. Liveness: all gem5 alive + non-zombie ──────────
+            # ── 1. Liveness: live gem5 plus clean completed peers ─
             local alive_count=0
+            local completed_count=0
             for pid in $gem5_pids; do
                 local state
                 state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
                 state=${state#${state%%[![:space:]]*}}
                 case "$state" in
-                    Z*) ;;  # zombie — not alive
+                    Z*|"") completed_count=$((completed_count + 1)) ;;
                     *) if [ -n "$state" ]; then alive_count=$((alive_count + 1)); fi ;;
                 esac
             done
-            # All gem5 wrappers becoming zombies means the guest group has
-            # completed and the foreground runner is about to collect their
-            # real exit statuses and coordinate UBIO/networksim shutdown.
-            # Do not race that normal teardown by killing its children here.
+            local gem5_status gem5_code
+            for gem5_status in "$LOG_BASE"/child_status_tc${tc}/gem5_node*.exit; do
+                [ -f "$gem5_status" ] || continue
+                gem5_code=$(tr -d '[:space:]' <"$gem5_status")
+                if [ "$gem5_code" != "0" ]; then
+                    local ts; ts=$(date +%s)
+                    echo "FAULT ${ts} gem5_exit: $(basename "$gem5_status")=$gem5_code" >> "$status_file"
+                    echo "[supervisor] FAULT: $(basename "$gem5_status") exited $gem5_code"
+                    for pid in $gem5_pids $ubio_pids $nsim_pid; do
+                        kill -9 "$pid" 2>/dev/null || true
+                    done
+                    exit 1
+                fi
+            done
+            # All gem5 wrappers exiting cleanly means the foreground runner is
+            # about to collect statuses and coordinate UBIO/networksim teardown.
             if [ "$alive_count" -eq 0 ]; then
                 local ts; ts=$(date +%s)
                 echo "COMPLETE ${ts} all_gem5_exited; runner collecting statuses" >> "$status_file"
                 exit 0
-            fi
-            # A partial loss is still an unexpected premature exit.
-            if [ "$alive_count" -lt "$num_nodes" ]; then
-                local ts; ts=$(date +%s)
-                echo "FAULT ${ts} liveness: only ${alive_count}/${num_nodes} gem5 alive" >> "$status_file"
-                echo "[supervisor] FAULT: only ${alive_count}/${num_nodes} gem5 alive"
-                for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                    kill -9 "$pid" 2>/dev/null || true
-                done
-                exit 1
             fi
 
             # ── 2. Progress: guest output or protocol tick movement ─
@@ -458,7 +461,7 @@ _supervisor_start() {
 
             # ── Heartbeat (only to status file, not stdout) ───────
             local ts; ts=$(date +%s)
-            echo "OK ${ts} alive=${alive_count}/${num_nodes} guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
+            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
         done
     ) &
     SUPERVISOR_PID=$!

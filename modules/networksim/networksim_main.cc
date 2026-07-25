@@ -71,6 +71,7 @@ public:
     void loadTopology(const std::string& path);
     void buildPorts();
     void buildRoutes();
+    void notifyPeerExit(int exitedMod);
     void step();
     void run(int maxSteps = -1);
 };
@@ -89,6 +90,26 @@ void NetworkSim::buildPorts() {
             return;
         }
         _ports[mod] = std::move(p);
+    }
+}
+
+void NetworkSim::notifyPeerExit(int exitedMod)
+{
+    for (auto& kv : _ports) {
+        const int targetMod = kv.first;
+        if (targetMod == exitedMod || _donePorts.count(targetMod))
+            continue;
+        MemMessage* notice = kv.second->allocateSendBuffer(_tick);
+        if (!notice)
+            continue;
+        notice->hdr.type = static_cast<uint32_t>(MemMessageType::TERMINATE);
+        notice->hdr.sourceId = exitedMod;
+        notice->hdr.targetId = targetMod;
+        TerminatePayload payload{};
+        payload.reason = 2; // peer_lost: source plane completed normally.
+        payload.sender = static_cast<uint32_t>(exitedMod);
+        notice->setPayload(payload);
+        kv.second->send(notice);
     }
 }
 
@@ -139,7 +160,11 @@ void NetworkSim::step() {
             MemMessage* m = p->recv(_tick);
             if (!m)
                 break;
-            if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) { _donePorts.insert(mod); break; }
+            if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) {
+                _donePorts.insert(mod);
+                notifyPeerExit(mod);
+                break;
+            }
             if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
             totalRecv++;
             if (TracePerfPolicy::get().shouldEmit("nsim")) {
