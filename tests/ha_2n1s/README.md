@@ -39,3 +39,11 @@ by `e2e_ha_2n1s_core.c` with the target SDK equivalents:
 The operation sequence, offsets, values, seed, barrier positions, and JSONL
 validation schema must remain unchanged. No proprietary placement, affinity,
 timer, cache-control, or FPGA SDK details need to be shared with this project.
+
+## CC Diagnostic Results
+
+For CC runs, `scripts/summarize_2n1s_protocol.py` emits JSONL samples and a
+summary from completed `EP-PERF kind=outer` records. Its manifest explicitly
+marks the result as `cc_outer_protocol`, `guest_visible=false`, and
+`cross_platform_comparable=false`. It is useful for CC path diagnosis only;
+it is not an FPGA or HA latency claim.
