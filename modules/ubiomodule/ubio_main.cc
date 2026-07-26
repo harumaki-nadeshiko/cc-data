@@ -811,6 +811,11 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     std::unique_ptr<cc::glob::BackstoreHostH64> _h64Host;
 
     DsmDataStore dsmData;
+    // Exact H64 coverage becomes reportable only after every persisted group
+    // has completed a validated scan. This is fixed group state, not a PA map.
+    std::array<uint32_t, 256> h64GroupLive{};
+    std::array<uint8_t, 256> h64GroupCovered{};
+    bool h64CoverageFault = false;
     MetaRNFClient _metaRNF;
 
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
@@ -990,19 +995,51 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 return;
             }
             const size_t group = static_cast<size_t>(scan->nextGroup++);
+            auto liveCount = std::make_shared<uint32_t>(0);
             _h64Host->scanGroupLive(group,
-                [scan](const H64SlotEntry &entry) {
+                [scan, liveCount](const H64SlotEntry &entry) {
+                    ++*liveCount;
                     if (scan->onLive) scan->onLive(entry.pa);
                 },
-                [scan, issue](BackstoreStatus status) {
+                [this, scan, issue, group, liveCount](BackstoreStatus status) {
                     if (status != BackstoreStatus::Ok) {
+                        h64CoverageFault = true;
                         if (scan->completion) scan->completion(false);
                         return;
+                    }
+                    if (group < h64GroupLive.size()) {
+                        h64GroupLive[group] = *liveCount;
+                        h64GroupCovered[group] = 1;
                     }
                     (*issue)();
                 });
         };
         (*issue)();
+    }
+
+    bool h64ExactCoverageKnown() const {
+        if (!_useH64 || h64CoverageFault || !_h64Host ||
+            _h64Host->config().num_groups != h64GroupCovered.size())
+            return false;
+        for (uint8_t covered : h64GroupCovered) {
+            if (!covered) return false;
+        }
+        return true;
+    }
+
+    uint64_t h64ExactLiveCount() const {
+        if (!h64ExactCoverageKnown()) return 0;
+        uint64_t count = 0;
+        for (uint32_t groupCount : h64GroupLive) count += groupCount;
+        return count;
+    }
+
+    void invalidateH64Coverage(uint64_t pa) {
+        if (!_useH64 || !_h64Host) return;
+        const size_t group = BackstoreSchemaH64::groupForPaStatic(
+            pa, _h64Host->config().num_groups, _h64Host->config().hash_seed);
+        if (group < h64GroupCovered.size())
+            h64GroupCovered[group] = 0;
     }
 
     // Phase D13: per-PA chain-walk state
@@ -1092,6 +1129,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         // Phase 3: dispatch to H64 when active
         if (_useH64 && _h64Host) {
+            invalidateH64Coverage(pa);
             _h64Host->upsert(pa, e.state, e.sharersMask, e.epoch,
                 [this, pa](const BackstoreCompletion &comp) {
                     ubcc.onBackstoreH64Complete(comp);
@@ -1191,6 +1229,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             // Use a dummy epoch for now; the UBCC will pass the correct one
             // in the full integration.
             uint64_t deleteEpoch = ubcc.getEpochForLine(pa);
+            invalidateH64Coverage(pa);
             _h64Host->erase(pa, deleteEpoch,
                 [this, pa](const BackstoreCompletion &comp) {
                     ubcc.onBackstoreH64Complete(comp);
@@ -2388,6 +2427,8 @@ main(int argc, char **argv)
     fprintf(stderr, "[UBCC-STATS] %s\n", ubcc.dumpStatsJson().c_str());
     fprintf(stderr, "[UBCC-STATS] {\"asyncWbCount\":%lu}\n",
             ubcc.getAsyncWbCount());
+    fprintf(stderr, "[UBCC-STATS] {\"h64ExactLiveKnown\":%d,\"h64ExactLiveCount\":%lu}\n",
+            host.h64ExactCoverageKnown() ? 1 : 0, host.h64ExactLiveCount());
 
     return 0;
 }

@@ -14,13 +14,15 @@ import statistics
 import sys
 
 
-STATE_RE = re.compile(r"\[UBCC-STATE\].*backstore_index=(\d+).*capacity=(\d+).*policy=(\w+)")
-STATS_RE = re.compile(r"\[UBCC-STATS\] \{.*\"residentCapacity\":(\d+).*\"backstoreIndex\":(\d+).*")
+STATE_RE = re.compile(r"\[UBCC-STATE\].*capacity=(\d+).*policy=(\w+)")
+STATS_RE = re.compile(r"\[UBCC-STATS\] \{.*\"residentCapacity\":(\d+).*")
+H64_EXACT_RE = re.compile(
+    r"\[UBCC-STATS\] \{\"h64ExactLiveKnown\":(\d+),\"h64ExactLiveCount\":(\d+)\}")
 PERF_RE = re.compile(r"\[EP-PERF\] kind=(\w+) node=\d+ pa=0x[0-9a-f]+.*latency_ps=(\d+)")
 
 
 def coverage(log_dir):
-    best_index = 0
+    exact_live = None
     capacity = 0
     policy = None
     for root, _, files in os.walk(log_dir):
@@ -31,20 +33,21 @@ def coverage(log_dir):
                 for line in stream:
                     match = STATE_RE.search(line)
                     if match:
-                        best_index = max(best_index, int(match.group(1)))
-                        capacity = max(capacity, int(match.group(2)))
-                        policy = match.group(3)
+                        capacity = max(capacity, int(match.group(1)))
+                        policy = match.group(2)
                     match = STATS_RE.search(line)
                     if match:
                         capacity = max(capacity, int(match.group(1)))
-                        best_index = max(best_index, int(match.group(2)))
+                    match = H64_EXACT_RE.search(line)
+                    if match and int(match.group(1)) == 1:
+                        exact_live = max(exact_live or 0, int(match.group(2)))
     if not capacity:
         raise ValueError(f"no UBCC-STATE coverage record in {log_dir}")
-    # backstore_index is an exact set, not a traffic counter.  It overlaps
-    # ResidentDir, therefore max is a conservative union lower bound.
+    if exact_live is None:
+        raise ValueError(f"no validated H64 exact LIVE coverage in {log_dir}")
     return {"policy": policy, "resident_capacity": capacity,
-            "backstore_unique": best_index,
-            "effective_unique_lower_bound": max(capacity, best_index)}
+            "h64_exact_live": exact_live,
+            "effective_unique_lower_bound": max(capacity, exact_live)}
 
 
 def mean_protocol_latency(log_dir, kind="outer"):
