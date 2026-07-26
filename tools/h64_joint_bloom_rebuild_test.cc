@@ -12,9 +12,10 @@ class ScanHost final : public UBCCHostIf
     uint64_t tick = 0;
     bool fail = false;
     std::vector<uint64_t> live;
+    int lookupCount = 0;
 
     uint64_t hostCurrentTick() const override { return tick; }
-    void hostIssueBackstoreRead(uint64_t) override {}
+    void hostIssueBackstoreRead(uint64_t) override { ++lookupCount; }
     void hostIssueBackstoreWrite(uint64_t) override {}
     void hostIssueBackstoreDelete(uint64_t) override {}
     void readDsmData(uint64_t, std::function<void(const uint8_t*)> cb) override
@@ -56,7 +57,7 @@ main()
     ResidentDirConfig cfg;
     cfg.sram_bytes = 4352;
     cfg.bloom_bytes = 128;
-    cfg.ways = 1;
+    cfg.ways = 2;
     cfg.set_bits = 1;
     UBCCController ubcc(0, 0, nullptr, 64, cfg.bloom_bytes, 0, 1, 3, &cfg);
     ScanHost host;
@@ -84,12 +85,23 @@ main()
     assert(ubcc.directory().bloomMayContain(h64Only));
     assert(ubcc.directory().bloomMayContain(duplicate));
 
+    const uint64_t validNegative = paForSlice(slice, duplicate + 64);
+    const auto ready = ubcc.processOuterRequest(
+        validNegative, UBCC_OuterReqType::GlobalReadShared, false, 0, 0, 1, 1);
+    assert(static_cast<int>(ready) >= 0);
+    assert(host.lookupCount == 0);
+
     const int failSlice = 1;
     host.fail = true;
     for (int i = 0; i < 2; ++i)
         ubcc.wakeup();
     assert(ubcc.directory().bloomSliceControl(failSlice).state ==
            ResidentDir::BloomSliceState::Invalid);
+    const uint64_t invalidNegative = paForSlice(failSlice, validNegative + 64);
+    const auto queued = ubcc.processOuterRequest(
+        invalidNegative, UBCC_OuterReqType::GlobalReadShared, false, 0, 0, 1, 2);
+    assert(static_cast<int>(queued) < 0);
+    assert(host.lookupCount == 1);
     std::fprintf(stderr, "joint H64 Bloom rebuild regression passed\n");
     return 0;
 }

@@ -353,14 +353,15 @@ UBCCController::ResidentAccessResult
 UBCCController::handleResidentMiss(
     uint64_t line_pa, const PendingRequester &pr, DirEntry &entry)
 {
-    // Phase 3: Bloom-only advisory negative filter.  No _backstoreMetadataPAs shadow.
-    // When H64 mode is active, Bloom-negative shortcut is DISABLED — all misses
-    // must issue H64 lookup because Bloom rebuild from H64 DRAM is not yet
-    // implemented (temporary safe degradation).  Legacy Bloom unchanged.
+    // H64 accepts a negative only after the corresponding jointly rebuilt
+    // ResidentDir/H64 slice is valid. Invalid and rebuilding slices retain the
+    // conservative metadata lookup path.
     const bool mayContain = _directory.bloomMayContain(line_pa);
+    const bool h64NegativeAuthoritative = _h64BloomAllMisses &&
+        _directory.bloomNegativeAuthoritative(line_pa);
     const bool shouldFill =
         _overflowPolicy == ResidentOverflowPolicy::Spill &&
-        (mayContain || _h64BloomAllMisses);  // H64: always issue lookup
+        (mayContain || (_h64BloomAllMisses && !h64NegativeAuthoritative));
 
     fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx opKind=%d req=%d requester=%d "
             "mayContain=%d h64BloomAll=%d count=%zu capacity=%zu freeForPa=%d policy=%d reqId=%lu\n",
@@ -418,7 +419,8 @@ UBCCController::handleResidentMiss(
         if (_verboseLog) {
             fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=%s opKind=%d\n",
                    _nodeId, line_pa,
-                   _h64BloomAllMisses ? "bloom_negative_h64_bypassed" : "bloom_negative",
+                   h64NegativeAuthoritative ? "bloom_negative_h64_authoritative" :
+                                              "bloom_negative",
                    static_cast<int>(pr.opKind));
             fflush(stderr);
         }
