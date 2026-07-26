@@ -551,6 +551,72 @@ static void test_collision_delete_probe_continuity() {
 }
 
 // ============================================================
+// Test 14: Bounded async group scan validates persisted LIVE slots
+// ============================================================
+static void test_group_live_scan() {
+    std::fprintf(stderr,"[T14] Async group LIVE scan...\n");
+    MockMetaRNF mock;
+    H64HostConfig cfg;
+    cfg.num_groups = 1; cfg.buckets_per_group = 4;
+    cfg.metadata_socket_lines = cfg.num_groups + cfg.totalBuckets();
+    BackstoreHostH64 host(cfg, &mock);
+
+    const uint64_t pa0 = 0x4000ULL;
+    uint64_t pa1 = pa0 + 64;
+    while (BackstoreSchemaH64::homeBucketForPaStatic(
+               pa1, cfg.buckets_per_group, cfg.hash_seed) ==
+           BackstoreSchemaH64::homeBucketForPaStatic(
+               pa0, cfg.buckets_per_group, cfg.hash_seed)) {
+        pa1 += 64;
+    }
+    bool ok = false;
+    host.upsert(pa0, UBCCMESIState::G_S, 0x1, 1,
+                [&](const BackstoreCompletion& r) { ok = r.status == BackstoreStatus::Ok; });
+    mock.drain(); assert(ok);
+    ok = false;
+    host.upsert(pa1, UBCCMESIState::G_E, 0x2, 2,
+                [&](const BackstoreCompletion& r) { ok = r.status == BackstoreStatus::Ok; });
+    mock.drain(); assert(ok);
+
+    // The production metadata range is zero-initialized into 64B lines.
+    // Populate untouched active buckets explicitly because this mock otherwise
+    // models an absent line as a null read instead of a zero bucket.
+    for (size_t bucket = 0; bucket < cfg.buckets_per_group; ++bucket) {
+        const uint64_t offset = cfg.bucketDataOffset(0, bucket);
+        if (mock._storage.count(offset))
+            continue;
+        H64BucketLine empty;
+        std::memcpy(mock._storage[offset], &empty, sizeof(empty));
+    }
+
+    std::set<uint64_t> live;
+    BackstoreStatus result = BackstoreStatus::IoError;
+    host.scanGroupLive(0, [&](const H64SlotEntry &entry) { live.insert(entry.pa); },
+                       [&](BackstoreStatus st) { result = st; });
+    mock.drain();
+    assert(result == BackstoreStatus::Ok);
+    assert(live.size() == 2 && live.count(pa0) && live.count(pa1));
+
+    bool firstDone = false;
+    host.scanGroupLive(0, [&](const H64SlotEntry &) {},
+                       [&](BackstoreStatus st) { firstDone = st == BackstoreStatus::Ok; });
+    BackstoreStatus busy = BackstoreStatus::Ok;
+    host.scanGroupLive(0, [&](const H64SlotEntry &) {},
+                       [&](BackstoreStatus st) { busy = st; });
+    assert(busy == BackstoreStatus::RetryableBusy);
+    mock.drain(); assert(firstDone);
+
+    mock._injectIoError = true;
+    mock._ioerrOffset = cfg.bucketDataOffset(0, 0);
+    result = BackstoreStatus::Ok;
+    host.scanGroupLive(0, [&](const H64SlotEntry &) {},
+                       [&](BackstoreStatus st) { result = st; });
+    mock.drain();
+    assert(result == BackstoreStatus::IoError);
+    std::fprintf(stderr,"[T14] PASS\n");
+}
+
+// ============================================================
 // Main
 // ============================================================
 int main() {
@@ -569,7 +635,8 @@ int main() {
     test_dsm_persistence_gate();
     test_h64_no_linedatacache_invariant();
     test_collision_delete_probe_continuity();
+    test_group_live_scan();
 
-    std::fprintf(stderr,"\n=== 13/13 TESTS PASSED ===\n");
+    std::fprintf(stderr,"\n=== 14/14 TESTS PASSED ===\n");
     return 0;
 }

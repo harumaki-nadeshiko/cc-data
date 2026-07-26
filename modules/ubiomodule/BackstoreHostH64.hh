@@ -132,6 +132,12 @@ class BackstoreHostH64
     void erase(uint64_t linePa, uint64_t deleteEpoch,
                std::function<void(const BackstoreCompletion&)> completion);
 
+    // Bounded, asynchronous scan used exclusively by Bloom reconstruction.
+    // It reads only the persisted active extent and never mutates metadata.
+    void scanGroupLive(size_t groupIdx,
+                       std::function<void(const H64SlotEntry&)> onLive,
+                       std::function<void(BackstoreStatus)> completion);
+
     const H64HostConfig& config() const { return _cfg; }
 
     // ---- Introspection for tests ----
@@ -144,6 +150,7 @@ class BackstoreHostH64
 
   private:
     static constexpr int kMaxSlots = 128;
+    static constexpr int kMaxGroupScans = 1;
 
     enum class SlotState : uint8_t {
         Free, Probing, WaitingControl, RmwPending, RmwCreditPending
@@ -187,6 +194,22 @@ class BackstoreHostH64
 
     TxnSlot _slots[kMaxSlots];
     int     _slotCount = 0;
+
+    struct GroupScan {
+        bool active = false;
+        size_t groupIdx = 0;
+        size_t activeBuckets = 0;
+        size_t nextBucket = 0;
+        std::function<void(const H64SlotEntry&)> onLive;
+        std::function<void(BackstoreStatus)> completion;
+    };
+    GroupScan _groupScans[kMaxGroupScans];
+    void onGroupScanControl(int scanIdx, MetaRNFLineStatus st,
+                            const uint8_t *data64);
+    void readGroupScanBucket(int scanIdx);
+    void onGroupScanBucket(int scanIdx, MetaRNFLineStatus st,
+                           const uint8_t *data64);
+    void completeGroupScan(int scanIdx, BackstoreStatus status);
 
     int allocSlot();
     void freeSlot(int idx);

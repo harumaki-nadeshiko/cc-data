@@ -186,6 +186,110 @@ void BackstoreHostH64::lookup(uint64_t linePa,
     ensureGroupControl(si);
 }
 
+void
+BackstoreHostH64::scanGroupLive(
+    size_t groupIdx, std::function<void(const H64SlotEntry&)> onLive,
+    std::function<void(BackstoreStatus)> completion)
+{
+    if (groupIdx >= _cfg.num_groups) {
+        if (completion) completion(BackstoreStatus::InvalidArgument);
+        return;
+    }
+    for (int i = 0; i < kMaxGroupScans; ++i) {
+        if (_groupScans[i].active)
+            continue;
+        GroupScan &scan = _groupScans[i];
+        scan = GroupScan();
+        scan.active = true;
+        scan.groupIdx = groupIdx;
+        scan.onLive = std::move(onLive);
+        scan.completion = std::move(completion);
+        _metaRNF->readLine(_cfg.groupControlOffset(groupIdx),
+            [this, i](MetaRNFLineStatus st, const uint8_t *data64) {
+                onGroupScanControl(i, st, data64);
+            });
+        return;
+    }
+    if (completion) completion(BackstoreStatus::RetryableBusy);
+}
+
+void
+BackstoreHostH64::onGroupScanControl(int scanIdx, MetaRNFLineStatus st,
+                                     const uint8_t *data64)
+{
+    if (scanIdx < 0 || scanIdx >= kMaxGroupScans || !_groupScans[scanIdx].active)
+        return;
+    if (st != MetaRNFLineStatus::Ok || !data64) {
+        completeGroupScan(scanIdx, mapMetaRNFStatus(st));
+        return;
+    }
+    H64GroupControl ctrl;
+    ctrl.loadFrom(data64);
+    if (!ctrl.valid() || ctrl.active_bucket_count > _cfg.buckets_per_group) {
+        completeGroupScan(scanIdx, BackstoreStatus::Corrupt);
+        return;
+    }
+    _groupScans[scanIdx].activeBuckets = ctrl.active_bucket_count;
+    _groupScans[scanIdx].nextBucket = 0;
+    readGroupScanBucket(scanIdx);
+}
+
+void
+BackstoreHostH64::readGroupScanBucket(int scanIdx)
+{
+    GroupScan &scan = _groupScans[scanIdx];
+    if (scan.nextBucket >= scan.activeBuckets) {
+        completeGroupScan(scanIdx, BackstoreStatus::Ok);
+        return;
+    }
+    const size_t bucket = scan.nextBucket;
+    _metaRNF->readLine(tableBucketOffset(scan.groupIdx, bucket),
+        [this, scanIdx](MetaRNFLineStatus st, const uint8_t *data64) {
+            onGroupScanBucket(scanIdx, st, data64);
+        });
+}
+
+void
+BackstoreHostH64::onGroupScanBucket(int scanIdx, MetaRNFLineStatus st,
+                                    const uint8_t *data64)
+{
+    if (scanIdx < 0 || scanIdx >= kMaxGroupScans || !_groupScans[scanIdx].active)
+        return;
+    if (st != MetaRNFLineStatus::Ok || !data64) {
+        completeGroupScan(scanIdx, mapMetaRNFStatus(st));
+        return;
+    }
+    H64BucketLine bucket;
+    std::memcpy(&bucket, data64, sizeof(bucket));
+    if (!bucket.hdrValid()) {
+        completeGroupScan(scanIdx, BackstoreStatus::Corrupt);
+        return;
+    }
+    GroupScan &scan = _groupScans[scanIdx];
+    for (int slot = 0; slot < static_cast<int>(kSlotsPerBucket); ++slot) {
+        H64SlotEntry entry;
+        H64Codec::unpack(bucket.slotAt(slot), entry);
+        if (!checkIntegrity(entry) || entry.state == H64SlotState::RESERVED) {
+            completeGroupScan(scanIdx, BackstoreStatus::Corrupt);
+            return;
+        }
+        if (entry.state == H64SlotState::LIVE && scan.onLive)
+            scan.onLive(entry);
+    }
+    ++scan.nextBucket;
+    readGroupScanBucket(scanIdx);
+}
+
+void
+BackstoreHostH64::completeGroupScan(int scanIdx, BackstoreStatus status)
+{
+    GroupScan &scan = _groupScans[scanIdx];
+    auto completion = std::move(scan.completion);
+    scan = GroupScan();
+    if (completion)
+        completion(status);
+}
+
 void BackstoreHostH64::upsert(uint64_t linePa, UBCCMESIState state,
     uint64_t sharersMask, uint64_t epoch,
     std::function<void(const BackstoreCompletion&)> completion) {
