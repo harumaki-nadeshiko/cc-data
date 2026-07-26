@@ -87,6 +87,7 @@ case "${1:-}" in
     --2s)          TOPO_KIND="2s"; shift ;;
     --8n1s)        TOPO_KIND="8n1s"; shift ;;
     --8n2s)        TOPO_KIND="8n2s"; shift ;;
+    --2n1s)        TOPO_KIND="2n1s"; shift ;;
 esac
 JSON="$ROOT_DIR/configs/topo_${TOPO_KIND}.json"
 [ -f "$JSON" ] || { echo "FATAL: config $JSON not found" >&2; exit 2; }
@@ -176,13 +177,19 @@ ubio_extra_args_for_tc() {
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
         202)
-            # Phase C1: spill push-grant _lineDataCache race fix test
+            # Phase C1: spill push-grant authoritative home-data test
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
         203)
             # Phase 5: H64 spill/onload regression. Hash collision and
             # tombstone semantics are tested directly by the focused Host test.
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
+        210|211|212|213|214)
+            case "${EP_PERF_PROFILE:-optimized}" in
+                naive) echo "--dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
+            esac
             ;;
         98)  echo "--ways=1" ;;
         *)   echo "" ;;
@@ -219,7 +226,7 @@ PY
 }
 
 # ─── per-TC run ─────────────────────────────────────────────────────
-LOG_BASE="${LOG_BASE:-$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}}"
+LOG_BASE="${LOG_BASE:-$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}_${RUN_ID}}"
 mkdir -p "$LOG_BASE" "$RUN_DIR" "$IPC_DIR"
 export UBCC_IPC_DIR="$IPC_DIR"
 export RUN_WORKLOAD="$WORKLOAD"

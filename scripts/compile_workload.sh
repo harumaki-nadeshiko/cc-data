@@ -22,23 +22,12 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WL_DIR="${2:-$ROOT_DIR/tests/e2e/workloads}"
 
 # Resolve tc_name via the canonical TESTCASES map in test_e2e.py.
-TC_NAME="$(python3 - "$ROOT_DIR/tests/e2e/test_e2e.py" "$TC_ID" <<'PY'
-import sys, re
-src_path, tc_id_s = sys.argv[1], sys.argv[2]
-tc_id = int(tc_id_s)
-text = open(src_path).read()
-# Match TESTCASES = { ... } block. The closing brace sits alone on its line
-# at column 0. Use re.MULTILINE so ^ matches line starts.
-start = re.search(r"^TESTCASES\s*=\s*\{", text, re.M)
-if not start:
-    sys.exit(2)
-end = text.find("\n}", start.end())
-if end < 0:
-    sys.exit(2)
-block = text[start.start():end+2]   # include 'TESTCASES = {' .. '\n}'
-ns = {}
-exec(block, ns)
-tc_name = ns["TESTCASES"].get(tc_id)
+TC_NAME="$(python3 - "$ROOT_DIR" "$TC_ID" <<'PY'
+import sys
+root, tc_id_s = sys.argv[1], sys.argv[2]
+sys.path.insert(0, root + "/tests/e2e")
+from test_e2e import TESTCASES
+tc_name = TESTCASES.get(int(tc_id_s))
 print(tc_name if tc_name else "")
 PY
 )"
@@ -66,6 +55,13 @@ fi
 
 cc="aarch64-linux-gnu-gcc"
 cflags="-static -O0 -g -DNUM_NODES=${NUM_NODES:-3} -DNUM_SOCKETS=${NUM_SOCKETS:-1} ${WORKLOAD_CFLAGS:-} -I${WL_DIR}"
+case "$TC_ID" in
+    210) cflags="$cflags -DHA_SCENARIO=1" ;;
+    211) cflags="$cflags -DHA_SCENARIO=2" ;;
+    212) cflags="$cflags -DHA_SCENARIO=3" ;;
+    213) cflags="$cflags -DHA_SCENARIO=4" ;;
+    214) cflags="$cflags -DHA_SCENARIO=7" ;;
+esac
 echo "[compile_workload] tc=$TC_ID name=$TC_NAME sockets=$NUM_SOCKETS nodes=${NUM_NODES:-3}"
 echo "[compile_workload] $cc $cflags -o $OUT $SRC"
 $cc $cflags -o "$OUT" "$SRC"

@@ -8,7 +8,7 @@ USAGE (Python runner mode):
     python3 tests/e2e/test_e2e.py --tc <N>           # Run single TC
 """
 
-import sys, os, re, subprocess, argparse, tempfile, shutil
+import sys, os, re, subprocess, argparse, tempfile, shutil, json
 
 # gem5 v25.1 SimObject hierarchy can be deep; increase recursion limit.
 sys.setrecursionlimit(20000)
@@ -120,8 +120,13 @@ TESTCASES = {
     134: "e2e_tc134_8n2s_sliding_window",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
-    202: "e2e_c1_spill_cache_push", # Phase C1: spill _lineDataCache push-grant test
+    202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
     203: "e2e_d1_overflow",          # Phase D1: backstore page overflow test
+    210: "e2e_ha_2n1s_core",         # HA01 local reuse portable core
+    211: "e2e_ha_2n1s_core",         # HA02 remote read portable core
+    212: "e2e_ha_2n1s_core",         # HA03 ownership portable core
+    213: "e2e_ha_2n1s_core",         # HA04 shared-to-writer portable core
+    214: "e2e_ha_2n1s_core",         # HA07 producer-consumer portable core
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -1922,6 +1927,26 @@ def verify_tc84(reads, lines):
     return True, f"TC84/85 PASSED: capacity test ({len(cap_lines)} markers)", []
 
 
+def verify_ha_2n1s(reads, lines):
+    validations = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("kind") == "validation":
+            validations.append(record)
+    nodes = {r.get("node") for r in validations if r.get("errors") == 0}
+    if nodes != {0, 1}:
+        return False, ("2N1S FAILED: expected successful JSONL validation from "
+                       f"nodes 0 and 1, got {validations}"), []
+    scenarios = {r.get("scenario") for r in validations}
+    if len(scenarios) != 1:
+        return False, f"2N1S FAILED: inconsistent scenarios {scenarios}", []
+    return True, f"2N1S PASSED: {next(iter(scenarios))} validated on two nodes", []
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1976,6 +2001,11 @@ VERIFIERS = {
     201: verify_tc201,
     202: verify_tc202,
     203: verify_tc203,
+    210: verify_ha_2n1s,
+    211: verify_ha_2n1s,
+    212: verify_ha_2n1s,
+    213: verify_ha_2n1s,
+    214: verify_ha_2n1s,
 }
 
 def verify_testcase(tc_id, reads, lines):

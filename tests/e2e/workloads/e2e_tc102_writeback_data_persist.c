@@ -7,7 +7,7 @@
  * 3. Barrier
  * 4. Node 2 reads the same line from Node 1's DSM segment
  *    → UBCC directory is G_I (writeback released ownership)
- *    → Data from DsmDataStore/_lineDataCache via ReadResp payload
+ *    → Data from authoritative DsmDataStore via ReadResp payload
  * 5. Verify: node 2 reads 0x10200AA (not 0)
  */
 #include "dsm_access.h"

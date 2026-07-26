@@ -1,4 +1,4 @@
-/* Phase C1 minimal test: spill _lineDataCache push-grant race fix.
+/* Phase C1 minimal test: spill authoritative-home-data push-grant test.
  *
  * Sequence:
  *   1) node1 writes pattern to home=0, acquires G_M.

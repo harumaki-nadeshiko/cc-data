@@ -8,7 +8,7 @@
  *   3) evictOneVictimNaive creates a Recall outstanding, keeps the entry
  *      pinned, and issues RecallReq to node1.
  *   4) node1's EP-RNF responds with RecallResp carrying the dirty payload.
- *   5) home persists the payload (writeDsmData + _lineDataCache), removes
+ *   5) home persists the payload in authoritative DsmDataStore, removes
  *      the victim, and replays capacity waiters.
  *   6) node2 reads the original line and verifies the exact pattern.
  *
