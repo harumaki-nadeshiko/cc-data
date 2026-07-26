@@ -196,11 +196,10 @@ UBCCController::wakeup()
             pendingRequesterCount += kv.second.size();
         std::fprintf(stderr,
                      "[UBCC-STATE] tick=%lu dir=%zu outstanding=%zu tombstones=%zu "
-                     "resident_waiters=%zu pending_requesters=%zu data_cache=%zu "
+                      "resident_waiters=%zu pending_requesters=%zu "
                       "capacity=%zu policy=%s\n",
                      now, _directory.count(), _outstandingReqs.size(),
-                     tombstoneCount, residentWaiterCount, pendingRequesterCount,
-                      _lineDataCache.size(),
+                      tombstoneCount, residentWaiterCount, pendingRequesterCount,
                       _directory.capacity(),
                       _overflowPolicy == ResidentOverflowPolicy::NaiveEvict
                           ? "naive" : "spill");
@@ -1971,9 +1970,6 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 
     if (reqType == UBCC_OuterReqType::GlobalInvalidate) {
         if (recallDone.dataValid && _host) {
-            if (!_h64BloomAllMisses) {
-                updateLineDataCache(line_pa, recallDone.dataBuf);
-            }
             _host->writeDsmData(line_pa, recallDone.dataBuf);
             std::fprintf(stderr,
                          "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home=%d pa=0x%lx "
@@ -2546,7 +2542,6 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     // Make home data authoritative before publishing the owner release.
     if (data && _host) {
         _host->writeDsmData(line_pa, data);
-        if (!_h64BloomAllMisses) updateLineDataCache(line_pa, data);
         std::fprintf(stderr,
                      "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=writeback\n",
                      _nodeId, line_pa, requesterNode);
@@ -3414,7 +3409,7 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
 
     if (ost.dataValid) {
         if (_h64BloomAllMisses) {
-            // H64: async DSM write — do NOT use _lineDataCache.
+            // H64: async DSM write with a bounded visibility gate.
             // HARD cap on concurrent DSM writes.
             if ((int)_h64DsmPending.size() >= kMaxH64DsmPending) {
                 // Too many in-flight DSM writes — log and fall through.
@@ -3436,12 +3431,9 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
                         });
                 }
             }
-        } else {
-            updateLineDataCache(ost.linePa, ost.dataBuf);
-            if (_host) _host->writeDsmData(ost.linePa, ost.dataBuf);
+        } else if (_host) {
+            _host->writeDsmData(ost.linePa, ost.dataBuf);
         }
-    } else if (entry.state == MESIState::G_I) {
-        if (!_h64BloomAllMisses) _lineDataCache.erase(ost.linePa);
     }
 
     panic_if((entry.state == MESIState::G_E || entry.state == MESIState::G_M) &&
@@ -4004,15 +3996,7 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             tempOst.writeIntent = false;
             tempOst.replayArmed = true;
 
-            // Data from _lineDataCache (recall-sourced), or HomeMemory
-            auto cacheIt = _lineDataCache.find(linePa);
-            if (cacheIt != _lineDataCache.end()) {
-                tempOst.dataValid = true;
-                memcpy(tempOst.dataBuf, cacheIt->second.data(), 64);
-                tempOst.dataSource = GrantDataSource::RecallBuffer;
-            } else {
-                tempOst.dataSource = GrantDataSource::HomeMemory;
-            }
+            tempOst.dataSource = GrantDataSource::HomeMemory;
 
             // Commit directly (no Clear needed for shared)
             commitIntendedResult(entry, tempOst);
@@ -4251,11 +4235,7 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.h.homeLinePa = grantOst.linePa;
     push.h.epoch = grantOst.baseEpoch;
     push.h.reqId = grantOst.reqId;
-    auto cachedData = _lineDataCache.end();
-    if (!grantOst.dataValid && !_h64BloomAllMisses) {
-        cachedData = _lineDataCache.find(grantOst.linePa);
-    }
-    const bool hasGrantData = grantOst.dataValid || cachedData != _lineDataCache.end();
+    const bool hasGrantData = grantOst.dataValid;
 
     push.h.flags = hasGrantData ? static_cast<uint32_t>(CFLAG_HAS_DATA) : 0;
 
@@ -4277,17 +4257,10 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.committedEpoch = 0;
     push.b.readResp.pendingInvMask = 0;
 
-    // Grant data: copy from grantOst dataBuf if dataValid, otherwise use the
-    // home-side recall/writeback cache populated by naive dirty eviction
-    // or spill writeback persistence.  Phase C1: do NOT mislabel cached
-    // home data as RecallBuffer — grantOst.dataSource already carries the
-    // correct enum from the grant decision path.
+    // Push grants only carry transaction-owned data. The router supplies
+    // authoritative home data for grants that do not own a payload.
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
-    } else if (cachedData != _lineDataCache.end()) {
-        std::memcpy(push.b.readResp.grantData, cachedData->second.data(), 64);
-        // Legacy: _lineDataCache fallback for non-H64 mode only
-        // H64-mode grants bypass this path (see ubio_main.cc grant data selection)
     }
     // ── Phase C4 trace point 6: push grant payload word ──
     {

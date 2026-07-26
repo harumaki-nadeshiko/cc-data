@@ -454,24 +454,6 @@ class UBCCController
 
     bool copyOutstandingGrantData(uint64_t line_pa, DataBlock &outBlk) const;
 
-    /** Update the bounded legacy compatibility cache. */
-    void updateLineDataCache(uint64_t line_pa, const uint8_t *data) {
-        if (_lineDataCache.find(line_pa) == _lineDataCache.end() &&
-            _lineDataCache.size() >= kMaxLineDataCacheLines) {
-            return;
-        }
-        std::array<uint8_t, 64> a{}; std::memcpy(a.data(), data, 64);
-        _lineDataCache[line_pa] = a;
-    }
-
-    /** Copy _lineDataCache entry into outBlk. Returns true if found. */
-    bool copyLineDataCache(uint64_t line_pa, DataBlock &outBlk) const {
-        auto it = _lineDataCache.find(line_pa);
-        if (it == _lineDataCache.end()) return false;
-        std::memcpy(outBlk.data, it->second.data(), 64);
-        return true;
-    }
-
     // C3-bis: G_S+RS immediate-commit grant data
     std::map<uint64_t, OutstandingRequest> _immediateGrantData;
     bool copyImmediateGrantData(uint64_t line_pa, DataBlock &outBlk);
@@ -818,16 +800,6 @@ public:
     uint64_t _bloomReconstructInterval = 10000;
     uint64_t _bloomReconstructCounter = 0;
     Tick _lastStateLogTick = 0;
-
-    // Phase 1: DSM Data Store coalescing (future use)
-    std::map<uint64_t, std::vector<PendingRequester>> _pendingDataWaiters;
-    std::set<uint64_t> _pendingDataReads;
-    bool _coalesceRsReads = false;
-
-    // Legacy-only compatibility cache. H64 never reads or writes it; cap it at
-    // 512 KiB so an explicitly selected legacy run cannot grow without bound.
-    static constexpr size_t kMaxLineDataCacheLines = 8192;
-    std::map<uint64_t, std::array<uint8_t, 64>> _lineDataCache;
 
     // ---- v4: Tombstone window (configurable, default 100000 ticks) ----
     Tick _tombstoneWindowW = 100000;

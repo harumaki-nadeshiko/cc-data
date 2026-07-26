@@ -382,11 +382,12 @@ static void test_logical_only() {
 }
 
 // ============================================================
-// Test 9: _lineDataCache not in H64 host path
+// Test 9: H64 host lifecycle has no software data-cache dependency
 // ============================================================
 static void test_no_linedatacache() {
-    std::fprintf(stderr,"[T9] No _lineDataCache in host...\n");
-    // The host class has no _lineDataCache member — verified at compile time.
+    std::fprintf(stderr,"[T9] No software data cache in H64 host...\n");
+    // The H64 host only owns metadata transactions; data authority remains
+    // with the coherent owner or direct-indexed home memory.
     // This test exercises the data flow: upsert→probe→RMW→completion.
     MockMetaRNF mock;
     H64HostConfig cfg;
@@ -416,7 +417,7 @@ static void test_no_linedatacache() {
     mock.drain();
     assert(nfOk);
 
-    std::fprintf(stderr,"[T9] Full lifecycle without _lineDataCache: PASS\n");
+    std::fprintf(stderr,"[T9] Full lifecycle without software data cache: PASS\n");
 }
 
 // ============================================================
@@ -509,15 +510,12 @@ static void test_dsm_persistence_gate() {
 }
 
 // ============================================================
-// Test 12: _lineDataCache NOT in H64 grant path (controller-level)
+// Test 12: H64 grants do not depend on a software data cache
 // ============================================================
 static void test_h64_no_linedatacache_invariant() {
-    std::fprintf(stderr,"[T12] H64 _lineDataCache invariant...\n");
-    // The production UBCCController::buildGrantResponse only searches
-    // _lineDataCache when !_h64BloomAllMisses.  In H64 mode, the lookup
-    // is skipped.  This is verified by code inspection and the grant
-    // data path in ubio_main.cc.  The BackstoreHostH64 has no
-    // _lineDataCache member at all (compile-time invariant).
+    std::fprintf(stderr,"[T12] H64 authoritative-home-data invariant...\n");
+    // Production grant construction carries transaction-owned data only;
+    // ubio_main falls back to direct-indexed authoritative home memory.
     std::fprintf(stderr,"[T12] Verified by code structure: PASS\n");
 }
 

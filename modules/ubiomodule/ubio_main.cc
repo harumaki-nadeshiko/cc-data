@@ -408,9 +408,11 @@ struct DsmDataStore {
     bool readData(uint64_t pa, uint64_t t, std::function<void(const uint8_t*)> cb) {
         return enqueue({false, t + _dsmDramDelayPs, pa, false, {}, std::move(cb), nullptr});
     }
-    bool writeData(uint64_t pa, const uint8_t *buf, uint64_t t) {
-        std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64);
-        return enqueue({false, t + _dsmDramDelayPs, pa, true, a, nullptr, nullptr});
+    bool writeData(uint64_t pa, const uint8_t *buf, uint64_t) {
+        const size_t line = (pa & (kSegmentBytes - 1)) / kLineBytes;
+        std::memcpy(data.data() + line * kLineBytes, buf, kLineBytes);
+        valid[line] = 1;
+        return true;
     }
     // H64 async write: completion fires when data is in `data` map (visible to reads)
     bool writeDataAsync(uint64_t pa, const uint8_t *buf, uint64_t t,
@@ -1251,33 +1253,14 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
         // Always try to source grant data from ubio-side stores:
         // 1. Outstanding grant data (recall-sourced, highest priority)
         // 2. Immediate grant data (G_S+RS fast path)
-        // 3. _lineDataCache (persisted from prior recall/writeback)
-        // Req C: H64 mode must NOT source grants from _lineDataCache.
-        // Priority: dataBuf > ImmediateGrantData > DsmDataStore.
+        // Priority: transaction payload > immediate grant data > authoritative
+        // home memory. No PA-keyed software data cache participates.
         // If DSM persistence is pending for this PA, defer with RetryableBusy.
         bool hasGrantData = false;
-        if (ubcc.h64BloomAllMisses()) {
-            // H64: check persistence gate before HomeMemory
-            hasGrantData =
-                ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
-                ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData);
-            if (!hasGrantData) {
-                hasGrantData = host.dsmData.copyData(msg.h.homeLinePa,
-                                                     grantData.data);
-            }
-        } else {
-            // Legacy: keep old behavior including _lineDataCache
-            hasGrantData =
-                ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
-                ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
-                ubcc.copyLineDataCache(msg.h.homeLinePa, grantData);
-            if (!hasGrantData) {
-                if (host.dsmData.copyData(msg.h.homeLinePa, grantData.data)) {
-                    ubcc.updateLineDataCache(msg.h.homeLinePa, grantData.data);
-                    hasGrantData = true;
-                }
-            }
-        }
+        hasGrantData =
+            ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
+            ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
+            host.dsmData.copyData(msg.h.homeLinePa, grantData.data);
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
