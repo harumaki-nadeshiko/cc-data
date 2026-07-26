@@ -200,6 +200,8 @@ class BackstoreHostH64
         size_t groupIdx = 0;
         size_t activeBuckets = 0;
         size_t nextBucket = 0;
+        uint32_t seqBefore = 0;
+        uint8_t rescans = 0;
         std::function<void(const H64SlotEntry&)> onLive;
         std::function<void(BackstoreStatus)> completion;
     };
@@ -210,6 +212,13 @@ class BackstoreHostH64
     void onGroupScanBucket(int scanIdx, MetaRNFLineStatus st,
                            const uint8_t *data64);
     void completeGroupScan(int scanIdx, BackstoreStatus status);
+
+    static constexpr size_t kTrackedGroups = 256;
+    static constexpr uint8_t kMaxGroupScanRescans = 3;
+    uint32_t _mutationSeq[kTrackedGroups]{};
+    uint16_t _activeWriters[kTrackedGroups]{};
+    void beginGroupMutation(size_t groupIdx);
+    void endGroupMutation(size_t groupIdx);
 
     int allocSlot();
     void freeSlot(int idx);

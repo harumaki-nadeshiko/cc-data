@@ -136,6 +136,25 @@ bool BackstoreHostH64::isBucketLocked(size_t flatIdx) const {
     return state && state->locked;
 }
 
+void
+BackstoreHostH64::beginGroupMutation(size_t groupIdx)
+{
+    if (groupIdx >= _cfg.num_groups || groupIdx >= kTrackedGroups)
+        return;
+    ++_mutationSeq[groupIdx];
+    ++_activeWriters[groupIdx];
+}
+
+void
+BackstoreHostH64::endGroupMutation(size_t groupIdx)
+{
+    if (groupIdx >= _cfg.num_groups || groupIdx >= kTrackedGroups)
+        return;
+    if (_activeWriters[groupIdx] > 0)
+        --_activeWriters[groupIdx];
+    ++_mutationSeq[groupIdx];
+}
+
 BackstoreStatus BackstoreHostH64::mapMetaRNFStatus(MetaRNFLineStatus ms) {
     switch (ms) {
         case MetaRNFLineStatus::Ok: return BackstoreStatus::Ok;
@@ -231,6 +250,7 @@ BackstoreHostH64::onGroupScanControl(int scanIdx, MetaRNFLineStatus st,
     }
     _groupScans[scanIdx].activeBuckets = ctrl.active_bucket_count;
     _groupScans[scanIdx].nextBucket = 0;
+    _groupScans[scanIdx].seqBefore = _mutationSeq[_groupScans[scanIdx].groupIdx];
     readGroupScanBucket(scanIdx);
 }
 
@@ -239,6 +259,19 @@ BackstoreHostH64::readGroupScanBucket(int scanIdx)
 {
     GroupScan &scan = _groupScans[scanIdx];
     if (scan.nextBucket >= scan.activeBuckets) {
+        const uint32_t seqAfter = _mutationSeq[scan.groupIdx];
+        if ((seqAfter != scan.seqBefore || _activeWriters[scan.groupIdx] != 0) &&
+            scan.rescans < kMaxGroupScanRescans) {
+            ++scan.rescans;
+            scan.nextBucket = 0;
+            scan.seqBefore = seqAfter;
+            readGroupScanBucket(scanIdx);
+            return;
+        }
+        if (seqAfter != scan.seqBefore || _activeWriters[scan.groupIdx] != 0) {
+            completeGroupScan(scanIdx, BackstoreStatus::RetryableBusy);
+            return;
+        }
         completeGroupScan(scanIdx, BackstoreStatus::Ok);
         return;
     }
@@ -681,9 +714,11 @@ void BackstoreHostH64::startRmwWrite(int slotIdx) {
     size_t off = tableBucketOffset(txn.groupIdx, txn.rmwBucketIdx);
     uint8_t buf[64];
     std::memcpy(buf, &txn.rmwBucket, 64);
+    beginGroupMutation(txn.groupIdx);
     _metaRNF->writeLine(off, buf,
         [this, slotIdx, flatIdx](MetaRNFLineStatus st) {
         auto& tx = _slots[slotIdx];
+        endGroupMutation(tx.groupIdx);
         BucketState* bst = findBucketState(flatIdx);
         if (!bst) {
             tx.result.status = BackstoreStatus::IoError;
@@ -834,8 +869,10 @@ void BackstoreHostH64::rereadForRmw(int slotIdx, size_t flatIdx) {
         size_t wOff = tableBucketOffset(tx.groupIdx, tx.rmwBucketIdx);
 
         uint8_t buf[64]; std::memcpy(buf, &tx.rmwBucket, 64);
+        beginGroupMutation(tx.groupIdx);
         _metaRNF->writeLine(wOff, buf, [this, slotIdx, flatIdx](MetaRNFLineStatus st2) {
             auto& tx2 = _slots[slotIdx];
+            endGroupMutation(tx2.groupIdx);
             BucketState* bst2 = findBucketState(flatIdx);
             if (!bst2) {
                 tx2.result.status = BackstoreStatus::IoError;
