@@ -323,36 +323,31 @@ but is not required in the customer-facing three-column summary.
 
 ### 5.2 Portable Workload Structure
 
-Workloads are split into a platform-independent core and a small adapter:
+The deliverable is a platform-independent workload source plus a documented
+target-side shim boundary. The project supplies a CC reference shim; customers
+replace only the architecture-specific access and synchronization primitives
+when building for an FPGA target:
 
 ```text
-workloads/ha_compare/common/workload_core.c
-workloads/ha_compare/include/ha_port.h
-workloads/ha_compare/platform/cc_ep_port.c
-workloads/ha_compare/platform/ha_native_port.c
+tests/e2e/workloads/e2e_ha_2n1s_core.c
+tests/e2e/workloads/dsm_access.h          # CC reference access shim
+tests/ha_2n1s/README.md                   # target replacement contract
 ```
 
-Required adapter contract:
+The target-side replacements are intentionally behavioral rather than an API
+contract. The customer need not disclose proprietary SDK details:
 
 ```c
-int platform_node_id(void);
-int platform_thread_id(void);
-void *platform_alloc_home(int node, size_t bytes, size_t alignment);
-void platform_barrier(void);
-uint64_t platform_time_ns(void);
-void platform_flush_range(void *ptr, size_t bytes);   /* scenario-controlled */
-void platform_fence(void);
+shared_range_load/store(home_node, offset)
+two_participant_barrier()
+node/thread identity
+JSONL result emission
 ```
 
-The core algorithm, operation order, random seed, data size, validation, warmup,
-and sample emission are identical. Only allocation, topology discovery,
-barrier, clock, and optional cache-control primitives are platform adapters.
-
-The HA adapter should use the customer's supported NUMA/HA allocation API. If
-standard Linux facilities are available, the preferred implementation is
-`mbind`/`set_mempolicy` or `libnuma`, CPU affinity, `pthread_barrier`, and
-`clock_gettime(CLOCK_MONOTONIC_RAW)`. The final API is confirmed on the target
-machine before freezing the binary.
+The core algorithm, operation order, random seed, data size, validation,
+warmup, and sample emission are identical. The customer may use any supported
+allocation, placement, affinity, timer, and cache-control mechanism internally;
+those platform details are neither required nor requested by this project.
 
 The CC adapter uses the 2N1S DSM mapping but must not expose gem5-only behavior
 to the workload core. Gem5 protocol markers are supplemental diagnostics, not
@@ -690,8 +685,8 @@ it earlier would compare two different data-authority models.
 ```text
 source/
   common workload cores
-  HA native adapter
-  CC-EP adapter
+  CC reference shim
+  target adaptation notes
 bin/
   target-specific binaries or reproducible build scripts
 configs/
@@ -763,16 +758,13 @@ different topology, data placement, sample boundaries, or workload semantics.
 
 ### Phase 0: Freeze Contracts
 
-- Confirm customer HA allocation, affinity, barrier, timer, and cache-control
-  APIs.
 - Freeze JSONL result schema and scenario parameters.
 - Capture current CC functional baselines.
 
 ### Phase 1: Portable 2N1S Core
 
-- Implement platform adapter interface.
 - Implement HA01-HA04 first because they do not depend on H64 rebuild.
-- Produce HA native and CC naive/optimized binaries from the same core source.
+- Produce a CC reference binary and ship the same source for target compilation.
 
 ### Phase 2: Authoritative Data Path
 
