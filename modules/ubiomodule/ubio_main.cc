@@ -359,46 +359,71 @@ struct DsmDataStore {
     std::vector<uint8_t> data = std::vector<uint8_t>(kSegmentBytes);
     std::vector<uint8_t> valid = std::vector<uint8_t>(kLineCount, 0);
     struct PendingDataOp {
+        bool valid = false;
         uint64_t fireTick; uint64_t pa; bool isWrite;
         std::array<uint8_t, 64> buf;
         std::function<void(const uint8_t*)> readCb;
         std::function<void(bool)> writeCb;  // H64: async completion
     };
+    static constexpr size_t kMaxPendingDataOps = 256;
     uint64_t _dsmDramDelayPs = 50000;
-    std::vector<PendingDataOp> pending;
+    std::array<PendingDataOp, kMaxPendingDataOps> pending;
+    size_t pendingCount = 0;
+    size_t pendingHighwater = 0;
+
+    bool enqueue(PendingDataOp op) {
+        for (auto &slot : pending) {
+            if (slot.valid)
+                continue;
+            op.valid = true;
+            slot = std::move(op);
+            ++pendingCount;
+            pendingHighwater = std::max(pendingHighwater, pendingCount);
+            return true;
+        }
+        return false;
+    }
+
     void drain(uint64_t tick) {
-        auto it = pending.begin();
-        while (it != pending.end()) {
-            if (tick >= it->fireTick) {
-                if (it->isWrite) {
-                    const size_t line = (it->pa & (kSegmentBytes - 1)) / kLineBytes;
+        for (auto &slot : pending) {
+            if (!slot.valid || tick < slot.fireTick)
+                continue;
+            if (slot.isWrite) {
+                    const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
                     std::memcpy(data.data() + line * kLineBytes,
-                                it->buf.data(), kLineBytes);
+                                slot.buf.data(), kLineBytes);
                     valid[line] = 1;
-                    if (it->writeCb) it->writeCb(true);
-                } else {
-                    const size_t line = (it->pa & (kSegmentBytes - 1)) / kLineBytes;
-                    if (it->readCb) {
-                        it->readCb(valid[line]
+                    if (slot.writeCb) slot.writeCb(true);
+            } else {
+                    const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
+                    if (slot.readCb) {
+                        slot.readCb(valid[line]
                             ? data.data() + line * kLineBytes : nullptr);
                     }
-                }
-                it = pending.erase(it);
-            } else ++it;
+            }
+            slot = PendingDataOp{};
+            --pendingCount;
         }
     }
-    void readData(uint64_t pa, uint64_t t, std::function<void(const uint8_t*)> cb) {
-        pending.push_back({t + _dsmDramDelayPs, pa, false, {}, cb, nullptr});
+    bool readData(uint64_t pa, uint64_t t, std::function<void(const uint8_t*)> cb) {
+        return enqueue({false, t + _dsmDramDelayPs, pa, false, {}, std::move(cb), nullptr});
     }
-    void writeData(uint64_t pa, const uint8_t *buf, uint64_t t) {
+    bool writeData(uint64_t pa, const uint8_t *buf, uint64_t t) {
         std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64);
-        pending.push_back({t + _dsmDramDelayPs, pa, true, a, nullptr, nullptr});
+        return enqueue({false, t + _dsmDramDelayPs, pa, true, a, nullptr, nullptr});
     }
     // H64 async write: completion fires when data is in `data` map (visible to reads)
-    void writeDataAsync(uint64_t pa, const uint8_t *buf, uint64_t t,
+    bool writeDataAsync(uint64_t pa, const uint8_t *buf, uint64_t t,
                         std::function<void(bool)> cb) {
         std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64);
-        pending.push_back({t + _dsmDramDelayPs, pa, true, a, nullptr, std::move(cb)});
+        auto failCb = cb;
+        PendingDataOp op{false, t + _dsmDramDelayPs, pa, true, a, nullptr,
+                         std::move(cb)};
+        if (enqueue(std::move(op)))
+            return true;
+        if (failCb)
+            failCb(false);
+        return false;
     }
 
     bool copyData(uint64_t pa, uint8_t *out) const {
