@@ -466,6 +466,24 @@ class BackstoreSchemaH64
     std::vector<H64BucketLine> _buckets;
 };
 
+// H64 metadata has 256 routing groups while ResidentDir has 16 Bloom slices.
+// Keep this mapping beside the H64 hash so writers and rebuild scanners use
+// the same routing decision.
+static constexpr size_t kH64BloomSlices = 16;
+
+inline size_t
+h64BloomSliceForGroup(size_t h64Group)
+{
+    return h64Group % kH64BloomSlices;
+}
+
+inline size_t
+h64BloomSliceForPa(uint64_t linePa, size_t numGroups, uint64_t seed)
+{
+    return h64BloomSliceForGroup(
+        BackstoreSchemaH64::groupForPaStatic(linePa, numGroups, seed));
+}
+
 } // namespace glob
 } // namespace cc
 

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "BackstoreTypes.hh"
+#include "BackstoreSchemaH64.hh"
 
 namespace cc
 {
@@ -133,6 +134,14 @@ class ResidentDir
     static constexpr size_t DefaultBloomBytes = 60 * 1024;
     static constexpr size_t DefaultIndexBytes = 4 * 1024;
 
+    enum class BloomSliceState : uint8_t { Invalid, Rebuilding, Valid };
+    struct BloomSliceControl {
+        BloomSliceState state = BloomSliceState::Invalid;
+        uint32_t rebuildEpoch = 0;
+        uint16_t pendingGroups = 0;
+        bool retryRequired = false;
+    };
+
     // Legacy constructor (backward compat)
     explicit ResidentDir(size_t bf_bytes = DefaultBloomBytes,
                          size_t force_entries = 0);
@@ -189,6 +198,11 @@ class ResidentDir
     const GroupIndex& groupIndex(int g) const { return _groupIndex[g]; }
     GroupIndex& groupIndex(int g) { return _groupIndex[g]; }
     int groupForPa(uint64_t pa) const;
+    BloomSliceControl bloomSliceControl(int slice) const;
+    void setBloomSliceRebuilding(int slice, uint16_t pendingGroups);
+    void publishBloomSlice(int slice, const uint8_t *bytes, size_t byteCount);
+    void invalidateBloomSlice(int slice, bool retryRequired = true);
+    bool bloomNegativeAuthoritative(uint64_t pa) const;
 
     // ---- Reconstruction ----
     bool shouldReconstructGroup(int g) const;
@@ -277,6 +291,7 @@ class ResidentDir
     size_t _bloomBitCount;
 
     GroupIndex _groupIndex[BloomGroups];
+    BloomSliceControl _sliceControl[BloomGroups];
 
     static constexpr uint32_t kReconstructPeriod = 1024;
     static constexpr double kReconstructStaleThreshold = 0.25;

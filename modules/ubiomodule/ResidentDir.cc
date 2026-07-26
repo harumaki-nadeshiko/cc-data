@@ -200,6 +200,8 @@ ResidentDir::init(const ResidentDirConfig &cfg)
     _bloomBits.assign(_bloomBytes, 0);
     for (int g = 0; g < BloomGroups; g++)
         _groupIndex[g] = GroupIndex();
+    for (auto &slice : _sliceControl)
+        slice = BloomSliceControl();
 
     // In-object GroupIndex storage: BloomGroups * sizeof(GroupIndex)
     constexpr size_t groupIndexStorage = BloomGroups * sizeof(GroupIndex);
@@ -796,7 +798,10 @@ ResidentDir::splitmix64(uint64_t x)
 }
 
 int ResidentDir::bloomGroup(uint64_t pa) const
-{ return (int)(splitmix64(pa >> 6) % BloomGroups); }
+{
+    return static_cast<int>(h64BloomSliceForPa(
+        pa, 256, 0x9e3779b97f4a7c15ULL));
+}
 
 int ResidentDir::groupForPa(uint64_t pa) const
 { return bloomGroup(pa); }
@@ -876,6 +881,60 @@ ResidentDir::bloomClear()
     std::fill(_bloomBits.begin(), _bloomBits.end(), 0);
     for (int g = 0; g < BloomGroups; g++)
         _groupIndex[g] = GroupIndex();
+    for (auto &slice : _sliceControl)
+        slice = BloomSliceControl();
+}
+
+ResidentDir::BloomSliceControl
+ResidentDir::bloomSliceControl(int slice) const
+{
+    return slice >= 0 && slice < BloomGroups ? _sliceControl[slice]
+                                               : BloomSliceControl();
+}
+
+void
+ResidentDir::setBloomSliceRebuilding(int slice, uint16_t pendingGroups)
+{
+    if (slice < 0 || slice >= BloomGroups)
+        return;
+    BloomSliceControl &ctrl = _sliceControl[slice];
+    ctrl.state = BloomSliceState::Rebuilding;
+    ++ctrl.rebuildEpoch;
+    ctrl.pendingGroups = pendingGroups;
+    ctrl.retryRequired = false;
+}
+
+void
+ResidentDir::publishBloomSlice(int slice, const uint8_t *bytes, size_t byteCount)
+{
+    const size_t groupBytes = bloomGroupBytes();
+    if (slice < 0 || slice >= BloomGroups || !bytes || byteCount != groupBytes)
+        return;
+    std::memcpy(_bloomBits.data() + slice * groupBytes, bytes, groupBytes);
+    BloomSliceControl &ctrl = _sliceControl[slice];
+    ctrl.state = BloomSliceState::Valid;
+    ctrl.pendingGroups = 0;
+    ctrl.retryRequired = false;
+    _groupIndex[slice].stale_delete_count = 0;
+}
+
+void
+ResidentDir::invalidateBloomSlice(int slice, bool retryRequired)
+{
+    if (slice < 0 || slice >= BloomGroups)
+        return;
+    BloomSliceControl &ctrl = _sliceControl[slice];
+    ctrl.state = BloomSliceState::Invalid;
+    ctrl.pendingGroups = 0;
+    ctrl.retryRequired = retryRequired;
+}
+
+bool
+ResidentDir::bloomNegativeAuthoritative(uint64_t pa) const
+{
+    const BloomSliceControl &ctrl = _sliceControl[bloomGroup(pa)];
+    return ctrl.state == BloomSliceState::Valid && !ctrl.retryRequired &&
+           !bloomMayContain(pa);
 }
 
 // ========================================================================
