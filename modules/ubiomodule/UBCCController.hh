@@ -25,6 +25,13 @@ namespace glob
 
 class RubySystem;  // opaque forward decl; ubio only stores an (unused) pointer
 
+enum class DsmDataStatus : uint8_t {
+    Ok,
+    NotWritten,
+    RetryableBusy,
+    IoError,
+};
+
 class UBCCHostIf
 {
   public:
@@ -42,15 +49,34 @@ class UBCCHostIf
         if (completion) completion(false);
     }
     virtual void readDsmData(uint64_t pa,
-                             std::function<void(const uint8_t*)> cb) = 0;
+                              std::function<void(const uint8_t*)> cb) = 0;
+    virtual void readDsmDataAsync(
+        uint64_t pa, std::function<void(DsmDataStatus, const uint8_t*)> completion)
+    {
+        readDsmData(pa, [completion = std::move(completion)](const uint8_t *data) {
+            if (completion)
+                completion(data ? DsmDataStatus::Ok : DsmDataStatus::NotWritten,
+                           data);
+        });
+    }
     virtual void writeDsmData(uint64_t pa, const uint8_t *buf) = 0;
     // H64 async persistence: completion fires when data is visible to
     // subsequent readDsmData (not just enqueued).
     virtual void writeDsmDataAsync(uint64_t pa, const uint8_t *buf,
-                                   std::function<void(bool)> completion) {
+                                    std::function<void(bool)> completion) {
         // Legacy default: synchronous fallback
         writeDsmData(pa, buf);
         if (completion) completion(true);
+    }
+    virtual void writeDsmDataAsyncStatus(
+        uint64_t pa, const uint8_t *buf,
+        std::function<void(DsmDataStatus)> completion)
+    {
+        writeDsmDataAsync(pa, buf,
+            [completion = std::move(completion)](bool ok) {
+                if (completion)
+                    completion(ok ? DsmDataStatus::Ok : DsmDataStatus::IoError);
+            });
     }
 };
 

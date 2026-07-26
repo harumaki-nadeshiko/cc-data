@@ -362,8 +362,8 @@ struct DsmDataStore {
         bool valid = false;
         uint64_t fireTick; uint64_t pa; bool isWrite;
         std::array<uint8_t, 64> buf;
-        std::function<void(const uint8_t*)> readCb;
-        std::function<void(bool)> writeCb;  // H64: async completion
+        std::function<void(DsmDataStatus, const uint8_t*)> readCb;
+        std::function<void(DsmDataStatus)> writeCb;
     };
     static constexpr size_t kMaxPendingDataOps = 256;
     uint64_t _dsmDramDelayPs = 50000;
@@ -393,19 +393,22 @@ struct DsmDataStore {
                     std::memcpy(data.data() + line * kLineBytes,
                                 slot.buf.data(), kLineBytes);
                     valid[line] = 1;
-                    if (slot.writeCb) slot.writeCb(true);
+                    if (slot.writeCb) slot.writeCb(DsmDataStatus::Ok);
             } else {
                     const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
                     if (slot.readCb) {
-                        slot.readCb(valid[line]
-                            ? data.data() + line * kLineBytes : nullptr);
+                        slot.readCb(valid[line] ? DsmDataStatus::Ok
+                                                 : DsmDataStatus::NotWritten,
+                                    valid[line] ? data.data() + line * kLineBytes
+                                                : nullptr);
                     }
             }
             slot = PendingDataOp{};
             --pendingCount;
         }
     }
-    bool readData(uint64_t pa, uint64_t t, std::function<void(const uint8_t*)> cb) {
+    bool readData(uint64_t pa, uint64_t t,
+                  std::function<void(DsmDataStatus, const uint8_t*)> cb) {
         return enqueue({false, t + _dsmDramDelayPs, pa, false, {}, std::move(cb), nullptr});
     }
     bool writeData(uint64_t pa, const uint8_t *buf, uint64_t) {
@@ -416,7 +419,7 @@ struct DsmDataStore {
     }
     // H64 async write: completion fires when data is in `data` map (visible to reads)
     bool writeDataAsync(uint64_t pa, const uint8_t *buf, uint64_t t,
-                        std::function<void(bool)> cb) {
+                        std::function<void(DsmDataStatus)> cb) {
         std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64);
         auto failCb = cb;
         PendingDataOp op{false, t + _dsmDramDelayPs, pa, true, a, nullptr,
@@ -424,7 +427,7 @@ struct DsmDataStore {
         if (enqueue(std::move(op)))
             return true;
         if (failCb)
-            failCb(false);
+            failCb(DsmDataStatus::RetryableBusy);
         return false;
     }
 
@@ -1208,10 +1211,27 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         _pendingBackstoreAcks.push_back({tickRef + 1, pa, true, existed});
     }
 
-    void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
+    void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override {
+        readDsmDataAsync(pa, [cb = std::move(cb)](DsmDataStatus, const uint8_t *data) {
+            if (cb) cb(data);
+        });
+    }
+    void readDsmDataAsync(uint64_t pa,
+                          std::function<void(DsmDataStatus, const uint8_t*)> completion) override {
+        auto failCompletion = completion;
+        if (!dsmData.readData(pa, tickRef, std::move(completion)) && failCompletion)
+            failCompletion(DsmDataStatus::RetryableBusy, nullptr);
+    }
     void writeDsmData(uint64_t pa, const uint8_t *buf) override { dsmData.writeData(pa, buf, tickRef); }
     void writeDsmDataAsync(uint64_t pa, const uint8_t *buf,
                            std::function<void(bool)> completion) override {
+        writeDsmDataAsyncStatus(pa, buf,
+            [completion = std::move(completion)](DsmDataStatus status) {
+                if (completion) completion(status == DsmDataStatus::Ok);
+            });
+    }
+    void writeDsmDataAsyncStatus(uint64_t pa, const uint8_t *buf,
+                                 std::function<void(DsmDataStatus)> completion) override {
         dsmData.writeDataAsync(pa, buf, tickRef, std::move(completion));
     }
 
