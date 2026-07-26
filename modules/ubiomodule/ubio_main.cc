@@ -1039,6 +1039,21 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             h64GroupCovered[group] = 0;
     }
 
+    void applyH64CoverageMutation(const BackstoreCompletion &comp) {
+        if (!_useH64 || !_h64Host || comp.status != BackstoreStatus::Ok)
+            return;
+        const size_t group = BackstoreSchemaH64::groupForPaStatic(
+            comp.linePa, _h64Host->config().num_groups, _h64Host->config().hash_seed);
+        if (group >= h64GroupCovered.size() || !h64GroupCovered[group])
+            return;
+        if (comp.op == BackstoreOp::Upsert && !comp.existed) {
+            ++h64GroupLive[group];
+        } else if (comp.op == BackstoreOp::Erase && comp.existed &&
+                   h64GroupLive[group] > 0) {
+            --h64GroupLive[group];
+        }
+    }
+
     void recordH64CoverageGroup(size_t group, uint32_t liveCount) {
         if (group < h64GroupLive.size()) {
             h64GroupLive[group] = liveCount;
@@ -1157,9 +1172,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         // Phase 3: dispatch to H64 when active
         if (_useH64 && _h64Host) {
-            invalidateH64Coverage(pa);
             _h64Host->upsert(pa, e.state, e.sharersMask, e.epoch,
-                [this, pa](const BackstoreCompletion &comp) {
+                [this](const BackstoreCompletion &comp) {
+                    applyH64CoverageMutation(comp);
                     ubcc.onBackstoreH64Complete(comp);
                 });
             return;
@@ -1257,9 +1272,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             // Use a dummy epoch for now; the UBCC will pass the correct one
             // in the full integration.
             uint64_t deleteEpoch = ubcc.getEpochForLine(pa);
-            invalidateH64Coverage(pa);
             _h64Host->erase(pa, deleteEpoch,
-                [this, pa](const BackstoreCompletion &comp) {
+                [this](const BackstoreCompletion &comp) {
+                    applyH64CoverageMutation(comp);
                     ubcc.onBackstoreH64Complete(comp);
                 });
             return;
