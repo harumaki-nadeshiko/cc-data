@@ -815,7 +815,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     // has completed a validated scan. This is fixed group state, not a PA map.
     std::array<uint32_t, 256> h64GroupLive{};
     std::array<uint8_t, 256> h64GroupCovered{};
-    bool h64CoverageFault = false;
+    bool h64CoverageScanInFlight = false;
+    size_t h64CoverageCursor = 0;
     MetaRNFClient _metaRNF;
 
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
@@ -1003,14 +1004,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 },
                 [this, scan, issue, group, liveCount](BackstoreStatus status) {
                     if (status != BackstoreStatus::Ok) {
-                        h64CoverageFault = true;
                         if (scan->completion) scan->completion(false);
                         return;
                     }
-                    if (group < h64GroupLive.size()) {
-                        h64GroupLive[group] = *liveCount;
-                        h64GroupCovered[group] = 1;
-                    }
+                    recordH64CoverageGroup(group, *liveCount);
                     (*issue)();
                 });
         };
@@ -1018,7 +1015,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     }
 
     bool h64ExactCoverageKnown() const {
-        if (!_useH64 || h64CoverageFault || !_h64Host ||
+        if (!_useH64 || !_h64Host ||
             _h64Host->config().num_groups != h64GroupCovered.size())
             return false;
         for (uint8_t covered : h64GroupCovered) {
@@ -1040,6 +1037,37 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             pa, _h64Host->config().num_groups, _h64Host->config().hash_seed);
         if (group < h64GroupCovered.size())
             h64GroupCovered[group] = 0;
+    }
+
+    void recordH64CoverageGroup(size_t group, uint32_t liveCount) {
+        if (group < h64GroupLive.size()) {
+            h64GroupLive[group] = liveCount;
+            h64GroupCovered[group] = 1;
+        }
+    }
+
+    void advanceH64Coverage() {
+        if (!_useH64 || !_h64Host || h64CoverageScanInFlight ||
+            !ubcc.allH64BloomSlicesValid() ||
+            _h64Host->config().num_groups != h64GroupCovered.size() ||
+            h64ExactCoverageKnown()) {
+            return;
+        }
+        for (size_t n = 0; n < h64GroupCovered.size(); ++n) {
+            const size_t group = (h64CoverageCursor + n) % h64GroupCovered.size();
+            if (h64GroupCovered[group]) continue;
+            h64CoverageCursor = (group + 1) % h64GroupCovered.size();
+            h64CoverageScanInFlight = true;
+            auto liveCount = std::make_shared<uint32_t>(0);
+            _h64Host->scanGroupLive(group,
+                [liveCount](const H64SlotEntry &) { ++*liveCount; },
+                [this, group, liveCount](BackstoreStatus status) {
+                    h64CoverageScanInFlight = false;
+                    if (status == BackstoreStatus::Ok)
+                        recordH64CoverageGroup(group, *liveCount);
+                });
+            return;
+        }
     }
 
     // Phase D13: per-PA chain-walk state
@@ -2405,6 +2433,7 @@ main(int argc, char **argv)
             // This expires tombstones and recalls without repeatedly scanning
             // state while PDES is parked at the same timestamp.
             ubcc.wakeup();
+            host.advanceH64Coverage();
         } else {
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message

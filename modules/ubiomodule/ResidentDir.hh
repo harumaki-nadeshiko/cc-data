@@ -203,6 +203,7 @@ class ResidentDir
     void publishBloomSlice(int slice, const uint8_t *bytes, size_t byteCount);
     void invalidateBloomSlice(int slice, bool retryRequired = true);
     bool bloomNegativeAuthoritative(uint64_t pa) const;
+    bool allBloomSlicesValid() const;
     size_t bloomSliceBytes() const { return bloomGroupBytes(); }
     void bloomScratchInsert(int slice, uint64_t pa, uint8_t *scratch,
                             size_t scratchBytes) const;

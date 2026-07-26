@@ -937,6 +937,16 @@ ResidentDir::bloomNegativeAuthoritative(uint64_t pa) const
            !bloomMayContain(pa);
 }
 
+bool
+ResidentDir::allBloomSlicesValid() const
+{
+    for (const BloomSliceControl &ctrl : _sliceControl) {
+        if (ctrl.state != BloomSliceState::Valid || ctrl.retryRequired)
+            return false;
+    }
+    return true;
+}
+
 void
 ResidentDir::bloomScratchInsert(int slice, uint64_t pa, uint8_t *scratch,
                                 size_t scratchBytes) const

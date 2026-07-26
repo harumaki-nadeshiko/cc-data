@@ -244,6 +244,22 @@ BackstoreHostH64::onGroupScanControl(int scanIdx, MetaRNFLineStatus st,
     }
     H64GroupControl ctrl;
     ctrl.loadFrom(data64);
+    bool allZero = true;
+    for (size_t i = 0; i < H64GroupControl::kRecordBytes; ++i) {
+        if (data64[i] != 0) {
+            allZero = false;
+            break;
+        }
+    }
+    // A never-touched group has no allocated control record yet. It is a
+    // valid empty group for a read-only coverage/Bloom scan, not corruption.
+    if (allZero) {
+        _groupScans[scanIdx].activeBuckets = 0;
+        _groupScans[scanIdx].nextBucket = 0;
+        _groupScans[scanIdx].seqBefore = _mutationSeq[_groupScans[scanIdx].groupIdx];
+        completeGroupScan(scanIdx, BackstoreStatus::Ok);
+        return;
+    }
     if (!ctrl.valid() || ctrl.active_bucket_count > _cfg.buckets_per_group) {
         completeGroupScan(scanIdx, BackstoreStatus::Corrupt);
         return;

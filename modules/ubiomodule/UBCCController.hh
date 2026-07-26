@@ -809,6 +809,7 @@ public:
     // regardless of Bloom result.  Set by ubio_main when H64 schema is active.
     void setH64BloomAllMisses(bool v) { _h64BloomAllMisses = v; }
     bool h64BloomAllMisses() const { return _h64BloomAllMisses; }
+    bool allH64BloomSlicesValid() const { return _directory.allBloomSlicesValid(); }
     void publishBloomLive(uint64_t linePa);
 
     // H64 async DSM persistence: called by host when writeDsmDataAsync completes.

@@ -617,6 +617,27 @@ static void test_group_live_scan() {
 }
 
 // ============================================================
+// Test 15: never-allocated group is an exact empty scan
+// ============================================================
+static void test_empty_group_scan() {
+    std::fprintf(stderr,"[T15] Empty group scan...\n");
+    MockMetaRNF mock;
+    H64HostConfig cfg;
+    cfg.num_groups = 1; cfg.buckets_per_group = 4;
+    cfg.metadata_socket_lines = cfg.num_groups + cfg.totalBuckets();
+    uint8_t zero[64]{};
+    std::memcpy(mock._storage[cfg.groupControlOffset(0)], zero, sizeof(zero));
+    BackstoreHostH64 host(cfg, &mock);
+    int live = 0;
+    BackstoreStatus status = BackstoreStatus::IoError;
+    host.scanGroupLive(0, [&](const H64SlotEntry &) { ++live; },
+                       [&](BackstoreStatus st) { status = st; });
+    mock.drain();
+    assert(status == BackstoreStatus::Ok && live == 0);
+    std::fprintf(stderr,"[T15] PASS\n");
+}
+
+// ============================================================
 // Main
 // ============================================================
 int main() {
@@ -636,7 +657,8 @@ int main() {
     test_h64_no_linedatacache_invariant();
     test_collision_delete_probe_continuity();
     test_group_live_scan();
+    test_empty_group_scan();
 
-    std::fprintf(stderr,"\n=== 14/14 TESTS PASSED ===\n");
+    std::fprintf(stderr,"\n=== 15/15 TESTS PASSED ===\n");
     return 0;
 }
