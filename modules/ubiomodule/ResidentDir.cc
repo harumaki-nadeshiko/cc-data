@@ -937,6 +937,44 @@ ResidentDir::bloomNegativeAuthoritative(uint64_t pa) const
            !bloomMayContain(pa);
 }
 
+void
+ResidentDir::bloomScratchInsert(int slice, uint64_t pa, uint8_t *scratch,
+                                size_t scratchBytes) const
+{
+    if (!scratch || slice < 0 || slice >= BloomGroups ||
+        bloomGroup(pa) != slice || scratchBytes != bloomGroupBytes())
+        return;
+    for (int h = 0; h < BloomHashes; ++h) {
+        const size_t byteOff = bloomByteOffset(pa, h, slice);
+        if (byteOff < static_cast<size_t>(slice) * scratchBytes ||
+            byteOff >= static_cast<size_t>(slice + 1) * scratchBytes)
+            continue;
+        const size_t localByte = byteOff - static_cast<size_t>(slice) * scratchBytes;
+        const int bit = static_cast<int>(splitmix64(
+            pa ^ static_cast<uint64_t>(h * 0x9e3779b9ULL)) % 8);
+        scratch[localByte] |= static_cast<uint8_t>(1u << bit);
+    }
+}
+
+size_t
+ResidentDir::scanResidentBloomSlice(int slice, size_t startSlot, size_t maxSlots,
+                                    uint8_t *scratch, size_t scratchBytes) const
+{
+    const size_t end = std::min(_layout.capacity, startSlot + maxSlots);
+    for (size_t slot = startSlot; slot < end; ++slot) {
+        const int set = static_cast<int>(slot / _layout.ways);
+        const int way = static_cast<int>(slot % _layout.ways);
+        if (!getValid(set, way))
+            continue;
+        UBCCDirEntry entry;
+        decodeEntry(set, way, entry);
+        if (entry.state == UBCCMESIState::G_I && !entry.residentDirty)
+            continue;
+        bloomScratchInsert(slice, entry.lineAddr, scratch, scratchBytes);
+    }
+    return end;
+}
+
 // ========================================================================
 // Reconstruction
 // ========================================================================

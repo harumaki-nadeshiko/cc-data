@@ -179,6 +179,87 @@ UBCCController::~UBCCController()
 }
 
 void
+UBCCController::publishBloomLive(uint64_t linePa)
+{
+    _directory.bloomInsert(linePa);
+    if (_h64BloomRebuildActive) {
+        _directory.bloomScratchInsert(_h64BloomRebuildSlice, linePa,
+                                      _h64BloomScratch.data(),
+                                      _h64BloomScratch.size());
+    }
+}
+
+void
+UBCCController::advanceH64BloomRebuild()
+{
+    if (!_host || _directory.bloomSliceBytes() == 0)
+        return;
+    if (!_h64BloomRebuildActive) {
+        for (int slice = 0; slice < ResidentDir::BloomGroups; ++slice) {
+            if (_directory.bloomSliceControl(slice).state ==
+                ResidentDir::BloomSliceState::Valid) {
+                continue;
+            }
+            _h64BloomRebuildActive = true;
+            _h64BloomH64ScanIssued = false;
+            _h64BloomRebuildSlice = slice;
+            _h64BloomResidentCursor = 0;
+            _h64BloomScratch.assign(_directory.bloomSliceBytes(), 0);
+            _directory.setBloomSliceRebuilding(slice, 16);
+            break;
+        }
+        if (!_h64BloomRebuildActive)
+            return;
+    }
+    if (_h64BloomH64ScanIssued)
+        return;
+    _h64BloomResidentCursor = _directory.scanResidentBloomSlice(
+        _h64BloomRebuildSlice, _h64BloomResidentCursor,
+        kBloomRebuildEntriesPerWake, _h64BloomScratch.data(),
+        _h64BloomScratch.size());
+    if (_h64BloomResidentCursor < _directory.capacity())
+        return;
+
+    _h64BloomH64ScanIssued = true;
+    const int slice = _h64BloomRebuildSlice;
+    _host->hostScanH64BloomSlice(
+        slice,
+        [this, slice](uint64_t linePa) {
+            if (_h64BloomRebuildActive && _h64BloomRebuildSlice == slice) {
+                _directory.bloomScratchInsert(slice, linePa,
+                                              _h64BloomScratch.data(),
+                                              _h64BloomScratch.size());
+            }
+        },
+        [this, slice](bool ok) {
+            if (!_h64BloomRebuildActive || _h64BloomRebuildSlice != slice)
+                return;
+            finishH64BloomRebuild(ok);
+        });
+}
+
+void
+UBCCController::finishH64BloomRebuild(bool ok)
+{
+    const int slice = _h64BloomRebuildSlice;
+    if (ok) {
+        _directory.publishBloomSlice(slice, _h64BloomScratch.data(),
+                                     _h64BloomScratch.size());
+        std::fprintf(stderr, "[H64-BLOOM-REBUILD] home=%d slice=%d result=valid\n",
+                     _nodeId, slice);
+    } else {
+        _directory.invalidateBloomSlice(slice);
+        std::fprintf(stderr, "[H64-BLOOM-REBUILD] home=%d slice=%d result=invalid\n",
+                     _nodeId, slice);
+    }
+    _h64BloomScratch.clear();
+    _h64BloomResidentCursor = 0;
+    _h64BloomRebuildSlice = -1;
+    _h64BloomH64ScanIssued = false;
+    _h64BloomRebuildActive = false;
+}
+
+void
 UBCCController::wakeup()
 {
     cleanupTombstones();
@@ -205,7 +286,9 @@ UBCCController::wakeup()
                           ? "naive" : "spill");
         _lastStateLogTick = now;
     }
-    if (++_bloomReconstructCounter >= _bloomReconstructInterval) {
+    if (_h64BloomAllMisses)
+        advanceH64BloomRebuild();
+    else if (++_bloomReconstructCounter >= _bloomReconstructInterval) {
         _bloomReconstructCounter = 0;
         for (int g = 0; g < ResidentDir::BloomGroups; ++g) {
             if (_directory.shouldReconstructGroup(g))
@@ -3449,7 +3532,7 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
             entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch);
 
     if (entry.state != MESIState::G_I) {
-        _directory.bloomInsert(ost.linePa);
+        publishBloomLive(ost.linePa);
     }
     // v4-A3: Don't force-delete G_I — let ResidentDir eviction handle cleanup
 }
@@ -3671,7 +3754,7 @@ UBCCController::onBackstoreFillComplete(
         e.epoch = entry.epoch;
         e.residentDirty = false;
         // Phase 3: Bloom insert after verified Fill from H64 (upsert ack inserts)
-        _directory.bloomInsert(linePa);
+        publishBloomLive(linePa);
     } else {
         e.state = MESIState::G_I;
         e.sharersMask = 0;
@@ -3719,7 +3802,7 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
         return;
     }
     if (e.state != MESIState::G_I) {
-        _directory.bloomInsert(linePa);
+        publishBloomLive(linePa);
     }
     e.residentDirty = false;
     _directory.update(linePa, e);
@@ -3799,7 +3882,7 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
       case BackstoreOp::Upsert: {
         if (comp.status == BackstoreStatus::Ok) {
             // Bloom: upsert ack inserts
-            _directory.bloomInsert(linePa);
+            publishBloomLive(linePa);
             onBackstoreWriteAck(linePa);
         } else if (comp.status == BackstoreStatus::StaleEpoch) {
             // An async snapshot may legitimately become stale. Drop only its
@@ -3882,7 +3965,7 @@ UBCCController::debugSeedBackstoreForTest(
     if (mesi < 0 || mesi > 3) {
         return false;
     }
-    _directory.bloomInsert(linePa);
+    publishBloomLive(linePa);
     return true;
 }
 
@@ -3906,7 +3989,7 @@ UBCCController::debugSeedResidentForTest(
     _directory.update(linePa, e);
     _directory.touch(linePa);
     if (e.state != MESIState::G_I) {
-        _directory.bloomInsert(linePa);
+        publishBloomLive(linePa);
     }
     refreshPinnedBit(linePa);
     return true;

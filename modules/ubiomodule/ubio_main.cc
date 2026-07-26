@@ -958,6 +958,50 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         });
     }
 
+    void hostScanH64BloomSlice(
+        int slice, std::function<void(uint64_t)> onLive,
+        std::function<void(bool)> completion) override {
+        if (!_useH64 || !_h64Host || slice < 0 || slice >= ResidentDir::BloomGroups) {
+            if (completion) completion(false);
+            return;
+        }
+        struct SliceScan {
+            int nextGroup = 0;
+            int slice = 0;
+            std::function<void(uint64_t)> onLive;
+            std::function<void(bool)> completion;
+        };
+        auto scan = std::make_shared<SliceScan>();
+        scan->slice = slice;
+        scan->onLive = std::move(onLive);
+        scan->completion = std::move(completion);
+        auto issue = std::make_shared<std::function<void()>>();
+        *issue = [this, scan, issue]() {
+            while (scan->nextGroup < static_cast<int>(_h64Host->config().num_groups) &&
+                   h64BloomSliceForGroup(scan->nextGroup) !=
+                       static_cast<size_t>(scan->slice)) {
+                ++scan->nextGroup;
+            }
+            if (scan->nextGroup >= static_cast<int>(_h64Host->config().num_groups)) {
+                if (scan->completion) scan->completion(true);
+                return;
+            }
+            const size_t group = static_cast<size_t>(scan->nextGroup++);
+            _h64Host->scanGroupLive(group,
+                [scan](const H64SlotEntry &entry) {
+                    if (scan->onLive) scan->onLive(entry.pa);
+                },
+                [scan, issue](BackstoreStatus status) {
+                    if (status != BackstoreStatus::Ok) {
+                        if (scan->completion) scan->completion(false);
+                        return;
+                    }
+                    (*issue)();
+                });
+        };
+        (*issue)();
+    }
+
     // Phase D13: per-PA chain-walk state
     struct ChainCtx { size_t idx; int maxSteps; };
     std::map<uint64_t, std::shared_ptr<ChainCtx>> _chainCtx;
@@ -1045,7 +1089,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         // Phase 3: dispatch to H64 when active
         if (_useH64 && _h64Host) {
-            ubcc.directory().bloomInsert(pa);
             _h64Host->upsert(pa, e.state, e.sharersMask, e.epoch,
                 [this, pa](const BackstoreCompletion &comp) {
                     ubcc.onBackstoreH64Complete(comp);
@@ -1054,7 +1097,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         }
 
         // Legacy Schema A path below
-        ubcc.directory().bloomInsert(pa);
+        ubcc.publishBloomLive(pa);
         int g = _schema.groupForPa(pa);
         cc::glob::BackstoreEntry schemaEntry;
         schemaEntry.pa = pa;

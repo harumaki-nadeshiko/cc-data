@@ -33,6 +33,14 @@ class UBCCHostIf
     virtual void hostIssueBackstoreRead(uint64_t pa) = 0;
     virtual void hostIssueBackstoreWrite(uint64_t pa) = 0;
     virtual void hostIssueBackstoreDelete(uint64_t pa) = 0;
+    virtual void hostScanH64BloomSlice(
+        int slice, std::function<void(uint64_t)> onLive,
+        std::function<void(bool)> completion)
+    {
+        (void)slice;
+        (void)onLive;
+        if (completion) completion(false);
+    }
     virtual void readDsmData(uint64_t pa,
                              std::function<void(const uint8_t*)> cb) = 0;
     virtual void writeDsmData(uint64_t pa, const uint8_t *buf) = 0;
@@ -775,6 +783,7 @@ public:
     // regardless of Bloom result.  Set by ubio_main when H64 schema is active.
     void setH64BloomAllMisses(bool v) { _h64BloomAllMisses = v; }
     bool h64BloomAllMisses() const { return _h64BloomAllMisses; }
+    void publishBloomLive(uint64_t linePa);
 
     // H64 async DSM persistence: called by host when writeDsmDataAsync completes.
     void onDsmPersistComplete(uint64_t linePa);
@@ -799,6 +808,14 @@ public:
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
     uint64_t _bloomReconstructCounter = 0;
+    static constexpr size_t kBloomRebuildEntriesPerWake = 256;
+    bool _h64BloomRebuildActive = false;
+    bool _h64BloomH64ScanIssued = false;
+    int _h64BloomRebuildSlice = -1;
+    size_t _h64BloomResidentCursor = 0;
+    std::vector<uint8_t> _h64BloomScratch;
+    void advanceH64BloomRebuild();
+    void finishH64BloomRebuild(bool ok);
     Tick _lastStateLogTick = 0;
 
     // ---- v4: Tombstone window (configurable, default 100000 ticks) ----
