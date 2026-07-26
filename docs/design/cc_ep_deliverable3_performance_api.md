@@ -52,6 +52,8 @@
 
 见交付件 2 §3。
 
+面向客户两节点单路HA实机的对比不直接复用8节点TC131总均值。统一的`2n1s` workload、平台适配层、计时边界、场景矩阵和结果格式见`h64_rebuild_data_path_and_2n1s_ha_workload_plan.md`。客户对比至少覆盖local reuse、remote cold/hot read、ownership ping-pong、shared-to-writer invalidation、capacity revisit、dirty-owner lifecycle、producer-consumer、同步竞争和混合干扰；同一workload core分别运行于HA native、CC naive和CC optimized。CC专有Outer/Recall/MetaRNF日志只用于路径归因，不作为跨平台唯一计时边界。
+
 ### 3. 延迟分解（示例：TC27 epoch_wrap_stress，3-node 1s）
 
 | 操作 | 中位延迟 | 说明 |

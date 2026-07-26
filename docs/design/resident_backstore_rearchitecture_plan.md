@@ -10,6 +10,13 @@ context: its stated final design and the current Schema A/C implementation do
 not agree, so it must not be used as an implementation contract without this
 document.
 
+**Follow-on implementation plan:** Correct ResidentDir + H64 Bloom rebuild,
+complete removal of `_lineDataCache`, and the portable two-node/one-socket HA
+comparison workload suite are specified in
+`h64_rebuild_data_path_and_2n1s_ha_workload_plan.md`. Where the follow-on plan
+is more specific about these three topics, it is the active implementation
+contract.
+
 ## 1. Goals and Non-Negotiable Rules
 
 The rearchitecture covers this path:
