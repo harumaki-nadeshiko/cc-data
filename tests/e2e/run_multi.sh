@@ -174,7 +174,7 @@ ubio_extra_args_for_tc() {
         201)
             # Phase A5: tiny spill ResidentDir + backstore for durability test.
             # sram-bytes must exceed bloom+index (128+4096=4224) to avoid underflow.
-            echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+            echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=3 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
         202)
             # Phase C1: spill push-grant authoritative home-data test
