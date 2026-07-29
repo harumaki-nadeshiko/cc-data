@@ -13,6 +13,12 @@ int main(int argc, char **argv)
 {
     int node_id = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    int cpu_index = (argc >= 3) ? parse_int(argv[2]) : 0;
+
+    if ((cpu_index % 4) != 0) {
+        _exit_program(0);
+        return 0;
+    }
 
     emit_e2e_meta(node_id, "TC1");
 

@@ -21,6 +21,7 @@ int main(int argc, char **argv) {
     sync_wait(0b111);
     if (nid == 1) {
         uint32_t got; char b[64]; int p; char *s;
+        uint64_t t_phase = read_cntvct_el0();
         for (int i = 0; i < 8; i++) {
             uint64_t t0, t1;
             __asm__ volatile("mrs %0,cntvct_el0":"=r"(t0));
@@ -28,6 +29,8 @@ int main(int argc, char **argv) {
             __asm__ volatile("mrs %0,cntvct_el0":"=r"(t1));
             if(got!=val){p=0;s="[LATENCY] FAIL";while(*s)b[p++]=*s++;b[p++]='\n';_raw_write(b,p);}
         }
+        emit_guest_timer(1, "cross_node_read", 8,
+                         read_cntvct_el0() - t_phase);
         p=0;s="[LATENCY] node=1 count=8 done";while(*s)b[p++]=*s++;b[p++]='\n';_raw_write(b,p);
         emit_read_val(nid,0,val,got,got==val);
     }

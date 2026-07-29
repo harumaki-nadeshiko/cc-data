@@ -121,36 +121,58 @@ ubio_extra_args_for_tc() {
         116) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 ${UBCC_POLICY:+--dir-overflow-policy=$UBCC_POLICY} ${UBCC_OPTS:-}" ;;
         120)
             case "${EP_PERF_PROFILE:-optimized}" in
-                baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                naive|baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                spill-noopt) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized|*) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
         121)
             case "${EP_PERF_PROFILE:-optimized}" in
-                baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                naive|baseline) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                spill-noopt) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized|*) echo "--bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
         122|123)
             case "${EP_PERF_PROFILE:-optimized}" in
-                baseline) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=${UBCC_POLICY:-naive} --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                naive|baseline) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                spill-noopt) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized|*) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
         124)
             case "${EP_PERF_PROFILE:-optimized}" in
-                baseline) echo "--batch-rs=0 ${UBCC_OPTS:-}" ;;
+                naive|baseline|spill-noopt) echo "--batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized|*) echo "--batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
-        126)
-            echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+        125|126|127|128|129)
+            case "${EP_PERF_PROFILE:-spill-noopt}" in
+                optimized) echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
+                *)         echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
+            esac
             ;;
-        125|127|128|129)
-            echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+        130|135|136|137|138|139|141)
+            case "${EP_PERF_PROFILE:-spill-noopt}" in
+                naive|baseline) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
+                *) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
+            esac
             ;;
-        130)
-            echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
+        142|143|144)
+            # Database workloads use a 512-entry, 1-way ResidentDir and stream
+            # 768 maintenance lines around a repeatedly used database hot set.
+            case "${EP_PERF_PROFILE:-spill-noopt}" in
+                naive|baseline) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
+                *) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
+            esac
+            ;;
+        140)
+            case "${EP_PERF_PROFILE:-spill-noopt}" in
+                optimized) echo "--batch-rs=1 ${UBCC_OPTS:-}" ;;
+                *) echo "--batch-rs=0 ${UBCC_OPTS:-}" ;;
+            esac
             ;;
         131|132|133|134)
             # ── Phase A1: Unambiguous policy selection ──
@@ -185,10 +207,11 @@ ubio_extra_args_for_tc() {
             # tombstone semantics are tested directly by the focused Host test.
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
-        210|211|212|213|214)
+        210|211|212|213|214|215|216|217|218|219)
             case "${EP_PERF_PROFILE:-optimized}" in
-                naive) echo "--dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
-                optimized|*) echo "--dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
+                naive) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                spill-noopt) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
+                optimized|*) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
         98)  echo "--ways=1" ;;
@@ -202,7 +225,7 @@ ubio_extra_args_for_tc() {
 expand_cmd() {
     local mod_id="$1"; local frules="$2"; local uextra="$3"; local node_od="${4:-}"
     NODE_OUTDIR="$node_od" python3 - "$JSON" "$mod_id" "$frules" "$uextra" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 cfg_path, mod_id, frules, uextra = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(cfg_path)))
 c = json.load(open(cfg_path))
@@ -218,7 +241,9 @@ def r(s):
     s = s.replace("{workload}", os.environ["RUN_WORKLOAD"])
     s = s.replace("{topo_json}", os.environ["RUN_TOPO_JSON"])
     s = s.replace("{node_outdir}", os.environ.get("NODE_OUTDIR",""))
-    s = s.replace("{fault_rules_args}", frules)
+    # Fault rules are a single CLI argument and may contain ';' separators.
+    # Quote them before the runner's eval-based launch wrapper sees the command.
+    s = s.replace("{fault_rules_args}", shlex.quote(frules) if frules else "")
     s = s.replace("{ubio_extra_args}", uextra)
     return s
 print(r(mod["cmd"]))
@@ -371,7 +396,8 @@ _supervisor_start() {
         local floor_bytes=$((EP_SUPERVISOR_DISK_FREE_GB * 1073741824))
         local prev_guest_progress=-1
         local prev_protocol_tick=-1
-        local stall_count=0
+        local guest_stall_count=0
+        local protocol_stall_count=0
         local stall_limit=$((EP_SUPERVISOR_PROGRESS_STALL_SEC / interval))
         [ "$stall_limit" -gt 0 ] 2>/dev/null || stall_limit=1
 
@@ -412,7 +438,10 @@ _supervisor_start() {
                 exit 0
             fi
 
-            # ── 2. Progress: guest output or protocol tick movement ─
+            # ── 2. Progress: either guest output or protocol tick movement
+            # keeps the generic watchdog alive. Profile-specific runners may
+            # inspect both fields to distinguish guest stalls from long fault
+            # recovery or spill streams without killing valid workloads.
             local current_guest_progress=0
             for nid in $(seq 0 $((num_nodes - 1))); do
                 local pf="$m5outdir/node${nid}/simout_n${nid}"
@@ -426,18 +455,23 @@ _supervisor_start() {
                [ "$current_protocol_tick" -gt "$prev_protocol_tick" ]; then
                 prev_guest_progress="$current_guest_progress"
                 prev_protocol_tick="$current_protocol_tick"
-                stall_count=0
+                guest_stall_count=0
             else
-                stall_count=$((stall_count + 1))
-                if [ "$stall_count" -ge "$stall_limit" ]; then
+                guest_stall_count=$((guest_stall_count + 1))
+                if [ "$guest_stall_count" -ge "$stall_limit" ]; then
                     local ts; ts=$(date +%s)
-                    echo "FAULT ${ts} progress_stall: guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} for $((stall_count * interval))s" >> "$status_file"
-                    echo "[supervisor] FAULT: no guest or protocol tick progress for $((stall_count * interval))s"
+                    echo "FAULT ${ts} progress_stall: guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} for $((guest_stall_count * interval))s" >> "$status_file"
+                    echo "[supervisor] FAULT: no guest or protocol tick progress for $((guest_stall_count * interval))s"
                     for pid in $gem5_pids $ubio_pids $nsim_pid; do
                         kill -9 "$pid" 2>/dev/null || true
                     done
                     exit 1
                 fi
+            fi
+            if [ "$current_protocol_tick" -gt "$prev_protocol_tick" ]; then
+                protocol_stall_count=0
+            else
+                protocol_stall_count=$((protocol_stall_count + 1))
             fi
 
             # ── 3. Log directory size check ───────────────────────
@@ -468,7 +502,7 @@ _supervisor_start() {
 
             # ── Heartbeat (only to status file, not stdout) ───────
             local ts; ts=$(date +%s)
-            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
+            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} guest_stall_sec=$((guest_stall_count * interval)) protocol_tick=${current_protocol_tick} protocol_stall_sec=$((protocol_stall_count * interval)) log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
         done
     ) &
     SUPERVISOR_PID=$!
@@ -570,9 +604,14 @@ run_tc() {
             fi
             cmd="$GEM5_BIN $debug_args${cmd#"$GEM5_BIN"}"
         fi
-        if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ]; then
+        if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ] || [ "$tc" = "141" ] ||
+           { [ "$tc" -ge 135 ] && [ "$tc" -le 139 ]; } ||
+           { [ "$tc" -ge 142 ] && [ "$tc" -le 144 ]; }; then
             # These tests isolate directory policy; do not mix protocol optimizations.
-            cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
+            case "${EP_PERF_PROFILE:-spill-noopt}" in
+                optimized) cmd="$cmd --silent-upgrade=1 --direct-fwd=0 --ubcc-batch-rs=1" ;;
+                *)         cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0" ;;
+            esac
         elif [ "$tc" = "131" ]; then
             # TC131 is the capacity/latency comparison workload.  The baseline
             # is naive with every latency optimization disabled; optimized uses
@@ -581,9 +620,11 @@ run_tc() {
                 optimized) cmd="$cmd --silent-upgrade=1 --direct-fwd=0 --ubcc-batch-rs=1" ;;
                 *)         cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0" ;;
             esac
-        elif [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
-            case "${EP_PERF_PROFILE:-optimized}" in
-                baseline)
+        elif [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ] || [ "$tc" = "140" ]; then
+            local default_profile=optimized
+            if [ "$tc" = "140" ]; then default_profile=spill-noopt; fi
+            case "${EP_PERF_PROFILE:-$default_profile}" in
+                baseline|spill-noopt)
                     cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
                     ;;
                 optimized|*)
@@ -729,7 +770,8 @@ run_tc() {
             # test PASSED despite the timeout (other nodes may keep spinning).
             if [ "$tc" -eq 9 ]; then
                 local crash_log="$LOG_BASE/gem5_tc${tc}_node0/stderr.log"
-                if grep -qE "Aborted|core dumped|SIGSEGV" "$crash_log" 2>/dev/null; then
+                if grep -q "Page table fault when accessing virtual address 0xfffff8000000" \
+                    "$crash_log" 2>/dev/null; then
                     echo "  TC${tc} PASSED (expected crash detected)"
                     _supervisor_stop
                     _kill_infra
@@ -827,6 +869,16 @@ run_tc() {
     sleep 0.2
 
     if [ $gem5_fail -ne 0 ] || [ $child_fail -ne 0 ]; then
+        # TC9 is a negative test: node0 must reject the unmapped non-DSM
+        # access. The crash can happen before the timeout loop observes it.
+        if [ "$tc" -eq 9 ]; then
+            local crash_log="$LOG_BASE/gem5_tc${tc}_node0/stderr.log"
+            if grep -q "Page table fault when accessing virtual address 0xfffff8000000" \
+                "$crash_log" 2>/dev/null; then
+                echo "  TC${tc} PASSED (expected crash detected)"
+                return 0
+            fi
+        fi
         echo "  TC${tc} CRASHED (a managed child exited non-zero)"
         return 1
     fi
@@ -874,25 +926,25 @@ echo "Log base: $LOG_BASE"
 echo "Sockets/node: $NUM_SOCKETS  (NMOD=$NMOD)"
 echo "Workload: $WORKLOAD  (compiled per-TC; path is constant)"
 
-# Sanity: warn if a --2s-only TC is passed under 1s
-if [ "$TOPO_KIND" = "1s" ]; then
-    for tc in "$@"; do
-        case "$tc" in 32|33|34|35|39|81)
-            echo "FATAL: TC$tc requires --2s topology. Re-run with --2s." >&2
-            exit 2
-        ;; esac
-    done
-fi
+# These workloads embed a fixed node/socket count and barrier mask. Reject a
+# mismatch before compiling or starting any managed process.
+required_topology_for_tc() {
+    case "$1" in
+        135|136|137|138|139|140|141|142|143|144) printf '%s\n' 1s ;;
+        32|33|34|35|39|81)                 printf '%s\n' 2s ;;
+        82|90|91|92|93|94|133)             printf '%s\n' 8n1s ;;
+        95|96|97|98|99|100|101|134)        printf '%s\n' 8n2s ;;
+        210|211|212|213|214|215|216|217|218|219) printf '%s\n' 2n1s ;;
+    esac
+}
 
-# Sanity: warn if an 8n2s-only TC is passed under 8n1s (or non-8n2s)
-if [ "$TOPO_KIND" = "8n1s" ]; then
-    for tc in "$@"; do
-        case "$tc" in 95|96|97|98|99|134)
-            echo "FATAL: TC$tc requires --8n2s topology. Re-run with --8n2s." >&2
-            exit 2
-        ;; esac
-    done
-fi
+for tc in "$@"; do
+    required_topology="$(required_topology_for_tc "$tc")"
+    if [ -n "$required_topology" ] && [ "$TOPO_KIND" != "$required_topology" ]; then
+        echo "FATAL: TC$tc requires --$required_topology topology. Re-run with --$required_topology." >&2
+        exit 2
+    fi
+done
 
 PASS=0; FAIL=0
 for tc in "$@"; do

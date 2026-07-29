@@ -36,6 +36,7 @@ int main(int argc, char **argv)
 
     if (!primary) { _exit_program(0); return 0; }
 
+    uint64_t t0 = read_cntvct_el0();
     for (int iter = 0; iter < ITERATIONS; iter++) {
         for (int seg = 1; seg <= SEGMENTS; seg++) {
             uint32_t val = any_hash((uint32_t)(node_id * NUM_SOCKETS + socket_id),
@@ -54,6 +55,8 @@ int main(int argc, char **argv)
             sync_wait(BARRIER_ALL, (unsigned)NUM_SOCKETS);
         }
     }
+    emit_guest_timer(node_id * NUM_SOCKETS + socket_id, "barrier_stress",
+                     ITERATIONS * SEGMENTS, read_cntvct_el0() - t0);
     emit_phase_done(node_id * NUM_SOCKETS + socket_id, "done");
     _exit_program(0);
     return 0;

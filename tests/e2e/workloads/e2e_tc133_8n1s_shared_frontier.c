@@ -11,9 +11,9 @@
 static inline uint32_t hot_off(int i) { return FRONTIER_BASE + (uint32_t)i * 64u; }
 static inline uint32_t stream_off(int i) { return STREAM_BASE + (uint32_t)i * 64u; }
 int main(int argc,char **argv) {
- int n=0,c=0;if(argc>=2)n=parse_int(argv[1]);if(argc>=3)c=parse_int(argv[2]);if(c%4){_exit_program(0);return 0;}emit_e2e_meta(n,"TC133");
+ int n=0,c=0;if(argc>=2)n=parse_int(argv[1]);if(argc>=3)c=parse_int(argv[2]);if(c%4){_exit_program(0);return 0;}emit_e2e_meta(n,"TC133");emit_timer_selftest(n);
  if(n==0){for(int i=0;i<HOT;i++)dsm_store(0,hot_off(i),VALUE|(uint32_t)i);emit_phase_done(0,"frontier_seed");} sync_wait(0xFF);
  if(n){for(int i=0;i<HOT;i++)(void)dsm_load(0,hot_off(i));emit_phase_done(n,"frontier_share");} sync_wait(0xFF);
  if(n==0){for(int i=0;i<PRESSURE;i++)dsm_store(0,stream_off(i),0x13380000u|(uint32_t)i);emit_phase_done(0,"frontier_pressure");} sync_wait(0xFF);
- if(n){for(int i=0;i<HOT;i++){uint32_t v=dsm_load(0,hot_off(i));if(i==n*512)emit_read_val(n,0,VALUE|(uint32_t)i,v,v==(VALUE|(uint32_t)i));}emit_phase_done(n,"frontier_reuse");} sync_wait(0xFF);_exit_program(0);return 0;
+ if(n){uint64_t t0=read_cntvct_el0();for(int i=0;i<HOT;i++){uint32_t v=dsm_load(0,hot_off(i));if(i==n*512)emit_read_val(n,0,VALUE|(uint32_t)i,v,v==(VALUE|(uint32_t)i));}emit_guest_timer(n,"post_pressure_frontier_reuse",HOT,read_cntvct_el0()-t0);emit_phase_done(n,"frontier_reuse");} sync_wait(0xFF);_exit_program(0);return 0;
 }

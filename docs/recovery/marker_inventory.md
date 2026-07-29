@@ -12,7 +12,7 @@
 | Category | Tag | Default | Gating | Description |
 |---|---|---|---|---|
 | **Correctness** | `CORR` | **Always ON** | None (or framework gated) | Fault evidence, invariant violations, mandatory audit logs |
-| **Latency/Perf** | `PERF` | **Always ON** | None | TRACE-PERF pipeline, latency measurements |
+| **Latency/Perf** | `PERF` | Measurement-dependent | Guest timing always on for measured runs; TracePerf may be off/sample/full | Guest latency measurements and optional transaction tracing |
 | **Stats** | `STAT` | **Always ON** | None | Periodic stats dumps consumed by CI/analysis |
 | **Test Evidence** | `TEST` | **Always ON** | None | Markers consumed by verify.py / test_e2e.py for test assertions |
 | **Debug/Diagnostic** | `DEBUG` | **OFF by default** | `_debugLog`, `_debugClearTrace`, or `_verboseLog` | Developer debugging, hot-path instrumentation |
@@ -119,11 +119,11 @@ remaining markers in this section are debugging-only and are gated behind
 | (framework::warn, fatal, inform) | simout | OP |
 | Test-inspection accessors (no markers) | — | TEST |
 
-### 4.2 Latency/Perf (Always ON)
+### 4.2 Latency/Perf (Measurement-dependent)
 
 | Marker | Stream | File | Gate |
 |---|---|---|---|
-| `[TRACE-PERF]` | stderr | UBAdapter.cc:214,1562 | None (critical perf pipeline) |
+| `[TRACE-PERF]` | stderr | UBAdapter.cc | `protocol/TracePerfPolicy.hh`; optional trace-chain pipeline, not a framework API |
 
 ### 4.3 Debug/Diagnostic (Gated — `_verboseLog`)
 
@@ -217,6 +217,9 @@ All markers below fire on EP-side request processing. Gating them behind `_verbo
 2. **All `[DEBUG-*]` markers MUST** be gated behind a boolean gate variable (never unconditional).
 3. **Test-consumed markers** (Section 8) **MUST NOT** be gated or renamed without updating all consumers.
 4. **Correctness/Operational markers** (`[UBFAULT]`, `[UBCC-STATS]`, etc.) **MUST** remain always-ON.
-5. **Latency pipeline** (`[TRACE-PERF]`) **MUST** remain always-ON.
+5. Guest performance markers (`[GUEST-TIMER]`, `[PERF-LATENCY]`, required
+   `[EP-PERF]`) stay enabled for their measured runs. `[TRACE-PERF]` may be
+   `off`, `sample`, or `full` and is owned by `protocol/TracePerfPolicy.hh`, not
+   by framework.
 
 Automated enforcement: `tests/logging/test_marker_compliance.py`.

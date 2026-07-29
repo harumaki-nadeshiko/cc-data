@@ -26,6 +26,9 @@ int main(int argc, char **argv)
 {
     int node_id = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    int cpu_index = 0;
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    if ((cpu_index % 4) != 0) { _exit_program(0); return 0; }
     emit_e2e_meta(node_id, "C1_SPILL_FIX");
     int verify_ok = 1;
 
@@ -48,7 +51,10 @@ int main(int argc, char **argv)
             emit_after_wr(0, 0, (uint32_t)((uint64_t)(i + 1) << 48));
         }
         emit_before_wr(0, 0, 0xBBBBBBBBu);
+        uint64_t t0 = read_cntvct_el0();
         dsm_store64(0, TRIGGER_OFF, 0xBBBBBBBBBBBBBBBBULL);
+        emit_guest_timer(0, "spill_evict_sync", 1,
+                         read_cntvct_el0() - t0);
         emit_after_wr(0, 0, 0xBBBBBBBBu);
         emit_phase_done(0, "spill_evict");
     }
@@ -57,7 +63,10 @@ int main(int argc, char **argv)
     /* Phase 3: node2 reads target → backstore fill → verify */
     if (node_id == 2) {
         emit_before_rd(2, 0);
+        uint64_t t0 = read_cntvct_el0();
         uint64_t got = dsm_load64(0, TARGET_OFF);
+        emit_guest_timer(2, "spill_cache_push_verify", 1,
+                         read_cntvct_el0() - t0);
         int match = (got == PATTERN);
         verify_ok = match;
         emit_read_val(2, 0, (uint32_t)(PATTERN & 0xFFFFFFFFu),
@@ -66,7 +75,7 @@ int main(int argc, char **argv)
     }
     if (node_id == 0 || node_id == 1)
         emit_phase_done(node_id, "idle");
-    // Keep all nodes alive through the final split-mode barrier release.
+    // Keep the recalled owner alive until Node2 has verified the payload.
     sync_wait(0b111);
     _exit_program(node_id == 2 && !verify_ok ? 1 : 0);
     return 0;

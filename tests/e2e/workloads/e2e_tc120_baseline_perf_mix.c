@@ -47,6 +47,7 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int round = 0; round < 4; round++) {
             for (int i = 0; i < TC120_HOT; i++) {
                 uint32_t got = dsm_load(0, (uint32_t)(i * CONFLICT_STRIDE));
@@ -56,6 +57,8 @@ int main(int argc, char **argv)
                 }
             }
         }
+        emit_guest_timer(1, "shared_hot_reads", TC120_HOT * 4,
+                         read_cntvct_el0() - t0);
         emit_phase_done(1, "shared_hot_reads");
     }
     sync_wait(0b111);

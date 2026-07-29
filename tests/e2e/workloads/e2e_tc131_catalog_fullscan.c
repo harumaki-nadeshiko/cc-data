@@ -16,23 +16,6 @@ static inline uint32_t hot_off(int i) { return CATALOG_BASE + (uint32_t)i * 64u;
 static inline uint32_t scan_off(int i) { return SCAN_BASE + (uint32_t)i * 64u; }
 static inline uint32_t upgrade_off(int i) { return UPGRADE_BASE + (uint32_t)i * 64u; }
 static inline uint32_t upgrade_sem_off(int i) { return UPGRADE_SEM_BASE + (uint32_t)i * 64u; }
-static inline uint64_t read_cntvct(void) { uint64_t v; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v)); return v; }
-static int fmt_u64_dec(char *buf, int p, uint64_t value) {
- if (!value) { buf[p++] = '0'; return p; }
- char digits[24]; int n = 0;
- while (value) { digits[n++] = (char)('0' + value % 10); value /= 10; }
- while (n) buf[p++] = digits[--n];
- return p;
-}
-static void emit_latency(int node, const char *phase, int sample, uint64_t cycles) {
- char buf[128]; int p = 0; char *s = (char *)"[LATENCY] node=";
- while (*s) buf[p++] = *s++; p = fmt_int(buf, p, node);
- s = (char *)" phase="; while (*s) buf[p++] = *s++;
- while (*phase) buf[p++] = *phase++;
- s = (char *)" iter="; while (*s) buf[p++] = *s++;
- p = fmt_int(buf, p, sample); s = (char *)" cycles="; while (*s) buf[p++] = *s++;
- p = fmt_u64_dec(buf, p, cycles); buf[p++] = '\n'; _raw_write(buf, p);
-}
 int main(int argc, char **argv) {
  int n = 0, c = 0;
  if (argc >= 2) n = parse_int(argv[1]);
@@ -42,7 +25,7 @@ int main(int argc, char **argv) {
  if (n > 2 || (c % 4 && !(n == 1 && c % 4 == 2))) {
   _exit_program(0); return 0;
  }
- if (c % 4 == 0) emit_e2e_meta(n, "TC131");
+ if (c % 4 == 0) { emit_e2e_meta(n, "TC131"); emit_timer_selftest(n); }
  if (n == 0) {
   for (int i = 0; i < HOT; i++) dsm_store(0, hot_off(i), VALUE | (uint32_t)i);
   emit_phase_done(0, "catalog_seed");
@@ -61,15 +44,15 @@ int main(int argc, char **argv) {
   emit_phase_done(0, "full_scan");
  }
  if (c % 4 == 0) sync_wait(7);
- if ((n == 1 || n == 2) && c % 4 == 0) {
-  for (int pass = 0; pass < 2; pass++) for (int i = 0; i < HOT; i++) {
-   uint64_t t0 = 0;
-   if (pass == 0 && i % 64 == 0) t0 = read_cntvct();
-   uint32_t v = dsm_load(0, hot_off(i));
-   if (t0) emit_latency(n, "catalog_reuse", i, read_cntvct() - t0);
+  if ((n == 1 || n == 2) && c % 4 == 0) {
+   uint64_t t0 = read_cntvct_el0();
+   for (int pass = 0; pass < 2; pass++) for (int i = 0; i < HOT; i++) {
+    uint32_t v = dsm_load(0, hot_off(i));
    if (pass == 0 && i % 512 == 0)
     emit_read_val(n, 0, VALUE | (uint32_t)i, v, v == (VALUE | (uint32_t)i));
   }
+  emit_guest_timer(n, "post_pressure_catalog_reuse", HOT * 2,
+                   read_cntvct_el0() - t0);
   emit_phase_done(n, "catalog_reuse");
  }
  if (c % 4 == 0) sync_wait(7);
@@ -87,14 +70,14 @@ int main(int argc, char **argv) {
    }
    emit_phase_done(1, "exclusive_upgrade");
   } else if (c % 4 == 2) {
-   for (int i = 0; i < UPGRADE_SAMPLES; i++) {
+    uint64_t t0 = read_cntvct_el0();
+    for (int i = 0; i < UPGRADE_SAMPLES; i++) {
     while (local_dram_load(upgrade_sem_off(i)) != 1) { }
-    uint64_t t0 = read_cntvct();
-    dsm_store(0, upgrade_off(i), 0x131f0000u | (uint32_t)i);
-    uint64_t t1 = read_cntvct();
-    emit_latency(1, "exclusive_upgrade", i, t1 - t0);
+     dsm_store(0, upgrade_off(i), 0x131f0000u | (uint32_t)i);
     local_dram_store(upgrade_sem_off(i), 2);
-   }
+    }
+    emit_guest_timer(1, "exclusive_upgrade", UPGRADE_SAMPLES,
+                     read_cntvct_el0() - t0);
   }
   }
  if (c % 4 == 0) sync_wait(7);

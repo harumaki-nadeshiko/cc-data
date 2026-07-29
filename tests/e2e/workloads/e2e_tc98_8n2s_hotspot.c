@@ -49,6 +49,7 @@ int main(int argc, char **argv)
     emit_e2e_meta(node_id, "TC98");
 
     int fail = 0;
+    uint64_t t0 = read_cntvct_el0();
     for (int r = 0; r < ROUNDS; r++) {
         uint32_t v = 0x98000000u | ((uint32_t)node_id << 8)
                      | ((uint32_t)socket_id << 4) | (uint32_t)r;
@@ -66,6 +67,8 @@ int main(int argc, char **argv)
             buf[p++] = '\n'; _raw_write(buf, p);
         }
     }
+    emit_guest_timer(node_id, "hotspot_contention", ROUNDS,
+                     read_cntvct_el0() - t0);
 
     /* Write unique final value to per-socket-plane done slot */
     uint32_t done_val = 0x98DD0000u | ((uint32_t)node_id << 8) | (uint32_t)socket_id;

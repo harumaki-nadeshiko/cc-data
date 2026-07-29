@@ -9,13 +9,14 @@
 #include "framework/Port.hh"
 #include "framework/MemMessage.hh"
 #include "framework/Log.hh"
-#include "framework/TracePerfPolicy.hh"
+#include "protocol/TracePerfPolicy.hh"
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
 #include "modules/ubiomodule/BackstoreHostH64.hh"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -186,7 +187,8 @@ parseFaultRules(const std::string &all)
 //   0 = drop, 1 = normal, 2 = duplicate. Emits [UBFAULT] on a match.
 // For Delay/Reorder actions, enqueues to g_delayedQueue and returns 0.
 int
-applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick)
+applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick,
+               bool fromNetwork)
 {
     if (g_faultRules.empty()) return 1;
     int copies = 1;
@@ -219,7 +221,7 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick)
                          "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
                          nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
                          coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
-            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, false, 1});
+            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
             copies = 0;
             break;
           case UbioFaultAction::Reorder:
@@ -228,7 +230,7 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick)
                          "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
                          nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
                          coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
-            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, false, 1});
+            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
             copies = 0;
         }
     }
@@ -819,6 +821,18 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     size_t h64CoverageCursor = 0;
     MetaRNFClient _metaRNF;
 
+    // Fixed admission table for push grants that need an authoritative home
+    // read. This is not PA-keyed state: each entry owns one in-flight response
+    // and is released by its typed completion.
+    struct PendingGrantRead {
+        bool active = false;
+        bool readInFlight = false;
+        uint64_t retryTick = 0;
+        CoherenceMessage push;
+    };
+    static constexpr size_t kMaxPendingGrantReads = 32;
+    std::array<PendingGrantRead, kMaxPendingGrantReads> pendingGrantReads{};
+
     explicit UbioBackstoreHost(UBCCController &ctrl, Port *gport, Port *nport,
                                int nid, int sid, uint64_t &t,
                                bool useH64 = false,
@@ -847,23 +861,31 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
     bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
-            bool ok = sendCoh(gem5Port, tickRef, nodeId, msg);
+            // Use gidOf to compute the correct global module id for the target
+            // adapter. Previously only nodeId (bare node number) was passed as
+            // dstModule, which set buf->hdr.targetId to the wrong value. For
+            // point-to-point ZMQ this is cosmetic, but the correct GID must be
+            // in the header: the gem5 UBAdapter matches srcSocket<<dstSocket
+            // and future topology-aware receivers may filter by targetId.
+            uint32_t dstGid = gidOf(nodeId, socketId);
+            bool ok = sendCoh(gem5Port, tickRef, dstGid, msg);
             if (g_debugUbioPerf) {
                 std::fprintf(stderr,
-                             "[DEBUG-CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu\n",
+                             "[DEBUG-CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu dstGid=%u\n",
                              nodeId, socketId, coherenceMsgTypeName(msg.h.type),
-                             msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef);
+                             msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef, dstGid);
                 std::fflush(stderr);
             }
             return ok;
         }
-        bool ok = sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
+        uint32_t dstGid = gidOf(msg.h.dstNode, msg.h.dstSocket);
+        bool ok = sendCoh(netPort, tickRef, dstGid, msg, true);
         if (g_debugUbioPerf) {
             std::fprintf(stderr,
-                         "[DEBUG-CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d ok=%d tick=%lu\n",
+                         "[DEBUG-CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d dstGid=%u ok=%d tick=%lu\n",
                          nodeId, socketId, coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.homeLinePa, msg.h.dstNode,
-                         msg.h.dstSocket, ok ? 1 : 0, tickRef);
+                         msg.h.dstSocket, dstGid, ok ? 1 : 0, tickRef);
             std::fflush(stderr);
         }
         return ok;
@@ -871,6 +893,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeAckNotify(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    bool sendUpgradeResp(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendGrantPush(const CoherenceMessage &msg) override {
         CoherenceMessage push = msg;
         // UBCC constructs replay pushes without direct access to the physical
@@ -882,7 +905,79 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             dsmData.copyData(push.h.homeLinePa, push.b.readResp.grantData)) {
             push.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
         }
-        return routeControlToTarget(push);
+
+        if (push.h.type != CoherenceMessageType::ReadResp ||
+            (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA))) {
+            return routeControlToTarget(push);
+        }
+
+        // The synchronous copy missed. Do not push a fabricated zero line:
+        // reserve a bounded slot and resolve the direct-indexed home read.
+        size_t slotIdx = kMaxPendingGrantReads;
+        for (size_t i = 0; i < pendingGrantReads.size(); ++i) {
+            if (!pendingGrantReads[i].active) {
+                slotIdx = i;
+                break;
+            }
+        }
+        if (slotIdx == kMaxPendingGrantReads)
+            return false;
+
+        PendingGrantRead &slot = pendingGrantReads[slotIdx];
+        slot.active = true;
+        slot.push = push;
+        issuePendingGrantRead(slotIdx);
+        return true;
+    }
+
+    void issuePendingGrantRead(size_t slotIdx) {
+        PendingGrantRead &pending = pendingGrantReads[slotIdx];
+        if (!pending.active || pending.readInFlight)
+            return;
+        pending.readInFlight = true;
+        readDsmDataAsync(pending.push.h.homeLinePa,
+            [this, slotIdx](DsmDataStatus status, const uint8_t *data) {
+                PendingGrantRead &slot = pendingGrantReads[slotIdx];
+                if (!slot.active)
+                    return;
+                slot.readInFlight = false;
+                CoherenceMessage ready = slot.push;
+
+                if (!ubcc.grantTupleLive(ready.h.homeLinePa,
+                                         ready.h.requesterNode,
+                                         ready.h.reqId)) {
+                    slot = PendingGrantRead{};
+                    return;
+                }
+                if (status == DsmDataStatus::RetryableBusy) {
+                    // The DSM fixed table is temporarily full. Keep this
+                    // bounded response slot and retry after virtual time moves.
+                    slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
+                    return;
+                }
+
+                slot = PendingGrantRead{};
+                if (status == DsmDataStatus::Ok && data) {
+                    std::memcpy(ready.b.readResp.grantData, data, 64);
+                    ready.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+                    routeControlToTarget(ready);
+                } else if (status == DsmDataStatus::NotWritten) {
+                    // An unwritten direct-indexed home line is the sole valid
+                    // no-data case; EPBackend may initialize it as zero.
+                    routeControlToTarget(ready);
+                }
+                // IoError sends no fabricated payload; requester retry owns
+                // recovery after this bounded attempt has been released.
+            });
+    }
+
+    void advancePendingGrantReads(uint64_t tick) {
+        for (size_t i = 0; i < pendingGrantReads.size(); ++i) {
+            PendingGrantRead &slot = pendingGrantReads[i];
+            if (!slot.active || slot.readInFlight || tick < slot.retryTick)
+                continue;
+            issuePendingGrantRead(i);
+        }
     }
     uint64_t hostCurrentTick() const override { return tickRef; }
 
@@ -1357,7 +1452,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 };
 
 bool
-handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int sid,
                   const CoherenceMessage &msg,
                   CoherenceMessage &response, bool &hasResponse)
 {
@@ -1409,9 +1504,11 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;               // v4-dual-socket: home socket plane
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeNode = nid;
+        response.h.homeSocket = sid;              // v4-dual-socket: home socket plane
         response.h.requesterNode = msg.h.requesterNode;
         response.h.homeLinePa = msg.h.homeLinePa;
         response.h.epoch = msg.h.epoch;
@@ -1445,6 +1542,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
                                     msg.h.epoch, keepAsClean);
         response.h.type = CoherenceMessageType::WritebackResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1460,6 +1558,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch);
         response.h.type = CoherenceMessageType::EvictResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1472,13 +1571,23 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
 
       case CoherenceMessageType::UpgradeReq: {
         bool notSharer = false;
+        bool deferred = false;
         bool accepted = ubcc.processOuterUpgradeReq(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId,
             msg.b.upgradeReq.desiredPerm,
             static_cast<UBCC_UpgradeCause>(msg.b.upgradeReq.cause),
-            &notSharer);
+            &notSharer, &deferred, msg.h.srcSocket);
+        if (deferred) {
+            // Resident fill/capacity replay owns the eventual response. Sending
+            // a temporary reject here makes the requester allocate a new reqId
+            // while replay can silently accept the old one, orphaning the home
+            // outstanding forever.
+            hasResponse = false;
+            return true;
+        }
         response.h.type = CoherenceMessageType::UpgradeResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1503,6 +1612,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
         response.h.type = CoherenceMessageType::UpgradeDoneResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1524,6 +1634,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
         response.h.type = CoherenceMessageType::ClearResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1570,6 +1681,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
         ubcc.queryLineMeta(msg.h.homeLinePa, qEpoch, qOwnerNode, qState, qFound);
         response.h.type = CoherenceMessageType::QueryLineMetaResp;
         response.h.srcNode = nid;
+        response.h.srcSocket = sid;
         response.h.dstNode = msg.h.srcNode;
         response.h.dstSocket = msg.h.srcSocket;
         response.h.homeLinePa = msg.h.homeLinePa;
@@ -1610,7 +1722,7 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
         for (int rep = 0; rep < dm.faultCopies; ++rep) {
             CoherenceMessage response;
             bool hasResponse = false;
-            bool handled = handleUbccMessage(ubcc, host, nid, coh, response, hasResponse);
+            bool handled = handleUbccMessage(ubcc, host, nid, sid, coh, response, hasResponse);
             if (dm.fromNetwork) {
                 if (handled && hasResponse) {
                     sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
@@ -1954,26 +2066,43 @@ main(int argc, char **argv)
 
     bool gem5Done = false, netDone = false;
     using BarrierKey = std::pair<uint32_t, uint32_t>;
-    using BarrierArrivals = std::map<int, uint32_t>;
+    static constexpr size_t kMaxBarrierPlanes = 32;
+    static constexpr size_t kMaxQueuedBarrierGenerations = 4;
+    struct BarrierArrivals {
+        std::array<std::array<uint32_t, kMaxQueuedBarrierGenerations>,
+                   kMaxBarrierPlanes> seqs{};
+        std::array<uint8_t, kMaxBarrierPlanes> head{};
+        std::array<uint8_t, kMaxBarrierPlanes> count{};
+    };
     std::map<BarrierKey, BarrierArrivals> barrierArrivals;
+    auto barrierReady = [&](const BarrierKey &bk, const BarrierArrivals &arrivals) {
+        for (size_t plane = 0; plane < kMaxBarrierPlanes; ++plane) {
+            if ((bk.first & (1U << plane)) == 0)
+                continue;
+            if (arrivals.count[plane] == 0)
+                return false;
+        }
+        return true;
+    };
     auto releaseBarrier = [&](const BarrierKey &bk) {
-        const uint32_t expected = __builtin_popcount(bk.first) * g_numSockets;
         auto it = barrierArrivals.find(bk);
-        if (it == barrierArrivals.end() || it->second.size() < expected)
+        if (it == barrierArrivals.end() || !barrierReady(bk, it->second))
             return;
 
-        bool allSent = true;
-        for (const auto &arrival : it->second) {
-            const int targetPlane = arrival.first;
+        for (int targetPlane = 0; targetPlane < static_cast<int>(kMaxBarrierPlanes); ++targetPlane) {
+            if ((bk.first & (1U << targetPlane)) == 0)
+                continue;
             const int targetNode = targetPlane / g_numSockets;
+            if (targetNode >= 32)
+                continue;
+            const size_t plane = static_cast<size_t>(targetPlane);
+            const uint32_t seq = it->second.seqs[plane][it->second.head[plane]];
             const int targetSocket = targetPlane % g_numSockets;
             Port *deliveryPort = (targetNode == nid && targetSocket == sid)
                 ? gem5Port : netPort;
             framework::MemMessage* rel = deliveryPort->allocateSendBuffer(tick);
-            if (!rel) {
-                allSent = false;
-                continue;
-            }
+            panic_if(!rel, "barrier release allocation failed mask=0x%x plane=%d",
+                     bk.first, targetPlane);
             rel->hdr.timestamp = tick;
             rel->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
             rel->hdr.targetId = gidOf(targetNode, targetSocket);
@@ -1982,14 +2111,29 @@ main(int argc, char **argv)
             rmsg.b.barrier.mask = bk.first;
             // Each isolated gem5 process may have an independently observed
             // generation; release exactly the generation it reported.
-            rmsg.b.barrier.seq = arrival.second;
+            rmsg.b.barrier.seq = seq;
             rel->setPayload(rmsg);
-            if (!deliveryPort->send(rel))
-                allSent = false;
+            if (g_debugUbioPerf) {
+                std::fprintf(stderr,
+                    "[DEBUG-UBIO-BARRIER] release mask=0x%x plane=%d seq=%u route=%s tick=%lu\n",
+                    bk.first, targetPlane, seq,
+                    deliveryPort == gem5Port ? "gem5" : "net", tick);
+            }
+            panic_if(!deliveryPort->send(rel),
+                     "barrier release send failed mask=0x%x plane=%d",
+                     bk.first, targetPlane);
         }
-        if (allSent) {
+        bool empty = true;
+        for (size_t plane = 0; plane < kMaxBarrierPlanes; ++plane) {
+            if ((bk.first & (1U << plane)) == 0)
+                continue;
+            it->second.head[plane] = static_cast<uint8_t>(
+                (it->second.head[plane] + 1) % kMaxQueuedBarrierGenerations);
+            --it->second.count[plane];
+            empty = empty && it->second.count[plane] == 0;
+        }
+        if (empty)
             barrierArrivals.erase(it);
-        }
     };
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
@@ -2087,9 +2231,9 @@ main(int argc, char **argv)
             }
 
             // Cross-node barrier (now a PAYLOAD CoherenceMessage, not a
-                // dedicated MemMessageType). A node reports BarrierReached; once all
-                // (node,socket) planes in the mask have arrived, reply BarrierRelease
-                // to ALL local socket planes.
+                // dedicated MemMessageType). Each set mask bit identifies one
+                // (node,socket) plane. Once all masked planes arrive, reply
+                // BarrierRelease to those same planes.
                 // TC90 fix: key by (mask, seq) to distinguish successive barriers
                 // sharing the same mask. Without this, interleaved BarrierReached
                 // messages from different generations pollute the set and get
@@ -2098,22 +2242,37 @@ main(int argc, char **argv)
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
                     int src = static_cast<int>(m->hdr.sourceId);
-                    // Arrival generations are local to isolated gem5
-                    // processes. Aggregate one in-flight generation per mask
-                    // and retain each plane's generation for its release.
+                    // Generations are local to isolated gem5 processes and
+                    // therefore cannot form a distributed key. Aggregate one
+                    // in-flight generation per mask and return each plane's
+                    // local sequence in its own release message.
                     BarrierKey bk{mask, 0};
-                    const int leaderNode = __builtin_ctz(mask);
-                    if (nid == leaderNode && sid == 0) {
-                        const int sourceNode = src / g_numSockets;
-                        if (sourceNode < 0 || sourceNode >= 32 ||
-                            (mask & (1U << sourceNode)) == 0) {
+                    panic_if(mask == 0, "barrier mask must not be empty");
+                    const int leaderPlane = __builtin_ctz(mask);
+                    const int leaderNode = leaderPlane / g_numSockets;
+                    const int leaderSocket = leaderPlane % g_numSockets;
+                    if (nid == leaderNode && sid == leaderSocket) {
+                        if (src < 0 || src >= static_cast<int>(kMaxBarrierPlanes) ||
+                            (mask & (1U << src)) == 0) {
                             std::fprintf(stderr,
                                          "[UBIO-BARRIER-WARN] n%d ignored source=%d mask=0x%x\n",
                                          nid, src, mask);
                             m = port->recv(tick, &st);
                             continue;
                         }
-                        barrierArrivals[bk][src] = seq;
+                        BarrierArrivals &arrivals = barrierArrivals[bk];
+                        const size_t plane = static_cast<size_t>(src);
+                        panic_if(arrivals.count[plane] == kMaxQueuedBarrierGenerations,
+                                 "barrier FIFO full mask=0x%x plane=%d", mask, src);
+                        const size_t tail = (arrivals.head[plane] + arrivals.count[plane]) %
+                                            kMaxQueuedBarrierGenerations;
+                        arrivals.seqs[plane][tail] = seq;
+                        ++arrivals.count[plane];
+                        if (g_debugUbioPerf) {
+                            std::fprintf(stderr,
+                                "[DEBUG-UBIO-BARRIER] enqueue mask=0x%x plane=%d seq=%u depth=%u tick=%lu\n",
+                                mask, src, seq, arrivals.count[plane], tick);
+                        }
                         releaseBarrier(bk);
                     } else if (!fromNetwork && netPort) {
                         // A single deterministic leader aggregates arrivals.
@@ -2149,7 +2308,7 @@ main(int argc, char **argv)
             // per-node semantics.
             int faultCopies = 1;
             if (!g_faultRules.empty() && (int)coh->h.dstNode == nid) {
-                faultCopies = applyUbioFault(*coh, nid, tick);
+                faultCopies = applyUbioFault(*coh, nid, tick, fromNetwork);
                 if (faultCopies == 0) {
                     // Dropped — neither processed nor forwarded.
                     m = port->recv(tick, &st);
@@ -2239,7 +2398,7 @@ main(int argc, char **argv)
                     CoherenceMessage response;
                     bool hasResponse = false;
                     host._metaRNF.enterReentrant();
-                    bool handled = handleUbccMessage(ubcc, host, nid, *coh, response, hasResponse);
+                    bool handled = handleUbccMessage(ubcc, host, nid, sid, *coh, response, hasResponse);
                     host._metaRNF.leaveReentrant();
                     if (handled && coh->h.type == CoherenceMessageType::RecallResp) {
                         // RECALL.DONE only flips state inside the home UBCC; there is
@@ -2291,10 +2450,10 @@ main(int argc, char **argv)
                                         "[RECALL-PROXY] n%d using DsmDataStore data for PA=0x%lx\n",
                                         nid, coh->h.homeLinePa);
                                 } else {
-                                    memset(resp.b.recallResp.data, 0, 64);
-                                    std::fprintf(stderr,
-                                        "[RECALL-PROXY] n%d no DsmDataStore data for PA=0x%lx, filling zeros\n",
-                                        nid, coh->h.homeLinePa);
+                                    panic_if(true,
+                                        "gem5 exited with no authoritative recall data "
+                                        "node=%d socket=%d PA=0x%lx reqId=%lu",
+                                        nid, sid, coh->h.homeLinePa, coh->h.reqId);
                                 }
                             }
                             resp.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
@@ -2378,7 +2537,7 @@ main(int argc, char **argv)
                 // operations triggered during handleUbccMessage will defer their
                 // MetaRNF sends, avoiding reentrant sendCoh during port->recv.
                 host._metaRNF.enterReentrant();
-                bool handled = handleUbccMessage(ubcc, host, nid, *coh, response, hasResponse);
+                bool handled = handleUbccMessage(ubcc, host, nid, sid, *coh, response, hasResponse);
                 host._metaRNF.leaveReentrant();
                 if (!handled) {
                     std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
@@ -2387,8 +2546,13 @@ main(int argc, char **argv)
                 }
                 if (hasResponse) {
                     Port *out = fromNetwork ? netPort : gem5Port;
-                    sendCoh(out, tick, fromNetwork ? (uint32_t)coh->h.srcNode : (uint32_t)nid,
-                            response, fromNetwork);
+                    const uint32_t targetGid = fromNetwork
+                        ? gidOf(coh->h.srcNode, coh->h.srcSocket)
+                        : gidOf(nid, sid);
+                    panic_if(!sendCoh(out, tick, targetGid, response, fromNetwork),
+                             "response send failed type=%s reqId=%lu targetGid=%u",
+                             coherenceMsgTypeName(response.h.type),
+                             response.h.reqId, targetGid);
                 }
             }
 
@@ -2428,8 +2592,7 @@ main(int argc, char **argv)
         // been observed. Retry only those already-satisfied generations.
         std::vector<BarrierKey> readyBarriers;
         for (const auto &kv : barrierArrivals) {
-            if (kv.second.size() >= static_cast<size_t>(
-                    __builtin_popcount(kv.first.first) * g_numSockets))
+            if (barrierReady(kv.first, kv.second))
                 readyBarriers.push_back(kv.first);
         }
         for (const BarrierKey &bk : readyBarriers)
@@ -2449,6 +2612,7 @@ main(int argc, char **argv)
             // state while PDES is parked at the same timestamp.
             ubcc.wakeup();
             host.advanceH64Coverage();
+            host.advancePendingGrantReads(tick);
         } else {
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message

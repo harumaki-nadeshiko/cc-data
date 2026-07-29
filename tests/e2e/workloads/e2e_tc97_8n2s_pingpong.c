@@ -47,6 +47,7 @@ int main(int argc, char **argv)
     sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
 
     int fail = 0;
+    uint64_t t0 = read_cntvct_el0();
     for (int r = 0; r < ROUNDS; r++) {
         int writer = r % TOTAL_SEGS;  /* ring position of this round's writer */
         uint32_t new_val = 0x97000000u | ((uint32_t)r << 8);
@@ -64,6 +65,8 @@ int main(int argc, char **argv)
         }
         sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);
     }
+    emit_guest_timer(node_id, "pingpong_ownership_ring", ROUNDS,
+                     read_cntvct_el0() - t0);
 
     /* Final verification: node 0 reads the token after all rounds */
     if (node_id == 0 && socket_id == 0) {

@@ -59,6 +59,7 @@ int main(int argc, char **argv)
     int fail = 0;
     /* Step 2: node 0 socket 0 reads every sub-segment */
     if (node_id == 0 && socket_id == 0) {
+        uint64_t t0 = read_cntvct_el0();
         for (int n = 0; n < NUM_NODES; n++) {
             for (int s = 0; s < NUM_SOCKETS; s++) {
                 uint32_t expected = 0x96000000u | ((uint32_t)n << 8) | (uint32_t)s;
@@ -67,6 +68,8 @@ int main(int argc, char **argv)
                 if (got != expected) fail++;
             }
         }
+        emit_guest_timer(node_id, "cross_socket_read", TOTAL_SEGS,
+                         read_cntvct_el0() - t0);
     }
 
     sync_wait((1u << TOTAL_SEGS) - 1, NUM_SOCKETS);

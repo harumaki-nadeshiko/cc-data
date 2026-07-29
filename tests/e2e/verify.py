@@ -63,9 +63,10 @@ def main():
                         "DIRECT-FWD" in line or
                         "RESIDENT-WAITER" in line or
                         "RESIDENT-BACKSTORE-KNOWN" in line or
-                        "RESIDENT-SPILL-START" in line or
-                        "RESIDENT-SPILL-DONE" in line or
-                        "RESIDENT-FILL-ISSUED" in line or
+                         "RESIDENT-SPILL-START" in line or
+                         "RESIDENT-SPILL-DONE" in line or
+                         "UBCC-SPILL-DIRTY-PERSIST" in line or
+                         "RESIDENT-FILL-ISSUED" in line or
                         "RESIDENT-FILL-DONE" in line or
                         "RESIDENT-MISS" in line or
                         "RESIDENT-REPLAY" in line or
@@ -78,7 +79,9 @@ def main():
                         "WB-DATA-PERSIST" in line or
                         "BACKSTORE-WRITE" in line or
                         "BACKSTORE-READ" in line or
-                        "EvictReq" in line):
+                         "EvictReq" in line or
+                         "UBCC-SHARED-RELEASE" in line or
+                         "RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line):
                         raw_lines.append(line.rstrip("\n"))
 
     print(f"[verify] TC{args.tc}: aggregated {found}/{expected} simout files, "
@@ -89,12 +92,6 @@ def main():
         print(f"  {msg}", flush=True)
         print(f">>> TC{args.tc} FAILED <<<", flush=True)
         sys.exit(1)
-
-    # TC9 is an expected-fatal page-fault case validated by process exit,
-    # not by simout content (no [READ_VAL] markers).
-    if args.tc == 9:
-        print(">>> TC9 PASSED <<<", flush=True)
-        sys.exit(0)
 
     reads = parse_read_vals(raw_lines)
 

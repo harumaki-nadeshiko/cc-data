@@ -27,11 +27,14 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < HOT_LINES; i++) {
             uint32_t exp = BASE | (uint32_t)i;
             uint32_t got = dsm_load(0, (uint32_t)i * 64u);
             if ((i % 8) == 0) emit_read_val(1, 0, exp, got, got == exp);
         }
+        emit_guest_timer(1, "hot_share", HOT_LINES,
+                         read_cntvct_el0() - t0);
         emit_phase_done(1, "hot_share");
     }
     sync_wait(0b111);
@@ -45,11 +48,14 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     if (node_id == 2) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < HOT_LINES; i++) {
             uint32_t exp = BASE | (uint32_t)i;
             uint32_t got = dsm_load(0, (uint32_t)i * 64u);
             if ((i % 8) == 0) emit_read_val(2, 0, exp, got, got == exp);
         }
+        emit_guest_timer(2, "hot_reuse", HOT_LINES,
+                         read_cntvct_el0() - t0);
         emit_phase_done(2, "hot_reuse");
     }
     sync_wait(0b111);

@@ -22,8 +22,8 @@
  *   EP_TRACE_PERF_FIRST_N=<N>             (default 500)
  */
 
-#ifndef FRAMEWORK_TRACE_PERF_POLICY_HH
-#define FRAMEWORK_TRACE_PERF_POLICY_HH
+#ifndef PROTOCOL_TRACE_PERF_POLICY_HH
+#define PROTOCOL_TRACE_PERF_POLICY_HH
 
 #include <atomic>
 #include <cstdio>
@@ -205,4 +205,4 @@ private:
     mutable std::map<std::string, Counter> _components;
 };
 
-#endif // FRAMEWORK_TRACE_PERF_POLICY_HH
+#endif // PROTOCOL_TRACE_PERF_POLICY_HH

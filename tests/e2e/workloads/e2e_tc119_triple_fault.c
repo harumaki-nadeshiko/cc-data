@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 
     /* ── Phase 4: Node1 reads all three ── */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t ga = dsm_load(HOME, OFF_A);
         emit_read_val(1, HOME, V_A, ga, ga == V_A);
 
@@ -70,6 +71,8 @@ int main(int argc, char **argv)
 
         uint32_t gc = dsm_load(HOME, OFF_C);
         emit_read_val(1, HOME, V_C, gc, gc == V_C);
+        emit_guest_timer(1, "triple_fault_convergence", 3,
+                         read_cntvct_el0() - t0);
     }
     sync_wait(0b11);
 

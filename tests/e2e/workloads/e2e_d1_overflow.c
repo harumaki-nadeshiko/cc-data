@@ -25,6 +25,9 @@ int main(int argc, char **argv)
 {
     int node_id = 0;
     if (argc >= 2) node_id = parse_int(argv[1]);
+    int cpu_index = 0;
+    if (argc >= 3) cpu_index = parse_int(argv[2]);
+    if ((cpu_index % 4) != 0) { _exit_program(0); return 0; }
     emit_e2e_meta(node_id, "D1_OVERFLOW");
     int verify_ok = 1;
 
@@ -42,11 +45,14 @@ int main(int argc, char **argv)
     /* Phase 2: node0 accesses many cold lines to force capacity
      * eviction of the 25 lines, spilling them to backstore. */
     if (node_id == 0) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < 50; i++) {
             emit_before_wr(0, 0, (uint32_t)i);
             dsm_store64(0, 0x10000u + (uint32_t)i * 64u, (uint64_t)i);
             emit_after_wr(0, 0, (uint32_t)i);
         }
+        emit_guest_timer(0, "d1_flush_pressure", 50,
+                         read_cntvct_el0() - t0);
         emit_phase_done(0, "flush");
     }
     sync_wait(0b111);
@@ -55,6 +61,7 @@ int main(int argc, char **argv)
      * spilled should be restored via backstore fill. */
     if (node_id == 2) {
         int mismatch = 0;
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < 25; i++) {
             uint64_t expected = PATTERN | (uint64_t)i;
             emit_before_rd(2, 0);
@@ -65,6 +72,8 @@ int main(int argc, char **argv)
                               (uint32_t)(got & 0xFFFFFFFFu), 0);
             }
         }
+        emit_guest_timer(2, "d1_verify_readback", 25,
+                         read_cntvct_el0() - t0);
         if (mismatch == 0) {
             /* Report one successful read for the verifier */
             emit_read_val(2, 0, (uint32_t)(PATTERN & 0xFFFFFFFFu),

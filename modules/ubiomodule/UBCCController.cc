@@ -895,6 +895,19 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                 // queue on later replay.
                 restore = (!_directory.fillPending(linePa) &&
                            !_directory.wbPending(linePa));
+                DirEntry current;
+                if (restore && _directory.lookup(linePa, current) &&
+                    normalizeEpoch(pr.epoch) != current.epoch) {
+                    restore = false;
+                    stop = false;
+                    fprintf(stderr,
+                            "[RESIDENT-WAITER-WB-DROP-STALE] home=%d pa=0x%lx "
+                            "node=%d msgEpoch=%lu currentEpoch=%lu\n",
+                            _nodeId, linePa, pr.node, normalizeEpoch(pr.epoch),
+                            current.epoch);
+                    fflush(stderr);
+                    break;
+                }
             }
             stop = !ok;
             break;
@@ -909,10 +922,28 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             break;
         }
         case ResidentOpKind::Upgrade: {
+            bool notSharer = false;
+            bool deferred = false;
             bool ok = processOuterUpgradeReq(
                 linePa, pr.node, pr.epoch, pr.reqId,
-                pr.upgradeDesiredPerm, pr.upgradeCause);
+                pr.upgradeDesiredPerm, pr.upgradeCause, &notSharer, &deferred,
+                pr.socket);
             if (!ok) {
+                if (notSharer) {
+                    // The requester permanently lost sharer status. It already
+                    // received (or will receive on retry) a NotSharer response
+                    // and must fall back to ReadUnique. Never retain this stale
+                    // waiter: with no fill/WB/outstanding left it cannot become
+                    // valid again and would otherwise leak forever.
+                    restore = false;
+                    stop = false;
+                    fprintf(stderr,
+                            "[RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER] home=%d "
+                            "pa=0x%lx node=%d reqId=%lu\n",
+                            _nodeId, linePa, pr.node, pr.reqId);
+                    fflush(stderr);
+                    break;
+                }
                 // fillPending/wbPending guard: if the upgrade re-enqueued
                 // itself behind a resident fill/wb, do NOT push the stale
                 // popped copy back — the new copy (from handleResidentMiss)
@@ -936,6 +967,35 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             // On success, if an outstanding was created, stop further replay
             // (the outstanding blocks subsequent operations).
             if (ok && findOutstanding(linePa)) {
+                OutstandingRequest *upgrade = findOutstanding(linePa);
+                if (_outbound && upgrade && upgrade->reqId == pr.reqId) {
+                    CoherenceMessage response;
+                    response.h.type = CoherenceMessageType::UpgradeResp;
+                    response.h.srcNode = _nodeId;
+                    response.h.srcSocket = _socketId;
+                    response.h.dstNode = pr.node;
+                    response.h.dstSocket = pr.socket >= 0 ? pr.socket : 0;
+                    response.h.homeLinePa = linePa;
+                    response.h.epoch = pr.epoch;
+                    response.h.reqId = pr.reqId;
+                    response.h.flags = static_cast<uint32_t>(CFLAG_ACCEPTED);
+                    response.b.upgradeResp.upgradeTargetMask =
+                        upgrade->upgradeTargetMask;
+                    response.b.upgradeResp.committedEpoch =
+                        getEpochForLine(linePa);
+                    if (!_outbound->sendUpgradeResp(response)) {
+                        fatal("UBCC node_id=%d: deferred UpgradeResp send failed "
+                              "PA=0x%lx requester=%d socket=%d reqId=%lu\n",
+                              _nodeId, linePa, pr.node, response.h.dstSocket,
+                              pr.reqId);
+                    }
+                    fprintf(stderr,
+                            "[RESIDENT-REPLAY-UPGRADE-RESP] home=%d pa=0x%lx "
+                            "node=%d reqId=%lu targetMask=0x%lx\n",
+                            _nodeId, linePa, pr.node, pr.reqId,
+                            upgrade->upgradeTargetMask);
+                    fflush(stderr);
+                }
                 stop = true;
             }
             break;
@@ -967,13 +1027,22 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             // pins its resident entry forever and can make a later full set
             // unevictable.
             const bool replaySucceeded = grantCreated || residentResolved;
+            if (static_cast<int>(g) == -1 && grantCreated) {
+                // evictOneVictim can recursively replay this same queue. That
+                // nested pass owns the grant push and may drain/erase this map
+                // entry, invalidating `it` in the outer pass. Do not touch it.
+                return;
+            }
             if (static_cast<int>(g) == -1 && !replaySucceeded) {
                 // A capacity miss re-enqueues the waiter itself before it
                 // returns busy. Do not restore this popped copy, or a request
                 // that completed synchronously can remain pinned forever.
                 restore = pr.waitReason != ResidentWaitReason::Capacity &&
                     (!_directory.fillPending(linePa) && !_directory.wbPending(linePa));
-            } else if (grantCreated && _outbound) {
+            // A capacity eviction can recursively replay this waiter. If that
+            // nested pass created the grant, this outer call returns Busy but
+            // sees its outstanding request. The nested pass already pushed it.
+            } else if (grantCreated && _outbound && static_cast<int>(g) != -1) {
                 CoherenceMessage push;
                 buildGrantResponse(*ost, push);
                 _outbound->sendGrantPush(push);
@@ -2133,13 +2202,22 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     if (_outbound) {
         CoherenceMessage push;
         buildGrantResponse(*grantOst, push);
-        _outbound->sendGrantPush(push);
+        bool pushOk = _outbound->sendGrantPush(push);
         printf("[PUSH-GRANT] RECALL home=%d pa=0x%lx requester=%d sock=%d "
-               "reqId=%lu grantType=%d dataSource=%d\n",
+               "reqId=%lu grantType=%d dataSource=%d pushOk=%d\n",
                _nodeId, line_pa, grantOst->requesterNode,
                grantOst->requesterSocket, grantOst->reqId,
                static_cast<int>(grantTypeFromIntended(grantOst->intendedState)),
-               static_cast<int>(grantOst->dataSource));
+               static_cast<int>(grantOst->dataSource),
+               pushOk ? 1 : 0);
+        if (!pushOk) {
+            std::fprintf(stderr,
+                "[PUSH-GRANT-FAIL] home=%d pa=0x%lx requester=%d sock=%d "
+                "reqId=%lu\n",
+                _nodeId, line_pa, grantOst->requesterNode,
+                grantOst->requesterSocket, grantOst->reqId);
+            std::fflush(stderr);
+        }
     }
 
     _recallResponseCount++;
@@ -2584,9 +2662,44 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         return false;
     }
 
+    const bool hasData = data != nullptr;
+
+    // A clean shared release removes only the releasing sharer. A data-bearing
+    // request in G_S is a delayed dirty-owner payload that arrived after a
+    // recall converted the line to shared; persist its bytes, but still remove
+    // only that requester's shared copy. Clearing the whole mask here loses
+    // live sharers and makes their next Upgrade permanently fail.
+    if (entry.state == MESIState::G_S) {
+        const uint64_t requesterBit = requesterNode >= 0 && requesterNode < 64
+            ? (1ULL << requesterNode) : 0;
+        if (!requesterBit || !(entry.sharersMask & requesterBit) || keepAsClean) {
+            framework::LogInfo("UBCC",
+                    "UBCC node_id=%d: shared release rejected PA=0x%lx "
+                    "requesterNode=%d sharersMask=0x%lx keepAsClean=%d\n",
+                    _nodeId, line_pa, requesterNode, entry.sharersMask,
+                    keepAsClean ? 1 : 0);
+            return false;
+        }
+        entry.sharersMask &= ~requesterBit;
+        entry.state = entry.sharersMask ? MESIState::G_S : MESIState::G_I;
+        fprintf(stderr,
+                "[UBCC-SHARED-RELEASE] home=%d pa=0x%lx node=%d hasData=%d "
+                "remainingSharers=0x%lx\n",
+                _nodeId, line_pa, requesterNode, hasData ? 1 : 0,
+                entry.sharersMask);
+        fflush(stderr);
+    } else if (entry.state == MESIState::G_E) {
+        // G_E is clean: its normal release is EvictReq. Accepting WritebackReq
+        // would blur clean eviction and dirty-data persistence contracts.
+        framework::LogInfo("UBCC",
+                "UBCC node_id=%d: G_E WritebackReq rejected PA=0x%lx "
+                "requesterNode=%d hasData=%d; use EvictReq\n",
+                _nodeId, line_pa, requesterNode, hasData ? 1 : 0);
+        return false;
+    } else {
     // ---- M7: Owner match check ----
-    // Writeback must come from the current owner (or -1 if no entry).
-    // Reject if the requesting node is not the current owner.
+    // G_M writeback must come from the current owner. G_I accepts an
+    // idempotent duplicate carrying the already-issued dirty payload.
     int ownerNode = DirEntry::ownerFromSharers(entry);
     if (ownerNode >= 0 && ownerNode != requesterNode) {
         framework::LogInfo("UBCC",
@@ -2597,18 +2710,25 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         return false;
     }
 
-    // ---- M7: Process writeback ----
-    // Dirty data is written back — clear dirty flag.
-    // If keepAsClean, the owner retains exclusive clean ownership (G_E).
-    // Otherwise, the owner drops the line entirely (G_I).
-    if (keepAsClean && requesterNode >= 0) {
+    if (entry.state == MESIState::G_M && !hasData) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id=%d: G_M WritebackReq rejected PA=0x%lx "
+                "requesterNode=%d missing dirty payload\n",
+                _nodeId, line_pa, requesterNode);
+        return false;
+    }
+
+    // G_M dirty data is written back. keepAsClean downgrades the owner to G_E;
+    // otherwise it drops the line. G_I handling is an idempotent duplicate.
+    if (entry.state == MESIState::G_M && keepAsClean && requesterNode >= 0) {
         // Owner writes back but retains clean exclusive
         entry.state = MESIState::G_E;
         entry.sharersMask = (1ULL << requesterNode);
     } else {
-        // Owner drops the line completely
+        // Owner drops the line, or duplicate writeback remains invalid.
         entry.state = MESIState::G_I;
         entry.sharersMask = 0;
+    }
     }
     // Phase A4: residentDirty tracks resident-metadata dirtiness (whether
     // the directory entry needs a backstore flush), NOT home dirty-data
@@ -2847,11 +2967,13 @@ UBCCController::processOuterUpgradeReq(
     uint64_t line_pa, int requesterNode,
     uint64_t epoch, uint64_t reqId,
     int desiredPerm, UBCC_UpgradeCause cause,
-    bool* outNotSharer)
+    bool* outNotSharer, bool* outDeferred, int requesterSocket)
 {
     epoch = normalizeEpoch(epoch);
     if (outNotSharer)
         *outNotSharer = false;
+    if (outDeferred)
+        *outDeferred = false;
 
     framework::LogInfo("UBCC",
             "UBCC node_id=%d: processOuterUpgradeReq PA=0x%lx "
@@ -2862,7 +2984,7 @@ UBCCController::processOuterUpgradeReq(
     PendingRequester prCtx;
     prCtx.opKind = ResidentOpKind::Upgrade;
     prCtx.node = requesterNode;
-    prCtx.socket = -1;
+    prCtx.socket = requesterSocket;
     prCtx.reqType = UBCC_OuterReqType::GlobalReadUnique;
     prCtx.writeIntent = true;
     prCtx.epoch = epoch;
@@ -2872,6 +2994,8 @@ UBCCController::processOuterUpgradeReq(
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
+        if (outDeferred)
+            *outDeferred = true;
         return false;
     }
 
@@ -3428,6 +3552,10 @@ UBCCController::onDsmPersistComplete(uint64_t linePa)
             }
         }
     }
+    // A Clear can have queued requesters behind the recall-derived grant that
+    // initiated this DSM write. Replaying them before the write is visible
+    // would let the batch shared fast path emit a no-data HomeMemory grant.
+    replayPendingRequesters(linePa);
 }
 
 // ---- H64 async DSM persistence FAILURE ----
@@ -3634,49 +3762,36 @@ bool
 UBCCController::cleanupExpiredRecallIfNeeded(uint64_t linePa,
                                               bool replayWaiters)
 {
+    (void)replayWaiters;
     OutstandingRequest *ost = findOutstanding(linePa);
     if (!ost || !isExpiredRecall(*ost))
         return false;
 
-    // Capacity eviction cannot discard a live recall: doing so lets a later
-    // request advance the epoch and turns the owner's delayed RecallResp into
-    // stale data. Retry the exact same recall tuple instead.
-    if (ost->requesterNode < 0) {
-        constexpr uint8_t kMaxRecallRetries = 3;
-        if (ost->recallRetries >= kMaxRecallRetries) {
-            fatal("UBCC node_id=%d: capacity recall timed out after retries "
-                  "PA=0x%lx owner=%d reqId=%lu\n",
-                  _nodeId, linePa, ost->targetNode, ost->reqId);
-        }
-        DirEntry entry;
-        if (!_directory.lookup(linePa, entry)) {
-            fatal("UBCC node_id=%d: capacity recall lost directory entry "
-                  "PA=0x%lx\n", _nodeId, linePa);
-        }
-        ++ost->recallRetries;
-        ost->createTick = curTick();
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: retrying timed-out capacity recall PA=0x%lx "
-                "owner=%d reqId=%lu attempt=%u\n",
-                _nodeId, linePa, ost->targetNode, ost->reqId,
-                ost->recallRetries);
-        if (!initiateRecall(linePa, entry, *ost)) {
-            fatal("UBCC node_id=%d: capacity recall resend failed PA=0x%lx\n",
-                  _nodeId, linePa);
-        }
-        return true;
+    // Never discard a live recall. A delayed response carries authoritative
+    // owner data; deleting the outstanding lets the response become orphaned
+    // and strands the requester. Retry the exact tuple with a fixed bound.
+    constexpr uint8_t kMaxRecallRetries = 3;
+    if (ost->recallRetries >= kMaxRecallRetries) {
+        fatal("UBCC node_id=%d: recall timed out after retries "
+              "PA=0x%lx owner=%d requester=%d reqId=%lu\n",
+              _nodeId, linePa, ost->targetNode, ost->requesterNode, ost->reqId);
     }
-
+    DirEntry entry;
+    if (!_directory.lookup(linePa, entry)) {
+        fatal("UBCC node_id=%d: recall lost directory entry PA=0x%lx\n",
+              _nodeId, linePa);
+    }
+    ++ost->recallRetries;
+    ost->createTick = curTick();
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: expired RECALL cleanup PA=0x%lx stage=%d "
-            "age=%lu replayWaiters=%d\n",
-            _nodeId, linePa, static_cast<int>(ost->stage),
-            curTick() - ost->createTick, replayWaiters ? 1 : 0);
-
-    removeOutstanding(linePa);
-
-    if (replayWaiters)
-        replayPendingRequesters(linePa);
+            "UBCC node_id=%d: retrying timed-out recall PA=0x%lx owner=%d "
+            "requester=%d reqId=%lu attempt=%u\n",
+            _nodeId, linePa, ost->targetNode, ost->requesterNode, ost->reqId,
+            ost->recallRetries);
+    if (!initiateRecall(linePa, entry, *ost)) {
+        fatal("UBCC node_id=%d: recall resend failed PA=0x%lx\n",
+              _nodeId, linePa);
+    }
     return true;
 }
 
@@ -4023,6 +4138,12 @@ UBCCController::debugForceResidentEvictForTest(uint64_t linePa)
 void
 UBCCController::replayPendingRequesters(uint64_t linePa)
 {
+    // HomeMemory grants must wait until recall-derived data is authoritative.
+    // processOuterRequest applies the same gate to new requests; this replay
+    // path bypasses processOuterRequest for the batch shared fast path.
+    if (_h64BloomAllMisses && _h64DsmPending.count(linePa))
+        return;
+
     auto qit = _pendingRequesters.find(linePa);
     if (qit == _pendingRequesters.end() || qit->second.empty())
         return;
@@ -4299,6 +4420,34 @@ UBCCController::removeOutstanding(uint64_t linePa)
     _outstandingReqs.erase(linePa);
 }
 
+bool
+UBCCController::grantTupleLive(uint64_t linePa, int requesterNode,
+                               uint64_t reqId) const
+{
+    auto it = _outstandingReqs.find(linePa);
+    if (it != _outstandingReqs.end()) {
+        const OutstandingRequest &ost = it->second;
+        if (ost.opType == OpType::GRANT_HANDSHAKE &&
+            ost.stage == OpStage::WAITING_CLEAR &&
+            ost.requesterNode == requesterNode && ost.reqId == reqId) {
+            return true;
+        }
+    }
+
+    // Batch-RS grants commit immediately and retain only a tombstone while the
+    // requester may still consume the pushed response.
+    auto tombstones = _tombstones.find(linePa);
+    if (tombstones == _tombstones.end())
+        return false;
+    for (const auto &ts : tombstones->second) {
+        if (ts.opType == OpType::GRANT_HANDSHAKE && ts.reqId == reqId &&
+            curTick() < ts.expireTick) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---- Push-Grant: build a complete ReadResp from GRANT_HANDSHAKE outstanding ----
 
 void
@@ -4311,11 +4460,13 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
 
     push.h.type = CoherenceMessageType::ReadResp;
     push.h.srcNode = _nodeId;
+    push.h.srcSocket = _socketId;                // v4-dual-socket: home socket plane
     push.h.dstNode = grantOst.requesterNode;
     push.h.dstSocket = grantOst.requesterSocket >= 0
         ? static_cast<uint16_t>(grantOst.requesterSocket)
         : static_cast<uint16_t>(_socketId);  // fallback: use home socket
     push.h.homeNode = _nodeId;
+    push.h.homeSocket = _socketId;               // v4-dual-socket: home socket plane
     push.h.requesterNode = grantOst.requesterNode;
     push.h.homeLinePa = grantOst.linePa;
     push.h.epoch = grantOst.baseEpoch;
@@ -4346,6 +4497,8 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     // authoritative home data for grants that do not own a payload.
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
+    } else {
+        std::memset(push.b.readResp.grantData, 0, 64);
     }
     // ── Phase C4 trace point 6: push grant payload word ──
     {

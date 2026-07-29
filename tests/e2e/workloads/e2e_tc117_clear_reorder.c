@@ -48,6 +48,7 @@ int main(int argc, char **argv)
 
     /* Phase 3: Node1 reads both lines — must converge */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got1 = dsm_load(1, LINE1_OFF);
         int m1 = (got1 == V1);
         emit_read_val(1, 1, V1, got1, m1);
@@ -55,6 +56,8 @@ int main(int argc, char **argv)
         uint32_t got2 = dsm_load(1, LINE2_OFF);
         int m2 = (got2 == V2);
         emit_read_val(1, 1, V2, got2, m2);
+        emit_guest_timer(1, "reorder_convergence_read", 2,
+                         read_cntvct_el0() - t0);
     }
     sync_wait(0b11);
 

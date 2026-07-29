@@ -67,7 +67,10 @@ int main(int argc, char **argv)
 
     /* ── Phase 3: Node0 flushes caches → dirty target evicted → WritebackReq ── */
     if (node_id == 0) {
+        uint64_t t0 = read_cntvct_el0();
         dsm_flush(0, TARGET_OFF);
+        emit_guest_timer(0, "writeback_flush", 1,
+                         read_cntvct_el0() - t0);
         emit_phase_done(0, "flush_wb");
     }
     /* Note: Node0's eviction is local.  All nodes must wait for the

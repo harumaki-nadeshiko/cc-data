@@ -55,11 +55,14 @@ int main(int argc, char **argv)
 
     /* ── Phase 3: Node1 reads both — must converge ── */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got1 = dsm_load(HOME_NODE, LINE_OFF1);
         emit_read_val(1, HOME_NODE, V1, got1, got1 == V1);
 
         uint32_t got2 = dsm_load(HOME_NODE, LINE_OFF2);
         emit_read_val(1, HOME_NODE, V2, got2, got2 == V2);
+        emit_guest_timer(1, "mixed_fault_convergence", 2,
+                         read_cntvct_el0() - t0);
     }
     sync_wait(0b11);
 

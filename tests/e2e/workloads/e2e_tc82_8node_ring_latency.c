@@ -20,8 +20,11 @@ int main(int argc,char**argv){
     __asm__("str %w0,[%1]"::"r"(val),"r"(dsm_addr(nid,0x6200)));
     sync_wait(0xFF);
     uint32_t got;
+    uint64_t t0 = read_cntvct_el0();
     __asm__("ldr %w0,[%1]":"=r"(got):"r"(dsm_addr(dst,0x6200)));
     uint32_t exp=0x82000000u|((uint32_t)dst<<8);
+    emit_guest_timer(nid, "ring_read", 1,
+                     read_cntvct_el0() - t0);
     emit_read_val(nid,dst,exp,got,got==exp);
     sync_wait(0xFF);_exit_program(0);return 0;
 }

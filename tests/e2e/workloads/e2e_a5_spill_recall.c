@@ -72,7 +72,10 @@ int main(int argc, char **argv)
         /* Now capacity=8 full (7 fillers + 1 target).
          * TRIGGER in set 4 forces spill-eviction of TARGET. */
         emit_before_wr(0, 0, 0xBBBBu);
+        uint64_t t0 = read_cntvct_el0();
         dsm_store64(0, TRIGGER_OFF, 0xBBBBBBBBBBBBBBBBULL);
+        emit_guest_timer(0, "spill_evict_sync", 1,
+                         read_cntvct_el0() - t0);
         emit_after_wr(0, 0, 0xBBBBu);
         emit_phase_done(0, "spill_evict");
     }
@@ -81,7 +84,10 @@ int main(int argc, char **argv)
     /* Phase 3: node2 reads target -> backstore fill -> Recall -> data */
     if (node_id == 2) {
         emit_before_rd(2, 0);
+        uint64_t t0 = read_cntvct_el0();
         uint64_t got = dsm_load64(0, TARGET_OFF);
+        emit_guest_timer(2, "spill_recall_verify", 1,
+                         read_cntvct_el0() - t0);
         int match = (got == PATTERN);
         verify_ok = match;
         emit_read_val(2, 0, (uint32_t)(PATTERN & 0xFFFFFFFFu),

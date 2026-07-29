@@ -1,6 +1,6 @@
 #include "framework/Port.hh"
 #include "framework/MemMessage.hh"
-#include "framework/TracePerfPolicy.hh"
+#include "protocol/TracePerfPolicy.hh"
 
 #include <cstdio>
 #include <signal.h>

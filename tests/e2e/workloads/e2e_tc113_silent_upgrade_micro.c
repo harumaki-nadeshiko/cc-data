@@ -45,6 +45,7 @@ int main(int argc, char **argv)
      * Under EP_SILENT_UPGRADE=0: each iteration sends OuterUpgradeReq.
      * Under EP_SILENT_UPGRADE=1: silent, no cross-node messages. */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < ITERS; i++) {
             uint32_t val = 0x11300000u | ((uint32_t)i & 0xFFF);
             dsm_store(1, 0, val);
@@ -57,6 +58,8 @@ int main(int argc, char **argv)
                 _raw_write(buf, p);
             }
         }
+        emit_guest_timer(1, "silent_upgrade_micro", ITERS,
+                         read_cntvct_el0() - t0);
     }
     sync_wait(0b111);
 

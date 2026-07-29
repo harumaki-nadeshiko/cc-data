@@ -103,7 +103,10 @@ int main(int argc, char **argv)
 
     /* ── Phase 4: Node1 local upgrade — must hit resident miss, wait, replay ── */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         dsm_store(0, TARGET_OFF, TC126_V1);
+        emit_guest_timer(1, "resident_upgrade_store", 1,
+                         read_cntvct_el0() - t0);
         emit_phase_done(1, "upgrade_store");
     }
     sync_wait(0b111);

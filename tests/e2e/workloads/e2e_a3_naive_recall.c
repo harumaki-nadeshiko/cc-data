@@ -59,7 +59,10 @@ int main(int argc, char **argv)
      */
     if (node_id == 0) {
         emit_before_wr(0, 0, 0xBBBBu);
+        uint64_t t0 = read_cntvct_el0();
         dsm_store64(0, TRIGGER_OFF, 0xBBBBBBBBBBBBBBBBULL);
+        emit_guest_timer(0, "naive_evict_recall", 1,
+                         read_cntvct_el0() - t0);
         emit_after_wr(0, 0, 0xBBBBu);
         emit_phase_done(0, "evict_recall");
     }
@@ -70,7 +73,10 @@ int main(int argc, char **argv)
     /* ── Phase 3: node2 verifies the original pattern survived ────── */
     if (node_id == 2) {
         emit_before_rd(2, 0);
+        uint64_t t0 = read_cntvct_el0();
         uint64_t got = dsm_load64(0, TARGET_OFF);
+        emit_guest_timer(2, "naive_recall_verify", 1,
+                         read_cntvct_el0() - t0);
         int match = (got == PATTERN);
         verify_ok = match;
         emit_read_val(2, 0, (uint32_t)(PATTERN & 0xFFFFFFFFu),

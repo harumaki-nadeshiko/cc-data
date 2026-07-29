@@ -305,28 +305,25 @@ Only the rebuilding slice loses the negative shortcut.
 - A spilled PA is never treated as authoritative negative.
 - Existing TC200-TC203 and TC131-TC134 correctness regressions pass.
 
-## 5. Track C: Portable 2N1S HA Comparison Suite
+## 5. Track C：可移植 2N1S HA 对比套件
 
-### 5.1 Comparison Matrix
+### 5.1 对比矩阵
 
-Every scenario is run in three modes:
+每个场景均在以下三种模式中执行：
 
-| Mode | Description |
+| 模式 | 说明 |
 |---|---|
-| `ha-native` | Customer two-node, one-socket HA machine. |
-| `cc-naive` | CC-EP 2N1S with naive overflow and latency optimizations disabled. |
-| `cc-opt` | CC-EP 2N1S with spill, valid Bloom shortcut, and declared latency optimizations enabled. |
+| `ha-native` | 客户的双节点、每节点单 socket HA 机器。 |
+| `cc-naive` | 使用 naive overflow、关闭延迟优化的 CC-EP 2N1S。 |
+| `cc-opt` | 使用 spill、有效 Bloom shortcut 及已声明延迟优化的 CC-EP 2N1S。 |
 
-An optional fourth mode, `cc-spill-no-opt`, separates spill architecture cost
-from protocol optimization benefit. It is recommended for internal diagnosis
-but is not required in the customer-facing three-column summary.
+可选的第四种模式 `cc-spill-no-opt` 用于区分 spill 架构成本和协议优化收益。
+它建议用于内部诊断，但客户可见的三列表汇总不强制要求。
 
-### 5.2 Portable Workload Structure
+### 5.2 可移植 workload 结构
 
-The deliverable is a platform-independent workload source plus a documented
-target-side shim boundary. The project supplies a CC reference shim; customers
-replace only the architecture-specific access and synchronization primitives
-when building for an FPGA target:
+交付物由平台无关的 workload 源码和已文档化的目标端 shim 边界组成。本项目
+提供 CC 参考 shim；构建 FPGA 目标时，客户只需替换与架构相关的访问和同步原语：
 
 ```text
 tests/e2e/workloads/e2e_ha_2n1s_core.c
@@ -334,8 +331,7 @@ tests/e2e/workloads/dsm_access.h          # CC reference access shim
 tests/ha_2n1s/README.md                   # target replacement contract
 ```
 
-The target-side replacements are intentionally behavioral rather than an API
-contract. The customer need not disclose proprietary SDK details:
+目标端替换刻意采用行为契约，而不是 API 契约。客户无需披露专有 SDK 细节：
 
 ```c
 shared_range_load/store(home_node, offset)
@@ -344,41 +340,37 @@ node/thread identity
 JSONL result emission
 ```
 
-The core algorithm, operation order, random seed, data size, validation,
-warmup, and sample emission are identical. The customer may use any supported
-allocation, placement, affinity, timer, and cache-control mechanism internally;
-those platform details are neither required nor requested by this project.
+核心算法、操作顺序、随机种子、数据规模、验证、预热与样本输出必须完全一致。
+客户可在内部使用任意受支持的分配、放置、亲和性、计时器和 cache-control 机制；
+本项目既不要求也不请求这些平台细节。
 
-The CC adapter uses the 2N1S DSM mapping but must not expose gem5-only behavior
-to the workload core. Gem5 protocol markers are supplemental diagnostics, not
-the primary cross-platform latency source.
+CC adapter 使用 2N1S DSM 映射，但不得向 workload core 暴露 gem5 专有行为。
+gem5 协议 marker 仅是补充诊断信息，不是跨平台延迟的主要来源。
 
-### 5.3 Timing Boundary
+### 5.3 计时边界
 
-The cross-platform primary metric is demand-visible elapsed time:
+跨平台主指标是需求可见的耗时：
 
 ```text
-immediately before the measured load/store/atomic or operation batch
-to
-immediately after architectural completion
+在被测 load/store/atomic 或操作批次之前立即开始
+至
+架构完成之后立即结束
 ```
 
-Rules:
+规则：
 
-- Measure timer-call overhead separately and report it.
-- For operations near timer resolution, time a fixed batch and divide by the
-  number of operations.
-- Use at least 1,000 measured samples after warmup for microbenchmarks when
-  runtime permits.
-- Report p50, p95, p99, mean, minimum, maximum, sample count, and throughput.
-- CC-only Outer/Recall/MetaRNF traces are used for attribution, never as the
-  sole HA comparison boundary.
+- 单独测量并报告 timer-call overhead。
+- 对接近计时器分辨率的操作，测量固定批次后除以操作数量。
+- 微基准在运行时间允许时，应在预热后至少采集 1,000 个测量样本。
+- 报告 p50、p95、p99、均值、最小值、最大值、样本数和吞吐量。
+- 仅 CC 可见的 Outer/Recall/MetaRNF trace 用于路径归因，绝不能作为唯一的
+  HA 对比计时边界。
 
-### 5.4 Required 2N1S Scenarios
+### 5.4 必需的 2N1S 场景
 
 #### HA01: Local Reuse Baseline
 
-Purpose: establish timer overhead and local cache/memory baseline.
+目的：建立 timer overhead 以及本地 cache/memory 基线。
 
 ```text
 node0 allocates local hot set
@@ -386,18 +378,18 @@ warmup repeated reads/writes
 measure repeated local reuse
 ```
 
-Metrics:
+指标：
 
-- local read/write p50/p99;
-- bandwidth;
-- timer overhead;
-- validation checksum.
+- 本地读/写 p50/p99；
+- 带宽；
+- timer overhead；
+- 验证 checksum。
 
-This is a normalization baseline, not an optimized-vs-naive claim.
+这是归一化基线，不用于声称 optimized 相比 naive 的优势。
 
 #### HA02: Remote Cold and Remote Hot Read
 
-Purpose: compare basic two-node remote access without capacity eviction.
+目的：在无容量驱逐的条件下对比基础双节点远程访问。
 
 ```text
 node0 owns data
@@ -405,7 +397,7 @@ node1 reads a cold pass
 node1 repeats a hot pass fitting in the selected cache working set
 ```
 
-Metrics:
+指标：
 
 - remote cold latency/bandwidth;
 - remote hot latency/bandwidth;
@@ -414,20 +406,20 @@ Metrics:
 
 #### HA03: Ownership Ping-Pong
 
-Purpose: measure dirty ownership transfer and recall behavior.
+目的：测量脏所有权转移和 recall 行为。
 
 ```text
 one cache line or a small line set alternates writers between node0 and node1
 each handoff validates sequence and value
 ```
 
-Variants:
+变体：
 
 - one line, serialized latency;
 - 64 or 256 lines, pipelined throughput;
 - read-mostly followed by writer takeover.
 
-Metrics:
+指标：
 
 - handoff p50/p99;
 - transfers/second;
@@ -436,7 +428,7 @@ Metrics:
 
 #### HA04: Shared-Read Then Writer Invalidation
 
-Purpose: expose invalidation cost in the two-node topology.
+目的：暴露双节点拓扑中的 invalidation 成本。
 
 ```text
 node0 initializes a line set
@@ -444,22 +436,20 @@ node1 reads and retains shared copies
 node0 writes the same set
 ```
 
-Metrics:
+指标：
 
 - first writer-after-share latency;
 - steady writer latency;
 - invalidations per operation;
 - CC invalidate request/ack latency and retry count.
 
-With two nodes the fanout width is one, so this workload measures invalidation
-latency rather than multi-node fanout scaling. This is a mandatory coherence
-transition in every mode; it establishes the unavoidable invalidation floor and
-must not be presented as a spill-specific optimization.
+在双节点中 fanout 宽度为一，因此该 workload 测量的是 invalidation 延迟，
+而非多节点 fanout 扩展性。这是每种模式必须经历的一致性状态转换，确定不可避免的
+invalidation 下限；不得将其表述为 spill 专属优化。
 
 #### HA05: Capacity Shared-Victim Revisit
 
-Purpose: compare local reuse preserved by spill with revisit after naive
-invalidation.
+目的：对比 spill 保留的本地复用与 naive invalidation 后的再次访问。
 
 ```text
 node1 caches a hot set owned by node0
@@ -467,11 +457,10 @@ node0 creates conflicting capacity pressure
 node1 revisits the hot set
 ```
 
-The same pressure addresses and resident-capacity ratio are used for
-`cc-naive` and `cc-opt`. On HA, the data footprint is scaled to the published
-HA directory/cache capacity target or run as a working-set sweep.
+`cc-naive` 和 `cc-opt` 使用相同的压力地址和 resident-capacity 比例。在 HA 上，
+数据 footprint 应按已发布的 HA directory/cache 容量目标缩放，或作为工作集扫描运行。
 
-Metrics:
+指标：
 
 - pre-pressure local reuse latency;
 - first post-pressure revisit latency;
@@ -489,7 +478,7 @@ preservation_gain = naive_first_revisit - opt_first_revisit
 
 #### HA06: Dirty-Owner Capacity Lifecycle
 
-Purpose: compare when dirty-owner cost is paid.
+目的：对比 dirty-owner 成本的支付时机。
 
 ```text
 node1 creates dirty remote-owned lines
@@ -497,28 +486,28 @@ node0 creates capacity pressure
 node0 or node1 revisits the evicted hot lines
 ```
 
-Report both stages:
+报告以下两个阶段：
 
 ```text
 eviction/admission latency
 first revisit latency
 ```
 
-This prevents spill from appearing artificially fast by deferring recall and
-prevents naive from appearing artificially fast by charging only revisit.
+这可防止 spill 因延后 recall 而显得虚假地快，也可防止 naive 因只计入 revisit
+而显得虚假地快。
 
 #### HA07: Producer-Consumer Stream
 
-Purpose: represent an application-style communication pattern.
+目的：代表应用程序风格的通信模式。
 
 ```text
 node0 produces fixed-size records into a home-placed ring
 node1 consumes and validates sequence/checksum
 ```
 
-Variants: 64 B, 256 B, 4 KiB records; single outstanding and windowed.
+变体：64 B、256 B、4 KiB record；单 outstanding 和窗口化模式。
 
-Metrics:
+指标：
 
 - one-way item latency;
 - sustained throughput;
@@ -527,7 +516,7 @@ Metrics:
 
 #### HA08: Lock and Barrier Contention
 
-Purpose: compare synchronization rather than bulk memory traffic.
+目的：对比同步，而非大块内存流量。
 
 ```text
 two-node ticket lock or sequence lock
@@ -535,7 +524,7 @@ two-party barrier
 configurable local work between synchronization points
 ```
 
-Metrics:
+指标：
 
 - lock handoff latency;
 - barrier latency;
@@ -544,28 +533,27 @@ Metrics:
 
 #### HA09: Mixed Local Compute and Remote Directory Pressure
 
-Purpose: evaluate the claimed separation between UBCC and an HA directory that
-shares HN-F resources.
+目的：评估 UBCC 与共享 HN-F 资源的 HA directory 之间所声称的隔离性。
 
 ```text
 one thread performs latency-sensitive local memory accesses
 another thread or phase creates remote ownership/directory traffic
 ```
 
-Metrics:
+指标：
 
 - local-access p50/p99 with no pressure;
 - local-access p50/p99 under remote pressure;
 - degradation ratio;
 - remote throughput.
 
-This scenario is important for the structural HA comparison, but the result is
-reported as observed behavior, not assumed to favor CC-EP.
+该场景对结构性 HA 对比十分重要，但结果应作为观察到的行为报告，而不能预设
+其有利于 CC-EP。
 
 #### CC-Only Diagnostic: Metadata L3 Locality
 
-This is not run on HA because HA does not expose CC-EP's H64 metadata format.
-It diagnoses the implementation used in the comparison:
+此诊断不在 HA 上运行，因为 HA 不暴露 CC-EP 的 H64 metadata 格式。它用于诊断
+对比中所使用的实现：
 
 ```text
 repeat one bucket
@@ -573,25 +561,25 @@ scan a metadata working set below 256 KiB
 scan a metadata working set above 256 KiB
 ```
 
-Metrics: MetaRNF/HN-F hits, misses, ReadOnce latency, WriteUnique latency, and
-working-set-size curves.
+指标：MetaRNF/HN-F hit、miss、ReadOnce latency、WriteUnique latency 以及
+working-set-size 曲线。
 
-### 5.5 Dataset Sizes
+### 5.5 数据集规模
 
-Each workload supports at least three working-set classes:
+每个 workload 至少支持三类工作集：
 
-| Class | Definition |
+| 类别 | 定义 |
 |---|---|
-| `cache-resident` | Fits in the relevant private or HN-F cache. |
-| `directory-pressure` | Exceeds CC ResidentDir capacity by 25-75%. |
-| `memory-streaming` | Exceeds local caches and has low temporal locality. |
+| `cache-resident` | 可容纳在相关私有 cache 或 HN-F cache 中。 |
+| `directory-pressure` | 超过 CC ResidentDir 容量 25-75%。 |
+| `memory-streaming` | 超过本地 cache，且时间局部性低。 |
 
-Absolute sizes are emitted in the result manifest. HA capacity differences are
-handled by a working-set sweep, not by silently changing only the HA workload.
+绝对规模写入结果 manifest。HA 容量差异应通过工作集扫描处理，不能只悄然变更
+HA workload。
 
-### 5.6 Result Format
+### 5.6 结果格式
 
-Every process emits machine-readable JSON Lines. Required records:
+每个进程输出机器可读的 JSON Lines。必需记录如下：
 
 ```json
 {"kind":"manifest","scenario":"HA05","mode":"cc-opt","nodes":2,"sockets_per_node":1,"threads_per_node":1,"working_set_bytes":4194304,"iterations":1000,"seed":131}
@@ -600,7 +588,7 @@ Every process emits machine-readable JSON Lines. Required records:
 {"kind":"validation","scenario":"HA05","errors":0,"checksum":"0x..."}
 ```
 
-CC runs additionally emit a sidecar protocol summary:
+CC 运行还额外输出 sidecar 协议摘要：
 
 ```text
 Outer requests
@@ -612,9 +600,9 @@ dirty recalls
 retry/busy counts
 ```
 
-### 5.7 Fairness Controls
+### 5.7 公平性控制
 
-The following must be recorded and held constant or explicitly normalized:
+以下项目必须记录，并保持不变或显式归一化：
 
 - two nodes, one socket per node;
 - CPU/thread affinity;
@@ -632,18 +620,16 @@ The following must be recorded and held constant or explicitly normalized:
 - no HA-only sleep or polling delay;
 - no timeout result counted as a sample.
 
-Clock frequencies, memory technology, interconnect speed, and cache sizes are
-reported rather than assumed equal. Results include both raw latency and
-normalized ratios to each platform's local baseline where appropriate.
+应报告 clock frequency、memory technology、interconnect speed 与 cache size，
+而不是假设它们相同。结果应包括原始延迟，以及在适用时相对各平台本地基线的归一化比值。
 
-### 5.8 Next-Day Minimum Deliverable
+### 5.8 次日最小交付物
 
-The customer-facing package required before the full protocol rework is split
-into an immediately portable subset and a provisional capacity subset.
+完整协议重构完成前要求的客户可见包分为可立即移植子集和临时容量子集。
 
-#### Immediately Portable and Reportable
+#### 可立即移植并报告
 
-These scenarios do not depend on H64 Bloom rebuild correctness:
+这些场景不依赖 H64 Bloom rebuild 的正确性：
 
 | Priority | Scenario | Customer-facing purpose |
 |---|---|---|
@@ -653,7 +639,17 @@ These scenarios do not depend on H64 Bloom rebuild correctness:
 | P0 | HA04 shared-read then writer | Compare the mandatory one-peer invalidation floor. |
 | P1 | HA07 producer-consumer, 64 B and 4 KiB | Provide an application-style latency/throughput result. |
 
-HA03 includes two separately reported variants:
+当前 CC E2E 映射为：HA01/02/03/04/07 对应 TC210/211/212/213/214；HA05/06/08/09
+对应 TC215/216/218/219。所有这些场景使用同一 portable core，并以 guest `CNTVCT`
+JSONL sample 标注计时来源；CC protocol trace 仍仅用于路径归因。
+
+截至 2026-07-27，TC210-216、TC218、TC219 均已在相同 2N1S topology 与 workload
+core 下完成一次 CC naive 和一次 CC optimized 的 strict functional run。该证据只证明
+功能正确性和 profile 可执行性：当前 gem5 配置对短 guest `CNTVCT` batch 返回零增量时，
+guest summary 必须输出 `timer_resolution_limited=true`，不得将该零值作为性能结果发布。
+HA native 的五次重复、可用的 target-side timer 校准和最终跨平台对比表仍是外部交付项。
+
+HA03 包含两个需独立报告的变体：
 
 ```text
 HA03A: alternating writer ownership between nodes
@@ -661,26 +657,23 @@ HA03B: acquire remote exclusive permission once, then measure repeated local
        writes, exposing whether an avoidable outer upgrade remains
 ```
 
-HA03B is the initial naive-versus-optimized differentiator. The HA result is
-reported as the native machine's behavior; CC naive disables silent upgrade,
-while CC optimized enables the declared local upgrade optimization.
+HA03B 是初始的 naive 与 optimized 区分项。HA 结果报告为 native machine 的行为；
+CC naive 关闭 silent upgrade，CC optimized 则启用已声明的本地 upgrade 优化。
 
-#### Provisional Diagnostic Only
+#### 仅限临时诊断
 
-HA05 capacity shared-victim revisit may be implemented and run immediately,
-but until joint ResidentDir/H64 Bloom rebuild is complete, the current CC
-optimized result includes the known all-H64-miss degradation. It must be
-labelled:
+HA05 capacity shared-victim revisit 可以立即实现和运行；但在联合 ResidentDir/H64
+Bloom rebuild 完成前，当前 CC optimized 结果含有已知的 all-H64-miss 性能退化，
+必须标记为：
 
 ```text
 PROVISIONAL: pre-Bloom-rebuild diagnostic, not final acceptance data
 ```
 
-HA06 dirty-owner capacity lifecycle is scheduled after `_lineDataCache` removal
-because the current naive path still uses that compatibility cache. Publishing
-it earlier would compare two different data-authority models.
+HA06 dirty-owner capacity lifecycle 安排在移除 `_lineDataCache` 后，因为当前
+naive path 仍使用该兼容 cache。更早发布会比较两个不同的数据权威模型。
 
-#### Required Package Contents
+#### 必需包内容
 
 ```text
 source/
@@ -697,7 +690,7 @@ README.md
   build, placement, affinity, execution, and interpretation instructions
 ```
 
-For every immediately reportable scenario, run:
+每个可立即报告的场景应执行：
 
 ```text
 HA native: at least 5 process repetitions
@@ -705,9 +698,25 @@ CC naive: at least 5 simulation repetitions when runtime permits
 CC optimized: at least 5 simulation repetitions when runtime permits
 ```
 
-If simulation cost prevents five completed runs before delivery, publish the
-completed run count and confidence limitation rather than mixing partial or
-timed-out runs into the sample set.
+若 simulation cost 导致交付前无法完成五次运行，应发布已完成的运行次数和置信度限制，
+而不是将部分完成或超时的运行混入样本集。
+
+当前限制：CC naive/optimized 的单次 strict functional matrix 已完成，但尚未完成每模式
+五次 simulation repetition；HA native 运行需要客户目标机、target shim 和校准后的
+guest-visible timer，不能由 gem5 protocol trace 替代。
+
+split SE 当前没有实例化 Arm `SystemCounter` / `GenericTimer`，因此 `CNTVCT` sample
+仅作为 guest timer health probe 保留；当 batch sample 为零时，summary 标记
+`timer_resolution_limited=true`，不得用于 latency 或 throughput 比较。对于 CC 内部
+路径分析，可使用 `scripts/analyze_2n1s_cc.py` 汇总 `EP-PERF kind=outer` 的
+protocol latency 和 simulated-time throughput；该结果必须保持
+`guest_visible=false` 与 `cross_platform_comparable=false`。
+
+2026-07-27 的 CC protocol 诊断结果记录于
+`docs/measure/ha_2n1s_cc_protocol_analysis_20260727.md`。在 125% ResidentDir
+pressure 下，optimized 已证明走 spill 而 naive 走 destructive eviction；其 protocol
+throughput 更高，但 `EP-PERF outer` 的单请求 mean/p95 更高。因此不得将该结果概括为
+“optimized 普遍更快”，且仍不能替代 demand-visible latency 的正式验收。
 
 ## 6. Track D: Acceptance and Reporting
 

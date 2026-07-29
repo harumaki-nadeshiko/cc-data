@@ -44,7 +44,10 @@ int main(int argc, char **argv)
 
     /* ── All nodes read the value ── */
     if (primary) emit_before_rd(node_id, 1);
+    uint64_t t0 = read_cntvct_el0();
     uint32_t got = dsm_load(1, 0);
+    emit_guest_timer(node_id, "concurrent_write_read", 1,
+                     read_cntvct_el0() - t0);
 
     int match = (got == 0x11000001 || got == 0x11000002 || got == 0x11000003);
     if (primary) emit_read_val(node_id, 1, my_val, got, match);

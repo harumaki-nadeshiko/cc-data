@@ -49,6 +49,7 @@ int main(int argc, char **argv)
     sync_wait(0xFF);  /* all 8 nodes must finish writing */
 
     int fail = 0;
+    uint64_t t0 = read_cntvct_el0();
     /* Each node reads every other node's DSM segment */
     for (int home = 0; home < NUM_NODES; home++) {
         uint32_t got = dsm_load(home, off);
@@ -56,6 +57,8 @@ int main(int argc, char **argv)
         emit_read_val(node_id, home, expected, got, got == expected);
         if (got != expected) fail++;
     }
+    emit_guest_timer(node_id, "all_to_all_read", NUM_NODES,
+                     read_cntvct_el0() - t0);
 
     sync_wait(0xFF);
     _exit_program(fail ? 1 : 0);

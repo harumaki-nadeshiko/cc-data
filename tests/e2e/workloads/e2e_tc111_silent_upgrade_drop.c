@@ -56,8 +56,11 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     /* Phase 4: All nodes read, must converge to 0x1110BBB2u */
+    uint64_t t0 = read_cntvct_el0();
     uint32_t got = dsm_load(1, 0);
     int match = (got == 0x1110BBB2u);
+    emit_guest_timer(node_id, "convergence_read", 1,
+                     read_cntvct_el0() - t0);
     if (primary) emit_read_val(node_id, 1, 0x1110BBB2u, got, match);
 
     sync_wait(0b111);

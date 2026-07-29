@@ -71,7 +71,10 @@ int main(int argc, char **argv)
 
     /* ── Phase 3: Node1 shared-read → fill #1, must see V0 ── */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got = dsm_load(0, TARGET_OFF);
+        emit_guest_timer(1, "read_v0_onload", 1,
+                         read_cntvct_el0() - t0);
         emit_read_val(1, 0, TC129_V0, got, got == TC129_V0);
         emit_phase_done(1, "read_v0_onload");
     }
@@ -97,7 +100,10 @@ int main(int argc, char **argv)
 
     /* ── Phase 6: Node2 reads target → fill #2, must see V1 ── */
     if (node_id == 2) {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got = dsm_load(0, TARGET_OFF);
+        emit_guest_timer(2, "read_v1_onload", 1,
+                         read_cntvct_el0() - t0);
         emit_read_val(2, 0, TC129_V1, got, got == TC129_V1);
         emit_phase_done(2, "read_v1_onload");
     }

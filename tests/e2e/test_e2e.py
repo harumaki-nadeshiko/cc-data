@@ -118,6 +118,16 @@ TESTCASES = {
     132: "e2e_tc132_dirty_checkpoint_stream",
     133: "e2e_tc133_8n1s_shared_frontier",
     134: "e2e_tc134_8n2s_sliding_window",
+    135: "e2e_tc135_preserved_sharer_revisit",
+    136: "e2e_tc136_preserved_owner_store",
+    137: "e2e_tc137_new_requester_load",
+    138: "e2e_tc138_dirty_handoff_store",
+    139: "e2e_tc139_mixed_batch_throughput",
+    140: "e2e_tc140_cross_l2_owner_store",
+    141: "e2e_tc141_spill_shared_writer_recovery",
+    142: "e2e_tc142_db_oltp_buffer_pool",
+    143: "e2e_tc143_db_btree_traversal",
+    144: "e2e_tc144_db_wal_checkpoint",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
     202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
@@ -127,6 +137,11 @@ TESTCASES = {
     212: "e2e_ha_2n1s_core",         # HA03 ownership portable core
     213: "e2e_ha_2n1s_core",         # HA04 shared-to-writer portable core
     214: "e2e_ha_2n1s_core",         # HA07 producer-consumer portable core
+    215: "e2e_ha_2n1s_core",         # HA05 capacity shared-victim revisit
+    216: "e2e_ha_2n1s_core",         # HA06 dirty-owner capacity lifecycle
+    217: "e2e_ha_2n1s_core",         # HA10 read-mostly skewed catalog performance
+    218: "e2e_ha_2n1s_core",         # HA08 lock/barrier contention
+    219: "e2e_ha_2n1s_core",         # HA09 mixed local/remote pressure
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -135,6 +150,15 @@ _RE_READ_VAL = re.compile(
     r"expected=(\w+)\s+actual=(\w+)\s+(MATCH|MISMATCH)"
 )
 _RE_E2E_META = re.compile(r"\[E2E_META\]\s+node=(\d+)\s+test=(\S+)")
+_RE_GUEST_TIMER = re.compile(
+    r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+"
+    r"counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+"
+    r"source=arm_cntvct_el0\s+unit=counter_ticks")
+_RE_PERF_LATENCY = re.compile(
+    r"\[PERF-LATENCY\]\s+node=(\d+)\s+phase=(\S+)\s+samples=(\d+)\s+"
+    r"min=(\d+)\s+p50=(\d+)\s+p95=(\d+)\s+p99=(\d+)\s+max=(\d+)\s+"
+    r"mean=(\d+)\s+counter_frequency_hz=(\d+)\s+"
+    r"source=arm_cntvct_el0\s+unit=counter_ticks")
 # Q2: Interleaved-output fallback — when concurrent writes from
 # multiple CPUs corrupt the READ_VAL line, the tail often survives
 # as "1223344 MATCH".  We extract the actual value prefix and verdict.
@@ -288,14 +312,10 @@ def verify_tc9(reads, lines):
     """TC9: Negative test — must reject non-DSM access.
     Success means: [FATAL] marker emitted AND no READ_VAL produced,
     OR simulation aborted with page-fault panic."""
+    expected_fault = "Page table fault when accessing virtual address 0xfffff8000000"
     for line in lines:
-        if "[FATAL]" in line:
-            if len(reads) == 0:
-                return True, "TC9 PASSED: [FATAL] detected, no READ_VAL", []
-    # Also accept gem5 panic as success signal
-    for line in lines:
-        if "Page table fault" in line or "panic:" in line:
-            return True, "TC9 PASSED: page-fault detected (expected)", []
+        if expected_fault in line and len(reads) == 0:
+            return True, "TC9 PASSED: expected non-DSM page fault detected", []
     if len(reads) > 0:
         return False, "TC9 FAILED: unexpected [READ_VAL] in negative test", reads
     return False, "TC9 FAILED: no [FATAL] or rejection signal detected", []
@@ -1210,7 +1230,7 @@ def verify_tc94(reads, lines):
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC94 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
-    return True, "TC94 PASSED: 8-round barrier stress", []
+    return True, "TC94 PASSED: single-round 8-node barrier", []
 
 def verify_tc95(reads, lines):
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
@@ -1506,7 +1526,22 @@ def verify_tc130(reads, lines):
                if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
     if missing:
         return False, f"TC130 FAILED: missing phases {missing}", []
-    return True, f"TC130 PASSED: hot checks={len(reads)}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC130 FAILED: {timer_error}", []
+    return True, f"TC130 PASSED: hot checks={len(reads)}, guest timer healthy", []
+
+
+def verify_guest_timer(lines):
+    samples = [_RE_GUEST_TIMER.search(line) for line in lines]
+    samples = [sample for sample in samples if sample]
+    selftests = [sample for sample in samples if sample.group(2) == "timer_selftest"]
+    if not selftests:
+        return "missing arm_cntvct_el0 timer_selftest"
+    if any(int(sample.group(4)) == 0 or int(sample.group(5)) == 0
+           for sample in selftests):
+        return "zero timer_selftest counter_ticks or counter_frequency_hz"
+    return None
 
 
 def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
@@ -1519,6 +1554,9 @@ def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
                if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
     if missing:
         return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
     return True, f"TC{tc_id} PASSED: reads={len(reads)}, real-capacity pressure completed", []
 
 
@@ -1541,6 +1579,243 @@ def verify_tc133(reads, lines):
 def verify_tc134(reads, lines):
     return verify_real_capacity_workload(134, reads, lines,
                                          ("window_seed", "window_share", "window_pressure", "window_reuse"), 7)
+
+
+def verify_latency_distribution_workload(tc_id, reads, lines, phases,
+                                         latency_phase, sample_count,
+                                         expected_reads_by_node,
+                                         required_timer_phase=None):
+    expected_reads = sum(expected_reads_by_node.values())
+    if len(reads) != expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    missing = [phase for phase in phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line
+                          for line in lines)]
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
+    for node, count in expected_reads_by_node.items():
+        actual = sum(1 for read in reads if read["node"] == node)
+        if actual != count:
+            return False, (f"TC{tc_id} FAILED: node{node} READ_VAL count="
+                           f"{actual}, expected {count}"), reads
+    unexpected_nodes = sorted({read["node"] for read in reads} -
+                              set(expected_reads_by_node))
+    if unexpected_nodes:
+        return False, (f"TC{tc_id} FAILED: unexpected READ_VAL nodes "
+                       f"{unexpected_nodes}"), reads
+    if required_timer_phase and not any(
+            sample and sample.group(2) == required_timer_phase
+            for sample in (_RE_GUEST_TIMER.search(line) for line in lines)):
+        return False, (f"TC{tc_id} FAILED: missing GUEST-TIMER phase "
+                       f"{required_timer_phase}"), []
+
+    samples = [_RE_PERF_LATENCY.search(line) for line in lines]
+    samples = [sample for sample in samples
+               if sample and sample.group(2) == latency_phase]
+    if len(samples) != 1:
+        return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
+                       f"PERF-LATENCY marker, got {len(samples)}"), []
+    sample = samples[0]
+    latency_node = {
+        135: 1, 136: 1, 137: 2, 138: 2, 139: 1, 140: 0,
+    }[tc_id]
+    if int(sample.group(1)) != latency_node:
+        return False, (f"TC{tc_id} FAILED: latency marker node="
+                       f"{sample.group(1)}, expected {latency_node}"), []
+    if int(sample.group(3)) != sample_count:
+        return False, (f"TC{tc_id} FAILED: {latency_phase} samples="
+                       f"{sample.group(3)}, expected {sample_count}"), []
+    values = [int(sample.group(i)) for i in range(4, 10)]
+    minimum, p50, p95, p99, maximum, mean = values
+    frequency = int(sample.group(10))
+    if minimum == 0 or frequency == 0:
+        return False, f"TC{tc_id} FAILED: zero latency or counter frequency", []
+    if not minimum <= p50 <= p95 <= p99 <= maximum:
+        return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
+    if not minimum <= mean <= maximum:
+        return False, f"TC{tc_id} FAILED: mean outside latency range", []
+    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, phase={latency_phase}, "
+                  f"samples={sample_count}, p50={p50}, p99={p99}"), []
+
+
+def verify_tc135(reads, lines):
+    return verify_latency_distribution_workload(
+        135, reads, lines,
+        ("seed_hot", "share_hot", "directory_pressure", "first_revisit"),
+        "preserved_sharer_first_load", 24, {1: 48})
+
+
+def verify_tc136(reads, lines):
+    return verify_latency_distribution_workload(
+        136, reads, lines,
+        ("dirty_owner_seed", "directory_pressure", "owner_store_reuse", "verify_final"),
+        "preserved_owner_store_complete", 24, {2: 24})
+
+
+def verify_tc137(reads, lines):
+    return verify_latency_distribution_workload(
+        137, reads, lines,
+        ("seed_hot", "share_hot", "directory_pressure", "new_requester_load"),
+        "new_requester_first_load", 24, {1: 24, 2: 24})
+
+
+def verify_tc138(reads, lines):
+    return verify_latency_distribution_workload(
+        138, reads, lines,
+        ("dirty_owner_seed", "directory_pressure", "ownership_handoff", "verify_final"),
+        "dirty_owner_handoff_store", 24, {0: 24})
+
+
+def verify_tc139(reads, lines):
+    return verify_latency_distribution_workload(
+        139, reads, lines,
+        ("seed_hot", "share_hot", "owner_hot", "directory_pressure",
+         "mixed_batches", "verify_final"),
+        "mixed_batch_16ops", 16, {1: 16, 2: 8},
+        "mixed_batch_throughput")
+
+
+def verify_tc140(reads, lines):
+    return verify_latency_distribution_workload(
+        140, reads, lines,
+        ("cross_l2_store", "verify_final"),
+        "cross_l2_owner_store", 24, {2: 24})
+
+
+def verify_tc141(reads, lines):
+    if len(reads) != 32:
+        return False, f"TC141 FAILED: expected 32 READ_VAL, got {len(reads)}", reads
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC141 FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    expected_nodes = {1: 16, 2: 16}
+    for node, count in expected_nodes.items():
+        actual = sum(1 for read in reads if read["node"] == node)
+        if actual != count:
+            return False, (f"TC141 FAILED: node{node} READ_VAL count={actual}, "
+                           f"expected {count}"), reads
+    required_phases = ("seed_hot", "share_hot", "directory_pressure",
+                       "shared_to_writer", "verify_final")
+    missing = [phase for phase in required_phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line
+                          for line in lines)]
+    if missing:
+        return False, f"TC141 FAILED: missing phases {missing}", []
+    required_markers = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE",
+                        "UBCC-SHARED-RELEASE")
+    missing = [marker for marker in required_markers
+               if not any(marker in line for line in lines)]
+    if missing:
+        return False, f"TC141 FAILED: missing protocol evidence {missing}", []
+    if any("RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line for line in lines):
+        return False, "TC141 FAILED: upgrade lost valid sharer status", []
+    return True, "TC141 PASSED: spill shared-to-writer recovery completed", []
+
+
+def verify_database_workload(tc_id, reads, lines, phases, expected_reads_by_node,
+                             latency_phase, service_phase, end_to_end_phase,
+                             operations, samples):
+    expected_reads = sum(expected_reads_by_node.values())
+    if len(reads) != expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    for node, expected in expected_reads_by_node.items():
+        actual = sum(1 for read in reads if read["node"] == node)
+        if actual != expected:
+            return False, (f"TC{tc_id} FAILED: node{node} READ_VAL count={actual}, "
+                           f"expected {expected}"), reads
+    unexpected = sorted({read["node"] for read in reads} - set(expected_reads_by_node))
+    if unexpected:
+        return False, f"TC{tc_id} FAILED: unexpected READ_VAL nodes {unexpected}", reads
+
+    missing = [phase for phase in phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line
+                          for line in lines)]
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
+
+    timers = {}
+    for line in lines:
+        match = _RE_GUEST_TIMER.search(line)
+        if match and match.group(2) in (service_phase, end_to_end_phase):
+            timers.setdefault(match.group(2), []).append(match)
+    for phase in (service_phase, end_to_end_phase):
+        matches = timers.get(phase, [])
+        if len(matches) != 1:
+            return False, (f"TC{tc_id} FAILED: expected one {phase} GUEST-TIMER, "
+                           f"got {len(matches)}"), []
+        match = matches[0]
+        if int(match.group(1)) != 1 or int(match.group(3)) != operations:
+            return False, (f"TC{tc_id} FAILED: {phase} node/operations mismatch "
+                           f"node={match.group(1)} operations={match.group(3)}"), []
+        if int(match.group(4)) == 0 or int(match.group(5)) == 0:
+            return False, f"TC{tc_id} FAILED: zero {phase} ticks/frequency", []
+    service_ticks = int(timers[service_phase][0].group(4))
+    end_to_end_ticks = int(timers[end_to_end_phase][0].group(4))
+    if end_to_end_ticks < service_ticks:
+        return False, (f"TC{tc_id} FAILED: end-to-end ticks {end_to_end_ticks} "
+                       f"below service ticks {service_ticks}"), []
+
+    latency = [match for line in lines
+               if (match := _RE_PERF_LATENCY.search(line)) and
+               match.group(2) == latency_phase]
+    if len(latency) != 1:
+        return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
+                       f"PERF-LATENCY, got {len(latency)}"), []
+    sample = latency[0]
+    if int(sample.group(1)) != 1 or int(sample.group(3)) != samples:
+        return False, (f"TC{tc_id} FAILED: {latency_phase} node/samples mismatch "
+                       f"node={sample.group(1)} samples={sample.group(3)}"), []
+    minimum, p50, p95, p99, maximum, mean = (
+        int(sample.group(index)) for index in range(4, 10))
+    if minimum == 0 or int(sample.group(10)) == 0:
+        return False, f"TC{tc_id} FAILED: zero latency/frequency", []
+    if not minimum <= p50 <= p95 <= p99 <= maximum:
+        return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
+    if not minimum <= mean <= maximum:
+        return False, f"TC{tc_id} FAILED: mean outside latency range", []
+    return True, (f"TC{tc_id} PASSED: operations={operations}, batches={samples}, "
+                  f"service_ticks={service_ticks}, end_to_end_ticks={end_to_end_ticks}"), []
+
+
+def verify_tc142(reads, lines):
+    return verify_database_workload(
+        142, reads, lines,
+        ("buffer_pool_seed", "buffer_pool_warm", "incremental_pressure",
+         "oltp_transactions", "oltp_verify"),
+        {1: 16, 2: 4}, "db_oltp_batch_32ops", "db_oltp_service",
+        "db_oltp_end_to_end", 1024, 32)
+
+
+def verify_tc143(reads, lines):
+    return verify_database_workload(
+        143, reads, lines,
+        ("btree_seed", "btree_warm", "btree_pressure", "btree_transactions",
+         "btree_verify"),
+        {1: 8, 2: 4}, "db_btree_batch_64ops", "db_btree_service",
+        "db_btree_end_to_end", 2048, 32)
+
+
+def verify_tc144(reads, lines):
+    return verify_database_workload(
+        144, reads, lines,
+        ("database_seed", "database_warm", "checkpoint_pressure",
+         "wal_transactions", "recovery_verify"),
+        {1: 16, 2: 32}, "db_wal_batch_32ops", "db_wal_service",
+        "db_wal_end_to_end", 1024, 32)
 
 
 def verify_tc201(reads, lines):
@@ -1698,15 +1973,23 @@ def verify_tc125(reads, lines):
         if int(r['actual'], 16) != v1:
             return False, f'TC125 FAILED: Node0 expected V1, got 0x{int(r["actual"],16):X}', [r]
 
-    # Log evidence: spill (victim=) + fill (pa=) for target PA
-    has_spill = any(
+    # H64 may asynchronously persist a clean target before capacity pressure.
+    # That valid offload is reclaimed as a safe force-remove rather than the
+    # dirty-victim spill path, and must still precede the required onload.
+    has_dirty_spill = any(
         'RESIDENT-SPILL-START' in l and target_spill_pat in l
         for l in lines)
+    has_clean_offload = any(
+        'UBCC-SPILL-DIRTY-PERSIST' in l and target_fill_pat in l and
+        'safe force-remove' in l
+        for l in lines)
+    has_spill = has_dirty_spill or has_clean_offload
     has_fill = any(
         'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
         for l in lines)
 
-    diag = f'spill={has_spill}, fill={has_fill}'
+    diag = (f'spill={has_spill}, dirty_spill={has_dirty_spill}, '
+            f'clean_offload={has_clean_offload}, fill={has_fill}')
     if not has_spill:
         return False, f'TC125 FAILED: no RESIDENT-SPILL-START for target ({diag})', []
     if not has_fill:
@@ -1743,9 +2026,14 @@ def verify_tc127(reads, lines):
                            f'expected 0x{v0:X}'), [r]
 
     # Log evidence
-    has_spill = any(
+    has_dirty_spill = any(
         'RESIDENT-SPILL-START' in l and target_spill_pat in l
         for l in lines)
+    has_clean_offload = any(
+        'UBCC-SPILL-DIRTY-PERSIST' in l and target_fill_pat in l and
+        'safe force-remove' in l
+        for l in lines)
+    has_spill = has_dirty_spill or has_clean_offload
     has_fill = any(
         'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
         for l in lines)
@@ -1756,7 +2044,9 @@ def verify_tc127(reads, lines):
         'UBCC-WB-REQ' in l and target_fill_pat in l and 'WritebackReq' in l
         for l in lines)
 
-    diag = f'spill={has_spill}, fill={has_fill}, wb_req={has_wb_req}, wb_persist={has_wb_persist}'
+    diag = (f'spill={has_spill}, dirty_spill={has_dirty_spill}, '
+            f'clean_offload={has_clean_offload}, fill={has_fill}, '
+            f'wb_req={has_wb_req}, wb_persist={has_wb_persist}')
     if not has_spill:
         return False, f'TC127 FAILED: no RESIDENT-SPILL-START victim=target ({diag})', []
     if not has_fill:
@@ -1801,6 +2091,9 @@ def verify_tc128(reads, lines):
     has_spill = any(
         'RESIDENT-SPILL-START' in l and target_spill_pat in l
         for l in lines)
+    has_clean_offload = any(
+        'UBCC-SPILL-DIRTY-PERSIST' in l and target_fill_pat in l and
+        'safe force-remove' in l for l in lines)
     has_fill = any(
         'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l
         for l in lines)
@@ -1808,9 +2101,10 @@ def verify_tc128(reads, lines):
         'EvictReq' in l and target_fill_pat in l
         for l in lines)
 
-    diag = f'spill={has_spill}, fill={has_fill}, evict_req={has_evict_req}'
-    if not has_spill:
-        return False, f'TC128 FAILED: no RESIDENT-SPILL-START ({diag})', []
+    diag = (f'spill={has_spill}, clean_offload={has_clean_offload}, '
+            f'fill={has_fill}, evict_req={has_evict_req}')
+    if not has_spill and not has_clean_offload:
+        return False, f'TC128 FAILED: no target offload evidence ({diag})', []
     if not has_fill:
         return False, f'TC128 FAILED: no RESIDENT-FILL-ISSUED ({diag})', []
 
@@ -1857,16 +2151,23 @@ def verify_tc129(reads, lines):
     if not n0_v1:
         return False, 'TC129 FAILED: Node0 did not read V1', reads
 
-    # Log evidence: count spill and fill events for target PA
-    spill_count = sum(1 for l in lines
-                      if 'RESIDENT-SPILL-START' in l and target_spill_pat in l)
+    # H64 can persist a clean target asynchronously before capacity pressure.
+    # Count either dirty victim spill or the equivalent safe force-remove as an
+    # offload; both must be followed by the two target onloads below.
+    dirty_spill_count = sum(1 for l in lines
+                            if 'RESIDENT-SPILL-START' in l and target_spill_pat in l)
+    clean_offload_count = sum(1 for l in lines
+                              if 'UBCC-SPILL-DIRTY-PERSIST' in l and
+                              target_fill_pat in l and 'safe force-remove' in l)
+    spill_count = dirty_spill_count + clean_offload_count
     fill_count = sum(1 for l in lines
                      if 'RESIDENT-FILL-ISSUED' in l and target_fill_pat in l)
 
-    diag = f'spills={spill_count}, fills={fill_count}'
+    diag = (f'offloads={spill_count}, dirty_spills={dirty_spill_count}, '
+            f'clean_offloads={clean_offload_count}, fills={fill_count}')
 
     if spill_count < 2:
-        return False, f'TC129 FAILED: expected two target spills ({diag})', []
+        return False, f'TC129 FAILED: expected two target offloads ({diag})', []
     if fill_count < 2:
         return False, f'TC129 FAILED: expected two target fills ({diag})', []
 
@@ -1947,6 +2248,47 @@ def verify_ha_2n1s(reads, lines):
         return False, f"2N1S FAILED: inconsistent scenarios {scenarios}", []
     return True, f"2N1S PASSED: {next(iter(scenarios))} validated on two nodes", []
 
+
+def verify_tc217(reads, lines):
+    passed, message, failures = verify_ha_2n1s(reads, lines)
+    if not passed:
+        return passed, message, failures
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches or len(reads) != 2:
+        return False, (f"TC217 FAILED: expected two final MATCH reads, "
+                       f"got reads={len(reads)} mismatches={len(mismatches)}"), reads
+    latency = [_RE_PERF_LATENCY.search(line) for line in lines]
+    latency = [sample for sample in latency
+               if sample and sample.group(2) == "ha10_catalog_batch_16ops"]
+    if len(latency) != 1 or int(latency[0].group(3)) != 8:
+        return False, (f"TC217 FAILED: expected one 8-sample HA10 latency "
+                       f"summary, got {len(latency)}"), []
+    timers = [_RE_GUEST_TIMER.search(line) for line in lines]
+    timers = [sample for sample in timers
+              if sample and sample.group(2) == "catalog_useful_throughput"]
+    if len(timers) != 1 or int(timers[0].group(3)) != 128:
+        return False, (f"TC217 FAILED: expected one 128-op useful throughput "
+                       f"timer, got {len(timers)}"), []
+    if int(timers[0].group(4)) == 0 or int(timers[0].group(5)) == 0:
+        return False, "TC217 FAILED: zero throughput ticks/frequency", []
+    batch_records = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (record.get("kind") == "sample" and
+                record.get("scenario") == "HA10" and
+                record.get("phase") == "catalog_batch"):
+            batch_records.append(record)
+    if len(batch_records) != 8 or {r.get("iteration") for r in batch_records} != set(range(8)):
+        return False, (f"TC217 FAILED: expected JSONL catalog batches 0-7, "
+                       f"got {len(batch_records)}"), []
+    return True, ("TC217 PASSED: HA10 validation, 8 batch samples, and "
+                  "128 useful operations completed"), []
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -1997,6 +2339,16 @@ VERIFIERS = {
     132: verify_tc132,
     133: verify_tc133,
     134: verify_tc134,
+    135: verify_tc135,
+    136: verify_tc136,
+    137: verify_tc137,
+    138: verify_tc138,
+    139: verify_tc139,
+    140: verify_tc140,
+    141: verify_tc141,
+    142: verify_tc142,
+    143: verify_tc143,
+    144: verify_tc144,
     200: verify_tc200,
     201: verify_tc201,
     202: verify_tc202,
@@ -2006,6 +2358,11 @@ VERIFIERS = {
     212: verify_ha_2n1s,
     213: verify_ha_2n1s,
     214: verify_ha_2n1s,
+    215: verify_ha_2n1s,
+    216: verify_ha_2n1s,
+    217: verify_tc217,
+    218: verify_ha_2n1s,
+    219: verify_ha_2n1s,
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -2242,7 +2599,8 @@ def gem5_config_main():
     # ── Build gem5 system ──────────────────────────────────────────
     import m5
     from m5.objects import (
-        System, SrcClockDomain, VoltageDomain, RubySystem,
+        ArmSystem, SystemCounter, GenericTimer, ArmPPI, NULL,
+        SrcClockDomain, VoltageDomain, RubySystem,
         TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, ArmEmuLinux,
     )
 
@@ -2271,10 +2629,25 @@ def gem5_config_main():
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    system = System(mem_mode="timing", cache_line_size=64)
+    system = ArmSystem(mem_mode="timing", cache_line_size=64)
     root.system = system
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
+    # Give SE workloads an architected, simulated-time counter.  The timer
+    # PPIs are intentionally unconnected: TC13x reads CNTVCT_EL0 only and
+    # never programs a compare register that would deliver an interrupt.
+    system.system_counter = SystemCounter(freqs=[0x01800000])
+    system.generic_timer = GenericTimer(
+        system=system,
+        counter=system.system_counter,
+        int_el3_phys=ArmPPI(num=29, platform=NULL),
+        int_el1_phys=ArmPPI(num=30, platform=NULL),
+        int_el1_virt=ArmPPI(num=27, platform=NULL),
+        int_el2_ns_phys=ArmPPI(num=26, platform=NULL),
+        int_el2_ns_virt=ArmPPI(num=28, platform=NULL),
+        int_el2_s_phys=ArmPPI(num=20, platform=NULL),
+        int_el2_s_virt=ArmPPI(num=19, platform=NULL),
+        cntfrq=0x01800000)
 
     # RubySystem is created inside Ruby.create_system — don't pre-create.
     # ruby_system = RubySystem()  # REMOVED
@@ -2632,13 +3005,6 @@ def gem5_config_main():
     print(f"Workload: {binary}", flush=True)
     print("=" * 60, flush=True)
 
-    # ── TC9: expected fatal (page fault) — verify via python runner ─
-    tc_id = _args.tc
-    if tc_id == 9:
-        print("  TC9 PASSED: expected fatal (page-fault at 0xfffff8000000)\n")
-        print(">>> TC9 PASSED <<<\n")
-        sys.exit(0)
-
     exit_event = m5.simulate()
     cause = exit_event.getCause()
     print(f"SIM_CAUSE={cause}", flush=True)
@@ -2863,12 +3229,6 @@ def verify_split_main():
                f"({found}/{expected})"), flush=True)
         print(f">>> TC{args.tc} FAILED <<<", flush=True)
         sys.exit(1)
-
-    # TC9 is an expected-fatal page-fault case validated by process exit,
-    # not by simout content.
-    if args.tc == 9:
-        print(">>> TC9 PASSED <<<", flush=True)
-        sys.exit(0)
 
     reads = parse_read_vals(raw_lines)
     passed, msg, failures = verify_testcase(args.tc, reads, raw_lines)

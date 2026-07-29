@@ -11,6 +11,10 @@
 
 #include <stdint.h>
 
+static uint64_t e2e_workload_start_tick;
+static int e2e_workload_started;
+static int e2e_workload_node;
+
 /* ── ARM64 syscall numbers ─────────────────────────────────────────── */
 #define SYS_WRITE      64
 #define SYS_SYNC_WAIT  436
@@ -162,6 +166,56 @@ static inline void _raw_write(const char *buf, int len)
     _syscall3(SYS_WRITE, 1, (long)buf, (long)len);
 }
 
+/* ── Architected system-counter helpers ────────────────────────────── */
+
+static inline uint64_t read_cntvct_el0(void)
+{
+    uint64_t value;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+}
+
+static inline uint64_t read_cntfrq_el0(void)
+{
+    uint64_t value;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
+    return value;
+}
+
+static inline void emit_guest_timer(int node_id, const char *phase,
+                                    uint32_t operations, uint64_t ticks)
+{
+    char buf[256]; int p = 0;
+    char *s = (char *)"[GUEST-TIMER] node=";
+    while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, node_id);
+    s = (char *)" phase="; while (*s) buf[p++] = *s++;
+    while (*phase) buf[p++] = *phase++;
+    s = (char *)" operations="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, (int)operations);
+    s = (char *)" counter_ticks="; while (*s) buf[p++] = *s++;
+    char digits[24]; int n = 0;
+    if (!ticks) digits[n++] = '0';
+    while (ticks) { digits[n++] = (char)('0' + ticks % 10); ticks /= 10; }
+    while (n) buf[p++] = digits[--n];
+    s = (char *)" counter_frequency_hz="; while (*s) buf[p++] = *s++;
+    uint64_t frequency = read_cntfrq_el0(); n = 0;
+    if (!frequency) digits[n++] = '0';
+    while (frequency) { digits[n++] = (char)('0' + frequency % 10); frequency /= 10; }
+    while (n) buf[p++] = digits[--n];
+    s = (char *)" source=arm_cntvct_el0 unit=counter_ticks\n";
+    while (*s) buf[p++] = *s++;
+    _raw_write(buf, p);
+}
+
+static inline void emit_timer_selftest(int node_id)
+{
+    uint64_t before = read_cntvct_el0();
+    for (int i = 0; i < 4096; ++i) __asm__ volatile("nop" ::: "memory");
+    uint64_t delta = read_cntvct_el0() - before;
+    emit_guest_timer(node_id, "timer_selftest", 4096, delta);
+}
+
 /* ── Marker emitters ───────────────────────────────────────────────── */
 
 static inline void emit_before_wr(int node_id, int home, uint32_t val)
@@ -256,6 +310,9 @@ static inline void emit_sync_marker(int node_id, int iter, int seg,
 
 static inline void emit_e2e_meta(int node_id, const char *test_name)
 {
+    e2e_workload_start_tick = read_cntvct_el0();
+    e2e_workload_started = 1;
+    e2e_workload_node = node_id;
     char buf[200]; int p = 0;
     char *s = (char *)"[E2E_META]   node=";
     while (*s) buf[p++] = *s++;
@@ -282,6 +339,10 @@ static inline void emit_progress(int node_id, const char *phase_name, int iter)
 
 static inline void _exit_program(int code)
 {
+    if (e2e_workload_started) {
+        emit_guest_timer(e2e_workload_node, "workload_total", 1,
+                         read_cntvct_el0() - e2e_workload_start_tick);
+    }
     _syscall1(SYS_EXIT, (long)code);
     /* not reached */
     while (1) {}

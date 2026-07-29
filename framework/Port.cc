@@ -243,11 +243,36 @@ Port::emitSync(uint64_t curTick)
 {
     if (_lastSyncTs > 0 && curTick - _lastSyncTs < _linkLatency)
         return true;
+
+    // Non-blocking send: CONTROL_SYNC is a heartbeat. If the peer hasn't
+    // connected yet, dropping this sync is safe — the PDES clock will advance
+    // once the peer's own sync arrives and raises _lastRxT. Blocking here
+    // (zmq::send_flags::none + sndtimeo=-1) deadlocks the gem5 event queue
+    // when the ubio peer starts after gem5's first wakeup fires (TC32/34/39/81
+    // zero-tick stall in 2-socket topologies where 6 ubios are launched).
     MemMessage* msg = allocateSendBuffer(curTick);
     if (!msg) return false;
     msg->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
     msg->hdr.size = sizeof(MemMessageHeader);
-    if (send(msg)) { _lastSyncTs = curTick; return true; }
+
+    bool ok = false;
+    auto& sock = _txSock ? *_txSock : *_rxSock;
+    try {
+        zmq::message_t z(msg->hdr.size);
+        std::memcpy(z.data(), msg, msg->hdr.size);
+        // Use dontwait: if the peer hasn't bound yet, the send will fail
+        // immediately instead of blocking the caller. Losing an occasional
+        // sync is harmless — the next one will arrive within _linkLatency.
+        auto result = sock.send(z, zmq::send_flags::dontwait);
+        ok = result.has_value();
+    } catch (const zmq::error_t&) {
+        ok = false;
+    }
+    delete msg;
+    if (ok) {
+        _lastSyncTs = curTick;
+        return true;
+    }
     return false;
 }
 

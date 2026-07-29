@@ -26,6 +26,7 @@ int main(int argc, char **argv)
     if (argc >= 3) cpu_index = parse_int(argv[2]);
     if ((cpu_index % 4) != 0) { _exit_program(0); return 0; }
     emit_e2e_meta(node_id, "TC130");
+    emit_timer_selftest(node_id);
 
     if (node_id == 0) {
         for (int i = 0; i < HOT_LINES; ++i)
@@ -52,6 +53,7 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int round = 0; round < ROUNDS; ++round) {
             for (int i = 0; i < HOT_LINES; ++i) {
                 uint32_t got = dsm_load(0, (uint32_t)i * 64u);
@@ -59,6 +61,8 @@ int main(int argc, char **argv)
                     emit_read_val(1, 0, hot_value(i), got, got == hot_value(i));
             }
         }
+        emit_guest_timer(1, "post_pressure_hot_reuse",
+                         HOT_LINES * ROUNDS, read_cntvct_el0() - t0);
         emit_phase_done(1, "hot_reuse");
     }
     sync_wait(0b111);

@@ -10,13 +10,6 @@
 #define BASE  0x12100000u
 #define CONFLICT_STRIDE 0x10000u
 
-static inline uint64_t read_cntvct(void)
-{
-    uint64_t v;
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
-    return v;
-}
-
 static int fmt_u64_dec(char *buf, int p, uint64_t val)
 {
     if (val == 0) { buf[p++] = '0'; return p; }
@@ -62,14 +55,17 @@ int main(int argc, char **argv)
     sync_wait(0b111);
 
     if (node_id == 1) {
+        uint64_t t_phase = read_cntvct_el0();
         for (int i = 0; i < TC121_LINES; i += 4) {
             uint32_t exp = BASE | (uint32_t)i;
-            uint64_t t0 = read_cntvct();
+            uint64_t t0 = read_cntvct_el0();
             uint32_t got = dsm_load(0, (uint32_t)i * CONFLICT_STRIDE);
-            uint64_t t1 = read_cntvct();
+            uint64_t t1 = read_cntvct_el0();
             emit_latency(1, "cold_stream_sample", i, t1 - t0);
             emit_read_val(1, 0, exp, got, got == exp);
         }
+        emit_guest_timer(1, "cold_stream_sample", TC121_LINES / 4,
+                         read_cntvct_el0() - t_phase);
         emit_phase_done(1, "cold_stream_sample");
     }
     sync_wait(0b111);

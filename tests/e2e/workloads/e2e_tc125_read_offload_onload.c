@@ -107,7 +107,10 @@ int main(int argc, char **argv)
     /* ── Phase 4: Node1 re-reads target → triggers fill (onload), must see V0 ── */
     if (node_id == 1) {
         evict_line((uint64_t)(uintptr_t)dsm_addr(0, TARGET_OFF));
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got = dsm_load(0, TARGET_OFF);
+        emit_guest_timer(1, "read_onload", 1,
+                         read_cntvct_el0() - t0);
         emit_read_val(1, 0, TC125_V0, got, got == TC125_V0);
         emit_phase_done(1, "read_onload");
     }

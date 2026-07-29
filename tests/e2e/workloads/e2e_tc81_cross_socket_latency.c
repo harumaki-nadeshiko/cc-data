@@ -14,8 +14,11 @@ int main(int argc,char**argv){
     __asm__("str %w0,[%1]"::"r"(0x810000AAu),"r"(dsm2(0,0,0x6100)));
     __asm__("str %w0,[%1]"::"r"(0x810000BBu),"r"(dsm2(0,1,0x6100)));
     uint32_t g0,g1;
+    uint64_t t0 = read_cntvct_el0();
     __asm__("ldr %w0,[%1]":"=r"(g0):"r"(dsm2(0,0,0x6100)));
     __asm__("ldr %w0,[%1]":"=r"(g1):"r"(dsm2(0,1,0x6100)));
+    emit_guest_timer(nid, "cross_socket_read", 2,
+                     read_cntvct_el0() - t0);
     int ok=(g0==0x810000AAu&&g1==0x810000BBu);
     emit_read_val(nid,0,0x810000AAu,g0,ok);
     _exit_program(ok?0:1);return 0;

@@ -32,6 +32,15 @@ enum class DsmDataStatus : uint8_t {
     IoError,
 };
 
+// A grant without transaction-owned data must wait for authoritative home
+// memory rather than being converted into an implicit zero-data response.
+enum class GrantBuildResult : uint8_t {
+    Ready,
+    DataReadPending,
+    RetryableBusy,
+    Error,
+};
+
 class UBCCHostIf
 {
   public:
@@ -92,6 +101,7 @@ class UBCCOutboundIf
     virtual bool sendRecallReq(const CoherenceMessage &msg) = 0;
     virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
+    virtual bool sendUpgradeResp(const CoherenceMessage &msg) = 0;
 
     /**
      * Push a grant ReadResp from home to requester.
@@ -453,7 +463,9 @@ class UBCCController
         uint64_t line_pa, int requesterNode,
         uint64_t epoch, uint64_t reqId,
         int desiredPerm, UBCC_UpgradeCause cause,
-        bool* outNotSharer = nullptr);
+        bool* outNotSharer = nullptr,
+        bool* outDeferred = nullptr,
+        int requesterSocket = -1);
 
     /**
      * Process an OuterUpgradeDone from a requester that completed local upgrade.
@@ -721,6 +733,11 @@ class UBCCController
                                            int requesterSocket = -1);
     void removeOutstanding(uint64_t linePa);
 
+    // True while a push grant still represents a live transaction.  The UBIO
+    // async home-read path uses this before delivering a delayed payload.
+    bool grantTupleLive(uint64_t linePa, int requesterNode,
+                        uint64_t reqId) const;
+
     void onBackstoreFillComplete(uint64_t linePa, bool found,
                                   const BackstoreEntry &entry);
     void onBackstoreWriteAck(uint64_t linePa);
@@ -849,7 +866,10 @@ public:
     Tick _tombstoneWindowW = 100000;
 
     // ---- v4: Recall orphan timeout (configurable) ----
-    Tick _recallTimeout = 1000000;
+    // Split-process 2S recall round trips can legitimately approach 10M
+    // protocol ticks under PDES alignment. Keep a bounded protocol timeout
+    // above that observed tail; wall-clock liveness remains guarded separately.
+    Tick _recallTimeout = 10000000;
 
     // Configurable epoch width for wrap-around experiments.
     uint32_t _epochBits = 64;

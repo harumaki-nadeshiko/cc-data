@@ -36,8 +36,10 @@ int main(int argc, char **argv)
     sync_wait(0xFF);
 
     uint32_t got;
+    uint64_t t0 = read_cntvct_el0();
     __asm__ volatile("ldr %w0, [%1]" : "=r"(got) : "r"(dsm_addr(hotspot_home, off)));
     int ok = (got == val);
+    emit_guest_timer(node_id, "hotspot_read", 1, read_cntvct_el0() - t0);
     emit_read_val(node_id, hotspot_home, val, got, ok);
     sync_wait(0xFF);
     _exit_program(ok ? 0 : 1);

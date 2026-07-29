@@ -49,7 +49,10 @@ int main(int argc, char **argv)
 
     /* Phase 3: Verify */
     {
+        uint64_t t0 = read_cntvct_el0();
         uint32_t got = dsm_load(HOME_NODE, X_OFF);
+        emit_guest_timer(node_id, "upgrade_verify", 1,
+                         read_cntvct_el0() - t0);
         emit_read_val(node_id, HOME_NODE, v2, got, got == v2);
         if (got != v2) fail++;
     }

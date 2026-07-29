@@ -1,10 +1,35 @@
 # E2E Test Case Reference
 
-> 最后更新: 2026-07-17
+> 最后更新: 2026-07-28
 > 基于 gem5 v4-selfsnoop-fix-clean (commit `4d1cdbf`)
 > 分支: `v4`
 
 ## 快速索引
+
+测试类型定义：
+
+- `Correctness`：主要用于协议状态、数据一致性、故障恢复或活性回归。
+- `Perf`：主要用于延迟、吞吐、容量或优化效果测量。
+- `Correctness+Perf`：性能测量同时具有强制数据/协议正确性门禁。
+
+### 全量类型分类
+
+以下分类覆盖 `test_e2e.py::TESTCASES` 中所有已注册 TC；未注册的编号不属于测试集。
+
+| TC | 类型 | 功能类别 |
+|---|---|---|
+| 1-54、63-64 | Correctness | 基础 DSM、一致性状态转换、内存序、并发、故障恢复、epoch、writeback/evict、目录和应用级数据一致性 |
+| 80-82、84-85 | Correctness+Perf | 跨节点/跨 socket/ring 延迟及 cacheline capacity；读值或容量 marker 是正确性门禁 |
+| 90-102 | Correctness+Perf | 8-node/双 socket 压力、热点、ping-pong、barrier、batch-RS、direct-forward 和 writeback persistence |
+| 110-119 | Correctness | Clear/Upgrade fault injection、silent-upgrade 功能、TBE 干扰和混合故障收敛 |
+| 120-124 | Correctness+Perf | baseline、cold/hot reuse、shared upgrade 和 direct-forward 性能场景 |
+| 125-129 | Correctness | H64 spill/onload、upgrade replay、writeback/clean-evict persistence 和多轮生命周期 |
+| 130-140 | Correctness+Perf | 目录容量、guest latency 分布、outer diagnostic 和独立 mixed throughput |
+| 141 | Correctness | spill shared-to-writer、deferred UpgradeResp、shared release 和 waiter 活性回归 |
+| 142-144 | Correctness+Perf | 数据库 OLTP buffer-pool、B-tree traversal、WAL/checkpoint 的 service 与 end-to-end 性能 |
+| 200 | Correctness | naive dirty recall 定向回归 |
+| 201-203 | Correctness | spill recall、authoritative data push 和 H64 overflow/onload 定向回归 |
+| 210-219 | Correctness+Perf | 2N1S HA/CC 可移植场景；JSON validation 为正确性门禁，guest/outer 指标用于性能比较 |
 
 | TC | 名称 | 拓扑 | 特殊配置 | 目的 | 通过标准 |
 |----|------|------|---------|------|---------|
@@ -91,6 +116,57 @@
 | 117 | e2e_tc117_clear_reorder | 1s | **fault:** ClearReq reorder | ClearReq 乱序恢复 (3.3 P1) | 全部读 MATCH, [UBFAULT] 证据 |
 | 118 | e2e_tc118_mixed_fault | 1s | **fault:** drop+delay ClearReq (同一 home) | 混合故障双 Clear (3.3 P1) | 全部读 MATCH, [UBFAULT] 证据 |
 | 119 | e2e_tc119_triple_fault | 1s | **fault:** drop+dup+delay ClearReq (同一 home) | 三合一故障 (3.3 P1) | ≥3 读全部 MATCH, [UBFAULT] 证据 |
+
+### TC120-TC144 分类与功能
+
+| TC | 类型 | 名称 | 拓扑 | 功能 | 主要通过标准 |
+|---:|---|---|---|---|---|
+| 120 | Correctness+Perf | e2e_tc120_baseline_perf_mix | 1s | 小目录下 populate、shared reads、owner migration 和 hot reread 的基线/优化混合场景 | sampled READ_VAL 全部 MATCH，phase/stats 完整 |
+| 121 | Correctness+Perf | e2e_tc121_perf_cold_stream | 1s | cold stream 的目录 miss、spill/onload 与 guest timer | READ_VAL MATCH，性能 phase 完整 |
+| 122 | Correctness+Perf | e2e_tc122_perf_hot_reuse | 1s | hot line 重复复用及目录策略对延迟的影响 | READ_VAL MATCH，性能 phase 完整 |
+| 123 | Correctness+Perf | e2e_tc123_perf_shared_upgrade | 1s | shared-to-writer upgrade 性能与收敛 | READ_VAL MATCH，upgrade phase 完整 |
+| 124 | Correctness+Perf | e2e_tc124_perf_direct_fwd | 1s | direct-forward 路径性能与数据正确性 | READ_VAL MATCH，direct-forward phase 完整 |
+| 125 | Correctness | e2e_tc125_read_offload_onload | 1s | shared read metadata spill 后 H64 onload | spill/fill 证据存在，读取 MATCH |
+| 126 | Correctness | e2e_tc126_resident_upgrade_replay | 1s | resident fill 后 Upgrade 必须按 Upgrade 语义 replay，不能降级为 ReadUnique | target Upgrade commit/回放次数正确，最终值 MATCH |
+| 127 | Correctness | e2e_tc127_writeback_offload_onload | 1s | dirty writeback metadata offload/onload 和数据持久化 | fill、WritebackReq、WB-DATA-PERSIST 证据及读取 MATCH |
+| 128 | Correctness | e2e_tc128_clean_evict_offload_onload | 1s | clean/shared metadata offload 后重新 onload | spill 或 safe force-remove 证据、fill 证据、读取 MATCH |
+| 129 | Correctness | e2e_tc129_long_mixed_integration | 1s | 同一 line 两轮 spill/fill，中间包含 ownership change | 两轮 offload/fill，V0→V1 数据正确 |
+| 130 | Correctness+Perf | e2e_tc130_directory_overflow_benchmark | 1s | 4-set×2-way 目录冲突压力和 hot reuse | 24 hot checks MATCH，guest timer 正常 |
+| 131 | Correctness+Perf | e2e_tc131_catalog_fullscan | 8n1s | 512 KiB 容量、catalog full scan、reuse 和验收 outer latency | capacity ≥ naive×1.5；spill-noopt outer 增量 ≤25 ns；数据 MATCH |
+| 132 | Correctness+Perf | e2e_tc132_dirty_checkpoint_stream | 1s | dirty checkpoint stream 的容量、恢复与时延 | checkpoint 数据 MATCH，phase/timer 完整 |
+| 133 | Correctness+Perf | e2e_tc133_8n1s_shared_frontier | 8n1s | 8-node shared frontier 压力与复用 | frontier sampled reads MATCH，phase/timer 完整 |
+| 134 | Correctness+Perf | e2e_tc134_8n2s_sliding_window | 8n2s | 双 socket sliding-window 容量压力与复用 | window sampled reads MATCH，phase/timer 完整 |
+| 135 | Correctness+Perf | e2e_tc135_preserved_sharer_revisit | 1s | 原 remote sharer 在目录压力后的 first-revisit load 分布 | 48 reads MATCH；24 个 guest latency 样本 |
+| 136 | Correctness+Perf | e2e_tc136_preserved_owner_store | 1s | 原 dirty owner 压力后的 writer-visible store completion | final reads MATCH；24 个 store-complete 样本 |
+| 137 | Correctness+Perf | e2e_tc137_new_requester_load | 1s | 新 requester 对 spilled shared metadata 的首次 load | share/new requester reads MATCH；24 个 latency 样本 |
+| 138 | Correctness+Perf | e2e_tc138_dirty_handoff_store | 1s | 新 writer 从 spilled dirty owner 获取 ownership | final reads MATCH；24 个 handoff store 样本 |
+| 139 | Correctness+Perf | e2e_tc139_mixed_batch_throughput | 1s | preserved shared reads + preserved owner writes 的独立 mixed throughput | reads MATCH；16 个 batch latency 样本；256-op throughput timer |
+| 140 | Correctness+Perf | e2e_tc140_cross_l2_owner_store | 1s | 同节点不同 L2 对 remote-owned line 的 store，观察 silent-upgrade 路径 | 24 final reads MATCH；24 个 cross-L2 store 样本 |
+| 141 | Correctness | e2e_tc141_spill_shared_writer_recovery | 1s | H64 fill/capacity 排队后的 shared-to-writer Upgrade 活性回归 | shared release 只清发送者 bit；deferred accepted UpgradeResp 回到原 reqId；32 reads MATCH；无 valid-sharer NotSharer drop |
+| 142 | Correctness+Perf | e2e_tc142_db_oltp_buffer_pool | 1s | 90/10 风格高偏斜 OLTP buffer-pool：64 个 hot page，32 batches，每 batch 28 reads + 4 updates；每 batch 前加入 24 条 maintenance pressure | 1,024 useful ops；32 个 batch latency；service 与含 pressure/barrier 的 end-to-end timer；20 reads MATCH |
+| 143 | Correctness+Perf | e2e_tc143_db_btree_traversal | 1s | B-tree root/internal/leaf/record 四层访存：每 batch 16 transactions，每 transaction 4 次访存，含 25% leaf-record update；穿插目录压力 | 2,048 memory ops；32 个 batch latency；service/end-to-end timer；12 reads MATCH |
+| 144 | Correctness+Perf | e2e_tc144_db_wal_checkpoint | 1s | WAL append + dirty data-page update：每 batch 16 个事务更新，每次先写 WAL 后写 data page；穿插 checkpoint pressure | 1,024 stores；32 个 batch latency；service/end-to-end timer；最终 16 个 WAL/data pair 共 48 reads MATCH |
+| 217 | Correctness+Perf | e2e_ha_2n1s_core (HA10) | 2n1s | 512-entry 目录上 640-line 分批压力与 90/10 skewed catalog lookup/update | 双节点 validation=0；8 个 batch JSONL/latency 样本；128 useful operations；最终更新值 MATCH |
+
+#### TC142-TC144 数据库性能口径
+
+三个数据库 TC 使用相同的 512-entry、1-way ResidentDir 配置，并在 32 个
+业务 batch 之间累计流式访问 768 条 maintenance/checkpoint pressure line。
+它们预期能够体现 spill 相对 naive destructive eviction 的优势，因为 hot
+database page 在目录溢出后仍有较短 reuse distance：naive 会 recall/invalidate
+节点已有 copy，spill 则可保留 copy 并把 directory metadata 移入 backstore。
+
+每个 TC 同时输出两种固定工作量计时：
+
+| 口径 | 包含内容 | 用途 |
+|---|---|---|
+| `*_service` | 只包含 transaction 内的 DSM loads/stores 和 completion barrier | 观察数据库请求服务路径以及 retained-copy reuse 收益 |
+| `*_end_to_end` | 从第一个 batch 前开始，到最后一个 batch 后结束，包含 pressure 等待和 batch barrier | 防止只汇报局部快路径，作为较保守的程序级比较 |
+
+测试并不以“spill 必须快于 naive”作为 correctness verifier 条件；性能优势由
+三 profile 矩阵在运行后计算。这样可以如实暴露 WAL/dirty-page 路径的开销，
+避免通过验收逻辑预设结论。正式汇报应以 `spill-noopt vs naive` 说明 spill
+policy 收益，`spill-opt vs spill-noopt` 仅用于判断额外优化是否实际命中。
 
 ---
 

@@ -63,7 +63,10 @@ int main(int argc, char **argv)
           do { v = dsm_load(1, off); asm volatile("dmb osh":::"memory"); } while (v != sentinel && --r > 0); }
 
         /* Step 2: Evict the target line from L1+L2 via set-conflict writes */
+        uint64_t t_wb = read_cntvct_el0();
         evict_line((uint64_t)(uintptr_t)dsm_addr(1, off));
+        emit_guest_timer(0, "writeback_evict", 1,
+                         read_cntvct_el0() - t_wb);
     }
 
     /* Step 3: Barrier */

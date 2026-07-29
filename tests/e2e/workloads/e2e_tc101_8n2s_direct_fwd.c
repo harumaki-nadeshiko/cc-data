@@ -45,6 +45,7 @@ int main(int argc, char **argv)
      * round's RECALL(owner=7,requester=0) does NOT trigger C4 (requester=home).
      * All other rounds (1→0, 2→1, ...) trigger C4: owner≠requester≠home.
      * To maximize C4 events, node 0 skips the chain; only nodes 1-7 chain. */
+    uint64_t t0 = read_cntvct_el0();
     for (int r = 0; r < ROUNDS; r++) {
         int prev = (node_id == 0) ? NUM_NODES - 1 : node_id - 1;
         if (node_id != 0) {
@@ -56,6 +57,8 @@ int main(int argc, char **argv)
         /* Node 0: no-op in chain (keeps PDES sync balanced) */
         __asm__ volatile("" : : : "memory");
     }
+    emit_guest_timer(node_id, "direct_fwd_chain", ROUNDS,
+                     read_cntvct_el0() - t0);
 
     sync_wait((1u << TOTAL_CPUS) - 1, NUM_SOCKETS);
 

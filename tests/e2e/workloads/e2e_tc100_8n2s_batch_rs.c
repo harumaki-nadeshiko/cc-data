@@ -45,10 +45,13 @@ int main(int argc, char **argv)
     /* Phase 2: ALL 16 CPUs read same line ROUNDS times simultaneously.
      * This triggers RS contention → batch grant via replayPendingRequesters. */
     uint32_t v = 0xBAAD;
+    uint64_t t0 = read_cntvct_el0();
     for (int r = 0; r < ROUNDS; r++) {
         v = *hot_addr();
         __asm__ volatile("" : : "r"(v) : "memory");
     }
+    emit_guest_timer(node_id, "batch_rs_reads", ROUNDS,
+                     read_cntvct_el0() - t0);
 
     /* Use the read value to ensure pipeline drain */
     __asm__ volatile("" : : "r"(v) : "memory");

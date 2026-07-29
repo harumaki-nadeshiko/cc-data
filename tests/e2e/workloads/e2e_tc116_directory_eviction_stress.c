@@ -55,6 +55,7 @@ int main(int argc, char **argv)
 
     /* Phase B: node1 reads hot lines, creating useful shared/cache residency. */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < HOT_LINES; i++) {
             uint32_t expected = TC116_VAL | (uint32_t)i;
             uint32_t got = dsm_load(0, hot_off(i));
@@ -62,6 +63,8 @@ int main(int argc, char **argv)
                 emit_read_val(1, 0, expected, got, got == expected);
             }
         }
+        emit_guest_timer(1, "hot_shared_read", HOT_LINES,
+                         read_cntvct_el0() - t0);
         emit_phase_done(1, "hot_shared");
     }
     sync_wait(0b111);
@@ -78,6 +81,7 @@ int main(int argc, char **argv)
     /* Phase D: node2 reuses hot lines.  Spill mode should reload directory
      * metadata; naive mode has already invalidated/evicted copies. */
     if (node_id == 2) {
+        uint64_t t0 = read_cntvct_el0();
         for (int round = 0; round < 3; round++) {
             for (int i = 0; i < HOT_LINES; i++) {
                 uint32_t expected = TC116_VAL | (uint32_t)i;
@@ -87,6 +91,8 @@ int main(int argc, char **argv)
                 }
             }
         }
+        emit_guest_timer(2, "hot_reuse_reload", HOT_LINES * 3,
+                         read_cntvct_el0() - t0);
         emit_phase_done(2, "hot_reuse_reload");
     }
     sync_wait(0b111);
@@ -94,9 +100,12 @@ int main(int argc, char **argv)
     /* Phase E: node1 upgrades a subset. This exposes whether its hot copies
      * survived directory pressure or were eagerly invalidated by naive mode. */
     if (node_id == 1) {
+        uint64_t t0 = read_cntvct_el0();
         for (int i = 0; i < HOT_LINES; i += 4) {
             dsm_store(0, hot_off(i), TC116_NEW | (uint32_t)i);
         }
+        emit_guest_timer(1, "hot_upgrade", HOT_LINES / 4,
+                         read_cntvct_el0() - t0);
         emit_phase_done(1, "hot_upgrade");
     }
     sync_wait(0b111);
