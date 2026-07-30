@@ -1,13 +1,12 @@
-/* TC143: topology-portable B-tree root-to-leaf traversal and updates. */
+/* TC146: graph frontier expansion with adjacency/property reuse and updates. */
 #include "portable_large_workload.h"
 
 #define BATCHES 32
-#define TRANSACTIONS_PER_BATCH 16
 #define OPS_PER_BATCH 64
 #define PRESSURE_PER_BATCH 24
-#define DATA_BASE 0x00400000u
+#define DATA_BASE 0x00a00000u
 #define PRESSURE_BASE 0x04000000u
-#define VALUE_BASE 0x14300000u
+#define VALUE_BASE 0x14600000u
 
 int main(int argc, char **argv)
 {
@@ -16,32 +15,29 @@ int main(int argc, char **argv)
     if (!portable_is_primary(cpu)) { _exit_program(0); return 0; }
     int plane = portable_plane(node, cpu);
     uint32_t shard = portable_shard(DATA_BASE, plane);
-    uint32_t root = shard;
-    uint32_t internal = shard + 0x1000u;
-    uint32_t leaf = shard + 0x2000u;
-    uint32_t record = shard + 0x4000u;
-    portable_emit_meta(plane, "TC143");
+    uint32_t frontier = shard;
+    uint32_t adjacency = shard + 0x2000u;
+    uint32_t property = shard + 0x6000u;
+    portable_emit_meta(plane, "TC146");
     emit_timer_selftest(plane);
 
     PORTABLE_SERIAL_FOR_EACH_PLANE(plane, {
-        dsm_store(0, root, VALUE_BASE | ((uint32_t)plane << 16));
-        for (int i = 0; i < 8; ++i)
-            dsm_store(0, portable_line(internal, i), VALUE_BASE | 0x1000u |
-                      ((uint32_t)plane << 16) | (uint32_t)i);
-        for (int i = 0; i < 64; ++i) {
-            dsm_store(0, portable_line(leaf, i), VALUE_BASE | 0x2000u |
-                      ((uint32_t)plane << 16) | (uint32_t)i);
-            dsm_store(0, portable_line(record, i), VALUE_BASE | 0x3000u |
-                      ((uint32_t)plane << 16) | (uint32_t)i);
+        for (int line = 0; line < 64; ++line) {
+            dsm_store(0, portable_line(frontier, line), VALUE_BASE |
+                      ((uint32_t)plane << 16) | 0x1000u | (uint32_t)line);
+            dsm_store(0, portable_line(adjacency, line), VALUE_BASE |
+                      ((uint32_t)plane << 16) | 0x2000u | (uint32_t)line);
+            dsm_store(0, portable_line(property, line), VALUE_BASE |
+                      ((uint32_t)plane << 16) | 0x3000u | (uint32_t)line);
         }
         __asm__ volatile("dsb sy" ::: "memory");
     });
-    emit_phase_done(plane, "btree_seed");
+    emit_phase_done(plane, "graph_seed");
 
-    uint32_t warm_expected = VALUE_BASE | 0x3000u | ((uint32_t)plane << 16);
-    uint32_t warm = dsm_load(0, portable_line(record, 0));
+    uint32_t warm_expected = VALUE_BASE | ((uint32_t)plane << 16) | 0x2000u;
+    uint32_t warm = dsm_load(0, adjacency);
     emit_read_val(plane, 0, warm_expected, warm, warm == warm_expected);
-    emit_phase_done(plane, "btree_warm");
+    emit_phase_done(plane, "graph_frontier_warm");
     portable_barrier();
 
     uint64_t samples[BATCHES];
@@ -57,18 +53,18 @@ int main(int argc, char **argv)
         portable_barrier();
 
         uint64_t start = read_counter_serialized();
-        for (int tx = 0; tx < TRANSACTIONS_PER_BATCH; ++tx) {
-            int page = (tx * 17 + batch * 5) & 63;
-            (void)dsm_load(0, root);
-            (void)dsm_load(0, portable_line(internal, page >> 3));
-            (void)dsm_load(0, portable_line(leaf, page));
-            if ((tx & 3) == 0) {
-                int update = tx >> 2;
-                dsm_store(0, portable_line(record, update),
-                          VALUE_BASE | ((uint32_t)plane << 16) |
+        for (int vertex = 0; vertex < 16; ++vertex) {
+            int id = (vertex * 13 + batch * 7) & 63;
+            (void)dsm_load(0, portable_line(frontier, id));
+            (void)dsm_load(0, portable_line(adjacency, id));
+            (void)dsm_load(0, portable_line(adjacency, (id + 17) & 63));
+            if ((vertex & 3) == 0) {
+                int update = vertex >> 2;
+                dsm_store(0, portable_line(property, update), VALUE_BASE |
+                          ((uint32_t)plane << 16) |
                           ((uint32_t)batch << 8) | (uint32_t)update);
             } else {
-                (void)dsm_load(0, portable_line(record, page));
+                (void)dsm_load(0, portable_line(property, id));
             }
         }
         __asm__ volatile("dsb sy" ::: "memory");
@@ -77,19 +73,18 @@ int main(int argc, char **argv)
         portable_barrier();
     }
     uint64_t end_to_end_ticks = read_counter_serialized() - end_to_end_start;
-    emit_phase_done(plane, "btree_pressure");
-    portable_emit_results(plane, "db_btree_service", "db_btree_end_to_end",
-                          "db_btree_batch_64ops", BATCHES * OPS_PER_BATCH,
+    portable_emit_results(plane, "graph_service", "graph_end_to_end",
+                          "graph_batch_64ops", BATCHES * OPS_PER_BATCH,
                           service_ticks, end_to_end_ticks, samples, BATCHES);
-    emit_phase_done(plane, "btree_transactions");
+    emit_phase_done(plane, "graph_iterations");
 
     for (int update = 0; update < 4; ++update) {
         uint32_t expected = VALUE_BASE | ((uint32_t)plane << 16) |
                             ((BATCHES - 1u) << 8) | (uint32_t)update;
-        uint32_t got = dsm_load(0, portable_line(record, update));
+        uint32_t got = dsm_load(0, portable_line(property, update));
         emit_read_val(plane, 0, expected, got, got == expected);
     }
-    emit_phase_done(plane, "btree_verify");
+    emit_phase_done(plane, "graph_verify");
     portable_barrier();
     _exit_program(0);
     return 0;

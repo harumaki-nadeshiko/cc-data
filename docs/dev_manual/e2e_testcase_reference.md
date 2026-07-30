@@ -26,7 +26,7 @@
 | 125-129 | Correctness | H64 spill/onload、upgrade replay、writeback/clean-evict persistence 和多轮生命周期 |
 | 130-140 | Correctness+Perf | 目录容量、guest latency 分布、outer diagnostic 和独立 mixed throughput |
 | 141 | Correctness | spill shared-to-writer、deferred UpgradeResp、shared release 和 waiter 活性回归 |
-| 142-144 | Correctness+Perf | 数据库 OLTP buffer-pool、B-tree traversal、WAL/checkpoint 的 service 与 end-to-end 性能 |
+| 142-147 | Correctness+Perf | 可移植数据库、FaaS、图计算和 feature-store 大 workload 的 service 与 end-to-end 性能 |
 | 200 | Correctness | naive dirty recall 定向回归 |
 | 201-203 | Correctness | spill recall、authoritative data push 和 H64 overflow/onload 定向回归 |
 | 210-219 | Correctness+Perf | 2N1S HA/CC 可移植场景；JSON validation 为正确性门禁，guest/outer 指标用于性能比较 |
@@ -117,7 +117,7 @@
 | 118 | e2e_tc118_mixed_fault | 1s | **fault:** drop+delay ClearReq (同一 home) | 混合故障双 Clear (3.3 P1) | 全部读 MATCH, [UBFAULT] 证据 |
 | 119 | e2e_tc119_triple_fault | 1s | **fault:** drop+dup+delay ClearReq (同一 home) | 三合一故障 (3.3 P1) | ≥3 读全部 MATCH, [UBFAULT] 证据 |
 
-### TC120-TC144 分类与功能
+### TC120-TC147 分类与功能
 
 | TC | 类型 | 名称 | 拓扑 | 功能 | 主要通过标准 |
 |---:|---|---|---|---|---|
@@ -143,18 +143,25 @@
 | 139 | Correctness+Perf | e2e_tc139_mixed_batch_throughput | 1s | preserved shared reads + preserved owner writes 的独立 mixed throughput | reads MATCH；16 个 batch latency 样本；256-op throughput timer |
 | 140 | Correctness+Perf | e2e_tc140_cross_l2_owner_store | 1s | 同节点不同 L2 对 remote-owned line 的 store，观察 silent-upgrade 路径 | 24 final reads MATCH；24 个 cross-L2 store 样本 |
 | 141 | Correctness | e2e_tc141_spill_shared_writer_recovery | 1s | H64 fill/capacity 排队后的 shared-to-writer Upgrade 活性回归 | shared release 只清发送者 bit；deferred accepted UpgradeResp 回到原 reqId；32 reads MATCH；无 valid-sharer NotSharer drop |
-| 142 | Correctness+Perf | e2e_tc142_db_oltp_buffer_pool | 1s | 90/10 风格高偏斜 OLTP buffer-pool：64 个 hot page，32 batches，每 batch 28 reads + 4 updates；每 batch 前加入 24 条 maintenance pressure | 1,024 useful ops；32 个 batch latency；service 与含 pressure/barrier 的 end-to-end timer；20 reads MATCH |
-| 143 | Correctness+Perf | e2e_tc143_db_btree_traversal | 1s | B-tree root/internal/leaf/record 四层访存：每 batch 16 transactions，每 transaction 4 次访存，含 25% leaf-record update；穿插目录压力 | 2,048 memory ops；32 个 batch latency；service/end-to-end timer；12 reads MATCH |
-| 144 | Correctness+Perf | e2e_tc144_db_wal_checkpoint | 1s | WAL append + dirty data-page update：每 batch 16 个事务更新，每次先写 WAL 后写 data page；穿插 checkpoint pressure | 1,024 stores；32 个 batch latency；service/end-to-end timer；最终 16 个 WAL/data pair 共 48 reads MATCH |
+| 142 | Correctness+Perf | e2e_tc142_db_oltp_buffer_pool | 1s/2s/8n1s/8n2s | 每 plane 独立 OLTP buffer-pool shard：32 hot pages，32 batches，每 batch 28 reads + 4 updates；每 batch 24 条 maintenance pressure | 每 plane 1,024 useful ops、32 latency samples、5 reads MATCH；service/end-to-end timer |
+| 143 | Correctness+Perf | e2e_tc143_db_btree_traversal | 1s/2s/8n1s/8n2s | 每 plane 独立 B-tree shard，root/internal/leaf/record 四层访问；每 batch 16 transactions，每 transaction 4 次访问，25% record update | 每 plane 2,048 memory ops、32 latency samples、5 reads MATCH |
+| 144 | Correctness+Perf | e2e_tc144_db_wal_checkpoint | 1s/2s/8n1s/8n2s | 每 plane WAL append + dirty page update；每 batch 16 updates，每次先 WAL 后 data page，穿插 checkpoint pressure | 每 plane 1,024 stores、32 latency samples、17 reads MATCH，验证最终 WAL/data pair |
+| 145 | Correctness+Perf | e2e_tc145_faas_warm_invocation | 1s/2s/8n1s/8n2s | FaaS warm-container runtime/tenant state：每 batch 48 runtime reads、8 tenant reads、8 result writes，并发 cold-package churn | 每 plane 2,048 ops、32 invocation samples、9 reads MATCH |
+| 146 | Correctness+Perf | e2e_tc146_graph_frontier | 1s/2s/8n1s/8n2s | 图计算 frontier expansion：frontier、两条 adjacency、property 四次访问/vertex，25% property update | 每 plane 2,048 ops、32 graph-iteration samples、5 reads MATCH |
+| 147 | Correctness+Perf | e2e_tc147_feature_store | 1s/2s/8n1s/8n2s | 推荐/推理 feature store：56 次高偏斜 embedding lookup + 8 次 sparse accumulator update/batch | 每 plane 2,048 ops、32 batch samples、9 reads MATCH |
 | 217 | Correctness+Perf | e2e_ha_2n1s_core (HA10) | 2n1s | 512-entry 目录上 640-line 分批压力与 90/10 skewed catalog lookup/update | 双节点 validation=0；8 个 batch JSONL/latency 样本；128 useful operations；最终更新值 MATCH |
 
-#### TC142-TC144 数据库性能口径
+#### TC142-TC147 可移植大 workload 性能口径
 
-三个数据库 TC 使用相同的 512-entry、1-way ResidentDir 配置，并在 32 个
-业务 batch 之间累计流式访问 768 条 maintenance/checkpoint pressure line。
-它们预期能够体现 spill 相对 naive destructive eviction 的优势，因为 hot
-database page 在目录溢出后仍有较短 reuse distance：naive 会 recall/invalidate
-节点已有 copy，spill 则可保留 copy 并把 directory metadata 移入 backstore。
+六个 TC 使用相同的 512-entry、1-way ResidentDir 配置。每个 active plane
+拥有独立 hot shard；所有 plane 共同分片执行每 batch 24 条、全程 768 条的
+全局 pressure stream。plane 数随拓扑为 3、6、8、16；总 useful operations 随之扩展。所有 plane
+访问 Home0，双 socket 拓扑中的 socket1 因此覆盖 cross-L2/socket requester。
+
+它们预期能够体现 spill 相对 naive destructive eviction 的优势，因为 hot page、
+runtime state、adjacency 或 embedding 在目录溢出后仍有较短 reuse distance：
+naive 会 recall/invalidate 已有 copy，spill 可保留 copy 并把 directory metadata
+移入 backstore。
 
 每个 TC 同时输出两种固定工作量计时：
 
@@ -164,9 +171,15 @@ database page 在目录溢出后仍有较短 reuse distance：naive 会 recall/i
 | `*_end_to_end` | 从第一个 batch 前开始，到最后一个 batch 后结束，包含 pressure 等待和 batch barrier | 防止只汇报局部快路径，作为较保守的程序级比较 |
 
 测试并不以“spill 必须快于 naive”作为 correctness verifier 条件；性能优势由
-三 profile 矩阵在运行后计算。这样可以如实暴露 WAL/dirty-page 路径的开销，
+topology/profile 矩阵在运行后计算。这样可以如实暴露 WAL/dirty-page 路径的开销，
 避免通过验收逻辑预设结论。正式汇报应以 `spill-noopt vs naive` 说明 spill
 policy 收益，`spill-opt vs spill-noopt` 仅用于判断额外优化是否实际命中。
+
+多 plane 汇总不得把 ticks 相加后直接取倒数。正式聚合口径为：
+
+- latency：各 plane `ns/op` 的均值和最大值。
+- aggregate throughput：所有 plane 总 operations 除以最慢 plane 的 elapsed time。
+- end-to-end：同样以 critical-path 最大 ticks 作为完成边界。
 
 ---
 

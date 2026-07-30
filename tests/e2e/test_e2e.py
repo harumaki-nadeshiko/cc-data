@@ -128,6 +128,9 @@ TESTCASES = {
     142: "e2e_tc142_db_oltp_buffer_pool",
     143: "e2e_tc143_db_btree_traversal",
     144: "e2e_tc144_db_wal_checkpoint",
+    145: "e2e_tc145_faas_warm_invocation",
+    146: "e2e_tc146_graph_frontier",
+    147: "e2e_tc147_feature_store",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
     202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
@@ -150,6 +153,7 @@ _RE_READ_VAL = re.compile(
     r"expected=(\w+)\s+actual=(\w+)\s+(MATCH|MISMATCH)"
 )
 _RE_E2E_META = re.compile(r"\[E2E_META\]\s+node=(\d+)\s+test=(\S+)")
+_RE_TOPOLOGY = re.compile(r"\[TOPOLOGY\]\s+node=(\d+)\s+planes=(\d+)")
 _RE_GUEST_TIMER = re.compile(
     r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+"
     r"counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+"
@@ -1719,103 +1723,162 @@ def verify_tc141(reads, lines):
     return True, "TC141 PASSED: spill shared-to-writer recovery completed", []
 
 
-def verify_database_workload(tc_id, reads, lines, phases, expected_reads_by_node,
-                             latency_phase, service_phase, end_to_end_phase,
-                             operations, samples):
-    expected_reads = sum(expected_reads_by_node.values())
+def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,
+                                   latency_phase, service_phase,
+                                   end_to_end_phase, operations, samples):
+    meta = [_RE_E2E_META.search(line) for line in lines]
+    planes = sorted({int(match.group(1)) for match in meta
+                     if match and match.group(2) == f"TC{tc_id}"})
+    if not planes:
+        return False, f"TC{tc_id} FAILED: no E2E_META participants", []
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    topology = [(int(match.group(1)), int(match.group(2))) for match in topology
+                if match]
+    declared_counts = {count for _, count in topology}
+    if len(declared_counts) != 1:
+        return False, (f"TC{tc_id} FAILED: inconsistent topology declarations "
+                       f"{sorted(declared_counts)}"), []
+    expected_planes = declared_counts.pop()
+    expected_set = list(range(expected_planes))
+    if planes != expected_set:
+        return False, (f"TC{tc_id} FAILED: planes={planes}, expected "
+                       f"{expected_set}"), []
+    topology_planes = sorted(plane for plane, _ in topology)
+    if topology_planes != expected_set:
+        return False, (f"TC{tc_id} FAILED: topology markers={topology_planes}, "
+                       f"expected {expected_set}"), []
+    expected_reads = len(planes) * reads_per_plane
     if len(reads) != expected_reads:
         return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
                        f"got {len(reads)}"), reads
     mismatches = [read for read in reads if read["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
-    for node, expected in expected_reads_by_node.items():
-        actual = sum(1 for read in reads if read["node"] == node)
-        if actual != expected:
-            return False, (f"TC{tc_id} FAILED: node{node} READ_VAL count={actual}, "
-                           f"expected {expected}"), reads
-    unexpected = sorted({read["node"] for read in reads} - set(expected_reads_by_node))
+    for plane in planes:
+        actual = sum(1 for read in reads if read["node"] == plane)
+        if actual != reads_per_plane:
+            return False, (f"TC{tc_id} FAILED: plane{plane} READ_VAL count="
+                           f"{actual}, expected {reads_per_plane}"), reads
+    unexpected = sorted({read["node"] for read in reads} - set(planes))
     if unexpected:
         return False, f"TC{tc_id} FAILED: unexpected READ_VAL nodes {unexpected}", reads
 
-    missing = [phase for phase in phases
-               if not any("[PHASE]" in line and f"phase={phase}" in line
-                          for line in lines)]
+    missing = []
+    for phase in phases:
+        for plane in planes:
+            if not any("[PHASE]" in line and f"node={plane}" in line and
+                       f"phase={phase}" in line for line in lines):
+                missing.append(f"{phase}@plane{plane}")
     if missing:
         return False, f"TC{tc_id} FAILED: missing phases {missing}", []
     timer_error = verify_guest_timer(lines)
     if timer_error:
         return False, f"TC{tc_id} FAILED: {timer_error}", []
 
-    timers = {}
+    timers = {service_phase: {}, end_to_end_phase: {}}
     for line in lines:
         match = _RE_GUEST_TIMER.search(line)
         if match and match.group(2) in (service_phase, end_to_end_phase):
-            timers.setdefault(match.group(2), []).append(match)
+            timers[match.group(2)].setdefault(int(match.group(1)), []).append(match)
     for phase in (service_phase, end_to_end_phase):
-        matches = timers.get(phase, [])
-        if len(matches) != 1:
-            return False, (f"TC{tc_id} FAILED: expected one {phase} GUEST-TIMER, "
-                           f"got {len(matches)}"), []
-        match = matches[0]
-        if int(match.group(1)) != 1 or int(match.group(3)) != operations:
-            return False, (f"TC{tc_id} FAILED: {phase} node/operations mismatch "
-                           f"node={match.group(1)} operations={match.group(3)}"), []
-        if int(match.group(4)) == 0 or int(match.group(5)) == 0:
-            return False, f"TC{tc_id} FAILED: zero {phase} ticks/frequency", []
-    service_ticks = int(timers[service_phase][0].group(4))
-    end_to_end_ticks = int(timers[end_to_end_phase][0].group(4))
-    if end_to_end_ticks < service_ticks:
-        return False, (f"TC{tc_id} FAILED: end-to-end ticks {end_to_end_ticks} "
-                       f"below service ticks {service_ticks}"), []
+        for plane in planes:
+            matches = timers[phase].get(plane, [])
+            if len(matches) != 1:
+                return False, (f"TC{tc_id} FAILED: expected one {phase} timer "
+                               f"for plane{plane}, got {len(matches)}"), []
+            match = matches[0]
+            if int(match.group(3)) != operations:
+                return False, (f"TC{tc_id} FAILED: {phase} plane{plane} "
+                               f"operations={match.group(3)}, expected {operations}"), []
+            if int(match.group(4)) == 0 or int(match.group(5)) == 0:
+                return False, f"TC{tc_id} FAILED: zero {phase} ticks/frequency", []
+    service_ticks = {plane: int(timers[service_phase][plane][0].group(4))
+                     for plane in planes}
+    end_to_end_ticks = {plane: int(timers[end_to_end_phase][plane][0].group(4))
+                        for plane in planes}
+    for plane in planes:
+        if end_to_end_ticks[plane] < service_ticks[plane]:
+            return False, (f"TC{tc_id} FAILED: plane{plane} end-to-end ticks "
+                           f"{end_to_end_ticks[plane]} below service ticks "
+                           f"{service_ticks[plane]}"), []
 
     latency = [match for line in lines
                if (match := _RE_PERF_LATENCY.search(line)) and
                match.group(2) == latency_phase]
-    if len(latency) != 1:
-        return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
-                       f"PERF-LATENCY, got {len(latency)}"), []
-    sample = latency[0]
-    if int(sample.group(1)) != 1 or int(sample.group(3)) != samples:
-        return False, (f"TC{tc_id} FAILED: {latency_phase} node/samples mismatch "
-                       f"node={sample.group(1)} samples={sample.group(3)}"), []
-    minimum, p50, p95, p99, maximum, mean = (
-        int(sample.group(index)) for index in range(4, 10))
-    if minimum == 0 or int(sample.group(10)) == 0:
-        return False, f"TC{tc_id} FAILED: zero latency/frequency", []
-    if not minimum <= p50 <= p95 <= p99 <= maximum:
-        return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
-    if not minimum <= mean <= maximum:
-        return False, f"TC{tc_id} FAILED: mean outside latency range", []
-    return True, (f"TC{tc_id} PASSED: operations={operations}, batches={samples}, "
-                  f"service_ticks={service_ticks}, end_to_end_ticks={end_to_end_ticks}"), []
+    by_plane = {}
+    for sample in latency:
+        by_plane.setdefault(int(sample.group(1)), []).append(sample)
+    for plane in planes:
+        plane_samples = by_plane.get(plane, [])
+        if len(plane_samples) != 1:
+            return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
+                           f"for plane{plane}, got {len(plane_samples)}"), []
+        sample = plane_samples[0]
+        if int(sample.group(3)) != samples:
+            return False, (f"TC{tc_id} FAILED: {latency_phase} plane{plane} "
+                           f"samples={sample.group(3)}, expected {samples}"), []
+        minimum, p50, p95, p99, maximum, mean = (
+            int(sample.group(index)) for index in range(4, 10))
+        if minimum == 0 or int(sample.group(10)) == 0:
+            return False, f"TC{tc_id} FAILED: zero latency/frequency", []
+        if not minimum <= p50 <= p95 <= p99 <= maximum:
+            return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
+        if not minimum <= mean <= maximum:
+            return False, f"TC{tc_id} FAILED: mean outside latency range", []
+    return True, (f"TC{tc_id} PASSED: planes={len(planes)}, "
+                  f"operations={operations * len(planes)}, batches={samples}"), []
 
 
 def verify_tc142(reads, lines):
-    return verify_database_workload(
+    return verify_portable_large_workload(
         142, reads, lines,
         ("buffer_pool_seed", "buffer_pool_warm", "incremental_pressure",
          "oltp_transactions", "oltp_verify"),
-        {1: 16, 2: 4}, "db_oltp_batch_32ops", "db_oltp_service",
+        5, "db_oltp_batch_32ops", "db_oltp_service",
         "db_oltp_end_to_end", 1024, 32)
 
 
 def verify_tc143(reads, lines):
-    return verify_database_workload(
+    return verify_portable_large_workload(
         143, reads, lines,
         ("btree_seed", "btree_warm", "btree_pressure", "btree_transactions",
          "btree_verify"),
-        {1: 8, 2: 4}, "db_btree_batch_64ops", "db_btree_service",
+        5, "db_btree_batch_64ops", "db_btree_service",
         "db_btree_end_to_end", 2048, 32)
 
 
 def verify_tc144(reads, lines):
-    return verify_database_workload(
+    return verify_portable_large_workload(
         144, reads, lines,
         ("database_seed", "database_warm", "checkpoint_pressure",
          "wal_transactions", "recovery_verify"),
-        {1: 16, 2: 32}, "db_wal_batch_32ops", "db_wal_service",
+        17, "db_wal_batch_32ops", "db_wal_service",
         "db_wal_end_to_end", 1024, 32)
+
+
+def verify_tc145(reads, lines):
+    return verify_portable_large_workload(
+        145, reads, lines,
+        ("faas_runtime_seed", "faas_runtime_warm", "faas_invocations",
+         "faas_verify"),
+        9, "faas_batch_64ops", "faas_service", "faas_end_to_end", 2048, 32)
+
+
+def verify_tc146(reads, lines):
+    return verify_portable_large_workload(
+        146, reads, lines,
+        ("graph_seed", "graph_frontier_warm", "graph_iterations",
+         "graph_verify"),
+        5, "graph_batch_64ops", "graph_service", "graph_end_to_end", 2048, 32)
+
+
+def verify_tc147(reads, lines):
+    return verify_portable_large_workload(
+        147, reads, lines,
+        ("feature_store_seed", "feature_store_warm", "feature_batches",
+         "feature_verify"),
+        9, "feature_batch_64ops", "feature_service",
+        "feature_end_to_end", 2048, 32)
 
 
 def verify_tc201(reads, lines):
@@ -2349,6 +2412,9 @@ VERIFIERS = {
     142: verify_tc142,
     143: verify_tc143,
     144: verify_tc144,
+    145: verify_tc145,
+    146: verify_tc146,
+    147: verify_tc147,
     200: verify_tc200,
     201: verify_tc201,
     202: verify_tc202,

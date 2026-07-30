@@ -1,13 +1,12 @@
-/* TC142: topology-portable skewed OLTP buffer-pool transactions. */
+/* TC147: recommendation feature-store lookups with sparse embedding updates. */
 #include "portable_large_workload.h"
 
-#define HOT_PAGES 32
 #define BATCHES 32
-#define OPS_PER_BATCH 32
+#define OPS_PER_BATCH 64
 #define PRESSURE_PER_BATCH 24
-#define DATA_BASE 0x00200000u
+#define DATA_BASE 0x00c00000u
 #define PRESSURE_BASE 0x04000000u
-#define VALUE_BASE 0x14200000u
+#define VALUE_BASE 0x14700000u
 
 int main(int argc, char **argv)
 {
@@ -16,21 +15,25 @@ int main(int argc, char **argv)
     if (!portable_is_primary(cpu)) { _exit_program(0); return 0; }
     int plane = portable_plane(node, cpu);
     uint32_t shard = portable_shard(DATA_BASE, plane);
-    portable_emit_meta(plane, "TC142");
+    uint32_t embedding = shard;
+    uint32_t accumulator = shard + 0x6000u;
+    portable_emit_meta(plane, "TC147");
     emit_timer_selftest(plane);
 
     PORTABLE_SERIAL_FOR_EACH_PLANE(plane, {
-        for (int page = 0; page < HOT_PAGES; ++page)
-            dsm_store(0, portable_line(shard, page),
-                      VALUE_BASE | ((uint32_t)plane << 16) | (uint32_t)page);
+        for (int line = 0; line < 128; ++line)
+            dsm_store(0, portable_line(embedding, line), VALUE_BASE |
+                      ((uint32_t)plane << 16) | (uint32_t)line);
+        for (int line = 0; line < 8; ++line)
+            dsm_store(0, portable_line(accumulator, line), 0);
         __asm__ volatile("dsb sy" ::: "memory");
     });
-    emit_phase_done(plane, "buffer_pool_seed");
+    emit_phase_done(plane, "feature_store_seed");
 
     uint32_t warm_expected = VALUE_BASE | ((uint32_t)plane << 16);
-    uint32_t warm = dsm_load(0, portable_line(shard, 0));
+    uint32_t warm = dsm_load(0, embedding);
     emit_read_val(plane, 0, warm_expected, warm, warm == warm_expected);
-    emit_phase_done(plane, "buffer_pool_warm");
+    emit_phase_done(plane, "feature_store_warm");
     portable_barrier();
 
     uint64_t samples[BATCHES];
@@ -46,37 +49,33 @@ int main(int argc, char **argv)
         portable_barrier();
 
         uint64_t start = read_counter_serialized();
-        for (int op = 0; op < 28; ++op) {
-            int page = (op % 5) ? ((op * 7 + batch) & 7)
-                                : ((op * 13 + batch * 3) & 31);
-            (void)dsm_load(0, portable_line(shard, page));
+        for (int lookup = 0; lookup < 56; ++lookup) {
+            int key = (lookup % 8) ? ((lookup * 9 + batch) & 31)
+                                   : ((lookup * 23 + batch * 5) & 127);
+            (void)dsm_load(0, portable_line(embedding, key));
         }
-        for (int update = 0; update < 4; ++update) {
-            int page = update * 2 + 1;
-            dsm_store(0, portable_line(shard, page),
-                      VALUE_BASE | ((uint32_t)plane << 16) |
-                      ((uint32_t)batch << 8) | (uint32_t)page);
-        }
+        for (int update = 0; update < 8; ++update)
+            dsm_store(0, portable_line(accumulator, update), VALUE_BASE |
+                      ((uint32_t)plane << 16) |
+                      ((uint32_t)batch << 8) | (uint32_t)update);
         __asm__ volatile("dsb sy" ::: "memory");
         samples[batch] = read_counter_serialized() - start;
         service_ticks += samples[batch];
         portable_barrier();
     }
     uint64_t end_to_end_ticks = read_counter_serialized() - end_to_end_start;
-    emit_phase_done(plane, "incremental_pressure");
-    portable_emit_results(plane, "db_oltp_service", "db_oltp_end_to_end",
-                          "db_oltp_batch_32ops", BATCHES * OPS_PER_BATCH,
+    portable_emit_results(plane, "feature_service", "feature_end_to_end",
+                          "feature_batch_64ops", BATCHES * OPS_PER_BATCH,
                           service_ticks, end_to_end_ticks, samples, BATCHES);
-    emit_phase_done(plane, "oltp_transactions");
+    emit_phase_done(plane, "feature_batches");
 
-    for (int update = 0; update < 4; ++update) {
-        int page = update * 2 + 1;
+    for (int update = 0; update < 8; ++update) {
         uint32_t expected = VALUE_BASE | ((uint32_t)plane << 16) |
-                            ((BATCHES - 1u) << 8) | (uint32_t)page;
-        uint32_t got = dsm_load(0, portable_line(shard, page));
+                            ((BATCHES - 1u) << 8) | (uint32_t)update;
+        uint32_t got = dsm_load(0, portable_line(accumulator, update));
         emit_read_val(plane, 0, expected, got, got == expected);
     }
-    emit_phase_done(plane, "oltp_verify");
+    emit_phase_done(plane, "feature_verify");
     portable_barrier();
     _exit_program(0);
     return 0;

@@ -323,6 +323,18 @@ static inline void emit_e2e_meta(int node_id, const char *test_name)
     _raw_write(buf, p);
 }
 
+static inline void emit_topology(int node_id, int planes)
+{
+    char buf[96]; int p = 0;
+    char *s = (char *)"[TOPOLOGY]   node=";
+    while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, node_id);
+    s = (char *)" planes="; while (*s) buf[p++] = *s++;
+    p = fmt_int(buf, p, planes);
+    buf[p++] = '\n';
+    _raw_write(buf, p);
+}
+
 static inline void emit_progress(int node_id, const char *phase_name, int iter)
 {
     char buf[192]; int p = 0;

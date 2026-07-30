@@ -159,7 +159,7 @@ ubio_extra_args_for_tc() {
                 *) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
             esac
             ;;
-        142|143|144)
+        142|143|144|145|146|147)
             # Database workloads use a 512-entry, 1-way ResidentDir and stream
             # 768 maintenance lines around a repeatedly used database hot set.
             case "${EP_PERF_PROFILE:-spill-noopt}" in
@@ -606,7 +606,7 @@ run_tc() {
         fi
         if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ] || [ "$tc" = "141" ] ||
            { [ "$tc" -ge 135 ] && [ "$tc" -le 139 ]; } ||
-           { [ "$tc" -ge 142 ] && [ "$tc" -le 144 ]; }; then
+           { [ "$tc" -ge 142 ] && [ "$tc" -le 147 ]; }; then
             # These tests isolate directory policy; do not mix protocol optimizations.
             case "${EP_PERF_PROFILE:-spill-noopt}" in
                 optimized) cmd="$cmd --silent-upgrade=1 --direct-fwd=0 --ubcc-batch-rs=1" ;;
@@ -930,7 +930,7 @@ echo "Workload: $WORKLOAD  (compiled per-TC; path is constant)"
 # mismatch before compiling or starting any managed process.
 required_topology_for_tc() {
     case "$1" in
-        135|136|137|138|139|140|141|142|143|144) printf '%s\n' 1s ;;
+        135|136|137|138|139|140|141)          printf '%s\n' 1s ;;
         32|33|34|35|39|81)                 printf '%s\n' 2s ;;
         82|90|91|92|93|94|133)             printf '%s\n' 8n1s ;;
         95|96|97|98|99|100|101|134)        printf '%s\n' 8n2s ;;
