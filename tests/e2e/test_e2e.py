@@ -145,6 +145,8 @@ TESTCASES = {
     217: "e2e_ha_2n1s_core",         # HA10 read-mostly skewed catalog performance
     218: "e2e_ha_2n1s_core",         # HA08 lock/barrier contention
     219: "e2e_ha_2n1s_core",         # HA09 mixed local/remote pressure
+    220: "e2e_ha_2n1s_core",         # HA11 clean/shared 150% capacity
+    221: "e2e_ha_2n1s_core",         # HA12 dirty-owner 150% capacity
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -2309,7 +2311,82 @@ def verify_ha_2n1s(reads, lines):
     scenarios = {r.get("scenario") for r in validations}
     if len(scenarios) != 1:
         return False, f"2N1S FAILED: inconsistent scenarios {scenarios}", []
-    return True, f"2N1S PASSED: {next(iter(scenarios))} validated on two nodes", []
+    capacity = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("kind") == "capacity":
+            capacity.append(record)
+    formal = [r for r in capacity if r.get("formal_capacity") is True]
+    if formal:
+        if len(formal) != 1 or formal[0].get("unique_lines", 0) < 768:
+            return False, f"2N1S FAILED: invalid formal capacity record {formal}", []
+    return True, (f"2N1S PASSED: {next(iter(scenarios))} validated on two nodes"
+                  f" formal_capacity={bool(formal)}"), []
+
+
+def verify_ha_capacity(reads, lines, scenario, expected_phases):
+    passed, message, failures = verify_ha_2n1s(reads, lines)
+    if not passed:
+        return passed, message, failures
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"{scenario} FAILED: {len(mismatches)} mismatches", mismatches
+    records = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("kind") == "capacity" and record.get("scenario") == scenario:
+            records.append(record)
+    expected_capacity = {
+        "resident_capacity": 512,
+        "hot_lines": 64,
+        "pressure_lines": 704,
+        "unique_lines": 768,
+        "capacity_ratio": 1.5,
+        "formal_capacity": True,
+    }
+    if len(records) != 1 or any(records[0].get(key) != value
+                                for key, value in expected_capacity.items()):
+        return False, (f"{scenario} FAILED: invalid exact-150 capacity record "
+                       f"{records}"), []
+    timers = [_RE_GUEST_TIMER.search(line) for line in lines]
+    timer_phases = {sample.group(2): int(sample.group(3))
+                    for sample in timers if sample}
+    missing = [phase for phase in expected_phases if phase not in timer_phases]
+    if missing:
+        return False, f"{scenario} FAILED: missing timers {missing}", []
+    invalid_ops = {phase: (timer_phases[phase], operations)
+                   for phase, operations in expected_phases.items()
+                   if timer_phases[phase] != operations}
+    if invalid_ops:
+        return False, f"{scenario} FAILED: invalid timer operations {invalid_ops}", []
+    if len(reads) != 64:
+        return False, f"{scenario} FAILED: expected 64 final reads, got {len(reads)}", []
+    return True, f"{scenario} PASSED: exact 768-line capacity and timed lifecycle", []
+
+
+def verify_tc220(reads, lines):
+    return verify_ha_capacity(reads, lines, "HA11", {
+        "clean_capacity_admission": 704,
+        "clean_first_revisit": 64,
+    })
+
+
+def verify_tc221(reads, lines):
+    return verify_ha_capacity(reads, lines, "HA12", {
+        "dirty_capacity_admission": 704,
+        "dirty_first_revisit": 32,
+        "dirty_handoff": 32,
+    })
 
 
 def verify_tc217(reads, lines):
@@ -2429,6 +2506,8 @@ VERIFIERS = {
     217: verify_tc217,
     218: verify_ha_2n1s,
     219: verify_ha_2n1s,
+    220: verify_tc220,
+    221: verify_tc221,
 }
 
 def verify_testcase(tc_id, reads, lines):

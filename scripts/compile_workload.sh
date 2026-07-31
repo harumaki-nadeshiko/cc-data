@@ -66,6 +66,8 @@ case "$TC_ID" in
     217) cflags="$cflags -DHA_SCENARIO=10" ;;
     218) cflags="$cflags -DHA_SCENARIO=8" ;;
     219) cflags="$cflags -DHA_SCENARIO=9" ;;
+    220) cflags="$cflags -DHA_SCENARIO=11" ;;
+    221) cflags="$cflags -DHA_SCENARIO=12" ;;
 esac
 echo "[compile_workload] tc=$TC_ID name=$TC_NAME sockets=$NUM_SOCKETS nodes=${NUM_NODES:-3}"
 echo "[compile_workload] $cc $cflags -o $OUT $SRC"

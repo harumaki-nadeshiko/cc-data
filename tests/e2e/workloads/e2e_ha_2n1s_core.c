@@ -15,14 +15,25 @@
 #define HA10_BATCHES 8
 #define HA10_PRESSURE_PER_BATCH 80
 #define HA10_OPS_PER_BATCH 16
+#define HA_RESIDENT_CAPACITY_LINES 512
+#define HA_CAPACITY_HOT_LINES 64
+#define HA_FORMAL_TOTAL_LINES ((HA_RESIDENT_CAPACITY_LINES * 3) / 2)
+#define HA_FORMAL_PRESSURE_LINES \
+    (HA_FORMAL_TOTAL_LINES - HA_CAPACITY_HOT_LINES)
+#ifndef HA_FORMAL_CAPACITY_LINES
+#define HA_FORMAL_CAPACITY_LINES 0
+#endif
 
 static inline uint64_t read_cntvct(void) { return read_cntvct_el0(); }
 
 static void json_manifest(int node)
 {
-    uint32_t workingSetBytes = HA_SCENARIO == 10
-        ? (HA10_CATALOG_LINES + HA10_BATCHES * HA10_PRESSURE_PER_BATCH) * 64u
-        : 4096u;
+    uint32_t workingSetBytes = 4096u;
+    if (HA_SCENARIO == 10)
+        workingSetBytes =
+            (HA10_CATALOG_LINES + HA10_BATCHES * HA10_PRESSURE_PER_BATCH) * 64u;
+    else if (HA_SCENARIO == 11 || HA_SCENARIO == 12)
+        workingSetBytes = HA_FORMAL_TOTAL_LINES * 64u;
     uint32_t iterations = HA_SCENARIO == 10 ? HA10_BATCHES : 1u;
     printf("{\"kind\":\"manifest\",\"scenario\":\"HA%02d\",\"mode\":\"cc\",\"node\":%d,\"seed\":131,\"nodes\":2,\"sockets_per_node\":1,\"threads_per_node\":1,\"working_set_bytes\":%u,\"iterations\":%u,\"measurement_source\":\"guest_cntvct\",\"guest_visible\":true}\n",
            HA_SCENARIO, node, workingSetBytes, iterations);
@@ -64,6 +75,63 @@ static uint32_t ha10_pressure_offset(uint32_t base, int line)
     return base + 0x100000u + (uint32_t)line * 64u;
 }
 
+static uint32_t formal_pressure_offset(int line)
+{
+    return 0x400000u + (uint32_t)line * 64u;
+}
+
+static uint32_t capacity_hot_offset(int line)
+{
+    return 0x200000u + (uint32_t)line * 64u;
+}
+
+static uint32_t capacity_pressure_offset(int line)
+{
+    return 0x300000u + (uint32_t)line * 64u;
+}
+
+static void json_capacity(int node, const char *scenario, uint32_t hot_lines,
+                          uint32_t pressure_lines, int formal)
+{
+    printf("{\"kind\":\"capacity\",\"scenario\":\"%s\",\"node\":%d,\"resident_capacity\":%u,\"hot_lines\":%u,\"pressure_lines\":%u,\"unique_lines\":%u,\"capacity_ratio\":%.6f,\"formal_capacity\":%s}\n",
+           scenario, node, HA_RESIDENT_CAPACITY_LINES, hot_lines, pressure_lines,
+           hot_lines + pressure_lines,
+           (double)(hot_lines + pressure_lines) / HA_RESIDENT_CAPACITY_LINES,
+           formal ? "true" : "false");
+    fflush(stdout);
+}
+
+static int run_formal_precondition(int node, uint64_t mask)
+{
+    if (HA_FORMAL_CAPACITY_LINES == 0 || HA_SCENARIO >= 11)
+        return 0;
+    int errors = 0;
+    uint64_t ticks = 0;
+    if (node == 0) {
+        uint64_t start = read_cntvct();
+        for (uint32_t i = 0; i < HA_FORMAL_CAPACITY_LINES; ++i)
+            perf_store_complete(0, formal_pressure_offset((int)i),
+                                0xAF000000u | i);
+        ticks = read_cntvct() - start;
+    }
+    sync_wait(mask);
+    if (node == 1) {
+        uint32_t first = dsm_load(0, formal_pressure_offset(0));
+        uint32_t last = dsm_load(0, formal_pressure_offset(
+                                     HA_FORMAL_CAPACITY_LINES - 1));
+        if (first != 0xAF000000u ||
+            last != (0xAF000000u | (HA_FORMAL_CAPACITY_LINES - 1)))
+            errors++;
+    }
+    sync_wait(mask);
+    if (node == 0) {
+        json_sample(0, "capacity_precondition", ticks,
+                    HA_FORMAL_CAPACITY_LINES);
+        json_capacity(0, "FORMAL150", 0, HA_FORMAL_CAPACITY_LINES, 1);
+    }
+    return errors;
+}
+
 int main(int argc, char **argv)
 {
     int node = argc >= 2 ? parse_int(argv[1]) : 0;
@@ -75,6 +143,7 @@ int main(int argc, char **argv)
     emit_e2e_meta(node, "HA_2N1S");
     emit_timer_selftest(node);
     json_manifest(node);
+    fail += run_formal_precondition(node, mask);
     if (HA_SCENARIO == 1) {
         if (node == 0) dsm_store(0, off, 0x101);
         sync_wait(mask);
@@ -294,6 +363,105 @@ int main(int argc, char **argv)
             if (got3 != expected3)
                 fail++;
         }
+    } else if (HA_SCENARIO == 11) {
+        if (node == 0) {
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i)
+                perf_store_complete(0, capacity_hot_offset(i),
+                                    0xAB110000u | (uint32_t)i);
+        }
+        sync_wait(mask);
+        if (node == 1) {
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i) {
+                uint32_t got = dsm_load(0, capacity_hot_offset(i));
+                if (got != (0xAB110000u | (uint32_t)i)) fail++;
+            }
+        }
+        sync_wait(mask);
+
+        if (node == 0) {
+            uint64_t start = read_counter_serialized();
+            for (int i = 0; i < HA_FORMAL_PRESSURE_LINES; ++i)
+                perf_store_complete(0, capacity_pressure_offset(i),
+                                    0xAB118000u | (uint32_t)i);
+            json_sample(0, "clean_capacity_admission",
+                        read_counter_serialized() - start,
+                         HA_FORMAL_PRESSURE_LINES);
+        }
+        sync_wait(mask);
+
+        if (node == 1) {
+            uint32_t values[HA_CAPACITY_HOT_LINES];
+            uint64_t start = read_counter_serialized();
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i)
+                values[i] = dsm_load(0, capacity_hot_offset(i));
+            json_sample(1, "clean_first_revisit",
+                        read_counter_serialized() - start,
+                        HA_CAPACITY_HOT_LINES);
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i) {
+                uint32_t expected = 0xAB110000u | (uint32_t)i;
+                emit_read_val(1, 0, expected, values[i], values[i] == expected);
+                if (values[i] != expected) fail++;
+            }
+        }
+        sync_wait(mask);
+        if (node == 0)
+            json_capacity(0, "HA11", HA_CAPACITY_HOT_LINES,
+                           HA_FORMAL_PRESSURE_LINES, 1);
+    } else if (HA_SCENARIO == 12) {
+        if (node == 1) {
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i)
+                perf_store_complete(0, capacity_hot_offset(i),
+                                    0xAB120000u | (uint32_t)i);
+        }
+        sync_wait(mask);
+
+        if (node == 0) {
+            uint64_t start = read_counter_serialized();
+            for (int i = 0; i < HA_FORMAL_PRESSURE_LINES; ++i)
+                perf_store_complete(0, capacity_pressure_offset(i),
+                                    0xAB128000u | (uint32_t)i);
+            json_sample(0, "dirty_capacity_admission",
+                        read_counter_serialized() - start,
+                         HA_FORMAL_PRESSURE_LINES);
+        }
+        sync_wait(mask);
+
+        if (node == 1) {
+            uint64_t start = read_counter_serialized();
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES / 2; ++i)
+                (void)dsm_load(0, capacity_hot_offset(i));
+            json_sample(1, "dirty_first_revisit",
+                        read_counter_serialized() - start,
+                        HA_CAPACITY_HOT_LINES / 2);
+        }
+        sync_wait(mask);
+
+        if (node == 0) {
+            uint64_t start = read_counter_serialized();
+            for (int i = HA_CAPACITY_HOT_LINES / 2;
+                 i < HA_CAPACITY_HOT_LINES; ++i)
+                perf_store_complete(0, capacity_hot_offset(i),
+                                    0xAB12F000u | (uint32_t)i);
+            json_sample(0, "dirty_handoff",
+                        read_counter_serialized() - start,
+                        HA_CAPACITY_HOT_LINES / 2);
+        }
+        sync_wait(mask);
+
+        if (node == 1) {
+            for (int i = 0; i < HA_CAPACITY_HOT_LINES; ++i) {
+                uint32_t expected = i < HA_CAPACITY_HOT_LINES / 2
+                    ? (0xAB120000u | (uint32_t)i)
+                    : (0xAB12F000u | (uint32_t)i);
+                uint32_t got = dsm_load(0, capacity_hot_offset(i));
+                emit_read_val(1, 0, expected, got, got == expected);
+                if (got != expected) fail++;
+            }
+        }
+        sync_wait(mask);
+        if (node == 0)
+            json_capacity(0, "HA12", HA_CAPACITY_HOT_LINES,
+                           HA_FORMAL_PRESSURE_LINES, 1);
     } else {
         if (node == 0) dsm_store(0, off, 0x701);
         sync_wait(mask);
