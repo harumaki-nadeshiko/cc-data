@@ -26,6 +26,7 @@
 ```text
 ha-workload-delivery/
   e2e_ha_2n1s_core.c
+  e2e_ha_cgroup_2n1s.c
   e2e_tc142_db_oltp_buffer_pool.c
   e2e_tc143_db_btree_traversal.c
   e2e_tc144_db_wal_checkpoint.c
@@ -48,8 +49,10 @@ ha-workload-delivery/
 当前仓库已包含 portable core、summarizer 和文档化 schema；真正发送给目标方时，
 不要打包本地 logs、ELF、HTML、`build/runs` 或私有 CC protocol trace。
 
-TC123/130/132/135/138/139 当前只交付 2N1S adapted contract；原源码仍固定为
-3N1S。只有 TC210-TC221 和 TC142-TC147 可列为已有 reference implementation。
+TC123/130/132/135/138/139 的原源码仍固定为 3N1S；独立 2N1S reference
+implementation 为 TC222-TC227。TC222/223/225/226/227 默认 optimized smoke PASS；
+TC224 的 512/4096 qualification profile PASS，但 8,192/65,536 原始规模因 600 秒
+progress stall FAIL，不能列为 full-scale qualified。
 
 ## 一页结论
 
@@ -61,6 +64,7 @@ TC123/130/132/135/138/139 当前只交付 2N1S adapted contract；原源码仍�
 | HA10 useful latency | 500.74 → 264.19 ns/op，-47.24% | PASS |
 | HA10 useful throughput | 1.997 → 3.785 Mops/s，+89.54% | PASS |
 | TC142-TC147 多拓扑 | 4 topology × 6 TC = 24/24 | PASS |
+| C 组 2N1S 迁移 | 6/6 有独立源码/verifier；5 default smoke PASS，TC224 compact PASS | PARTIAL：TC224 full-scale FAIL |
 
 汇报时必须同时说明：TC138 dirty-owner handoff 慢 12.12%，TC132 checkpoint
 recover 慢 39.49%，HA06 admission 慢约 19.6%。这些是方案成本，不应隐藏。

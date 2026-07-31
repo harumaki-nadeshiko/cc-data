@@ -67,8 +67,8 @@ HA10 是推荐的性能验收入口：512-entry 容量模型、16 条 catalog li
 
 HA11/HA12 是精确 150% capacity 入口：64 hot + 704 pressure = 768 unique lines。
 TC142-TC147 是推荐的业务 workload 扩展。TC123/130/132/135/138/139 的原源码
-仍固定为 3N1S；其 2N1S 角色合并、计时和验收定义见场景规范目录，当前不得标为
-directly runnable implementation。
+仍固定为 3N1S；其 2N1S 适配使用独立 TC222-TC227 和
+`e2e_ha_cgroup_2n1s.c`，避免改变原测试语义。
 
 ## 5. 目标侧适配接口
 
@@ -445,6 +445,12 @@ aarch64-none-elf-objcopy -O binary ha10.elf ha10.bin
 | 219 | 9 | `ha09_mixed_pressure.elf` |
 | 220 | 11 | `ha11_clean_exact150.elf` |
 | 221 | 12 | `ha12_dirty_exact150.elf` |
+| 222 | C group 1 | `tc222_shared_writer_2n1s.elf` |
+| 223 | C group 2 | `tc223_hot_reuse_2n1s.elf` |
+| 224 | C group 3 | `tc224_checkpoint_2n1s.elf` |
+| 225 | C group 4 | `tc225_sharer_revisit_2n1s.elf` |
+| 226 | C group 5 | `tc226_dirty_handoff_2n1s.elf` |
+| 227 | C group 6 | `tc227_mixed_batch_2n1s.elf` |
 
 可以构建 12 个独立 binary，也可以构建一个 image，通过只读 boot parameter 选择
 scenario。若运行时选择，必须保证分支外的 code/data 不改变 cache footprint；正式
@@ -453,6 +459,17 @@ scenario。若运行时选择，必须保证分支外的 code/data 不改变 cac
 TC142-TC147 使用各自独立源码，不通过 `HA_SCENARIO` 选择。其 target binary 建议为
 `tc142_oltp.elf`、`tc143_btree.elf`、`tc144_wal.elf`、`tc145_faas.elf`、
 `tc146_graph.elf` 和 `tc147_feature.elf`。
+
+TC224 默认保留来源 workload 的 8,192 active + 65,536 pressure 配置，但当前 CC
+reference 在该规模触发 600 秒 progress-stall guard。已验证的 portable
+qualification profile 是：
+
+```bash
+WORKLOAD_CFLAGS="-DC224_ACTIVE_LINES=512 -DC224_PRESSURE_LINES=4096 -DC224_READ_STRIDE=64" \
+  bash tests/e2e/run_multi.sh --2n1s 224
+```
+
+该 profile PASS 只证明迁移和中等压力路径可用，不能替代 8K/64K 原始规模验收。
 
 ## 20. HA10 Bare-metal 执行步骤
 

@@ -44,11 +44,21 @@ their dynamic participant/barrier contract:
 | 146 | Graph frontier |
 | 147 | Feature store |
 
-The catalog additionally defines 2N1S adapted contracts for TC123, TC130,
-TC132, TC135, TC138, and TC139. Their current source files remain fixed 3N1S
-workloads, so those entries are specifications, not directly runnable 2N1S
-binaries. Do not present them as implemented until a dedicated portable source
-and verifier exist.
+The C-group adaptations are implemented as dedicated TC222-TC227 binaries in
+`e2e_ha_cgroup_2n1s.c`; the original TC123/130/132/135/138/139 remain unchanged
+3N1S workloads. TC222/223/225/226/227 pass default optimized smoke. TC224 passes
+the 512-active/4096-pressure qualification profile; its original
+8192-active/65536-pressure profile currently hits the 600-second progress-stall
+guard and must not be reported as qualified.
+
+| New TC | Adapted workload |
+|---:|---|
+| 222 | TC123 shared-to-writer batch |
+| 223 | TC130 overflow hot reuse |
+| 224 | TC132 dirty checkpoint recovery |
+| 225 | TC135 preserved sharer first revisit |
+| 226 | TC138 dirty owner handoff |
+| 227 | TC139 mixed batch throughput |
 
 Run CC profiles with identical inputs:
 

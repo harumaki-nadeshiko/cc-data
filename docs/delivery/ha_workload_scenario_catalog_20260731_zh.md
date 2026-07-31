@@ -11,11 +11,12 @@
 |---|---|---|---|
 | A | HA01-HA12 / TC210-TC221 | 2N1S reference 已实现 | `e2e_ha_2n1s_core.c`、verifier、JSONL contract |
 | B | TC142-TC147 | topology-portable 源码已实现 | 原 workload 源码、公共 helper、verifier、业务性能 contract |
-| C | TC123/130/132/135/138/139 | 原源码为固定 3N1S | 2N1S adapted contract；目标侧或后续 portable core 必须按本文实现 |
+| C | TC222-TC227 | `e2e_ha_cgroup_2n1s.c` | TC123/130/132/135/138/139 的独立 2N1S portable adaptation |
 
 组 C 不能直接将原 `.c` 文件以 `--2n1s` 运行。原文件含三参与者 barrier 或 node2
 角色；本文保留其架构语义并定义两节点角色合并方法。交付报告必须标明
-`implementation_status=contract_only`，直到有独立的 2N1S 源码和 verifier。
+原 TC123/130/132/135/138/139 仍保持 3N1S 语义；2N1S 实现使用新 TC222-TC227，
+不会悄悄修改原 verifier。manifest 使用 `implementation_status=implemented_2n1s`。
 
 以下 TC 不纳入当前 2N1S HA 交付：TC120-TC122、TC124-TC129、TC131、TC133、
 TC134、TC136、TC137、TC140、TC141。主要原因是被推荐场景覆盖、依赖第三个独立
@@ -298,11 +299,26 @@ Global/CHI 的典型映射如下：
 | Global/CHI | embedding 主要为 ReadShared/local hit；accumulator 为重复 unique ownership |
 | 验收 | warm embedding + 8 最终 accumulator reads MATCH |
 
-## 6. C 组：2N1S Adapted Contract
+## 6. C 组：2N1S Portable Implementation
 
 本组保留原 TC 的核心架构语义，但重新定义角色以消除 node2。除非另有说明，Home0
 位于 node0，barrier mask 为 `0x3`。实现时应分配新的 HA scenario ID 或独立 target
 binary，不能悄悄修改原 TC 的 3N1S verifier。
+
+实现映射与 2026-07-31 optimized 验证状态：
+
+| 新 TC | 来源语义 | 2N1S 状态 |
+|---:|---|---|
+| 222 | TC123-HA | 默认规模 smoke PASS |
+| 223 | TC130-HA | 默认规模 smoke PASS |
+| 224 | TC132-HA | 512 active + 4,096 pressure qualification PASS；原 8,192 + 65,536 profile 在 600 秒无进展时 FAIL |
+| 225 | TC135-HA | 默认规模 smoke PASS |
+| 226 | TC138-HA | 默认规模 smoke PASS |
+| 227 | TC139-HA | 默认规模 smoke PASS |
+
+PASS 日志位于 `logs/cgroup_2n1s_smoke_20260731/`、
+`logs/cgroup_2n1s_qualification_20260731/` 和
+`logs/cgroup_2n1s_final_20260731/`，不进入交付 commit。
 
 ### 6.1 TC123-HA：Shared To Writer Batch
 
@@ -374,7 +390,7 @@ binary，不能悄悄修改原 TC 的 3N1S verifier。
 | 每 batch | even line 8 loads + odd line 8 stores；batch 尾 completion barrier；16 operations |
 | 计时 | `mixed_batch_16ops`=16 samples；`mixed_batch_throughput`=256 operations |
 | Global/CHI | even lines 测 shared reuse；odd lines 测 retained owner write reuse；policy 差异会改变 Outer request 数量 |
-| 验收 | node0 最终验证 8 条 odd line 为 batch15 值；16 samples、256-op timer 完整 |
+| 验收 | node1 本地验证 8 条 odd line 为 batch15 值并向 node0 交接 checksum；node0 验证 summary；16 samples、256-op timer 完整 |
 
 ## 7. 交付优先级
 

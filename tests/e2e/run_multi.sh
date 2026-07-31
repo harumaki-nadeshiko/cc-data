@@ -207,7 +207,7 @@ ubio_extra_args_for_tc() {
             # tombstone semantics are tested directly by the focused Host test.
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
-        210|211|212|213|214|215|216|217|218|219|220|221)
+        210|211|212|213|214|215|216|217|218|219|220|221|222|223|224|225|226|227)
             case "${EP_PERF_PROFILE:-optimized}" in
                 naive) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 spill-noopt) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
@@ -934,7 +934,7 @@ required_topology_for_tc() {
         32|33|34|35|39|81)                 printf '%s\n' 2s ;;
         82|90|91|92|93|94|133)             printf '%s\n' 8n1s ;;
         95|96|97|98|99|100|101|134)        printf '%s\n' 8n2s ;;
-        210|211|212|213|214|215|216|217|218|219|220|221) printf '%s\n' 2n1s ;;
+        210|211|212|213|214|215|216|217|218|219|220|221|222|223|224|225|226|227) printf '%s\n' 2n1s ;;
     esac
 }
 

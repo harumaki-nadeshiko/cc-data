@@ -18,6 +18,12 @@
 CC optimized 相对 CC naive 的 useful latency 降低 **47.24%**，useful throughput
 提升 **89.54%**。它是交给未知 HA target 复现的首选 workload。
 
+C 组 TC123/130/132/135/138/139 已迁移为独立 2N1S TC222-TC227。2026-07-31
+optimized smoke 中 TC222/223/225/226/227 默认规模 PASS；TC224 的 512 active +
+4,096 pressure qualification profile PASS。TC224 原始 8,192 active + 65,536
+pressure profile 被 600 秒 progress-stall guard 终止，因此当前只能判为迁移可用、
+full-scale qualification 未通过，不能纳入性能结论。
+
 证据等级提示：
 
 - 目标 1 的 TC131 容量/Outer 结果是后续协议修复前完成的正式矩阵，最新代码待复跑。

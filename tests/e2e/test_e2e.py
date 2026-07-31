@@ -147,6 +147,12 @@ TESTCASES = {
     219: "e2e_ha_2n1s_core",         # HA09 mixed local/remote pressure
     220: "e2e_ha_2n1s_core",         # HA11 clean/shared 150% capacity
     221: "e2e_ha_2n1s_core",         # HA12 dirty-owner 150% capacity
+    222: "e2e_ha_cgroup_2n1s",        # C123-HA shared-to-writer batch
+    223: "e2e_ha_cgroup_2n1s",        # C130-HA overflow hot reuse
+    224: "e2e_ha_cgroup_2n1s",        # C132-HA dirty checkpoint recovery
+    225: "e2e_ha_cgroup_2n1s",        # C135-HA preserved sharer revisit
+    226: "e2e_ha_cgroup_2n1s",        # C138-HA dirty owner handoff
+    227: "e2e_ha_cgroup_2n1s",        # C139-HA mixed batch throughput
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -2389,6 +2395,123 @@ def verify_tc221(reads, lines):
     })
 
 
+def verify_ha_cgroup(reads, lines, scenario, expected_reads,
+                     timer_phases=(), latency_phases=()):
+    passed, message, failures = verify_ha_2n1s(reads, lines)
+    if not passed:
+        return passed, message, failures
+    validations = []
+    manifests = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("scenario") == scenario:
+            if record.get("kind") == "validation":
+                validations.append(record)
+            elif record.get("kind") == "manifest":
+                manifests.append(record)
+    if len(manifests) != 2 or {r.get("node") for r in manifests} != {0, 1}:
+        return False, f"{scenario} FAILED: invalid manifests {manifests}", []
+    if any(r.get("implementation_status") != "implemented_2n1s"
+           for r in manifests):
+        return False, f"{scenario} FAILED: implementation status missing", []
+    if len(validations) != 2 or {r.get("node") for r in validations} != {0, 1}:
+        return False, f"{scenario} FAILED: invalid validations {validations}", []
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches or len(reads) != expected_reads:
+        return False, (f"{scenario} FAILED: reads={len(reads)} "
+                       f"expected={expected_reads} mismatches={len(mismatches)}"), reads
+    timers = [_RE_GUEST_TIMER.search(line) for line in lines]
+    timers = {m.group(2): int(m.group(3)) for m in timers if m}
+    missing_timers = [phase for phase, operations in timer_phases
+                      if timers.get(phase) != operations]
+    if missing_timers:
+        return False, f"{scenario} FAILED: invalid timers {missing_timers}", []
+    latency = [_RE_PERF_LATENCY.search(line) for line in lines]
+    latency = {m.group(2): int(m.group(3)) for m in latency if m}
+    missing_latency = [phase for phase, samples in latency_phases
+                       if latency.get(phase) != samples]
+    if missing_latency:
+        return False, f"{scenario} FAILED: invalid latency {missing_latency}", []
+    return True, f"{scenario} PASSED: portable 2N1S contract validated", []
+
+
+def verify_tc222(reads, lines):
+    return verify_ha_cgroup(reads, lines, "C123-HA", 4,
+                            (("c123_shared_to_writer_store", 4),),
+                            (("c123_shared_to_writer_store", 4),))
+
+
+def verify_tc223(reads, lines):
+    return verify_ha_cgroup(reads, lines, "C130-HA", 24,
+                            (("c130_post_pressure_hot_reuse", 96),),
+                            (("c130_first_revisit", 24),))
+
+
+def verify_tc224(reads, lines):
+    configs = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (record.get("kind") == "workload_config" and
+                record.get("scenario") == "C132-HA"):
+            configs.append(record)
+    if len(configs) != 2 or {r.get("node") for r in configs} != {0, 1}:
+        return False, f"C132-HA FAILED: invalid workload configs {configs}", []
+    fields = ("active_lines", "pressure_lines", "read_stride", "sample_count")
+    if any(configs[0].get(field) != configs[1].get(field) for field in fields):
+        return False, f"C132-HA FAILED: node configs differ {configs}", []
+    active = configs[0].get("active_lines", 0)
+    pressure = configs[0].get("pressure_lines", 0)
+    stride = configs[0].get("read_stride", 0)
+    samples = configs[0].get("sample_count", 0)
+    stride_samples = (active - 1) // stride + 1 if stride > 0 else 0
+    expected_samples = stride_samples + int(
+        stride > 0 and (active - 1) % stride != 0)
+    if (active <= 0 or pressure <= 0 or stride <= 0 or
+            samples != expected_samples):
+        return False, f"C132-HA FAILED: invalid workload config {configs[0]}", []
+    passed, message, failures = verify_ha_cgroup(
+        reads, lines, "C132-HA", samples)
+    if not passed:
+        return passed, message, failures
+    if samples < 2:
+        return False, "C132-HA FAILED: expected at least two checkpoint samples", reads
+    timers = [_RE_GUEST_TIMER.search(line) for line in lines]
+    timers = [m for m in timers if m and m.group(2) in
+              ("c132_checkpoint_recover", "c132_checkpoint_end_to_end")]
+    if len(timers) != 2:
+        return False, "C132-HA FAILED: missing recover/end-to-end timers", []
+    operations = {int(m.group(3)) for m in timers}
+    if len(operations) != 1 or next(iter(operations)) <= 0:
+        return False, f"C132-HA FAILED: inconsistent operations {operations}", []
+    return True, "C132-HA PASSED: checkpoint recovery validated", []
+
+
+def verify_tc225(reads, lines):
+    return verify_ha_cgroup(reads, lines, "C135-HA", 48,
+                            latency_phases=(("c135_preserved_sharer_first_load", 24),))
+
+
+def verify_tc226(reads, lines):
+    return verify_ha_cgroup(reads, lines, "C138-HA", 24,
+                            latency_phases=(("c138_dirty_owner_handoff_store", 24),))
+
+
+def verify_tc227(reads, lines):
+    return verify_ha_cgroup(reads, lines, "C139-HA", 9,
+                            (("c139_mixed_batch_throughput", 256),),
+                            (("c139_mixed_batch_16ops", 16),))
+
+
 def verify_tc217(reads, lines):
     passed, message, failures = verify_ha_2n1s(reads, lines)
     if not passed:
@@ -2508,6 +2631,12 @@ VERIFIERS = {
     219: verify_ha_2n1s,
     220: verify_tc220,
     221: verify_tc221,
+    222: verify_tc222,
+    223: verify_tc223,
+    224: verify_tc224,
+    225: verify_tc225,
+    226: verify_tc226,
+    227: verify_tc227,
 }
 
 def verify_testcase(tc_id, reads, lines):
