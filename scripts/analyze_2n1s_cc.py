@@ -34,16 +34,17 @@ def main():
 
     samples = defaultdict(list)
     for run, log_dir in enumerate(args.log_dir):
-        for path in Path(log_dir).glob("gem5_tc*_node*/stderr.log"):
-            match = TC_RE.match(path.parent.name)
-            if not match or int(match.group(1)) not in SCENARIOS:
-                continue
-            tc = int(match.group(1))
-            for line in path.read_text(errors="replace").splitlines():
-                outer = OUTER_RE.search(line)
-                if outer:
-                    samples[tc].append((run, int(outer.group(1)), int(outer.group(3)),
-                                        int(outer.group(4)), int(outer.group(5))))
+        for stream in ("stdout.log", "stderr.log"):
+            for path in Path(log_dir).glob(f"gem5_tc*_node*/{stream}"):
+                match = TC_RE.match(path.parent.name)
+                if not match or int(match.group(1)) not in SCENARIOS:
+                    continue
+                tc = int(match.group(1))
+                for line in path.read_text(errors="replace").splitlines():
+                    outer = OUTER_RE.search(line)
+                    if outer:
+                        samples[tc].append((run, int(outer.group(1)), int(outer.group(3)),
+                                            int(outer.group(4)), int(outer.group(5))))
 
     with open(args.output, "w") as output:
         for tc, scenario in sorted(SCENARIOS.items()):

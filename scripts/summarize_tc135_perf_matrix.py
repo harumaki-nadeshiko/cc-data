@@ -90,14 +90,15 @@ def summarize_case(tc, profile, status):
                     "throughput_ops_s": operations * frequency / ticks if ticks else None,
                 })
 
-    for path in case_dir.glob("gem5_tc*_node*/stderr.log"):
-        for line in path.read_text(errors="replace").splitlines():
-            match = OUTER_RE.search(line)
-            if match:
-                outer_ps.append(int(match.group(5)))
-            if ("SILENT" in line or "BATCH-RS" in line or
-                    "DIRECT-FWD" in line):
-                text_lines.append(line)
+    for stream in ("stdout.log", "stderr.log"):
+        for path in case_dir.glob(f"gem5_tc*_node*/{stream}"):
+            for line in path.read_text(errors="replace").splitlines():
+                match = OUTER_RE.search(line)
+                if match:
+                    outer_ps.append(int(match.group(5)))
+                if ("SILENT" in line or "BATCH-RS" in line or
+                        "DIRECT-FWD" in line):
+                    text_lines.append(line)
 
     stats_text = ""
     for stream in ("stderr.log", "stdout.log"):

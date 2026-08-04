@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize EPBackend protocol-latency evidence from E2E stderr logs."""
+"""Summarize EPBackend protocol-latency evidence from E2E process logs."""
 import argparse
 import os
 import re
@@ -9,13 +9,14 @@ import sys
 
 PERF_RE = re.compile(
     r"\[EP-PERF\] kind=(\w+) node=(\d+) pa=0x([0-9a-f]+).*latency_ps=(\d+)")
+LOG_BASENAMES = {"stdout.log", "stderr.log"}
 
 
 def samples(log_dir, kind):
     values = []
     for root, _, names in os.walk(log_dir):
         for name in names:
-            if name != "stderr.log":
+            if name not in LOG_BASENAMES:
                 continue
             with open(os.path.join(root, name), errors="replace") as stream:
                 for line in stream:

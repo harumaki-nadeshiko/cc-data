@@ -6,9 +6,9 @@
  *   ubio_main --gem5-ep=ipc:///tmp/ubio_n0 --net-ep=ipc:///tmp/networksim_m0_p1 --node=0
  */
 
-#include "framework/Port.hh"
-#include "framework/MemMessage.hh"
-#include "framework/Log.hh"
+#include "framework/iface/Message.hh"
+#include "framework/iface/Port.hh"
+#include "framework/iface/Log.hh"
 #include "protocol/TracePerfPolicy.hh"
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
@@ -152,8 +152,8 @@ parseFaultRules(const std::string &all)
         }
         parts.push_back(rule_str.substr(pos));
         if (parts.size() < 6) {
-            std::fprintf(stderr, "[UBFAULT] malformed rule '%s' — skipping\n",
-                         rule_str.c_str());
+            LogWarn("UBIO", "[UBFAULT] malformed rule '{}' — skipping",
+                    rule_str);
             continue;
         }
         UbioFaultRule r;
@@ -177,9 +177,9 @@ parseFaultRules(const std::string &all)
         if (parts.size() > 7 && !parts[7].empty())
             r.matchCount = std::stoi(parts[7]);
         g_faultRules.push_back(r);
-        std::fprintf(stderr, "[UBFAULT] loaded rule '%s' type=%s src=%d dst=%d "
-                     "action=%d count=%d\n", r.name.c_str(), parts[1].c_str(),
-                     r.matchSrc, r.matchDst, (int)r.action, r.matchCount);
+        LogInfo("UBIO", "[UBFAULT] loaded rule '{}' type={} src={} dst={} "
+                "action={} count={}", r.name, parts[1], r.matchSrc, r.matchDst,
+                static_cast<int>(r.action), r.matchCount);
     }
 }
 
@@ -202,34 +202,34 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick,
         const char *tn = coherenceMsgTypeName(coh.h.type);
         switch (r.action) {
           case UbioFaultAction::Drop:
-            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Drop "
-                         "type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
-                         nid, r.name.c_str(), tn, coh.h.srcNode, coh.h.dstNode,
-                         coh.h.homeLinePa, coh.h.reqId);
+            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Drop "
+                    "type={} src={} dst={} pa=0x{:x} reqId={}",
+                    nid, r.name, tn, coh.h.srcNode, coh.h.dstNode,
+                    coh.h.homeLinePa, coh.h.reqId);
             copies = 0;
             break;
           case UbioFaultAction::Duplicate:
-            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Duplicate "
-                         "type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
-                         nid, r.name.c_str(), tn, coh.h.srcNode, coh.h.dstNode,
-                         coh.h.homeLinePa, coh.h.reqId);
+            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Duplicate "
+                    "type={} src={} dst={} pa=0x{:x} reqId={}",
+                    nid, r.name, tn, coh.h.srcNode, coh.h.dstNode,
+                    coh.h.homeLinePa, coh.h.reqId);
             copies = 2;
             break;
           case UbioFaultAction::Delay:
             // 4.6: real delay — enqueue to delayed queue, drop original copy
-            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Delay "
-                         "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
-                         nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
-                         coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
+            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Delay "
+                    "ticks={} type={} src={} dst={} pa=0x{:x} reqId={}",
+                    nid, r.name, r.delayTicks, tn, coh.h.srcNode,
+                    coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
             g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
             copies = 0;
             break;
           case UbioFaultAction::Reorder:
             // 3.3: reorder — buffer and deliver after delayTicks
-            std::fprintf(stderr, "[UBFAULT] node=%d rule='%s' action=Reorder "
-                         "ticks=%lu type=%s src=%d dst=%d pa=0x%lx reqId=%lu\n",
-                         nid, r.name.c_str(), r.delayTicks, tn, coh.h.srcNode,
-                         coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
+            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Reorder "
+                    "ticks={} type={} src={} dst={} pa=0x{:x} reqId={}",
+                    nid, r.name, r.delayTicks, tn, coh.h.srcNode,
+                    coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
             g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
             copies = 0;
         }
@@ -260,8 +260,8 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         (msg.h.type == CoherenceMessageType::ReadResp);
     if (g_debugUbioPerf && (msg.h.type == CoherenceMessageType::ClearReq ||
         msg.h.type == CoherenceMessageType::ClearResp)) {
-        std::fprintf(stderr,
-                     "[DEBUG-UBIO-CLEAR] send type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d routeModule=%u tick=%lu\n",
+        LogDebug("UBIO",
+                     "[DEBUG-UBIO-CLEAR] send type={} reqId={} pa=0x{:x} srcNode={} dstNode={} routeModule={} tick={}",
                      coherenceMsgTypeName(msg.h.type),
                      msg.h.reqId, msg.h.homeLinePa,
                      msg.h.srcNode, msg.h.dstNode,
@@ -269,18 +269,18 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
     }
     if (!port) {
         if (g_debugUbioPerf && traceReadPath) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBIO-RR-SEND] type=%s sendCoh ret=false reason=no_port reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+            LogDebug("UBIO",
+                         "[DEBUG-UBIO-RR-SEND] type={} sendCoh ret=false reason=no_port reqId={} srcNode={} dstNode={} dstModule={} tick={}",
                          coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule,  tick);
         }
         return false;
     }
-    framework::MemMessage *buf = port->allocateSendBuffer(tick);
+    Message *buf = AllocateSendMessage(port, tick);
     if (g_debugUbioPerf && traceReadPath) {
-        std::fprintf(stderr,
-                     "[DEBUG-UBIO-RR-SEND] type=%s alloc ptr=%p reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+        LogDebug("UBIO",
+                     "[DEBUG-UBIO-RR-SEND] type={} alloc ptr={} reqId={} srcNode={} dstNode={} dstModule={} tick={}",
                      coherenceMsgTypeName(msg.h.type),
                      static_cast<void*>(buf),
                      msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
@@ -288,39 +288,40 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
     }
     if (!buf) {
         if (g_debugUbioPerf && traceReadPath) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBIO-RR-SEND] type=%s sendCoh ret=false reason=sendAllocateBuffer_null reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+            LogDebug("UBIO",
+                         "[DEBUG-UBIO-RR-SEND] type={} sendCoh ret=false reason=sendAllocateBuffer_null reqId={} srcNode={} dstNode={} dstModule={} tick={}",
                          coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule,  tick);
         }
         return false;
     }
-    buf->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
-    buf->hdr.targetId = dstModule;
-    buf->hdr.req_id = msg.h.reqId;
-    if (!buf->setPayload(msg)) {
+    SetMessageType(buf, MessageType::Payload);
+    SetMessageTargetId(buf, dstModule);
+    SetMessageRequestId(buf, msg.h.reqId);
+    if (sizeof(msg) > GetMaxPayloadSize()) {
         if (g_debugUbioPerf && traceReadPath) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBIO-RR-SEND] type=%s sendCoh ret=false reason=setPayload_fail reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+            LogDebug("UBIO",
+                         "[DEBUG-UBIO-RR-SEND] type={} sendCoh ret=false reason=payload_too_large reqId={} srcNode={} dstNode={} dstModule={} tick={}",
                          coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
                          dstModule,  tick);
         }
-        delete buf;
+        ReleaseMessage(buf);
         return false;
     }
-    uint64_t sendTs = buf->hdr.timestamp;
-    bool ok = port->send(buf);
+    SetMessagePayload(buf, &msg, sizeof(msg));
+    uint64_t sendTs = GetMessageTimestamp(buf);
+    bool ok = SendMessage(port, buf);
     if (ok && TracePerfPolicy::get().shouldEmit("ubio")) {
-        std::fprintf(stderr, "[TRACE-PERF] %lu|%u|ubio|%lu|0x%lx|%s|%s\n",
+        LogInfo("UBIO", "[TRACE-PERF] {}|{}|ubio|{}|0x{:x}|{}|{}",
                      sendTs, dstModule, msg.h.reqId, msg.h.homeLinePa,
                      toNetwork ? "SEND_NET" : "SEND_GEM5",
                      coherenceMsgTypeName(msg.h.type));
     }
     if (g_debugUbioPerf && traceReadPath) {
-        std::fprintf(stderr,
-                     "[DEBUG-UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+        LogDebug("UBIO",
+                     "[DEBUG-UBIO-RR-SEND] type={} sendCoh ret={} reason={} reqId={} srcNode={} dstNode={} dstModule={} tick={}",
                      coherenceMsgTypeName(msg.h.type),
                      ok ? "true" : "false",
                      ok ? "ok" : "port_send_fail",
@@ -584,7 +585,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
             for (int i = 1; i < _deferredCount; ++i) _deferredOps[i-1] = _deferredOps[i];
             _deferredCount--;
             drained++;
-            if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-DRAIN-OP] n=%d op=%s off=%lu reqId=0x%lx remain=%d\n",
+            if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-OP] n={} op={} off={} reqId=0x{:x} remain={}",
                          _nodeId, op.isWrite ? "WRITE" : "READ",
                          op.bucketOffset, op.reqId, _deferredCount);
             bool sent = false;
@@ -599,7 +600,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 memcpy(req.b.metaRNFLineWriteReq.data, op.data, 64);
                 sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
                 if (!sent) {
-                    if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-DRAIN-FAIL] n=%d write off=%lu\n",
+                    if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-FAIL] n={} write off={}",
                                  _nodeId, op.bucketOffset);
                     auto it = _pendingLineWrites.find(op.reqId);
                     if (it != _pendingLineWrites.end()) {
@@ -618,7 +619,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 req.b.metaRNFLineReadReq.bucketOffset = op.bucketOffset;
                 sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
                 if (!sent) {
-                    if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-DRAIN-FAIL] n=%d read off=%lu\n",
+                    if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-FAIL] n={} read off={}",
                                  _nodeId, op.bucketOffset);
                     auto it = _pendingLineReads.find(op.reqId);
                     if (it != _pendingLineReads.end()) {
@@ -648,7 +649,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 if (cb) cb(MetaRNFLineStatus::RetryableBusy, nullptr);
                 return;
             }
-            if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-DEFER] n=%d read off=%lu depth=%d cnt=%d\n",
+            if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DEFER] n={} read off={} depth={} cnt={}",
                          _nodeId, bucketOffset, _reentrantDepth, _deferredCount+1);
             auto& op = _deferredOps[_deferredCount++];
             op.isWrite = false; op.bucketOffset = bucketOffset;
@@ -678,7 +679,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
         uint64_t rid = msg.h.reqId;
         auto it = _pendingLineReads.find(rid);
         if (it == _pendingLineReads.end()) {
-            if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-RESP-DROP] n=%d readResp reqId=%lu (not in pending)\n",
+            if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-RESP-DROP] n={} readResp reqId={} (not in pending)",
                          _nodeId, rid);
             return;
         }
@@ -687,7 +688,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
         uint8_t data[64];
         memcpy(data, msg.b.metaRNFLineReadResp.data, 64);
         _pendingLineReads.erase(it);
-        if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-RESP-CB] n=%d readResp reqId=%lu st=%d depth=%d\n",
+        if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-RESP-CB] n={} readResp reqId={} st={} depth={}",
                      _nodeId, rid, (int)st, _reentrantDepth);
         if (cb) cb(st, data);
     }
@@ -718,7 +719,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 if (cb) cb(MetaRNFLineStatus::RetryableBusy);
                 return;
             }
-            if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-DEFER] n=%d write off=%lu depth=%d cnt=%d\n",
+            if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DEFER] n={} write off={} depth={} cnt={}",
                          _nodeId, bucketOffset, _reentrantDepth, _deferredCount+1);
             auto& op = _deferredOps[_deferredCount++];
             op.isWrite = true; op.bucketOffset = bucketOffset;
@@ -748,14 +749,14 @@ struct MetaRNFClient : public MetaRNFClientIF {
         uint64_t rid = msg.h.reqId;
         auto it = _pendingLineWrites.find(rid);
         if (it == _pendingLineWrites.end()) {
-            if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-WRESP-DROP] n=%d writeResp reqId=%lu (not in pending)\n",
+            if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-WRESP-DROP] n={} writeResp reqId={} (not in pending)",
                          _nodeId, rid);
             return;
         }
         auto cb = std::move(it->second.callback);
         MetaRNFLineStatus st = msg.b.metaRNFLineWriteResp.status;
         _pendingLineWrites.erase(it);
-        if (_debugH64Pdes) std::fprintf(stderr, "[DEBUG-H64-PDES-WRESP-CB] n=%d writeResp reqId=%lu st=%d depth=%d\n",
+        if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-WRESP-CB] n={} writeResp reqId={} st={} depth={}",
                      _nodeId, rid, (int)st, _reentrantDepth);
         if (cb) cb(st);
     }
@@ -782,7 +783,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
             }
             _pendingReads.erase(it);
         } else {
-            std::fprintf(stderr, "[MetaRNF] WARN: no pending read for reqId=%lu\n", rid);
+            LogWarn("UBIO", "[MetaRNF] WARN: no pending read for reqId={}", rid);
         }
     }
 };
@@ -845,9 +846,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         if (_useH64 && h64cfg) {
             _h64Host.reset(new cc::glob::BackstoreHostH64(*h64cfg, &_metaRNF));
-            std::fprintf(stderr, "[UBIO-H64-HOST] node=%d socket=%d "
-                    "H64 host initialized: %zu groups x %zu buckets/group, "
-                    "logical_lines=%lu table_start=%zu\n",
+            LogInfo("UBIO", "[UBIO-H64-HOST] node={} socket={} "
+                    "H64 host initialized: {} groups x {} buckets/group, "
+                    "logical_lines={} table_start={}",
                     nid, sid,
                     h64cfg->num_groups, h64cfg->buckets_per_group,
                     h64cfg->metadata_socket_lines, h64cfg->tableDataStartOffset());
@@ -863,30 +864,28 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
             // Use gidOf to compute the correct global module id for the target
             // adapter. Previously only nodeId (bare node number) was passed as
-            // dstModule, which set buf->hdr.targetId to the wrong value. For
+            // dstModule, which set the transport targetId to the wrong value. For
             // point-to-point ZMQ this is cosmetic, but the correct GID must be
             // in the header: the gem5 UBAdapter matches srcSocket<<dstSocket
             // and future topology-aware receivers may filter by targetId.
             uint32_t dstGid = gidOf(nodeId, socketId);
             bool ok = sendCoh(gem5Port, tickRef, dstGid, msg);
             if (g_debugUbioPerf) {
-                std::fprintf(stderr,
-                             "[DEBUG-CTRL-ROUTE] node=%d sock=%d local type=%s reqId=%lu pa=0x%lx ok=%d tick=%lu dstGid=%u\n",
+                LogDebug("UBIO",
+                             "[DEBUG-CTRL-ROUTE] node={} sock={} local type={} reqId={} pa=0x{:x} ok={} tick={} dstGid={}",
                              nodeId, socketId, coherenceMsgTypeName(msg.h.type),
                              msg.h.reqId, msg.h.homeLinePa, ok ? 1 : 0, tickRef, dstGid);
-                std::fflush(stderr);
             }
             return ok;
         }
         uint32_t dstGid = gidOf(msg.h.dstNode, msg.h.dstSocket);
         bool ok = sendCoh(netPort, tickRef, dstGid, msg, true);
         if (g_debugUbioPerf) {
-            std::fprintf(stderr,
-                         "[DEBUG-CTRL-ROUTE] node=%d sock=%d net type=%s reqId=%lu pa=0x%lx dst=%d:%d dstGid=%u ok=%d tick=%lu\n",
+            LogDebug("UBIO",
+                         "[DEBUG-CTRL-ROUTE] node={} sock={} net type={} reqId={} pa=0x{:x} dst={}:{} dstGid={} ok={} tick={}",
                          nodeId, socketId, coherenceMsgTypeName(msg.h.type),
                          msg.h.reqId, msg.h.homeLinePa, msg.h.dstNode,
                          msg.h.dstSocket, dstGid, ok ? 1 : 0, tickRef);
-            std::fflush(stderr);
         }
         return ok;
     }
@@ -922,15 +921,14 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 } else {
                     response.b.queryLineMetaResp.ownerNode = -1;
                 }
-                std::fprintf(stderr,
-                    "[QLM-H64-DONE] home=%d pa=0x%lx reqId=%lu status=%s "
-                    "found=%d epoch=%lu owner=%d\n",
+                LogInfo("UBIO",
+                    "[QLM-H64-DONE] home={} pa=0x{:x} reqId={} status={} "
+                    "found={} epoch={} owner={}",
                     nodeId, request.h.homeLinePa, request.h.reqId,
                     backstoreStatusName(comp.status),
                     response.b.queryLineMetaResp.found ? 1 : 0,
                     response.b.queryLineMetaResp.epoch,
                     response.b.queryLineMetaResp.ownerNode);
-                std::fflush(stderr);
                 routeControlToTarget(response);
             });
         return true;
@@ -1031,7 +1029,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return;
         }
         if (_useH64 && !_h64Host) {
-            fprintf(stderr, "[BACKSTORE-READ-ERR] pa=0x%lx H64 host not initialized\n", pa);
+            LogError("UBIO", "[BACKSTORE-READ-ERR] pa=0x{:x} H64 host not initialized", pa);
             _pendingFills.push_back({tickRef + 1, pa, false, UBCCController::BackstoreEntry{}});
             return;
         }
@@ -1041,7 +1039,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         bool found = false;
         int g = _schema.groupForPa(pa);
         std::vector<uint64_t> pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
-        std::fprintf(stderr, "[BACKSTORE-READ] pa=0x%lx group=%d candidates=%zu head=0x%lx tail=0x%lx\n",
+        LogInfo("UBIO", "[BACKSTORE-READ] pa=0x{:x} group={} candidates={} head=0x{:x} tail=0x{:x}",
                      pa, g, pages.size(), _groupIdx[g].page_directory[0],
                      _groupIdx[g].page_directory[1]);
 
@@ -1065,7 +1063,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             // its writeback payload.
             _pendingFills.push_back({tickRef + std::max<uint64_t>(1, _ubioDramDelayPs),
                                       pa, found, e});
-            std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=1\n",
+            LogInfo("UBIO", "[BACKSTORE-READ-DONE] pa=0x{:x} found={} local=1",
                          pa, found ? 1 : 0);
             return;
         }
@@ -1074,10 +1072,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         // defer this fill until the durable callback fires.
         for (auto pagePa : pages) {
             if (_pagesDirty.count(pagePa)) {
-                std::fprintf(stderr,
-                    "[BACKSTORE-READ-WAIT-DURABLE] pa=0x%lx group=%d page=0x%lx\n",
+                LogInfo("UBIO",
+                    "[BACKSTORE-READ-WAIT-DURABLE] pa=0x{:x} group={} page=0x{:x}",
                     pa, g, pagePa);
-                std::fflush(stderr);
                 _deferredReadsByPage[pagePa].push_back(pa);
                 return;
             }
@@ -1093,9 +1090,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         _chainGroup[pa] = g;
 
         uint64_t firstPage = pages[0];
-        std::fprintf(stderr, "[BACKSTORE-CHAIN-READ] pa=0x%lx group=%d page=0x%lx idx=0/%zu\n",
+        LogInfo("UBIO", "[BACKSTORE-CHAIN-READ] pa=0x{:x} group={} page=0x{:x} idx=0/{}",
                      pa, g, firstPage, pages.size());
-        std::fflush(stderr);
         ctx->idx = 1;
 
         _metaRNF.readPage(firstPage, [this, pa](const uint8_t* data256) {
@@ -1234,10 +1230,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         auto pas = std::move(it->second);
         _deferredReadsByPage.erase(it);
         for (uint64_t pa : pas) {
-            std::fprintf(stderr,
-                "[BACKSTORE-READ-REPLAY-DURABLE] pa=0x%lx page=0x%lx\n",
+            LogInfo("UBIO",
+                "[BACKSTORE-READ-REPLAY-DURABLE] pa=0x{:x} page=0x{:x}",
                 pa, pagePa);
-            std::fflush(stderr);
             hostIssueBackstoreRead(pa);
         }
     }
@@ -1268,8 +1263,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 e2.sharersMask = schemaEntry.sharersMask;
                 e2.epoch = schemaEntry.epoch;
                 found2 = true;
-                std::fprintf(stderr, "[BACKSTORE-CHAIN-FOUND] pa=0x%lx page=0x%lx\n", pa, pagePa);
-                std::fflush(stderr);
+                LogInfo("UBIO", "[BACKSTORE-CHAIN-FOUND] pa=0x{:x} page=0x{:x}", pa, pagePa);
             }
             if (!found2 && lp && lp->hdr.next_page_ptr != 0) {
                 bool already = false;
@@ -1284,14 +1278,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         } else if (ctx->idx < pages.size() && ctx->maxSteps > 0) {
             ctx->maxSteps--;
             uint64_t nextPage = pages[ctx->idx];
-            std::fprintf(stderr, "[BACKSTORE-CHAIN-READ] pa=0x%lx group=%d page=0x%lx idx=%zu/%zu\n",
+            LogInfo("UBIO", "[BACKSTORE-CHAIN-READ] pa=0x{:x} group={} page=0x{:x} idx={}/{}",
                          pa, g, nextPage, ctx->idx, pages.size());
-            std::fflush(stderr);
             ctx->idx++;
             _metaRNF.readPage(nextPage, [this, pa](const uint8_t* d) { chainReadCallback(pa, d); });
         } else {
-            std::fprintf(stderr, "[BACKSTORE-CHAIN-MISS] pa=0x%lx group=%d candidates=%zu\n", pa, g, pages.size());
-            std::fflush(stderr);
+            LogInfo("UBIO", "[BACKSTORE-CHAIN-MISS] pa=0x{:x} group={} candidates={}", pa, g, pages.size());
             _chainCtx.erase(pa); _chainPages.erase(pa); _chainGroup.erase(pa);
             UBCCController::BackstoreEntry eMiss{};
             _pendingFills.push_back({tickRef + 1, pa, false, eMiss});
@@ -1301,7 +1293,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     void hostIssueBackstoreWrite(uint64_t pa) override {
         UBCCController::BackstoreEntry e{};
         if (!ubcc.snapshotResidentForBackstore(pa, e)) {
-            std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx snapshot=0\n", pa);
+            LogInfo("UBIO", "[BACKSTORE-WRITE] pa=0x{:x} snapshot=0", pa);
             _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
             return;
         }
@@ -1328,7 +1320,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
         if (plan.needs_new_page) plan.target_page_pa = _nextPageId++;
-        std::fprintf(stderr, "[BACKSTORE-WRITE] pa=0x%lx group=%d page=0x%lx new=%d state=%d sharers=0x%lx epoch=%lu\n",
+        LogInfo("UBIO", "[BACKSTORE-WRITE] pa=0x{:x} group={} page=0x{:x} new={} state={} sharers=0x{:x} epoch={}",
                      pa, g, plan.target_page_pa, plan.needs_new_page ? 1 : 0,
                      static_cast<int>(schemaEntry.state), schemaEntry.sharersMask, schemaEntry.epoch);
         cc::glob::BackstorePage* p = nullptr;
@@ -1339,7 +1331,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             p = _getPage(plan.target_page_pa);
         }
         if (!p) {
-            std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=no_page\n", pa, plan.target_page_pa);
+            LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=no_page", pa, plan.target_page_pa);
             _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
             return;
         }
@@ -1349,9 +1341,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             uint64_t oldPagePa = plan.target_page_pa;
             uint64_t newPagePa = _nextPageId++;
             p->hdr.next_page_ptr = newPagePa;
-            std::fprintf(stderr, "[BACKSTORE-OVERFLOW-ALLOC] pa=0x%lx group=%d oldPage=0x%lx newPage=0x%lx entries=%u\n",
+            LogInfo("UBIO", "[BACKSTORE-OVERFLOW-ALLOC] pa=0x{:x} group={} oldPage=0x{:x} newPage=0x{:x} entries={}",
                          pa, g, oldPagePa, newPagePa, p->hdr.entry_count);
-            std::fflush(stderr);
             _pagesDirty.insert(oldPagePa);
             _metaRNF.writePage(oldPagePa, *p);
             _pagesDirty.erase(oldPagePa);
@@ -1363,20 +1354,18 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             _schema.applyUpsert(*newP, pa, schemaEntry, newPlan);
             _schema.updateIndexAfterWrite(_groupIdx[g], newPlan, newPagePa);
             // D6: durable write of new overflow page via callback
-            std::fprintf(stderr, "[BACKSTORE-WRITE-PENDING] pa=0x%lx page=0x%lx\n", pa, newPagePa);
-            std::fflush(stderr);
+            LogInfo("UBIO", "[BACKSTORE-WRITE-PENDING] pa=0x{:x} page=0x{:x}", pa, newPagePa);
             _pagesDirty.insert(newPagePa);
             uint64_t capPa = pa; uint64_t capPage = newPagePa;
             _metaRNF.writePageD2(capPage, *newP, [this, capPa, capPage](bool durable) {
                 if (durable) {
-                    std::fprintf(stderr, "[BACKSTORE-WRITE-DURABLE] pa=0x%lx page=0x%lx\n", capPa, capPage);
+                    LogInfo("UBIO", "[BACKSTORE-WRITE-DURABLE] pa=0x{:x} page=0x{:x}", capPa, capPage);
                     _pagesDirty.erase(capPage);
                     replayDeferredReads(capPage);
                     _pendingBackstoreAcks.push_back({tickRef + 1, capPa, false, true});
                 } else {
-                    std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=remote\n", capPa, capPage);
+                    LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=remote", capPa, capPage);
                 }
-                std::fflush(stderr);
             });
             return;
         }
@@ -1384,20 +1373,18 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         _schema.applyUpsert(*p, pa, schemaEntry, plan);
         _schema.updateIndexAfterWrite(_groupIdx[g], plan, plan.target_page_pa);
         // D6: durable write via callback
-        std::fprintf(stderr, "[BACKSTORE-WRITE-PENDING] pa=0x%lx page=0x%lx\n", pa, plan.target_page_pa);
-        std::fflush(stderr);
+        LogInfo("UBIO", "[BACKSTORE-WRITE-PENDING] pa=0x{:x} page=0x{:x}", pa, plan.target_page_pa);
         _pagesDirty.insert(plan.target_page_pa);
         uint64_t capPa2 = pa; uint64_t capPage2 = plan.target_page_pa;
         _metaRNF.writePageD2(capPage2, *p, [this, capPa2, capPage2](bool durable) {
             if (durable) {
-                std::fprintf(stderr, "[BACKSTORE-WRITE-DURABLE] pa=0x%lx page=0x%lx\n", capPa2, capPage2);
+                LogInfo("UBIO", "[BACKSTORE-WRITE-DURABLE] pa=0x{:x} page=0x{:x}", capPa2, capPage2);
                 _pagesDirty.erase(capPage2);
                 replayDeferredReads(capPage2);
                 _pendingBackstoreAcks.push_back({tickRef + 1, capPa2, false, true});
             } else {
-                std::fprintf(stderr, "[BACKSTORE-WRITE-FAIL] pa=0x%lx page=0x%lx reason=remote\n", capPa2, capPage2);
+                LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=remote", capPa2, capPage2);
             }
-            std::fflush(stderr);
         });
     }
 
@@ -1668,8 +1655,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 
       case CoherenceMessageType::ClearReq: {
         if (g_debugUbioPerf) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBIO-CLEAR] ubcc-enter nid=%d type=ClearReq reqId=%lu pa=0x%lx srcNode=%d dstNode=%d epoch=%lu\n",
+            LogDebug("UBIO",
+                         "[DEBUG-UBIO-CLEAR] ubcc-enter nid={} type=ClearReq reqId={} pa=0x{:x} srcNode={} dstNode={} epoch={}",
                          nid, msg.h.reqId, msg.h.homeLinePa,
                          msg.h.srcNode, msg.h.dstNode, msg.h.epoch);
         }
@@ -1685,8 +1672,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         response.h.reqId = msg.h.reqId;
         response.b.clearResp.accepted = accepted;
         if (g_debugUbioPerf) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBIO-CLEAR] ubcc-exit nid=%d type=ClearResp reqId=%lu pa=0x%lx accepted=%d dstNode=%d\n",
+            LogDebug("UBIO",
+                         "[DEBUG-UBIO-CLEAR] ubcc-exit nid={} type=ClearResp reqId={} pa=0x{:x} accepted={} dstNode={}",
                          nid, msg.h.reqId, msg.h.homeLinePa,
                          accepted ? 1 : 0, response.h.dstNode);
         }
@@ -1759,8 +1746,8 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
         DelayedMsg dm = g_delayedQueue.front();
         g_delayedQueue.pop_front();
         const CoherenceMessage &coh = dm.coh;
-        std::fprintf(stderr, "[UBFAULT-DELIVER] node=%d delivering delayed "
-                     "type=%s reqId=%lu pa=0x%lx fireTick=%lu currentTick=%lu\n",
+        LogWarn("UBIO", "[UBFAULT-DELIVER] node={} delivering delayed "
+                      "type={} reqId={} pa=0x{:x} fireTick={} currentTick={}",
                      nid, coherenceMsgTypeName(coh.h.type), coh.h.reqId,
                      coh.h.homeLinePa, dm.fireTick, tick);
         // Re-inject: if it was from network, process as network message; else as gem5 message.
@@ -1870,10 +1857,10 @@ main(int argc, char **argv)
             } else if (!std::strcmp(p, "experimental_schema_c") ||
                        !std::strcmp(p, "schema_c") ||
                        !std::strcmp(p, "legacy_schema_c")) {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] --backstore-schema=%s: "
+                LogError("UBIO",
+                    "[UBIO-FATAL] --backstore-schema={}: "
                     "Schema C exists in source but is not wired in ubio_main. "
-                    "Use --backstore-schema=legacy_schema_a, h64, or disabled.\n", p);
+                    "Use --backstore-schema=legacy_schema_a, h64, or disabled.", p);
                 std::exit(1);
             } else if (!std::strcmp(p, "disabled") || !std::strcmp(p, "none"))
                 g_schemaMode = BackstoreSchemaMode::Disabled;
@@ -1884,9 +1871,9 @@ main(int argc, char **argv)
             else if (!std::strcmp(p, "auto"))
                 g_schemaMode = BackstoreSchemaMode::Auto;
             else {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] --backstore-schema=%s: unrecognized. "
-                    "Valid: legacy_schema_a, h64, disabled, auto.\n", p);
+                LogError("UBIO",
+                    "[UBIO-FATAL] --backstore-schema={}: unrecognized. "
+                    "Valid: legacy_schema_a, h64, disabled, auto.", p);
                 std::exit(1);
             }
         }
@@ -1943,11 +1930,11 @@ main(int argc, char **argv)
             // For production configs: config value must match reality.
             size_t eff = g_rdcfg.effectiveGroupIndexBytes();
             if (eff != kRealGroupIndexStorage) {
-                std::fprintf(stderr,
-                    "[UBIO-FATAL] group_index_bytes=%zu must equal %zu "
+                LogError("UBIO",
+                    "[UBIO-FATAL] group_index_bytes={} must equal {} "
                     "(sizeof(GroupIndex)*BloomGroups). "
                     "Remove --group-index-bytes= override or use "
-                    "--sram-bytes < 65536 for tiny test configs.\n",
+                    "--sram-bytes < 65536 for tiny test configs.",
                     eff, kRealGroupIndexStorage);
                 std::exit(1);
             }
@@ -1957,7 +1944,7 @@ main(int argc, char **argv)
     // ── Debug gates: default-off, opt-in via env vars ─────────────────
     if (const char *env = std::getenv("UBIO_DEBUG_PERF")) {
         g_debugUbioPerf = (std::atoi(env) != 0);
-        if (g_debugUbioPerf) std::fprintf(stderr, "[UBIO-DEBUG] perf tracing enabled\n");
+        if (g_debugUbioPerf) LogDebug("UBIO", "[UBIO-DEBUG] perf tracing enabled");
     }
     bool ubccDebugClear = false;
     if (const char *env = std::getenv("UBCC_DEBUG_CLEAR")) {
@@ -1965,36 +1952,48 @@ main(int argc, char **argv)
     }
 
     if (nid < 0 || nid > 31) {
-        std::fprintf(stderr, "[ubio:%d] ERROR: need --node=\n", nid);
+        LogError("UBIO", "[ubio:{}] ERROR: need --node=", nid);
         return 1;
     }
 
     // Socket-plane model: this ubio process is the home directory + router for
     // exactly one (node, socket) plane. num_sockets from --num-sockets arg.
     if (sid < 0 || sid >= g_numSockets) {
-        std::fprintf(stderr, "[ubio:%d] ERROR: --socket=%d out of range [0,%d)\n",
+        LogError("UBIO", "[ubio:{}] ERROR: --socket={} out of range [0,{})",
                      nid, sid, g_numSockets);
         return 1;
     }
     int gid = static_cast<int>(gidOf(nid, sid));
 
-    std::fprintf(stderr, "[UBIO-START] node=%d socket=%d gid=%d creating ports...\n",
-                 nid, sid, gid); fflush(stderr);
-    framework::PortParams gem5Pp = framework::PortEnvLoader::ubioGem5Port(gid, true);
-    framework::PortParams netPp = framework::PortEnvLoader::ubioNetPort(gid);
-    Port *gem5Port = new Port();
-    Port *netPort = new Port();
-    if (!gem5Port->init(gem5Pp) || !netPort->init(netPp)) {
-        std::fprintf(stderr, "[ubio:%d] port init failed\n", nid);
+    LogInfo("UBIO", "[UBIO-START] node={} socket={} gid={} creating ports...",
+            nid, sid, gid);
+    PortConfig gem5Config;
+    gem5Config.selfRole = "ubio";
+    gem5Config.peerRole = "gem5";
+    gem5Config.channelName = "coherence";
+    gem5Config.nodeId = nid;
+    gem5Config.socketId = sid;
+    gem5Config.numNodes = g_numNodes;
+    gem5Config.numSockets = g_numSockets;
+    PortConfig netConfig;
+    netConfig.selfRole = "ubio";
+    netConfig.peerRole = "networksim";
+    netConfig.channelName = "network";
+    netConfig.nodeId = nid;
+    netConfig.socketId = sid;
+    netConfig.numNodes = g_numNodes;
+    netConfig.numSockets = g_numSockets;
+    Port *gem5Port = CreatePort(gem5Config);
+    Port *netPort = CreatePort(netConfig);
+    if (!gem5Port || !netPort) {
+        LogError("UBIO", "[ubio:{}] port init failed", nid);
+        if (gem5Port) DestroyPort(gem5Port);
+        if (netPort) DestroyPort(netPort);
         return 1;
     }
-    std::string gem5Rx = gem5Pp.localRxEndpoint, gem5Tx = gem5Pp.peerRxEndpoint;
-    std::string netRx = netPp.localRxEndpoint, netTx = netPp.peerRxEndpoint;
-    std::fprintf(stderr,
-                 "[UBIO-IPC] nid=%d gem5.rx=%s gem5.tx=%s net.rx=%s net.tx=%s\n",
-                 nid,
-                 gem5Rx.c_str(), gem5Tx.c_str(),
-                 netRx.c_str(), netTx.c_str());
+    LogInfo("UBIO",
+                 "[UBIO-IPC] nid={} sid={} coherence=ubio/gem5 network=ubio/networksim",
+                 nid, sid);
 
     uint64_t tick = 0;
     cc::setUbioTickSource(&tick);
@@ -2059,16 +2058,16 @@ main(int argc, char **argv)
         const size_t per_socket_dram = g_metadataDramTotalBytes
                                        / ((size_t)g_numSockets);
         const size_t capacity = layout.capacity;
-        std::fprintf(stderr,
-            "[UBIO-MANIFEST] node=%d socket=%d num_sockets=%d\n"
-            "[UBIO-MANIFEST] schema_mode=%s overflow_policy=%s\n"
-            "[UBIO-MANIFEST] metadata_dram_configured=%lu MiB per_socket=%lu MiB "
+        LogInfo("UBIO",
+            "[UBIO-MANIFEST] node={} socket={} num_sockets={}\n"
+            "[UBIO-MANIFEST] schema_mode={} overflow_policy={}\n"
+            "[UBIO-MANIFEST] metadata_dram_configured={} MiB per_socket={} MiB "
                 "(authoritative range: see [EPBACKEND-MANIFEST])\n"
-            "[UBIO-MANIFEST] resident_capacity=%zu entries (%d-way x %d-set)\n"
-            "[UBIO-MANIFEST] on_chip_budget_total=%zu KiB (limit=512 KiB)\n"
-            "[UBIO-MANIFEST] on_chip_breakdown: dir=%zu KiB bloom=%zu KiB "
-                "residentGroupIndex=%zu KiB hostLegacyGroupIndex=%zu KiB "
-                "blc_reserved=%zu KiB desc_reserved=%zu KiB\n",
+            "[UBIO-MANIFEST] resident_capacity={} entries ({}-way x {}-set)\n"
+            "[UBIO-MANIFEST] on_chip_budget_total={} KiB (limit=512 KiB)\n"
+            "[UBIO-MANIFEST] on_chip_breakdown: dir={} KiB bloom={} KiB "
+                "residentGroupIndex={} KiB hostLegacyGroupIndex={} KiB "
+                "blc_reserved={} KiB desc_reserved={} KiB",
             nid, sid, g_numSockets,
             backstoreSchemaModeName(g_schemaMode),
             g_overflowPolicy == ResidentOverflowPolicy::Spill ? "spill" : "naive",
@@ -2083,27 +2082,25 @@ main(int argc, char **argv)
 
         // Phase 3: H64 active status
         if (g_schemaMode == BackstoreSchemaMode::H64) {
-            std::fprintf(stderr,
-                "[UBIO-MANIFEST] H64_ACTIVE: bounded_txn_max=%d active_rmw_max=%d "
-                "num_groups=%zu buckets_per_group=%zu "
-                "metadata_lines=%lu table_start_offset=%zu "
-                "(logical offsets only, clean [DEBUG-H64-*] gating)\n",
+            LogInfo("UBIO",
+                "[UBIO-MANIFEST] H64_ACTIVE: bounded_txn_max={} active_rmw_max={} "
+                "num_groups={} buckets_per_group={} "
+                "metadata_lines={} table_start_offset={} "
+                "(logical offsets only, clean [DEBUG-H64-*] gating)",
                 h64cfg.max_pending_ops, h64cfg.max_active_rmw,
                 h64cfg.num_groups, h64cfg.buckets_per_group,
                 h64cfg.metadata_socket_lines, h64cfg.tableDataStartOffset());
         } else if (g_schemaMode == BackstoreSchemaMode::LegacySchemaA) {
-            std::fprintf(stderr,
+            LogInfo("UBIO",
                 "[UBIO-MANIFEST] H64_INACTIVE: using legacy_schema_a "
-                "(page-chain with unbounded page cache)\n");
+                "(page-chain with unbounded page cache)");
         }
-
-        std::fflush(stderr);
 
         // Hard budget assertion (includes host duplicate)
         if (total_on_chip > 512 * 1024) {
-            std::fprintf(stderr,
-                "[UBIO-FATAL] total on-chip budget %zu KiB exceeds 512 KiB "
-                "limit. Reduce bloom/blc/desc or increase sram.\n",
+            LogError("UBIO",
+                "[UBIO-FATAL] total on-chip budget {} KiB exceeds 512 KiB "
+                "limit. Reduce bloom/blc/desc or increase sram.",
                 total_on_chip / 1024);
             std::exit(1);
         }
@@ -2146,27 +2143,29 @@ main(int argc, char **argv)
             const int targetSocket = targetPlane % g_numSockets;
             Port *deliveryPort = (targetNode == nid && targetSocket == sid)
                 ? gem5Port : netPort;
-            framework::MemMessage* rel = deliveryPort->allocateSendBuffer(tick);
-            panic_if(!rel, "barrier release allocation failed mask=0x%x plane=%d",
+            Message *rel = AllocateSendMessage(deliveryPort, tick);
+            panic_if(!rel, "barrier release allocation failed mask=0x{:x} plane={}",
                      bk.first, targetPlane);
-            rel->hdr.timestamp = tick;
-            rel->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
-            rel->hdr.targetId = gidOf(targetNode, targetSocket);
+            SetMessageType(rel, MessageType::Payload);
+            SetMessageTargetId(rel, gidOf(targetNode, targetSocket));
             CoherenceMessage rmsg;
             rmsg.h.type = CoherenceMessageType::BarrierRelease;
             rmsg.b.barrier.mask = bk.first;
             // Each isolated gem5 process may have an independently observed
             // generation; release exactly the generation it reported.
             rmsg.b.barrier.seq = seq;
-            rel->setPayload(rmsg);
+            panic_if(sizeof(rmsg) > GetMaxPayloadSize(),
+                     "barrier release payload too large mask=0x{:x} plane={}",
+                     bk.first, targetPlane);
+            SetMessagePayload(rel, &rmsg, sizeof(rmsg));
             if (g_debugUbioPerf) {
-                std::fprintf(stderr,
-                    "[DEBUG-UBIO-BARRIER] release mask=0x%x plane=%d seq=%u route=%s tick=%lu\n",
+                LogDebug("UBIO",
+                    "[DEBUG-UBIO-BARRIER] release mask=0x{:x} plane={} seq={} route={} tick={}",
                     bk.first, targetPlane, seq,
                     deliveryPort == gem5Port ? "gem5" : "net", tick);
             }
-            panic_if(!deliveryPort->send(rel),
-                     "barrier release send failed mask=0x%x plane=%d",
+            panic_if(!SendMessage(deliveryPort, rel),
+                     "barrier release send failed mask=0x{:x} plane={}",
                      bk.first, targetPlane);
         }
         bool empty = true;
@@ -2185,20 +2184,24 @@ main(int argc, char **argv)
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
         if (!port) return;
         ReceiveStatus st;
-        MemMessage *m = port->recv(tick, &st);
+        const Message *m = ReceiveMessage(port, tick, &st);
         int drain_cnt = 0;
-        while (m && st == ReceiveStatus::kMessage) {
+        while (m && st == ReceiveStatus::Message) {
             if (++drain_cnt > 200) break;  // prevent starvation of other ports
-            if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
-                std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu from_net=%d\n",
-                             nid, m->hdr.timestamp, fromNetwork);
-                const TerminatePayload *term = m->getPayload<TerminatePayload>();
+            if (GetMessageType(m) == MessageType::Terminate) {
+                LogInfo("UBIO", "[ubio:{}] recv TERMINATE ts={} from_net={}",
+                             nid, GetMessageTimestamp(m), fromNetwork);
+                const TerminateInfo *term =
+                    GetMessagePayloadSize(m) == sizeof(TerminateInfo)
+                        ? static_cast<const TerminateInfo *>(
+                              GetMessagePayloadData(m))
+                        : nullptr;
                 if (fromNetwork && term && term->reason == 2) {
                     const int peerPlane = static_cast<int>(term->sender);
                     const int peerNode = peerPlane / g_numSockets;
                     const int peerSocket = peerPlane % g_numSockets;
                     ubcc.markPeerPlaneExited(peerNode, peerSocket);
-                    m = port->recv(tick, &st);
+                    m = ReceiveMessage(port, tick, &st);
                     continue;
                 }
                 if (!fromNetwork) {
@@ -2206,18 +2209,20 @@ main(int argc, char **argv)
                     // to networksim so other nodes can exclude this peer from
                     // PDES safeTs (TC90/TC98 deadlock fix).
                     ubcc.directory().dumpStatsJson();
-                    std::fprintf(stderr, "[UBCC-STATS] %s\n", ubcc.dumpStatsJson().c_str());
-                    *doneFlag = true;
+                    LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
                     if (netPort) {
-                        framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
-                        if (fwd) {
-                            *fwd = *m;
-                            fwd->hdr.timestamp = tick;
-                            fwd->hdr.targetId = 0;
-                            netPort->send(fwd);
-                            std::fprintf(stderr, "[ubio:%d] TERMINATE forwarded to networksim\n", nid);
-                        }
+                        Message *fwd = AllocateSendMessage(netPort, tick);
+                        panic_if(!fwd,
+                                 "TERMINATE allocation failed node={} socket={}",
+                                 nid, sid);
+                        CopyMessage(fwd, m);
+                        SetMessageTargetId(fwd, 0);
+                        panic_if(!SendMessage(netPort, fwd),
+                                 "TERMINATE forwarding failed node={} socket={}",
+                                 nid, sid);
+                        LogInfo("UBIO", "[ubio:{}] TERMINATE forwarded to networksim", nid);
                     }
+                    *doneFlag = true;
                     // networksim terminates after receiving one marker from
                     // every UBIO; it does not send a marker back. Once the
                     // local marker is enqueued this UBIO has no remaining
@@ -2233,25 +2238,29 @@ main(int argc, char **argv)
                     *doneFlag = true;
                 }
                 if (*doneFlag) break;
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
-            if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
-                m = port->recv(tick, &st);
+            if (GetMessageType(m) == MessageType::ControlSync) {
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
-            if (m->hdr.type != static_cast<uint32_t>(MemMessageType::PAYLOAD)) {
-                std::fprintf(stderr, "[ubio:%d] drop MemMessage type=%u ts=%lu size=%u\n",
-                             nid, m->hdr.type, m->hdr.timestamp, m->hdr.size);
-                m = port->recv(tick, &st);
+            if (GetMessageType(m) != MessageType::Payload) {
+                LogWarn("UBIO", "[ubio:{}] drop Message type={} ts={} size={}",
+                             nid, static_cast<unsigned>(GetMessageType(m)),
+                             GetMessageTimestamp(m), GetMessagePayloadSize(m));
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
-            const CoherenceMessage *coh = m->getPayload<CoherenceMessage>();
+            const CoherenceMessage *coh =
+                GetMessagePayloadSize(m) == sizeof(CoherenceMessage)
+                    ? static_cast<const CoherenceMessage *>(GetMessagePayloadData(m))
+                    : nullptr;
             if (!coh) {
-                std::fprintf(stderr, "[ubio:%d] bad payload size=%u req_id=%lu\n",
-                             nid, m->payloadLen(), m->hdr.req_id);
-                m = port->recv(tick, &st);
+                LogWarn("UBIO", "[ubio:{}] bad payload size={} req_id={}",
+                             nid, GetMessagePayloadSize(m), GetMessageRequestId(m));
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
@@ -2260,24 +2269,23 @@ main(int argc, char **argv)
                 if (fromNetwork) {
                     // Arrived from a peer ubio (another local socket) — forward
                     // to local gem5's UBAdapter via gem5Port.
-                    framework::MemMessage* rel = gem5Port->allocateSendBuffer(tick);
+                    Message *rel = AllocateSendMessage(gem5Port, tick);
                     if (rel) {
-                        *rel = *m;
-                        rel->hdr.timestamp = tick;
-                        rel->hdr.targetId = gidOf(nid, sid);
-                        gem5Port->send(rel);
+                        CopyMessage(rel, m);
+                        SetMessageTargetId(rel, gidOf(nid, sid));
+                        SendMessage(gem5Port, rel);
                         if (g_debugUbioPerf)
-                            std::fprintf(stderr, "[DEBUG-UBIO-BARRIER] n%d release fwd mask=0x%x\n",
+                            LogDebug("UBIO", "[DEBUG-UBIO-BARRIER] n{} release fwd mask=0x{:x}",
                                          nid, coh->b.barrier.mask);
                     }
                 }
                 // Already handled via gem5Port send above; skip further processing.
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
-            // Cross-node barrier (now a PAYLOAD CoherenceMessage, not a
-                // dedicated MemMessageType). Each set mask bit identifies one
+            // Cross-node barrier (now a PAYLOAD CoherenceMessage). Each set
+                // mask bit identifies one
                 // (node,socket) plane. Once all masked planes arrive, reply
                 // BarrierRelease to those same planes.
                 // TC90 fix: key by (mask, seq) to distinguish successive barriers
@@ -2287,7 +2295,7 @@ main(int argc, char **argv)
                 if (coh->h.type == CoherenceMessageType::BarrierReached) {
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
-                    int src = static_cast<int>(m->hdr.sourceId);
+                    int src = static_cast<int>(GetMessageSourceId(m));
                     // Generations are local to isolated gem5 processes and
                     // therefore cannot form a distributed key. Aggregate one
                     // in-flight generation per mask and return each plane's
@@ -2300,23 +2308,23 @@ main(int argc, char **argv)
                     if (nid == leaderNode && sid == leaderSocket) {
                         if (src < 0 || src >= static_cast<int>(kMaxBarrierPlanes) ||
                             (mask & (1U << src)) == 0) {
-                            std::fprintf(stderr,
-                                         "[UBIO-BARRIER-WARN] n%d ignored source=%d mask=0x%x\n",
+                            LogWarn("UBIO",
+                                         "[UBIO-BARRIER-WARN] n{} ignored source={} mask=0x{:x}",
                                          nid, src, mask);
-                            m = port->recv(tick, &st);
+                            m = ReceiveMessage(port, tick, &st);
                             continue;
                         }
                         BarrierArrivals &arrivals = barrierArrivals[bk];
                         const size_t plane = static_cast<size_t>(src);
                         panic_if(arrivals.count[plane] == kMaxQueuedBarrierGenerations,
-                                 "barrier FIFO full mask=0x%x plane=%d", mask, src);
+                                 "barrier FIFO full mask=0x{:x} plane={}", mask, src);
                         const size_t tail = (arrivals.head[plane] + arrivals.count[plane]) %
                                             kMaxQueuedBarrierGenerations;
                         arrivals.seqs[plane][tail] = seq;
                         ++arrivals.count[plane];
                         if (g_debugUbioPerf) {
-                            std::fprintf(stderr,
-                                "[DEBUG-UBIO-BARRIER] enqueue mask=0x%x plane=%d seq=%u depth=%u tick=%lu\n",
+                            LogDebug("UBIO",
+                                "[DEBUG-UBIO-BARRIER] enqueue mask=0x{:x} plane={} seq={} depth={} tick={}",
                                 mask, src, seq, arrivals.count[plane], tick);
                         }
                         releaseBarrier(bk);
@@ -2324,25 +2332,24 @@ main(int argc, char **argv)
                         // A single deterministic leader aggregates arrivals.
                         // Broadcast coordination allowed different nodes to
                         // independently release incompatible generations.
-                        framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
+                        Message *fwd = AllocateSendMessage(netPort, tick);
                         if (fwd) {
-                            *fwd = *m;
-                            fwd->hdr.timestamp = tick;
-                            fwd->hdr.targetId = gidOf(leaderNode, 0);
-                            netPort->send(fwd);
+                            CopyMessage(fwd, m);
+                            SetMessageTargetId(fwd, gidOf(leaderNode, 0));
+                            SendMessage(netPort, fwd);
                         }
                     }
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
-            std::fprintf(stderr, "[ubio:%d] %s recv %s reqId=%lu src=%u dst=%u\n",
+            LogDebug("UBIO", "[ubio:{}] {} recv {} reqId={} src={} dst={}",
                          nid, fromNetwork ? "net" : "gem5",
                          coherenceMsgTypeName(coh->h.type), coh->h.reqId,
-                         m->hdr.sourceId, m->hdr.targetId);
+                         GetMessageSourceId(m), GetMessageTargetId(m));
             if (TracePerfPolicy::get().shouldEmit("ubio")) {
-                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|ubio|%lu|0x%lx|%s|%s\n",
-                             m->hdr.timestamp, nid, coh->h.reqId, coh->h.homeLinePa,
+                LogInfo("UBIO", "[TRACE-PERF] {}|{}|ubio|{}|0x{:x}|{}|{}",
+                             GetMessageTimestamp(m), nid, coh->h.reqId, coh->h.homeLinePa,
                              fromNetwork ? "RECV_NET" : "RECV_GEM5",
                              coherenceMsgTypeName(coh->h.type));
             }
@@ -2357,15 +2364,15 @@ main(int argc, char **argv)
                 faultCopies = applyUbioFault(*coh, nid, tick, fromNetwork);
                 if (faultCopies == 0) {
                     // Dropped — neither processed nor forwarded.
-                    m = port->recv(tick, &st);
+                    m = ReceiveMessage(port, tick, &st);
                     continue;
                 }
             }
 
             if (g_debugUbioPerf && (coh->h.type == CoherenceMessageType::ClearReq ||
                 coh->h.type == CoherenceMessageType::ClearResp)) {
-                std::fprintf(stderr,
-                             "[DEBUG-UBIO-CLEAR] recv nid=%d from=%s type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d requester=%d epoch=%lu\n",
+                LogDebug("UBIO",
+                             "[DEBUG-UBIO-CLEAR] recv nid={} from={} type={} reqId={} pa=0x{:x} srcNode={} dstNode={} requester={} epoch={}",
                              nid, fromNetwork ? "net" : "gem5",
                              coherenceMsgTypeName(coh->h.type),
                              coh->h.reqId, coh->h.homeLinePa,
@@ -2375,14 +2382,14 @@ main(int argc, char **argv)
 
             if (g_debugUbioPerf && (coh->h.type == CoherenceMessageType::RecallReq ||
                 coh->h.type == CoherenceMessageType::RecallResp)) {
-                std::fprintf(stderr, "[DEBUG-RECALL-TRACE-C] ubio:%d %s %s reqId=%lu cohDst=%d\n",
+                LogDebug("UBIO", "[DEBUG-RECALL-TRACE-C] ubio:{} {} {} reqId={} cohDst={}",
                              nid, fromNetwork ? "net" : "gem5",
                              coherenceMsgTypeName(coh->h.type), coh->h.reqId, coh->h.dstNode);
             }
 
             if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
-                std::fprintf(stderr,
-                             "[DEBUG-UBIO-RR-PATH] reqId=%lu from=%s srcNode=%d dstNode=%d nid=%d enter_dstNode_check=%s homeLinePa=0x%lx\n",
+                LogDebug("UBIO",
+                             "[DEBUG-UBIO-RR-PATH] reqId={} from={} srcNode={} dstNode={} nid={} enter_dstNode_check={} homeLinePa=0x{:x}",
                              coh->h.reqId, fromNetwork ? "net" : "gem5",
                              coh->h.srcNode, coh->h.dstNode, nid,
                              (coh->h.dstNode != nid) ? "true" : "false",
@@ -2393,8 +2400,8 @@ main(int argc, char **argv)
                 // If this PA belongs to our local DSM plane, force local processing
                 bool isDsm = ubcc.isDsmAddr(coh->h.homeLinePa);
                 if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
-                    std::fprintf(stderr,
-                                 "[DEBUG-UBIO-RR-PATH] reqId=%lu dstNode!=nid true, isDsmAddr=%s -> pass_non_dsm_check=%s homeLinePa=0x%lx\n",
+                    LogDebug("UBIO",
+                                 "[DEBUG-UBIO-RR-PATH] reqId={} dstNode!=nid true, isDsmAddr={} -> pass_non_dsm_check={} homeLinePa=0x{:x}",
                                  coh->h.reqId,
                                  isDsm ? "true" : "false",
                                  (!isDsm) ? "true" : "false",
@@ -2412,29 +2419,29 @@ main(int argc, char **argv)
                     // upgrade's invalidation acks never came back → deadlock.)
                     if (netPort) {
                         if (g_debugUbioPerf) {
-                            std::fprintf(stderr, "[DEBUG-TRACE-2] n%d FWD %s dst=%d:%d via net\n",
+                            LogDebug("UBIO", "[DEBUG-TRACE-2] n{} FWD {} dst={}:{} via net",
                                          nid, coherenceMsgTypeName(coh->h.type),
                                          coh->h.dstNode, coh->h.dstSocket);
                         }
                         bool sent = sendCoh(netPort, tick,
                                             gidOf(coh->h.dstNode, coh->h.dstSocket), *coh, true);
                         if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
-                            std::fprintf(stderr,
-                                         "[DEBUG-UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=true sendCoh_ret=%s dstNode=%d\n",
+                            LogDebug("UBIO",
+                                         "[DEBUG-UBIO-RR-PATH] reqId={} forward_sendCoh_called=true sendCoh_ret={} dstNode={}",
                                          coh->h.reqId, sent ? "true" : "false", coh->h.dstNode);
                         }
                     } else {
                         if (g_debugUbioPerf) {
-                            std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
+                            LogDebug("UBIO", "[ubio:{}] DROP cross-node {} (no net)",
                                          nid, coherenceMsgTypeName(coh->h.type));
                         }
                         if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
-                            std::fprintf(stderr,
-                                         "[DEBUG-UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=false reason=no_netPort\n",
+                            LogDebug("UBIO",
+                                         "[DEBUG-UBIO-RR-PATH] reqId={} forward_sendCoh_called=false reason=no_netPort",
                                          coh->h.reqId);
                         }
                     }
-                    m = port->recv(tick, &st);
+                    m = ReceiveMessage(port, tick, &st);
                     continue;
                 }
             }
@@ -2455,15 +2462,15 @@ main(int argc, char **argv)
                         bool sentToGem5 = sendCoh(gem5Port, tick,
                             gidOf(nid, sid), *coh);
                         if (g_debugUbioPerf) {
-                            std::fprintf(stderr,
-                                         "[DEBUG-TRACE-4-RECALL] n%d net->gem5 recall-done sendCoh_ret=%s reqId=%lu dstSocket=%d\n",
+                            LogDebug("UBIO",
+                                         "[DEBUG-TRACE-4-RECALL] n{} net->gem5 recall-done sendCoh_ret={} reqId={} dstSocket={}",
                                          nid, sentToGem5 ? "true" : "false",
                                          coh->h.reqId, sid);
                         }
                     }
                     if (handled && hasResponse) {
                         if (g_debugUbioPerf) {
-                            std::fprintf(stderr, "[DEBUG-TRACE-3] n%d net->UBCC grant, sending %s back to %d:%d\n",
+                            LogDebug("UBIO", "[DEBUG-TRACE-3] n{} net->UBCC grant, sending {} back to {}:{}",
                                          nid, coherenceMsgTypeName(response.h.type),
                                          coh->h.srcNode, coh->h.srcSocket);
                         }
@@ -2476,9 +2483,9 @@ main(int argc, char **argv)
                             // 注意：此时 gem5 的 L1/L2 可能有未写回的 dirty 数据，
                             // 但 barrier 设计保证 verify 在 gem5 退出前完成，
                             // 此路径仅作防御性兜底。
-                            std::fprintf(stderr,
-                                "[RECALL-PROXY] n%d gem5Done=true, synthesizing RecallResp "
-                                "for PA=0x%lx reqId=%lu homeNode=%d\n",
+                            LogWarn("UBIO",
+                                "[RECALL-PROXY] n{} gem5Done=true, synthesizing RecallResp "
+                                "for PA=0x{:x} reqId={} homeNode={}",
                                 nid, coh->h.homeLinePa, coh->h.reqId, coh->h.homeNode);
                             CoherenceMessage resp;
                             resp.h = coh->h;
@@ -2492,13 +2499,13 @@ main(int argc, char **argv)
                             {
                                 if (host.dsmData.copyData(coh->h.homeLinePa,
                                                           resp.b.recallResp.data)) {
-                                    std::fprintf(stderr,
-                                        "[RECALL-PROXY] n%d using DsmDataStore data for PA=0x%lx\n",
+                                    LogWarn("UBIO",
+                                        "[RECALL-PROXY] n{} using DsmDataStore data for PA=0x{:x}",
                                         nid, coh->h.homeLinePa);
                                 } else {
                                     panic_if(true,
                                         "gem5 exited with no authoritative recall data "
-                                        "node=%d socket=%d PA=0x%lx reqId=%lu",
+                                        "node={} socket={} PA=0x{:x} reqId={}",
                                         nid, sid, coh->h.homeLinePa, coh->h.reqId);
                                 }
                             }
@@ -2508,22 +2515,22 @@ main(int argc, char **argv)
                                     resp, true);
                         } else if (gem5Done) {
                             // gem5 已退出，其他 gem5Ingress 消息无法处理，记录告警
-                            std::fprintf(stderr,
-                                "[WARN-GEM5DONE] n%d gem5Done=true, dropping %s "
-                                "reqId=%lu PA=0x%lx\n",
+                            LogWarn("UBIO",
+                                "[WARN-GEM5DONE] n{} gem5Done=true, dropping {} "
+                                "reqId={} PA=0x{:x}",
                                 nid, coherenceMsgTypeName(coh->h.type),
                                 coh->h.reqId, coh->h.homeLinePa);
                         } else {
                             // 正常路径：转发给 gem5
                             if (g_debugUbioPerf) {
-                                std::fprintf(stderr, "[DEBUG-TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
+                                LogDebug("UBIO", "[DEBUG-TRACE-4] n{} net->gem5 fwd {} reqId={}",
                                              nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                             }
                             bool sentToGem5 = sendCoh(gem5Port, tick,
                                 gidOf(coh->h.srcNode, coh->h.srcSocket), *coh);
                             if (g_debugUbioPerf) {
-                                std::fprintf(stderr,
-                                             "[DEBUG-TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
+                                LogDebug("UBIO",
+                                             "[DEBUG-TRACE-4-SEND] n{} net->gem5 sendCoh_ret={} type={} reqId={} dstModule={} dstPort={} srcSocket={}",
                                              nid, sentToGem5 ? "true" : "false",
                                              coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                                              coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
@@ -2531,7 +2538,7 @@ main(int argc, char **argv)
                         }
                     }
                 }
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
@@ -2541,7 +2548,7 @@ main(int argc, char **argv)
                 host._metaRNF.handleResp(*coh);
                 host._metaRNF.leaveReentrant();
                 // Deferred ops drained at outer loop boundary (after pollAndProcess)
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFWriteResp: durable write ack from gem5 (Phase D2)
@@ -2549,7 +2556,7 @@ main(int argc, char **argv)
                 host._metaRNF.enterReentrant();
                 host._metaRNF.handleWriteResp(*coh);
                 host._metaRNF.leaveReentrant();
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFLineReadResp: typed 64B line read response (Phase 2)
@@ -2557,7 +2564,7 @@ main(int argc, char **argv)
                 host._metaRNF.enterReentrant();
                 host._metaRNF.handleLineReadResp(*coh);
                 host._metaRNF.leaveReentrant();
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFLineWriteResp: typed 64B line write ack (Phase 2)
@@ -2565,14 +2572,14 @@ main(int argc, char **argv)
                 host._metaRNF.enterReentrant();
                 host._metaRNF.handleLineWriteResp(*coh);
                 host._metaRNF.leaveReentrant();
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
             if (!isUbccIngress(coh->h.type)) {
-                std::fprintf(stderr, "[ubio:%d] drop unsupported local type=%s\n",
+                LogWarn("UBIO", "[ubio:{}] drop unsupported local type={}",
                              nid, coherenceMsgTypeName(coh->h.type));
-                m = port->recv(tick, &st);
+                m = ReceiveMessage(port, tick, &st);
                 continue;
             }
 
@@ -2586,7 +2593,7 @@ main(int argc, char **argv)
                 bool handled = handleUbccMessage(ubcc, host, nid, sid, *coh, response, hasResponse);
                 host._metaRNF.leaveReentrant();
                 if (!handled) {
-                    std::fprintf(stderr, "[ubio:%d] UBCC unhandled type=%s\n",
+                    LogWarn("UBIO", "[ubio:{}] UBCC unhandled type={}",
                                  nid, coherenceMsgTypeName(coh->h.type));
                     break;
                 }
@@ -2596,13 +2603,13 @@ main(int argc, char **argv)
                         ? gidOf(coh->h.srcNode, coh->h.srcSocket)
                         : gidOf(nid, sid);
                     panic_if(!sendCoh(out, tick, targetGid, response, fromNetwork),
-                             "response send failed type=%s reqId=%lu targetGid=%u",
+                             "response send failed type={} reqId={} targetGid={}",
                              coherenceMsgTypeName(response.h.type),
                              response.h.reqId, targetGid);
                 }
             }
 
-            m = port->recv(tick, &st);
+            m = ReceiveMessage(port, tick, &st);
         }
     };
 
@@ -2610,10 +2617,10 @@ main(int argc, char **argv)
     while (!(gem5Done && (netPort == nullptr || netDone))) {
         loop_count++;
         // 1. Heartbeat: emitSync for all ports (even silent ones)
-        if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-PRE-EMIT] tick=%lu\n", tick); fflush(stderr); }
-        if (!gem5Done) gem5Port->emitSync(tick);
-        if (loop_count <= 5) { std::fprintf(stderr, "[UBIO-POST-EMIT] tick=%lu\n", tick); fflush(stderr); }
-        if (netPort && !netDone) netPort->emitSync(tick);
+        if (loop_count <= 5) { LogDebug("UBIO", "[UBIO-PRE-EMIT] tick={}", tick); }
+        if (!gem5Done) EmitSync(gem5Port, tick);
+        if (loop_count <= 5) { LogDebug("UBIO", "[UBIO-POST-EMIT] tick={}", tick); }
+        if (netPort && !netDone) EmitSync(netPort, tick);
 
         // 2. Drain all ready messages from each port
         if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
@@ -2629,7 +2636,7 @@ main(int argc, char **argv)
         if (host._metaRNF.hasDeferred()) {
             static int dd_cnt = 0;
             if (host._metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))
-                std::fprintf(stderr, "[DEBUG-H64-PDES-DRAIN] n=%d cnt=%d deferred=%d tick=%lu\n",
+                LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN] n={} cnt={} deferred={} tick={}",
                              nid, dd_cnt, host._metaRNF._deferredCount, tick);
             host._metaRNF.drainDeferred();
         }
@@ -2646,9 +2653,9 @@ main(int argc, char **argv)
 
         // 3. Advance tick via safeTs
         uint64_t minTs = UINT64_MAX;
-        if (!gem5Done) minTs = gem5Port->safeTs(tick);
+        if (!gem5Done) minTs = SafeTimestamp(gem5Port, tick);
         if (netPort && !netDone) {
-            uint64_t netSafe = netPort->safeTs(tick);
+            uint64_t netSafe = SafeTimestamp(netPort, tick);
             if (netSafe < minTs) minTs = netSafe;
         }
         if (minTs > tick) {
@@ -2678,11 +2685,15 @@ main(int argc, char **argv)
 
     // 3.4: Dump ResidentDir performance counters
     ubcc.directory().dumpStatsJson();
-    fprintf(stderr, "[UBCC-STATS] %s\n", ubcc.dumpStatsJson().c_str());
-    fprintf(stderr, "[UBCC-STATS] {\"asyncWbCount\":%lu}\n",
+    LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
+    LogInfo("UBIO", "[UBCC-STATS] {{\"asyncWbCount\":{}}}",
             ubcc.getAsyncWbCount());
-    fprintf(stderr, "[UBCC-STATS] {\"h64ExactLiveKnown\":%d,\"h64ExactLiveCount\":%lu}\n",
+    LogInfo("UBIO", "[UBCC-STATS] {{\"h64ExactLiveKnown\":{},\"h64ExactLiveCount\":{}}}",
             host.h64ExactCoverageKnown() ? 1 : 0, host.h64ExactLiveCount());
 
+    TerminatePort(gem5Port);
+    TerminatePort(netPort);
+    DestroyPort(gem5Port);
+    DestroyPort(netPort);
     return 0;
 }

@@ -6,9 +6,12 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <thread>
 #include <vector>
 
-#include "framework/Port.hh"
+#include "framework/iface/Message.hh"
+#include "framework/iface/Port.hh"
+#include "framework/iface/Log.hh"
 #include "modules/ubiomodule/CoherenceMessage.hh"
 
 using namespace framework;
@@ -22,61 +25,71 @@ struct BarrierState {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: barriermanager <num_nodes>\n");
+        LogError("BarrierManager", "usage: barriermanager <num_nodes>");
         return 1;
     }
     int numNodes = std::atoi(argv[1]);
     if (numNodes < 1 || numNodes > 32) {
-        std::fprintf(stderr, "num_nodes must be 1-32\n");
+        LogError("BarrierManager", "num_nodes must be 1-32");
         return 1;
     }
 
-    std::vector<std::unique_ptr<Port>> ports;
+    std::vector<Port *> ports;
     for (int n = 0; n < numNodes; n++) {
-        framework::PortParams pp = framework::PortEnvLoader::barrierPort(n);
-        auto p = std::make_unique<Port>();
-        if (!p->init(pp)) {
-            std::fprintf(stderr, "barrier port init failed n=%d\n", n);
+        PortConfig config;
+        config.selfRole = "barrier";
+        config.peerRole = "gem5";
+        config.channelName = "barrier";
+        config.nodeId = n;
+        config.socketId = 0;
+        config.numNodes = numNodes;
+        config.numSockets = 1;
+        Port *p = CreatePort(config);
+        if (!p) {
+            LogError("BarrierManager", "barrier port init failed n={}", n);
+            for (Port *created : ports) DestroyPort(created);
             return 1;
         }
-        ports.push_back(std::move(p));
+        ports.push_back(p);
     }
 
     std::map<uint32_t, BarrierState> barriers;
     uint64_t tick = 0;
     std::set<size_t> donePorts;
 
-    std::printf("[BarrierManager] listening on %d nodes\n", numNodes);
+    LogInfo("BarrierManager", "[BarrierManager] listening on {} nodes", numNodes);
 
-    while (true) {
-        for (auto &p : ports) p->emitSync(tick);
+    while (donePorts.size() < ports.size()) {
+        for (size_t i = 0; i < ports.size(); ++i) {
+            if (!donePorts.count(i)) EmitSync(ports[i], tick);
+        }
 
-        bool any = false;
         for (size_t i = 0; i < ports.size(); i++) {
             if (donePorts.count(i)) continue;
-            auto &p = ports[i];
+            Port *p = ports[i];
             ReceiveStatus st;
-            MemMessage *m = p->recv(tick, &st);
-            while (m && st == ReceiveStatus::kMessage) {
-                // CONTROL_SYNC arrives as an ordinary kMessage; skip it so it
+            const Message *m = ReceiveMessage(p, tick, &st);
+            while (m && st == ReceiveStatus::Message) {
+                // CONTROL_SYNC arrives as an ordinary Message; skip it so it
                 // does not count as barrier activity.
-                if (m->hdr.type == static_cast<uint32_t>(MemMessageType::CONTROL_SYNC)) {
-                    m = p->recv(tick, &st);
+                if (GetMessageType(m) == MessageType::ControlSync) {
+                    m = ReceiveMessage(p, tick, &st);
                     continue;
                 }
-                if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
+                if (GetMessageType(m) == MessageType::Terminate) {
                     donePorts.insert(i);
                     break;
                 }
-                any = true;
                 // Barrier control is now a PAYLOAD CoherenceMessage (BarrierReached).
-                const CoherenceMessage *bc =
-                    (m->hdr.type == static_cast<uint32_t>(MemMessageType::PAYLOAD))
-                        ? m->getPayload<CoherenceMessage>() : nullptr;
+                const CoherenceMessage *bc = nullptr;
+                if (GetMessageType(m) == MessageType::Payload &&
+                    GetMessagePayloadSize(m) == sizeof(CoherenceMessage)) {
+                    bc = static_cast<const CoherenceMessage *>(GetMessagePayloadData(m));
+                }
                 if (bc && bc->h.type == CoherenceMessageType::BarrierReached) {
                     uint32_t mask = bc->b.barrier.mask;
                     uint32_t nodeId = bc->h.srcNode;
-                    std::printf("[BarrierManager] ARRIVED node=%u mask=0x%x\n", nodeId, mask);
+                    LogInfo("BarrierManager", "[BarrierManager] ARRIVED node={} mask=0x{:x}", nodeId, mask);
 
                     auto &bs = barriers[mask];
                     bs.mask = mask;
@@ -87,38 +100,47 @@ int main(int argc, char **argv) {
                     while (v) { expected++; v &= (v - 1); }
 
                     if (bs.arrived.size() >= expected) {
-                        std::printf("[BarrierManager] RELEASE mask=0x%x\n", mask);
+                        LogInfo("BarrierManager", "[BarrierManager] RELEASE mask=0x{:x}", mask);
                         // Broadcast BarrierRelease to all nodes in the mask
                         for (uint32_t ni = 0; ni < (uint32_t)numNodes; ni++) {
                             if (mask & (1u << ni)) {
-                                framework::MemMessage* buf = ports[ni]->allocateSendBuffer(tick);
+                                Message *buf = AllocateSendMessage(ports[ni], tick);
                                 if (buf) {
-                                    buf->hdr.type = static_cast<uint32_t>(MemMessageType::PAYLOAD);
-                                    buf->hdr.sourceId = 0;
-                                    buf->hdr.targetId = ni;
+                                    SetMessageType(buf, MessageType::Payload);
+                                    SetMessageSourceId(buf, 0);
+                                    SetMessageTargetId(buf, ni);
                                     CoherenceMessage rmsg;
                                     rmsg.h.type = CoherenceMessageType::BarrierRelease;
                                     rmsg.b.barrier.mask = mask;
-                                    buf->setPayload(rmsg);
-                                    ports[ni]->send(buf);
+                                    if (sizeof(rmsg) > GetMaxPayloadSize()) {
+                                        ReleaseMessage(buf);
+                                        continue;
+                                    }
+                                    SetMessagePayload(buf, &rmsg, sizeof(rmsg));
+                                    SendMessage(ports[ni], buf);
                                 }
                             }
                         }
                         bs.arrived.clear();
                     }
                 }
-                m = p->recv(tick, &st);
+                m = ReceiveMessage(p, tick, &st);
             }
         }
-        if (!any) tick++;
-        else {
-            uint64_t minTs = UINT64_MAX;
-            for (size_t i = 0; i < ports.size(); i++) {
-                if (donePorts.count(i)) continue;
-                uint64_t ts = ports[i]->safeTs(tick); if (ts < minTs) minTs = ts;
-            }
-            tick = (minTs > tick) ? minTs : tick + 1;
+        uint64_t minTs = UINT64_MAX;
+        for (size_t i = 0; i < ports.size(); i++) {
+            if (donePorts.count(i)) continue;
+            uint64_t ts = SafeTimestamp(ports[i], tick);
+            if (ts < minTs) minTs = ts;
         }
+        if (minTs != UINT64_MAX && minTs > tick)
+            tick = minTs;
+        else
+            std::this_thread::yield();
+    }
+    for (Port *p : ports) {
+        TerminatePort(p);
+        DestroyPort(p);
     }
     return 0;
 }

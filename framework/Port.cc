@@ -1,336 +1,568 @@
-#include "framework/Port.hh"
+#include "framework/iface/Port.hh"
+
+#include "framework/iface/Log.hh"
+
 #include <algorithm>
-#include <cstdio>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <new>
+#include <string>
+#include <utility>
 #include <zmq.hpp>
 
 namespace framework {
+namespace {
 
-// Per-message PORT-SEND/PORT-RECV traces fire on every sync (every ~linkLatency
-// ticks) and generate multi-GB logs that exhaust the disk. Gate them behind
-// EP_DEBUG_PORT=1 so they are OFF by default. Read once.
-static inline bool portDebugEnabled() {
-    static int v = -1;
-    if (v < 0) {
-        const char* e = std::getenv("EP_DEBUG_PORT");
-        v = (e && e[0] == '1') ? 1 : 0;
-    }
-    return v != 0;
-}
+constexpr std::size_t kMaxPayloadSize = 1024;
+constexpr std::uint32_t kWireHeaderSize = 40;
 
-// ── Port ────────────────────────────────────────────────────────────
-Port::Port() {}
+struct WireHeader {
+    std::uint64_t timestamp = 0;
+    std::uint32_t size = kWireHeaderSize;
+    std::uint32_t type = static_cast<std::uint32_t>(MessageType::Payload);
+    std::uint32_t sourceId = 0;
+    std::uint32_t reserved0 = 0;
+    std::uint32_t targetId = 0;
+    std::uint32_t reserved1 = 0;
+    std::uint64_t requestId = 0;
+};
 
-Port::~Port() { _releaseSockets(); }
+static_assert(sizeof(WireHeader) == kWireHeaderSize,
+              "local wire header must remain compatible");
 
-void Port::_releaseSockets() {
-    if (!_open) return;
-    _open = false;
-    if (_rxSock) _rxSock.reset();
-    if (_txSock) _txSock.reset();
-    if (_ctx)    _ctx.reset();
-}
-
-bool
-Port::init(const PortParams& params, const PortRuntime& runtime)
+std::string IpcBase()
 {
-    if (_open) return false;
-    _name = params.name;
-    _moduleId = params.moduleId;
-    _portId = params.portId;
-    _syncInterval = runtime.syncInterval;
-    _linkLatency  = runtime.linkLatency;
-
-    const char* env_link = std::getenv("EP_LINK_LATENCY_PS");
-    if (env_link) _linkLatency = std::strtoull(env_link, nullptr, 10);
-    const char* env_sync = std::getenv("EP_SYNC_INTERVAL_PS");
-    if (env_sync) _syncInterval = std::strtoull(env_sync, nullptr, 10);
-    if (_syncInterval < _linkLatency) {
-        std::fprintf(stderr, "[PORT-CFG-WARN] %s syncInterval(%lu) < linkLatency(%lu), "
-                     "clamping syncInterval=linkLatency\n",
-                     params.name.c_str(), _syncInterval, _linkLatency);
-        _syncInterval = _linkLatency;
-    }
-
-    _ctx = std::make_unique<zmq::context_t>(1);
-    _txSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);
-    _rxSock = std::make_unique<zmq::socket_t>(*_ctx, zmq::socket_type::pair);
-
-    // Bound every IPC socket. With HWM=0 a stalled peer lets protocol traffic
-    // accumulate until the host OOM-kills an unrelated process. Blocking here
-    // applies backpressure instead of silently dropping coherence messages.
-    int sndtimeo = -1;
-    _txSock->set(zmq::sockopt::sndtimeo, sndtimeo);
-    int hwm = 8192;
-    if (const char* env_hwm = std::getenv("EP_PORT_HWM")) {
-        const long requested = std::strtol(env_hwm, nullptr, 10);
-        if (requested > 0 && requested <= 1048576)
-            hwm = static_cast<int>(requested);
-    }
-    _txSock->set(zmq::sockopt::sndhwm, hwm);
-    _txSock->set(zmq::sockopt::rcvhwm, hwm);
-    _rxSock->set(zmq::sockopt::sndhwm, hwm);
-    _rxSock->set(zmq::sockopt::rcvhwm, hwm);
-
-    try {
-        _rxSock->bind(params.localRxEndpoint);
-    } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[Port %s] rx bind(%s) failed: %s\n",
-                     _name.c_str(), params.localRxEndpoint.c_str(), e.what());
-        _releaseSockets();
-        return false;
-    }
-    // If peer endpoint equals local (bind-only server mode, e.g. barrier),
-    // don't connect — send/recv share the bound _rxSock.
-    if (params.peerRxEndpoint != params.localRxEndpoint) {
-        try {
-            _txSock->connect(params.peerRxEndpoint);
-        } catch (const zmq::error_t& e) {
-            std::fprintf(stderr, "[Port %s] tx connect(%s) failed: %s\n",
-                         _name.c_str(), params.peerRxEndpoint.c_str(), e.what());
-            _releaseSockets();
-            return false;
-        }
-    } else {
-        _txSock.reset();  // bind-only; send via _rxSock
-    }
-    _open = true;
-    std::fprintf(stderr, "[Port %s] rx=%s tx->%s\n",
-                 _name.c_str(), params.localRxEndpoint.c_str(),
-                 params.peerRxEndpoint.c_str());
-    return true;
+    const char* directory = std::getenv("UBCC_IPC_DIR");
+    return std::string(directory && *directory ? directory
+                                                : "/workspace/gem5/shared_ipc") +
+           "/ipc";
 }
 
-void Port::terminate() {
-    if (!_open) { _releaseSockets(); return; }
-    // best-effort TERMINATE notice
-    if (_txSock) {
-        try {
-            MemMessage m;
-            m.hdr.type = static_cast<uint32_t>(MemMessageType::TERMINATE);
-            m.hdr.size = sizeof(MemMessageHeader);
-            m.hdr.sourceId = _moduleId;
-            zmq::message_t z(m.hdr.size);
-            std::memcpy(z.data(), &m, m.hdr.size);
-            _txSock->send(z, zmq::send_flags::dontwait);
-        } catch (...) {}
-    }
-    _releaseSockets();
-}
-
-uint64_t Port::receiveTimestamp() const { return _pending ? _pendingT : _lastRxT; }
-
-uint64_t Port::safeTs(uint64_t curT) const {
-    // safeTs = min(peer's latest timestamp, own lookahead window). Before the
-    // first message from the peer, receiveTimestamp()==0 (init value, not a
-    // sentinel), so this returns 0 — the min() absorbing element — parking the
-    // local clock at 0 until the peer's first sync raises _lastRxT. No special
-    // case needed (matches the reference TimeSync::safeTs).
-    uint64_t rxt = receiveTimestamp();
-    uint64_t base = (_lastSyncTs > 0) ? _lastSyncTs : curT;
-    uint64_t syncBound = base + _syncInterval;
-    return (rxt < syncBound) ? rxt : syncBound;
-}
-
-// ── Data plane ──────────────────────────────────────────────────────
-
-MemMessage*
-Port::allocateSendBuffer(uint64_t timestamp)
+std::string Lower(std::string value)
 {
-    if (!_open) return nullptr;
-    MemMessage* msg = new (std::nothrow) MemMessage();
-    if (!msg) return nullptr;
-    msg->clear();
-    msg->hdr.timestamp = timestamp + _linkLatency;
-    msg->hdr.sourceId = _moduleId;
-    msg->hdr.size = sizeof(MemMessageHeader);
-    return msg;
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
 }
 
-bool
-Port::send(MemMessage* msg)
+std::string CanonicalRole(const std::string& role)
 {
-    if (!msg) return false;
-    if (!_open) {
-        delete msg;
-        return false;
-    }
-    bool ok = false;
-    auto& sock = _txSock ? *_txSock : *_rxSock;
-    try {
-        zmq::message_t z(msg->hdr.size);
-        std::memcpy(z.data(), msg, msg->hdr.size);
-        if (portDebugEnabled())
-            std::fprintf(stderr, "[PORT-SEND] %s type=%u ts=%lu dst=%u\n",
-                         _name.c_str(), msg->hdr.type, msg->hdr.timestamp,
-                         msg->hdr.targetId);
-        ok = sock.send(z, zmq::send_flags::none).has_value();
-    } catch (const zmq::error_t& e) {
-        std::fprintf(stderr, "[PORT-SEND-ERR] %s: %s\n", _name.c_str(), e.what());
-        ok = false;
-    }
-    delete msg;
-    return ok;
+    std::string result = Lower(role);
+    if (result == "nsim" || result == "network" || result == "network_sim")
+        return "networksim";
+    return result;
 }
 
-MemMessage*
-Port::recv(uint64_t curT, ReceiveStatus* status)
+bool ResolveEndpoints(const PortConfig& config, std::uint32_t gid,
+                      std::string& local, std::string& peer)
 {
-    ReceiveStatus dummy;
-    ReceiveStatus& st = status ? *status : dummy;
+    const std::string self = CanonicalRole(config.selfRole);
+    const std::string other = CanonicalRole(config.peerRole);
+    const std::string channel = Lower(config.channelName);
+    const std::string suffix = std::to_string(gid);
 
-    if (!_open) {
-        st = ReceiveStatus::kEmpty; return nullptr;
-    }
-
-    if (_pending) {
-        if (_pendingT <= curT) {
-            _lastRxT = _pendingT;
-            _pending = false;
-            // A CONTROL_SYNC is delivered as an ordinary kMessage; the caller
-            // recognizes and skips it via hdr.type (see 2.1.2 alignment).
-            st = ReceiveStatus::kMessage;
-            static thread_local MemMessage result;
-            result = _pendingMsg;
-            return &result;
-        }
-        st = ReceiveStatus::kPendingFuture;
-        return nullptr;
-    }
-
-    MemMessage tmp;
-    try {
-        zmq::message_t z;
-        auto r = _rxSock->recv(z, zmq::recv_flags::dontwait);
-        if (!r.has_value()) { st = ReceiveStatus::kEmpty; return nullptr; }
-        uint32_t sz = z.size();
-        if (sz < kMemMessageHeaderSize || sz > sizeof(MemMessage)) {
-            st = ReceiveStatus::kEmpty; return nullptr;
-        }
-        std::memcpy(&tmp, z.data(), sz);
-    } catch (const zmq::error_t&) { st = ReceiveStatus::kEmpty; return nullptr; }
-
-    _lastRxT = (uint64_t)tmp.hdr.timestamp;
-    if (portDebugEnabled())
-        std::fprintf(stderr, "[PORT-RECV] %s type=%u ts=%lu src=%u dst=%u curT=%lu\n",
-                     _name.c_str(), tmp.hdr.type, tmp.hdr.timestamp,
-                     tmp.hdr.sourceId, tmp.hdr.targetId, curT);
-
-    // A CONTROL_SYNC carries no payload but has a timestamp; it is treated like
-    // any other message here (_lastRxT updated above tracks the peer's latest
-    // ts). It flows through the timestamp-visibility check below and is returned
-    // as an ordinary kMessage for the caller to skip by hdr.type. We must NOT
-    // advance _lastSyncTs from a received sync — that is our own heartbeat clock
-    // and is only set by emitSync().
-    if (tmp.hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
-        // Deliver TERMINATE to the caller so the application can mark this
-        // port done and stop polling it (Port no longer tracks peer state).
-        st = ReceiveStatus::kMessage;
-        static thread_local MemMessage result; result = tmp; return &result;
-    }
-    if (tmp.hdr.timestamp > curT) {
-        _pending = true; _pendingT = tmp.hdr.timestamp; _pendingMsg = tmp;
-        st = ReceiveStatus::kPendingFuture; return nullptr;
-    }
-    st = ReceiveStatus::kMessage;
-    static thread_local MemMessage result; result = tmp; return &result;
-}
-
-// ── Sync ────────────────────────────────────────────────────────────
-bool
-Port::emitSync(uint64_t curTick)
-{
-    if (_lastSyncTs > 0 && curTick - _lastSyncTs < _linkLatency)
+    if (channel == "coherence" &&
+        ((self == "gem5" && other == "ubio") ||
+         (self == "ubio" && other == "gem5"))) {
+        const std::string base = IpcBase();
+        auto endpoint = [&](const std::string& from, const std::string& to) {
+            return "ipc://" + base + "_" + from + "_" + suffix + "_to_" + to +
+                   "_" + suffix;
+        };
+        local = endpoint(other, self);
+        peer = endpoint(self, other);
         return true;
-
-    // Non-blocking send: CONTROL_SYNC is a heartbeat. If the peer hasn't
-    // connected yet, dropping this sync is safe — the PDES clock will advance
-    // once the peer's own sync arrives and raises _lastRxT. Blocking here
-    // (zmq::send_flags::none + sndtimeo=-1) deadlocks the gem5 event queue
-    // when the ubio peer starts after gem5's first wakeup fires (TC32/34/39/81
-    // zero-tick stall in 2-socket topologies where 6 ubios are launched).
-    MemMessage* msg = allocateSendBuffer(curTick);
-    if (!msg) return false;
-    msg->hdr.type = static_cast<uint32_t>(MemMessageType::CONTROL_SYNC);
-    msg->hdr.size = sizeof(MemMessageHeader);
-
-    bool ok = false;
-    auto& sock = _txSock ? *_txSock : *_rxSock;
-    try {
-        zmq::message_t z(msg->hdr.size);
-        std::memcpy(z.data(), msg, msg->hdr.size);
-        // Use dontwait: if the peer hasn't bound yet, the send will fail
-        // immediately instead of blocking the caller. Losing an occasional
-        // sync is harmless — the next one will arrive within _linkLatency.
-        auto result = sock.send(z, zmq::send_flags::dontwait);
-        ok = result.has_value();
-    } catch (const zmq::error_t&) {
-        ok = false;
     }
-    delete msg;
-    if (ok) {
-        _lastSyncTs = curTick;
+
+    if (channel == "network" &&
+        ((self == "ubio" && other == "networksim") ||
+         (self == "networksim" && other == "ubio"))) {
+        const std::string base = IpcBase();
+        const std::string module = "m" + suffix;
+        auto endpoint = [&](const std::string& from, const std::string& to) {
+            const std::string fromName = from == "networksim" ? from + "_" + module
+                                                               : from + "_" + suffix;
+            const std::string toName = to == "networksim" ? to + "_" + module
+                                                           : to + "_" + suffix;
+            return "ipc://" + base + "_" + fromName + "_to_" + toName;
+        };
+        local = endpoint(other, self);
+        peer = endpoint(self, other);
+        return true;
+    }
+
+    // Compatibility with the legacy barrier's bind-only Port configuration.
+    if (channel == "barrier" && self == "barrier") {
+        local = "ipc:///tmp/barrier_m" + suffix + "_p1";
+        peer = local;
         return true;
     }
     return false;
 }
 
-// ── PortEnvLoader ───────────────────────────────────────────────────
-static std::string
-ipcBase()
+std::uint64_t ReadRuntimeEnv(const char* name, std::uint64_t fallback)
 {
-    const char *dir = std::getenv("UBCC_IPC_DIR");
-    return std::string((dir && *dir) ? dir : "/workspace/gem5/shared_ipc") +
-        "/ipc";
+    const char* value = std::getenv(name);
+    if (!value || !*value)
+        return fallback;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    return end != value && *end == '\0' ? static_cast<std::uint64_t>(parsed)
+                                         : fallback;
 }
 
-PortParams PortEnvLoader::gem5UbioPort(int nid) {
-    PortParams p;
-    p.name = "gem5_ubio";
-    p.moduleId = nid; p.portId = 0;
-    const auto base = ipcBase();
-    p.localRxEndpoint = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
-    p.peerRxEndpoint  = "ipc://" + base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-    return p;
+} // namespace
+
+struct Message {
+    WireHeader header;
+    unsigned char payload[kMaxPayloadSize]{};
+    std::size_t capacity = kMaxPayloadSize;
+};
+
+struct Port {
+    std::string name;
+    std::uint32_t gid = 0;
+    std::uint64_t syncInterval = 2500;
+    std::uint64_t linkLatency = 2500;
+    std::uint64_t lastSyncTimestamp = 0;
+    std::uint64_t lastReceiveTimestamp = 0;
+    bool open = false;
+    bool pending = false;
+    std::uint64_t pendingTimestamp = 0;
+    Message pendingMessage;
+    Message receiveMessage;
+    std::unique_ptr<zmq::context_t> context;
+    std::unique_ptr<zmq::socket_t> transmitSocket;
+    std::unique_ptr<zmq::socket_t> receiveSocket;
+};
+
+namespace {
+
+void ClosePort(Port* port)
+{
+    if (!port)
+        return;
+    port->open = false;
+    port->receiveSocket.reset();
+    port->transmitSocket.reset();
+    port->context.reset();
 }
-PortParams PortEnvLoader::ubioGem5Port(int nid, bool isUbio) {
-    PortParams p;
-    p.name = isUbio ? "gem5" : "gem5_ubio";
-    p.moduleId = nid; p.portId = 0;
-    if (isUbio) {
-        const auto base = ipcBase();
-        p.localRxEndpoint = "ipc://" + base + "_gem5_" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-        p.peerRxEndpoint  = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_gem5_" + std::to_string(nid);
-    } else {
-        return gem5UbioPort(nid);
+
+bool SendWire(Port* port, const Message& message, zmq::send_flags flags)
+{
+    if (!port || !port->open)
+        return false;
+    const std::size_t wireSize = message.header.size;
+    if (wireSize < kWireHeaderSize ||
+        wireSize > kWireHeaderSize + kMaxPayloadSize)
+        return false;
+    try {
+        zmq::message_t wire(wireSize);
+        std::memcpy(wire.data(), &message.header, kWireHeaderSize);
+        if (wireSize > kWireHeaderSize) {
+            std::memcpy(static_cast<unsigned char*>(wire.data()) + kWireHeaderSize,
+                        message.payload, wireSize - kWireHeaderSize);
+        }
+        zmq::socket_t& socket = port->transmitSocket ? *port->transmitSocket
+                                                     : *port->receiveSocket;
+        return socket.send(wire, flags).has_value();
+    } catch (const zmq::error_t& error) {
+        LogError("framework", "send on {} failed: {}", port->name, error.what());
+        return false;
     }
-    return p;
 }
-PortParams PortEnvLoader::ubioNetPort(int nid) {
-    PortParams p;
-    p.name = "net"; p.moduleId = nid; p.portId = 1;
-    const auto base = ipcBase();
-    p.localRxEndpoint = "ipc://" + base + "_networksim_m" + std::to_string(nid) + "_to_ubio_" + std::to_string(nid);
-    p.peerRxEndpoint  = "ipc://" + base + "_ubio_" + std::to_string(nid) + "_to_networksim_m" + std::to_string(nid);
-    return p;
+
+void CheckMessage(const Message* message)
+{
+    LogAssertIf(message != nullptr, "framework", "Message must not be null");
 }
-PortParams PortEnvLoader::nsimUbioPort(int mod) {
-    PortParams p;
-    p.name = "nsim_p" + std::to_string(mod); p.moduleId = mod; p.portId = 1;
-    const auto base = ipcBase();
-    p.localRxEndpoint = "ipc://" + base + "_ubio_" + std::to_string(mod) + "_to_networksim_m" + std::to_string(mod);
-    p.peerRxEndpoint  = "ipc://" + base + "_networksim_m" + std::to_string(mod) + "_to_ubio_" + std::to_string(mod);
-    return p;
+
+void CheckMutableMessage(Message* message)
+{
+    LogAssertIf(message != nullptr, "framework", "Message must not be null");
 }
-PortParams PortEnvLoader::barrierPort(int n) {
-    // barrier uses a single endpoint pair per node: barrier binds, ubio/gem5
-    // connect. Use a duplex pair for uniformity with the new init().
-    PortParams p;
-    p.name = "barrier_n" + std::to_string(n); p.moduleId = n; p.portId = 1;
-    p.localRxEndpoint = "ipc:///tmp/barrier_m" + std::to_string(n) + "_p1";
-    p.peerRxEndpoint  = "ipc:///tmp/barrier_m" + std::to_string(n) + "_p1";
-    return p;
+
+} // namespace
+
+Port* CreatePort(const PortConfig& config, const PortRuntime& runtime)
+{
+    if (config.numNodes == 0 || config.numSockets == 0 ||
+        config.nodeId >= config.numNodes || config.socketId >= config.numSockets) {
+        LogError("framework", "invalid topology node={}/{} socket={}/{}",
+                 config.nodeId, config.numNodes, config.socketId,
+                 config.numSockets);
+        return nullptr;
+    }
+    const std::uint64_t wideGid =
+        static_cast<std::uint64_t>(config.nodeId) * config.numSockets +
+        config.socketId;
+    if (wideGid > std::numeric_limits<std::uint32_t>::max()) {
+        LogError("framework", "port gid is out of range: {}", wideGid);
+        return nullptr;
+    }
+
+    std::string localEndpoint;
+    std::string peerEndpoint;
+    if (!ResolveEndpoints(config, static_cast<std::uint32_t>(wideGid),
+                          localEndpoint, peerEndpoint)) {
+        LogError("framework", "unsupported port roles {}/{} channel {}",
+                 config.selfRole, config.peerRole, config.channelName);
+        return nullptr;
+    }
+
+    std::unique_ptr<Port> port(new (std::nothrow) Port);
+    if (!port) {
+        LogError("framework", "failed to allocate port");
+        return nullptr;
+    }
+    port->name = config.selfRole + ":" + config.channelName;
+    port->gid = static_cast<std::uint32_t>(wideGid);
+    port->linkLatency = ReadRuntimeEnv("EP_LINK_LATENCY_PS", runtime.linkLatency);
+    port->syncInterval =
+        ReadRuntimeEnv("EP_SYNC_INTERVAL_PS", runtime.syncInterval);
+    if (port->syncInterval < port->linkLatency) {
+        LogWarn("framework", "{} syncInterval({}) < linkLatency({}); clamping",
+                port->name, port->syncInterval, port->linkLatency);
+        port->syncInterval = port->linkLatency;
+    }
+
+    try {
+        port->context = std::make_unique<zmq::context_t>(1);
+        port->transmitSocket = std::make_unique<zmq::socket_t>(
+            *port->context, zmq::socket_type::pair);
+        port->receiveSocket = std::make_unique<zmq::socket_t>(
+            *port->context, zmq::socket_type::pair);
+        port->transmitSocket->set(zmq::sockopt::sndtimeo, -1);
+        int highWaterMark = 8192;
+        if (const char* value = std::getenv("EP_PORT_HWM")) {
+            const long requested = std::strtol(value, nullptr, 10);
+            if (requested > 0 && requested <= 1048576)
+                highWaterMark = static_cast<int>(requested);
+        }
+        for (zmq::socket_t* socket : {port->transmitSocket.get(),
+                                     port->receiveSocket.get()}) {
+            socket->set(zmq::sockopt::linger, 0);
+            socket->set(zmq::sockopt::sndhwm, highWaterMark);
+            socket->set(zmq::sockopt::rcvhwm, highWaterMark);
+        }
+        port->receiveSocket->bind(localEndpoint);
+        if (peerEndpoint == localEndpoint) {
+            port->transmitSocket.reset();
+        } else {
+            port->transmitSocket->connect(peerEndpoint);
+        }
+        port->open = true;
+    } catch (const std::exception& error) {
+        LogError("framework", "create port {} rx={} tx={} failed: {}", port->name,
+                 localEndpoint, peerEndpoint, error.what());
+        ClosePort(port.get());
+        return nullptr;
+    }
+    LogDebug("framework", "port {} rx={} tx={}", port->name, localEndpoint,
+             peerEndpoint);
+    return port.release();
+}
+
+void TerminatePort(Port* port)
+{
+    if (!port)
+        return;
+    if (port->open) {
+        Message terminate;
+        terminate.header.type = static_cast<std::uint32_t>(MessageType::Terminate);
+        terminate.header.sourceId = port->gid;
+        (void)SendWire(port, terminate, zmq::send_flags::dontwait);
+    }
+    ClosePort(port);
+}
+
+void DestroyPort(Port* port)
+{
+    if (!port)
+        return;
+    ClosePort(port);
+    delete port;
+}
+
+Message* AllocateSendMessage(Port* port, std::uint64_t timestamp)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    if (!port->open)
+        return nullptr;
+    Message* message = new (std::nothrow) Message;
+    if (!message)
+        return nullptr;
+    LogAssertIf(timestamp <=
+                    std::numeric_limits<std::uint64_t>::max() - port->linkLatency,
+                "framework", "message timestamp {} plus latency {} overflows",
+                timestamp, port->linkLatency);
+    message->header.timestamp = timestamp + port->linkLatency;
+    message->header.sourceId = port->gid;
+    return message;
+}
+
+bool SendMessage(Port* port, Message* message)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    LogAssertIf(message != nullptr, "framework", "Message must not be null");
+    const bool result = SendWire(port, *message, zmq::send_flags::none);
+    delete message;
+    return result;
+}
+
+const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
+                              ReceiveStatus* status)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    LogAssertIf(status != nullptr, "framework", "ReceiveStatus must not be null");
+    if (!port->open) {
+        *status = ReceiveStatus::Empty;
+        return nullptr;
+    }
+    if (port->pending) {
+        if (port->pendingTimestamp > currentTimestamp) {
+            *status = ReceiveStatus::PendingFuture;
+            return nullptr;
+        }
+        port->lastReceiveTimestamp = port->pendingTimestamp;
+        port->pending = false;
+        port->receiveMessage = port->pendingMessage;
+        *status = ReceiveStatus::Message;
+        return &port->receiveMessage;
+    }
+
+    try {
+        zmq::message_t wire;
+        if (!port->receiveSocket->recv(wire, zmq::recv_flags::dontwait)) {
+            *status = ReceiveStatus::Empty;
+            return nullptr;
+        }
+        if (wire.size() < kWireHeaderSize ||
+            wire.size() > kWireHeaderSize + kMaxPayloadSize) {
+            LogWarn("framework", "discarding invalid wire message size {}",
+                    wire.size());
+            *status = ReceiveStatus::Empty;
+            return nullptr;
+        }
+        Message incoming;
+        std::memcpy(&incoming.header, wire.data(), kWireHeaderSize);
+        if (incoming.header.type >
+            static_cast<std::uint32_t>(MessageType::Payload)) {
+            LogWarn("framework", "discarding invalid wire message type {}",
+                    incoming.header.type);
+            *status = ReceiveStatus::Empty;
+            return nullptr;
+        }
+        if (incoming.header.size != wire.size()) {
+            LogWarn("framework", "discarding wire size mismatch {} != {}",
+                    incoming.header.size, wire.size());
+            *status = ReceiveStatus::Empty;
+            return nullptr;
+        }
+        if (wire.size() > kWireHeaderSize) {
+            std::memcpy(incoming.payload,
+                        static_cast<const unsigned char*>(wire.data()) +
+                            kWireHeaderSize,
+                        wire.size() - kWireHeaderSize);
+        }
+        port->lastReceiveTimestamp = incoming.header.timestamp;
+        if (incoming.header.timestamp > currentTimestamp &&
+            incoming.header.type !=
+                static_cast<std::uint32_t>(MessageType::Terminate)) {
+            port->pending = true;
+            port->pendingTimestamp = incoming.header.timestamp;
+            port->pendingMessage = incoming;
+            *status = ReceiveStatus::PendingFuture;
+            return nullptr;
+        }
+        port->receiveMessage = incoming;
+        *status = ReceiveStatus::Message;
+        return &port->receiveMessage;
+    } catch (const zmq::error_t& error) {
+        LogWarn("framework", "receive on {} failed: {}", port->name, error.what());
+        *status = ReceiveStatus::Empty;
+        return nullptr;
+    }
+}
+
+bool EmitSync(Port* port, std::uint64_t currentTimestamp)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    if (!port->open)
+        return false;
+    LogAssertIf(currentTimestamp <=
+                    std::numeric_limits<std::uint64_t>::max() - port->linkLatency,
+                "framework", "sync timestamp {} plus latency {} overflows",
+                currentTimestamp, port->linkLatency);
+    if (port->lastSyncTimestamp > 0) {
+        LogAssertIf(currentTimestamp >= port->lastSyncTimestamp, "framework",
+                    "sync timestamp {} precedes last sync timestamp {}",
+                    currentTimestamp, port->lastSyncTimestamp);
+        if (currentTimestamp - port->lastSyncTimestamp < port->linkLatency)
+            return true;
+    }
+    Message sync;
+    sync.header.timestamp = currentTimestamp + port->linkLatency;
+    sync.header.sourceId = port->gid;
+    sync.header.type = static_cast<std::uint32_t>(MessageType::ControlSync);
+    if (!SendWire(port, sync, zmq::send_flags::dontwait))
+        return false;
+    port->lastSyncTimestamp = currentTimestamp;
+    return true;
+}
+
+std::uint64_t SafeTimestamp(const Port* port, std::uint64_t currentTimestamp)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    const std::uint64_t received = ReceiveTimestamp(port);
+    const std::uint64_t base = port->lastSyncTimestamp > 0
+                                   ? port->lastSyncTimestamp
+                                   : currentTimestamp;
+    const std::uint64_t bound = base >
+            std::numeric_limits<std::uint64_t>::max() - port->syncInterval
+        ? std::numeric_limits<std::uint64_t>::max()
+        : base + port->syncInterval;
+    return std::min(received, bound);
+}
+
+std::uint64_t ReceiveTimestamp(const Port* port)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    return port->pending ? port->pendingTimestamp : port->lastReceiveTimestamp;
+}
+
+std::uint64_t SyncInterval(const Port* port)
+{
+    LogAssertIf(port != nullptr, "framework", "Port must not be null");
+    return port->syncInterval;
+}
+
+std::uint64_t GetMessageTimestamp(const Message* message)
+{
+    CheckMessage(message);
+    return message->header.timestamp;
+}
+
+void SetMessageTimestamp(Message* message, std::uint64_t timestamp)
+{
+    CheckMutableMessage(message);
+    message->header.timestamp = timestamp;
+}
+
+MessageType GetMessageType(const Message* message)
+{
+    CheckMessage(message);
+    LogAssertIf(message->header.type <= static_cast<std::uint32_t>(MessageType::Payload),
+                "framework", "invalid message type {}", message->header.type);
+    return static_cast<MessageType>(message->header.type);
+}
+
+void SetMessageType(Message* message, MessageType type)
+{
+    CheckMutableMessage(message);
+    LogAssertIf(static_cast<std::uint32_t>(type) <=
+                    static_cast<std::uint32_t>(MessageType::Payload),
+                "framework", "invalid message type {}",
+                static_cast<std::uint32_t>(type));
+    message->header.type = static_cast<std::uint32_t>(type);
+}
+
+std::uint32_t GetMessageSourceId(const Message* message)
+{
+    CheckMessage(message);
+    return message->header.sourceId;
+}
+
+void SetMessageSourceId(Message* message, std::uint32_t sourceId)
+{
+    CheckMutableMessage(message);
+    message->header.sourceId = sourceId;
+}
+
+std::uint32_t GetMessageTargetId(const Message* message)
+{
+    CheckMessage(message);
+    return message->header.targetId;
+}
+
+void SetMessageTargetId(Message* message, std::uint32_t targetId)
+{
+    CheckMutableMessage(message);
+    message->header.targetId = targetId;
+}
+
+std::uint64_t GetMessageRequestId(const Message* message)
+{
+    CheckMessage(message);
+    return message->header.requestId;
+}
+
+void SetMessageRequestId(Message* message, std::uint64_t requestId)
+{
+    CheckMutableMessage(message);
+    message->header.requestId = requestId;
+}
+
+void SetMessagePayload(Message* message, const void* data, std::size_t size)
+{
+    CheckMutableMessage(message);
+    LogAssertIf(size <= message->capacity, "framework",
+                "payload size {} exceeds message capacity {}", size,
+                message->capacity);
+    LogAssertIf(data != nullptr || size == 0, "framework",
+                "payload data must not be null when size is {}", size);
+    if (size)
+        std::memcpy(message->payload, data, size);
+    message->header.size = kWireHeaderSize + static_cast<std::uint32_t>(size);
+}
+
+const void* GetMessagePayloadData(const Message* message)
+{
+    CheckMessage(message);
+    return message->payload;
+}
+
+std::size_t GetMessagePayloadSize(const Message* message)
+{
+    CheckMessage(message);
+    LogAssertIf(message->header.size >= kWireHeaderSize &&
+                    message->header.size <= kWireHeaderSize + message->capacity,
+                "framework", "invalid message size {}", message->header.size);
+    return message->header.size - kWireHeaderSize;
+}
+
+std::size_t GetMaxPayloadSize()
+{
+    return kMaxPayloadSize;
+}
+
+void CopyMessage(Message* destination, const Message* source)
+{
+    CheckMutableMessage(destination);
+    CheckMessage(source);
+    const std::size_t payloadSize = GetMessagePayloadSize(source);
+    LogAssertIf(payloadSize <= destination->capacity, "framework",
+                "source payload {} exceeds destination capacity {}", payloadSize,
+                destination->capacity);
+    const std::uint64_t timestamp = destination->header.timestamp;
+    destination->header.type = source->header.type;
+    destination->header.sourceId = source->header.sourceId;
+    destination->header.targetId = source->header.targetId;
+    destination->header.requestId = source->header.requestId;
+    destination->header.size = kWireHeaderSize + payloadSize;
+    if (payloadSize)
+        std::memcpy(destination->payload, source->payload, payloadSize);
+    destination->header.timestamp = timestamp;
+}
+
+void ReleaseMessage(Message* message)
+{
+    CheckMutableMessage(message);
+    delete message;
 }
 
 } // namespace framework

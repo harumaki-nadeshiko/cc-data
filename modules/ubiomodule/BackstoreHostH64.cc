@@ -5,6 +5,8 @@
 #include <cstring>
 #include <algorithm>
 
+#include "framework/iface/Log.hh"
+
 namespace cc { namespace glob {
 
 BackstoreHostH64::BackstoreHostH64(const H64HostConfig& cfg, MetaRNFClientIF* metaRNF)
@@ -405,8 +407,8 @@ void BackstoreHostH64::ensureGroupControl(int slotIdx) {
     uint64_t ctrlOffset = _cfg.groupControlOffset(txn.groupIdx);
 
     if (_debugEnabled) {
-        std::fprintf(stderr, "[DEBUG-H64-CTRL-READ] pa=0x%lx group=%zu ctrlOffset=%lu\n",
-                     txn.linePa, txn.groupIdx, ctrlOffset);
+        framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-READ] pa=0x{:x} group={} ctrlOffset={}",
+                            txn.linePa, txn.groupIdx, ctrlOffset);
     }
 
     _metaRNF->readLine(ctrlOffset, [this, slotIdx](MetaRNFLineStatus st, const uint8_t* data64) {
@@ -418,12 +420,12 @@ void BackstoreHostH64::onGroupControlRead(int slotIdx, MetaRNFLineStatus st, con
     auto& txn = _slots[slotIdx];
     auto& gc = _groupCtrls[txn.groupIdx];
 
-    if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-CTRL-READ-CB] slot=%d st=%d group=%zu pa=0x%lx\n",
-                 slotIdx, (int)st, txn.groupIdx, txn.linePa);
+    if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-READ-CB] slot={} st={} group={} pa=0x{:x}",
+                                           slotIdx, (int)st, txn.groupIdx, txn.linePa);
 
     if (st != MetaRNFLineStatus::Ok) {
-        if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-CTRL-READ-FAIL] slot=%d st=%d -> completeSlot\n",
-                     slotIdx, (int)st);
+        if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-READ-FAIL] slot={} st={} -> completeSlot",
+                                               slotIdx, (int)st);
         txn.result.status = mapMetaRNFStatus(st);
         txn.result.linePa = txn.linePa; txn.result.op = txn.op;
         completeSlot(slotIdx); return;
@@ -433,8 +435,8 @@ void BackstoreHostH64::onGroupControlRead(int slotIdx, MetaRNFLineStatus st, con
     if (data64) ctrl.loadFrom(data64);
 
     if (!ctrl.valid()) {
-        if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-CTRL-INIT] slot=%d group=%zu -> writeLine\n",
-                     slotIdx, txn.groupIdx);
+        if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-INIT] slot={} group={} -> writeLine",
+                                               slotIdx, txn.groupIdx);
         // Uninitialized — write a default control record
         H64GroupControl fresh;
         fresh.active_bucket_count = static_cast<uint32_t>(_cfg.buckets_per_group);
@@ -442,8 +444,8 @@ void BackstoreHostH64::onGroupControlRead(int slotIdx, MetaRNFLineStatus st, con
         fresh.generation = 1;
 
         if (_debugEnabled) {
-            std::fprintf(stderr, "[DEBUG-H64-CTRL-INIT] group=%zu active=%u salt=0x%lx gen=%u\n",
-                         txn.groupIdx, fresh.active_bucket_count, fresh.salt, fresh.generation);
+            framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-INIT] group={} active={} salt=0x{:x} gen={}",
+                                txn.groupIdx, fresh.active_bucket_count, fresh.salt, fresh.generation);
         }
 
         uint8_t raw[64];
@@ -476,8 +478,8 @@ void BackstoreHostH64::onGroupControlRead(int slotIdx, MetaRNFLineStatus st, con
     if (txn.activeBuckets == 0) txn.activeBuckets = _cfg.buckets_per_group;
 
     if (_debugEnabled) {
-        std::fprintf(stderr, "[DEBUG-H64-CTRL-OK] group=%zu active=%u salt=0x%lx gen=%u\n",
-                     txn.groupIdx, gc.active_bucket_count, gc.salt, gc.generation);
+        framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-CTRL-OK] group={} active={} salt=0x{:x} gen={}",
+                            txn.groupIdx, gc.active_bucket_count, gc.salt, gc.generation);
     }
 
     startProbe(slotIdx);
@@ -499,8 +501,8 @@ void BackstoreHostH64::startProbe(int slotIdx) {
     size_t bucketIdx = (txn.homeBucket + txn.probeIdx) % txn.activeBuckets;
     size_t bucketOff = tableBucketOffset(txn.groupIdx, bucketIdx);
 
-    if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-PROBE-START] slot=%d pa=0x%lx group=%zu homeBucket=%zu probe=%zu bucketOff=%zu active=%zu\n",
-                 slotIdx, pa, txn.groupIdx, txn.homeBucket, txn.probeIdx, bucketOff, txn.activeBuckets);
+    if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-PROBE-START] slot={} pa=0x{:x} group={} homeBucket={} probe={} bucketOff={} active={}",
+                                           slotIdx, pa, txn.groupIdx, txn.homeBucket, txn.probeIdx, bucketOff, txn.activeBuckets);
 
     if (!h64BucketOffsetInRange(bucketOff, _cfg.metadata_socket_lines * 64ULL)) {
         txn.result.status = BackstoreStatus::IoError;
@@ -518,8 +520,8 @@ void BackstoreHostH64::onProbeBucketRead(int slotIdx, MetaRNFLineStatus st, cons
     auto& txn = _slots[slotIdx];
     uint64_t pa = txn.linePa;
 
-    if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-PROBE-READ-CB] slot=%d st=%d probe=%zu pa=0x%lx\n",
-                 slotIdx, (int)st, txn.probeIdx, pa);
+    if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-PROBE-READ-CB] slot={} st={} probe={} pa=0x{:x}",
+                                           slotIdx, (int)st, txn.probeIdx, pa);
 
     if (st == MetaRNFLineStatus::RetryableBusy) {
         // Gem5 MetaRNF rejected (TBE full, buffer full). Retry the same
@@ -920,11 +922,11 @@ void BackstoreHostH64::completeSlot(int slotIdx) {
     auto& txn = _slots[slotIdx];
     txn.result.linePa = txn.linePa; txn.result.op = txn.op;
     BackstoreCompletion result = txn.result;
-    if (_debugEnabled) std::fprintf(stderr, "[DEBUG-H64-SLOT-COMPLETE] slot=%d pa=0x%lx op=%s status=%s found=%d\n",
-                 slotIdx, result.linePa,
-                 backstoreOpName(result.op),
-                 backstoreStatusName(result.status),
-                 result.found ? 1 : 0);
+    if (_debugEnabled) framework::LogDebug("BackstoreHostH64", "[DEBUG-H64-SLOT-COMPLETE] slot={} pa=0x{:x} op={} status={} found={}",
+                                           slotIdx, result.linePa,
+                                           backstoreOpName(result.op),
+                                           backstoreStatusName(result.status),
+                                           result.found ? 1 : 0);
     auto cb = std::move(txn.cb);
     freeSlot(slotIdx);
     if (cb) cb(result);

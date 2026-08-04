@@ -1,8 +1,10 @@
 # CC-EP → 目标框架迁移指南
 
-> 当前状态：框架层完成，独立模块可独立编译测试，gem5 内部仍为指针耦合
-> 目标框架：基于 ZeroMQ 消息队列的多进程仿真架构
-> 前置阅读：`docs/recovery/refactoring_plan.md`
+> [!WARNING]
+> **历史/已弃用迁移记录。** 本文描述的是早期 PseudoMemPort、concrete Port 和进程拆分过程，所列“当前状态”“未完成事项”、文件映射和命令均不得视为 2026-08-05 的现状。
+> **当前 Framework 使用、后端选择以及 `libxxx.a + xxx.hh` 真实后端移植的唯一权威文档：[`docs/design/framework_iface_backend_guide_zh.md`](design/framework_iface_backend_guide_zh.md)。** 请勿在新生产代码中使用旧 concrete `Port.hh`、`MemMessage.hh` 或 pseudo NetworkSim 接口。
+
+> 以下三行是历史背景而非当前声明：当时记录为“框架层完成、独立模块可独立编译测试、gem5 内部仍为指针耦合”，目标为基于 ZeroMQ 的多进程架构，前置阅读为 `docs/recovery/refactoring_plan.md`。
 
 ---
 

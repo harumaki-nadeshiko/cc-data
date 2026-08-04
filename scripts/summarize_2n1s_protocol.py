@@ -9,6 +9,7 @@ import sys
 
 PERF_RE = re.compile(
     r"\[EP-PERF\] kind=(\w+) node=(\d+) pa=0x[0-9a-f]+.*latency_ps=(\d+)")
+LOG_BASENAMES = {"stdout.log", "stderr.log"}
 
 
 def percentile(values, q):
@@ -29,7 +30,7 @@ def main():
     samples = []
     for root, _, files in os.walk(args.log_dir):
         for name in files:
-            if name != "stderr.log":
+            if name not in LOG_BASENAMES:
                 continue
             with open(os.path.join(root, name), errors="replace") as stream:
                 for line in stream:

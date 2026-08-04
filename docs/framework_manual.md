@@ -1,11 +1,14 @@
 # CC-EP 框架手册 (Framework Manual)
 
+> [!WARNING]
+> **历史/已弃用文档，不再描述当前 Framework 公共接口与后端架构。** 本文保留用于追溯旧 ZeroMQ concrete Port、MemMessage 和早期构建/运行设计，其中大量路径、接口及“当前状态”陈述已经过时，不得作为新代码或移植依据。
+> **截至 2026-08-05 的唯一权威指南：[`docs/design/framework_iface_backend_guide_zh.md`](design/framework_iface_backend_guide_zh.md)。** 当前生产代码只能使用 `framework/iface/{Message,Port,Log}.hh`，并通过 `libframework_local.a` 或未来 `libframework_real.a` 选择后端。
+
 > 面向"移植到目标框架"的读者。本手册详尽介绍当前 cc-ep 工程的整体架构、
 > 各模块职责、进程拓扑、IPC/时钟同步设计、`framework` 传输层接口、消息格式、
 > 编译与运行方法，以及移植时最可能需要替换/微调的边界点。
 >
-> **本手册对应仓库状态：Port 对齐三项（2.1.5 去 wall-clock / 2.1.1 去 TxHandle /
-> 2.1.3 去 PortState）全部完成后的最终态。**
+> **以下内容仅对应当时的历史仓库状态，不再宣称是当前最终态。**
 
 ---
 

@@ -7,7 +7,7 @@
 #include <cstdarg>
 #include <sstream>
 
-#include "framework/Log.hh"
+#include "framework/iface/Log.hh"
 #include "NodeAddressMap.hh"
 
 namespace cc
@@ -85,7 +85,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
     _dsmSegSize(0)
 {
     if (_epochBits == 0 || _epochBits > 64) {
-        fatal("UBCC node_id=%d socket=%d: epoch_bits=%u out of range (1..64)\n",
+        fatal("UBCC node_id={} socket={}: epoch_bits={} out of range (1..64)",
               _nodeId, _socketId, _epochBits);
     }
 
@@ -107,12 +107,12 @@ UBCCController::UBCCController(int node_id, int socket_id,
     // legacy); for dual-socket we must override it here.
     _addrMap = NodeAddressMap(num_nodes, kNumSockets, kSegSize);
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d socket=%d: initialized with epoch_bits=%u "
-            "dsmBase=0x%lx dsmSize=0x%lx numSockets=%d\n",
+            "UBCC node_id={} socket={}: initialized with epoch_bits={} "
+            "dsmBase=0x{:x} dsmSize=0x{:x} numSockets={}",
             _nodeId, _socketId, _epochBits, _dsmLocalBase, _dsmSegSize,
             kNumSockets);
 
-    framework::LogInfo("UBCC", "UBCC node_id=%d socket=%d: C3 batch RS %s\n",
+    framework::LogInfo("UBCC", "UBCC node_id={} socket={}: C3 batch RS {}",
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
 
     registerInstance(node_id, socket_id, this);
@@ -135,8 +135,8 @@ UBCCController::markPeerPlaneExited(int node_id, int socket_id)
             return;
         }
         _exitedPeerNodesMask |= nodeBit;
-        std::fprintf(stderr,
-                     "[UBCC-PEER-EXIT] home=%d peer=%d all_socket_planes_exited\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-PEER-EXIT] home={} peer={} all_socket_planes_exited",
                      _nodeId, node_id);
 
         // A networksim-observed normal termination proves every cache copy on
@@ -246,11 +246,11 @@ UBCCController::finishH64BloomRebuild(bool ok)
     if (ok) {
         _directory.publishBloomSlice(slice, _h64BloomScratch.data(),
                                      _h64BloomScratch.size());
-        std::fprintf(stderr, "[H64-BLOOM-REBUILD] home=%d slice=%d result=valid\n",
+        framework::LogInfo("UBCC", "[H64-BLOOM-REBUILD] home={} slice={} result=valid",
                      _nodeId, slice);
     } else {
         _directory.invalidateBloomSlice(slice);
-        std::fprintf(stderr, "[H64-BLOOM-REBUILD] home=%d slice=%d result=invalid\n",
+        framework::LogWarn("UBCC", "[H64-BLOOM-REBUILD] home={} slice={} result=invalid",
                      _nodeId, slice);
     }
     _h64BloomScratch.clear();
@@ -277,10 +277,10 @@ UBCCController::wakeup()
         size_t pendingRequesterCount = 0;
         for (const auto &kv : _pendingRequesters)
             pendingRequesterCount += kv.second.size();
-        std::fprintf(stderr,
-                     "[UBCC-STATE] tick=%lu dir=%zu outstanding=%zu tombstones=%zu "
-                      "resident_waiters=%zu pending_requesters=%zu "
-                      "capacity=%zu policy=%s\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-STATE] tick={} dir={} outstanding={} tombstones={} "
+                      "resident_waiters={} pending_requesters={} "
+                      "capacity={} policy={}",
                      now, _directory.count(), _outstandingReqs.size(),
                       tombstoneCount, residentWaiterCount, pendingRequesterCount,
                       _directory.capacity(),
@@ -353,19 +353,19 @@ UBCCController::dumpStableCapacityBlockDiagnostics(Tick now) const
         return "UNKNOWN";
     };
 
-    std::fprintf(stderr,
-        "[UBCC-STABLE-BLOCK-BEGIN] tick=%lu samples=%u dir=%zu/%zu "
-        "outstanding=%zu waiter_pas=%zu\n",
+    framework::LogInfo("UBCC",
+        "[UBCC-STABLE-BLOCK-BEGIN] tick={} samples={} dir={}/{} "
+        "outstanding={} waiter_pas={}",
         now, _diagStableSamples, _directory.count(), _directory.capacity(),
         _outstandingReqs.size(), _residentWaiters.size());
 
     for (const auto &kv : _outstandingReqs) {
         const OutstandingRequest &ost = kv.second;
-        std::fprintf(stderr,
-            "[UBCC-STABLE-OUTSTANDING] pa=0x%lx op=%s stage=%s requester=%d "
-            "socket=%d target=%d targetMask=0x%lx reqId=%lu baseEpoch=%lu "
-            "reservedEpoch=%lu pendingAcks=%d createTick=%lu age=%lu "
-            "deadline=%lu retries=%u dataValid=%d replayArmed=%d\n",
+        framework::LogInfo("UBCC",
+            "[UBCC-STABLE-OUTSTANDING] pa=0x{:x} op={} stage={} requester={} "
+            "socket={} target={} targetMask=0x{:x} reqId={} baseEpoch={} "
+            "reservedEpoch={} pendingAcks={} createTick={} age={} "
+            "deadline={} retries={} dataValid={} replayArmed={}",
             kv.first, opTypeName(ost.opType), stageName(ost.stage),
             ost.requesterNode, ost.requesterSocket, ost.targetNode,
             ost.targetMask, ost.reqId, ost.baseEpoch, ost.reservedEpoch,
@@ -402,8 +402,8 @@ UBCCController::dumpStableCapacityBlockDiagnostics(Tick now) const
                 setWaiters += kv.second.size();
             }
         }
-        std::fprintf(stderr,
-            "[UBCC-STABLE-SET] representative=0x%lx waiters=%zu free=%d\n",
+        framework::LogInfo("UBCC",
+            "[UBCC-STABLE-SET] representative=0x{:x} waiters={} free={}",
             waiterPa, setWaiters,
             _directory.hasFreeSlotForPa(waiterPa) ? 1 : 0);
 
@@ -431,11 +431,11 @@ UBCCController::dumpStableCapacityBlockDiagnostics(Tick now) const
                 const bool dirtyTombstone =
                     _overflowPolicy == ResidentOverflowPolicy::Spill &&
                     entry.state == MESIState::G_I && entry.residentDirty;
-                std::fprintf(stderr,
-                    "[UBCC-STABLE-WAY] representative=0x%lx set=%d way=%d "
-                    "pa=0x%lx state=%s sharers=0x%lx epoch=%lu dirty=%d "
-                    "pinned=%d reasons=outstanding:%d,pending:%d,waiters:%d,"
-                    "snapshot:%d,fill:%d,wb:%d,dirty_tombstone:%d\n",
+                framework::LogInfo("UBCC",
+                    "[UBCC-STABLE-WAY] representative=0x{:x} set={} way={} "
+                    "pa=0x{:x} state={} sharers=0x{:x} epoch={} dirty={} "
+                    "pinned={} reasons=outstanding:{},pending:{},waiters:{},"
+                    "snapshot:{},fill:{},wb:{},dirty_tombstone:{}",
                     waiterPa, set, way, pa, mesiStateName(entry.state),
                     entry.sharersMask, entry.epoch,
                     entry.residentDirty ? 1 : 0,
@@ -446,8 +446,7 @@ UBCCController::dumpStableCapacityBlockDiagnostics(Tick now) const
             }
         }
     }
-    std::fprintf(stderr, "[UBCC-STABLE-BLOCK-END] tick=%lu\n", now);
-    std::fflush(stderr);
+    framework::LogInfo("UBCC", "[UBCC-STABLE-BLOCK-END] tick={}", now);
 }
 
 // ---- isDsmAddr (pure computation, no SentinelHelper) ----
@@ -511,8 +510,8 @@ UBCCController::handleResidentMiss(
         _overflowPolicy == ResidentOverflowPolicy::Spill &&
         (mayContain || (_h64BloomAllMisses && !h64NegativeAuthoritative));
 
-    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx opKind=%d req=%d requester=%d "
-            "mayContain=%d h64BloomAll=%d count=%zu capacity=%zu freeForPa=%d policy=%d reqId=%lu\n",
+    framework::LogInfo("UBCC", "[RESIDENT-MISS] home={} pa=0x{:x} opKind={} req={} requester={} "
+            "mayContain={} h64BloomAll={} count={} capacity={} freeForPa={} policy={} reqId={}",
             _nodeId, line_pa, static_cast<int>(pr.opKind),
             static_cast<int>(pr.reqType), pr.node,
             mayContain ? 1 : 0,
@@ -521,7 +520,6 @@ UBCCController::handleResidentMiss(
             _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
             _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0,
             pr.reqId);
-    fflush(stderr);
     if (!_directory.hasFreeSlotForPa(line_pa)) {
         PendingRequester pr2 = pr;  // copy caller's envelope
         pr2.waitReason = ResidentWaitReason::Capacity;
@@ -537,12 +535,11 @@ UBCCController::handleResidentMiss(
         auto wit = _residentWaiters.find(line_pa);
         size_t waiterDepth = (wit == _residentWaiters.end()) ? 0 : wit->second.size();
         if (_verboseLog) {
-            fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
-                    "evictResult=%d count=%zu capacity=%zu waiterDepth=%zu opKind=%d enqueueResult=%d\n",
+            framework::LogDebug("UBCC", "[RESIDENT-MISS-BUSY] home={} pa=0x{:x} reason=capacity_wait "
+                    "evictResult={} count={} capacity={} waiterDepth={} opKind={} enqueueResult={}",
                     _nodeId, line_pa, static_cast<int>(evictResult),
                     _directory.count(), _directory.capacity(), waiterDepth,
                     static_cast<int>(pr.opKind), static_cast<int>(enqueueResult));
-            fflush(stderr);
         }
         return ResidentAccessResult::Busy;
     }
@@ -564,12 +561,11 @@ UBCCController::handleResidentMiss(
     if (!shouldFill) {
         entry = placeholder;
         if (_verboseLog) {
-            fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=%s opKind=%d\n",
+            framework::LogDebug("UBCC", "[RESIDENT-MISS-READY] home={} pa=0x{:x} reason={} opKind={}",
                    _nodeId, line_pa,
                    h64NegativeAuthoritative ? "bloom_negative_h64_authoritative" :
                                               "bloom_negative",
                    static_cast<int>(pr.opKind));
-            fflush(stderr);
         }
         refreshPinnedBit(line_pa);
         return ResidentAccessResult::Ready;
@@ -587,11 +583,10 @@ UBCCController::handleResidentMiss(
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
     }
-    fprintf(stderr, "[RESIDENT-FILL-ISSUED] tick=%lu home=%d pa=0x%lx waiterDepth=%zu opKind=%d\n",
+    framework::LogInfo("UBCC", "[RESIDENT-FILL-ISSUED] tick={} home={} pa=0x{:x} waiterDepth={} opKind={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, line_pa, _residentWaiters[line_pa].size(),
             static_cast<int>(pr.opKind));
-    fflush(stderr);
     return ResidentAccessResult::Queued;
 }
 
@@ -609,20 +604,18 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
     for (const auto &kv : _residentWaiters) total += kv.second.size();
     if (existing == _residentWaiters.end() && total >= MAX_RESIDENT_WAITERS_TOTAL) {
         if (_verboseLog) {
-            fprintf(stderr, "[RESIDENT-WAITER-DROP] home=%d pa=0x%lx reason=global_queue_full total=%zu\n",
+            framework::LogDebug("UBCC", "[RESIDENT-WAITER-DROP] home={} pa=0x{:x} reason=global_queue_full total={}",
                     _nodeId, linePa, total);
-            fflush(stderr);
         }
         return ResidentWaiterEnqueueResult::Full;
     }
     auto &q = _residentWaiters[linePa];
     if (q.size() >= MAX_PENDING_PER_PA) {
         if (_verboseLog) {
-            fprintf(stderr, "[RESIDENT-WAITER-DROP] home=%d pa=0x%lx opKind=%d node=%d "
-                   "reqId=%lu reason=queue_full depth=%zu\n",
+            framework::LogDebug("UBCC", "[RESIDENT-WAITER-DROP] home={} pa=0x{:x} opKind={} node={} "
+                   "reqId={} reason=queue_full depth={}",
                    _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
                    pr.reqId, q.size());
-            fflush(stderr);
         }
         return ResidentWaiterEnqueueResult::Full;
     }
@@ -634,30 +627,27 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
             e.socket == pr.socket) {
             if (pr.reqId != 0 && e.reqId == pr.reqId) {
                 if (_verboseLog) {
-                    fprintf(stderr, "[RESIDENT-WAITER-DEDUP] home=%d pa=0x%lx opKind=%d "
-                           "node=%d reqId=%lu reason=exact_dup_reqId\n",
+                    framework::LogDebug("UBCC", "[RESIDENT-WAITER-DEDUP] home={} pa=0x{:x} opKind={} "
+                           "node={} reqId={} reason=exact_dup_reqId",
                            _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.reqId);
-                    fflush(stderr);
                 }
                 return ResidentWaiterEnqueueResult::Duplicate;
             }
             if (pr.reqId == 0 && e.reqId == 0 && e.epoch == pr.epoch) {
                 if (_verboseLog) {
-                    fprintf(stderr, "[RESIDENT-WAITER-DEDUP] home=%d pa=0x%lx opKind=%d "
-                           "node=%d epoch=%lu reason=legacy_dup_no_reqId\n",
+                    framework::LogDebug("UBCC", "[RESIDENT-WAITER-DEDUP] home={} pa=0x{:x} opKind={} "
+                           "node={} epoch={} reason=legacy_dup_no_reqId",
                            _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.epoch);
-                    fflush(stderr);
                 }
                 return ResidentWaiterEnqueueResult::Duplicate;
             }
         }
     }
     q.push_back(pr);
-    fprintf(stderr, "[RESIDENT-WAITER-ENQ] home=%d pa=0x%lx opKind=%d node=%d "
-            "socket=%d reqId=%lu epoch=%lu depth=%zu\n",
+    framework::LogInfo("UBCC", "[RESIDENT-WAITER-ENQ] home={} pa=0x{:x} opKind={} node={} "
+            "socket={} reqId={} epoch={} depth={}",
             _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
             pr.socket, pr.reqId, pr.epoch, q.size());
-    fflush(stderr);
     return ResidentWaiterEnqueueResult::Enqueued;
 }
 
@@ -686,12 +676,11 @@ UBCCController::retireCommittedResidentWaiters(const OutstandingRequest &ost)
         _residentWaiters.erase(it);
     }
     if (retired != 0) {
-        std::fprintf(stderr,
-                     "[RESIDENT-WAITER-RETIRE-COMMITTED] home=%d pa=0x%lx "
-                     "node=%d socket=%d reqId=%lu count=%zu\n",
+        framework::LogInfo("UBCC",
+                     "[RESIDENT-WAITER-RETIRE-COMMITTED] home={} pa=0x{:x} "
+                     "node={} socket={} reqId={} count={}",
                      _nodeId, ost.linePa, ost.requesterNode,
                      ost.requesterSocket, ost.reqId, retired);
-        std::fflush(stderr);
     }
     return retired;
 }
@@ -734,21 +723,19 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     DirEntry victim;
     if (!_directory.pickVictim(avoidPa, victimPa, victim)) {
         if (_verboseLog) {
-            fprintf(stderr, "[RESIDENT-EVICT-PICK-FAIL] home=%d avoid=0x%lx count=%zu capacity=%zu\n",
+            framework::LogDebug("UBCC", "[RESIDENT-EVICT-PICK-FAIL] home={} avoid=0x{:x} count={} capacity={}",
                     _nodeId, avoidPa, _directory.count(), _directory.capacity());
         }
-        fflush(stderr);
         return ResidentEvictResult::Blocked;
     }
 
     if (_verboseLog) {
-        fprintf(stderr, "[RESIDENT-EVICT-PICK] home=%d avoid=0x%lx victim=0x%lx "
-               "state=%s sharers=0x%lx dirty=%d residentDirty=%d policy=%d\n",
+        framework::LogDebug("UBCC", "[RESIDENT-EVICT-PICK] home={} avoid=0x{:x} victim=0x{:x} "
+               "state={} sharers=0x{:x} dirty={} residentDirty={} policy={}",
                _nodeId, avoidPa, victimPa, mesiStateName(victim.state),
                victim.sharersMask, DirEntry::protoDirty(victim) ? 1 : 0,
                victim.residentDirty ? 1 : 0,
                _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
-        fflush(stderr);
     }
 
     if (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict) {
@@ -773,11 +760,10 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
         // If Bloom is negative (reconstructed without this PA), fall through to
         // re-persist.  No _backstoreMetadataPAs to check.
         if (_directory.bloomMayContain(victimPa)) {
-            fprintf(stderr,
-                    "[UBCC-SPILL-DIRTY-PERSIST] home=%d pa=0x%lx state=%s "
-                    "residentDirty=0 bloomPositive=1 — safe force-remove\n",
+            framework::LogInfo("UBCC",
+                    "[UBCC-SPILL-DIRTY-PERSIST] home={} pa=0x{:x} state={} "
+                    "residentDirty=0 bloomPositive=1 — safe force-remove",
                     _nodeId, victimPa, mesiStateName(victim.state));
-            fflush(stderr);
             _directory.forceRemove(victimPa);
             _residentWaiters.erase(victimPa);
             _pendingRequesters.erase(victimPa);
@@ -785,29 +771,26 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
         }
         // Bloom missing — metadata may have been lost.  Fall
         // through to schedule a fresh backstore write to ensure durability.
-        fprintf(stderr,
-                "[UBCC-SPILL-DIRTY-PERSIST] home=%d pa=0x%lx state=%s "
-                "residentDirty=0 bloomPositive=0 — re-persisting\n",
+        framework::LogInfo("UBCC",
+                "[UBCC-SPILL-DIRTY-PERSIST] home={} pa=0x{:x} state={} "
+                "residentDirty=0 bloomPositive=0 — re-persisting",
                 _nodeId, victimPa, mesiStateName(victim.state));
-        fflush(stderr);
     }
 
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
     _evictionPendingRemoval.insert(victimPa);
-    fprintf(stderr, "[RESIDENT-SPILL-START] tick=%lu home=%d victim=0x%lx state=%s residentDirty=%d\n",
+    framework::LogInfo("UBCC", "[RESIDENT-SPILL-START] tick={} home={} victim=0x{:x} state={} residentDirty={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
-    fflush(stderr);
     if (victim.state == MESIState::G_I) {
         scheduleBackstoreDelete(victimPa);
     } else {
-        std::fprintf(stderr,
-                     "[UBCC-SPILL-DIRTY-PERSIST] home=%d pa=0x%lx state=%s "
-                     "sharers=0x%lx epoch=%lu — scheduling backstore write\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-SPILL-DIRTY-PERSIST] home={} pa=0x{:x} state={} "
+                     "sharers=0x{:x} epoch={} — scheduling backstore write",
                      _nodeId, victimPa, mesiStateName(victim.state),
                      victim.sharersMask, victim.epoch);
-        std::fflush(stderr);
         scheduleBackstoreWrite(victimPa);
     }
     return ResidentEvictResult::Armed;
@@ -841,8 +824,8 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         _naiveForcedWritebacks++;
     }
 
-    printf("[UBCC-NAIVE-EVICT] home=%d pa=0x%lx state=%s sharers=0x%lx "
-           "targets=0x%lx dirty=%d epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-NAIVE-EVICT] home={} pa=0x{:x} state={} sharers=0x{:x} "
+           "targets=0x{:x} dirty={} epoch={}",
            _nodeId, victimPa, mesiStateName(victim.state), victim.sharersMask,
            targetMask, DirEntry::protoDirty(victim) ? 1 : 0, victim.epoch);
 
@@ -861,27 +844,25 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         recallOreq->intendedSharersMask = 0;
         recallOreq->intendedOwnerNode = -1;
         recallOreq->intendedDirty = false;
-        std::fprintf(stderr,
-                     "[UBCC-NAIVE-DIRTY-RECALL-CREATE] home=%d socket=%d "
-                     "pa=0x%lx owner=%d state=%s sharers=0x%lx "
-                     "residentDirty=%d reqId=%lu baseEpoch=%lu "
-                     "reservedEpoch=%lu stage=%d\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-NAIVE-DIRTY-RECALL-CREATE] home={} socket={} "
+                     "pa=0x{:x} owner={} state={} sharers=0x{:x} "
+                     "residentDirty={} reqId={} baseEpoch={} "
+                     "reservedEpoch={} stage={}",
                      _nodeId, _socketId, victimPa, owner,
                      mesiStateName(victim.state), victim.sharersMask,
                      victim.residentDirty ? 1 : 0, recallOreq->reqId,
                      recallOreq->baseEpoch, recallOreq->reservedEpoch,
                      static_cast<int>(recallOreq->stage));
-        std::fflush(stderr);
         if (!initiateRecall(victimPa, victim, *recallOreq)) {
             removeOutstanding(victimPa);
             return ResidentEvictResult::Blocked;
         }
-        std::fprintf(stderr,
-                     "[UBCC-NAIVE-DIRTY-RECALL-HOLD] home=%d pa=0x%lx owner=%d "
-                     "state=%s epoch=%lu\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-NAIVE-DIRTY-RECALL-HOLD] home={} pa=0x{:x} owner={} "
+                     "state={} epoch={}",
                      _nodeId, victimPa, owner, mesiStateName(victim.state),
                      victim.epoch);
-        std::fflush(stderr);
         return ResidentEvictResult::Armed;
     }
 
@@ -1025,7 +1006,7 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         // though every tombstone is now safe to reclaim.
         refreshPinnedBit(linePa);
         replayResidentWaitersForCapacity(linePa);
-        printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
+        framework::LogInfo("UBCC","[UBCC-ASYNC-WB] home={} pa=0x{:x} epoch={} — dirty cleared (snapshot matched)",
                _nodeId, linePa, snapshotEpoch);
     } else {
         // The completed snapshot no longer owns the entry. Keep the newer
@@ -1033,8 +1014,8 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         // waiters in this set.
         refreshPinnedBit(linePa);
         replayResidentWaitersForCapacity(linePa);
-        printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx snapshotEpoch=%lu currentEpoch=%lu "
-               "— dirty kept (entry modified)\n",
+        framework::LogInfo("UBCC","[UBCC-ASYNC-WB] home={} pa=0x{:x} snapshotEpoch={} currentEpoch={} "
+               "— dirty kept (entry modified)",
                _nodeId, linePa, snapshotEpoch, entry.epoch);
     }
 }
@@ -1079,12 +1060,11 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         PendingRequester pr = it->second.front();
         it->second.pop_front();
 
-        fprintf(stderr, "[RESIDENT-WAITER-REPLAY] tick=%lu home=%d pa=0x%lx opKind=%d "
-                "node=%d socket=%d reqId=%lu epoch=%lu\n",
+        framework::LogInfo("UBCC", "[RESIDENT-WAITER-REPLAY] tick={} home={} pa=0x{:x} opKind={} "
+                "node={} socket={} reqId={} epoch={}",
                 _host ? _host->hostCurrentTick() : 0,
                 _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
                 pr.socket, pr.reqId, pr.epoch);
-        fflush(stderr);
 
         bool stop = false;
         bool restore = false;  // whether to push the waiter back
@@ -1106,12 +1086,11 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                     normalizeEpoch(pr.epoch) != current.epoch) {
                     restore = false;
                     stop = false;
-                    fprintf(stderr,
-                            "[RESIDENT-WAITER-WB-DROP-STALE] home=%d pa=0x%lx "
-                            "node=%d msgEpoch=%lu currentEpoch=%lu\n",
+                    framework::LogWarn("UBCC",
+                            "[RESIDENT-WAITER-WB-DROP-STALE] home={} pa=0x{:x} "
+                            "node={} msgEpoch={} currentEpoch={}",
                             _nodeId, linePa, pr.node, normalizeEpoch(pr.epoch),
                             current.epoch);
-                    fflush(stderr);
                     break;
                 }
             }
@@ -1143,11 +1122,10 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                     // valid again and would otherwise leak forever.
                     restore = false;
                     stop = false;
-                    fprintf(stderr,
-                            "[RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER] home=%d "
-                            "pa=0x%lx node=%d reqId=%lu\n",
+                    framework::LogWarn("UBCC",
+                            "[RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER] home={} "
+                            "pa=0x{:x} node={} reqId={}",
                             _nodeId, linePa, pr.node, pr.reqId);
-                    fflush(stderr);
                     break;
                 }
                 // fillPending/wbPending guard: if the upgrade re-enqueued
@@ -1157,16 +1135,14 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                 restore = (!_directory.fillPending(linePa) &&
                            !_directory.wbPending(linePa));
                 if (restore) {
-                    fprintf(stderr, "[RESIDENT-WAITER-REPLAY-UPGRADE-REJECT] home=%d "
-                           "pa=0x%lx node=%d reqId=%lu\n",
+                    framework::LogWarn("UBCC", "[RESIDENT-WAITER-REPLAY-UPGRADE-REJECT] home={} "
+                           "pa=0x{:x} node={} reqId={}",
                            _nodeId, linePa, pr.node, pr.reqId);
-                    fflush(stderr);
                 } else {
-                    fprintf(stderr, "[RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED] home=%d "
-                           "pa=0x%lx node=%d reqId=%lu — fill/wb pending, waiter "
-                           "already re-enqueued, discarding stale copy\n",
+                    framework::LogWarn("UBCC", "[RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED] home={} "
+                           "pa=0x{:x} node={} reqId={} — fill/wb pending, waiter "
+                           "already re-enqueued, discarding stale copy",
                            _nodeId, linePa, pr.node, pr.reqId);
-                    fflush(stderr);
                 }
             }
             stop = !ok;
@@ -1190,17 +1166,16 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                     response.b.upgradeResp.committedEpoch =
                         getEpochForLine(linePa);
                     if (!_outbound->sendUpgradeResp(response)) {
-                        fatal("UBCC node_id=%d: deferred UpgradeResp send failed "
-                              "PA=0x%lx requester=%d socket=%d reqId=%lu\n",
+                        fatal("UBCC node_id={}: deferred UpgradeResp send failed "
+                              "PA=0x{:x} requester={} socket={} reqId={}",
                               _nodeId, linePa, pr.node, response.h.dstSocket,
                               pr.reqId);
                     }
-                    fprintf(stderr,
-                            "[RESIDENT-REPLAY-UPGRADE-RESP] home=%d pa=0x%lx "
-                            "node=%d reqId=%lu targetMask=0x%lx\n",
+                    framework::LogInfo("UBCC",
+                            "[RESIDENT-REPLAY-UPGRADE-RESP] home={} pa=0x{:x} "
+                            "node={} reqId={} targetMask=0x{:x}",
                             _nodeId, linePa, pr.node, pr.reqId,
                             upgrade->upgradeTargetMask);
-                    fflush(stderr);
                 }
                 stop = true;
             }
@@ -1252,11 +1227,10 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                 CoherenceMessage push;
                 buildGrantResponse(*ost, push);
                 _outbound->sendGrantPush(push);
-                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] tick=%lu home=%d pa=0x%lx "
-                        "requester=%d reqId=%lu\n",
+                framework::LogInfo("UBCC", "[RESIDENT-REPLAY-PUSH] tick={} home={} pa=0x{:x} "
+                        "requester={} reqId={}",
                         _host ? _host->hostCurrentTick() : 0,
                         _nodeId, linePa, pr.node, pr.reqId);
-                fflush(stderr);
             }
             stop = (static_cast<int>(g) == -1 && !replaySucceeded);
             break;
@@ -1328,9 +1302,8 @@ UBCCController::replayResidentWaitersForCapacity(uint64_t triggerPa)
     }
     for (size_t i = 0; i < keyCount; ++i) {
         const uint64_t pa = keys[i];
-        fprintf(stderr, "[RESIDENT-CAPACITY-REPLAY] home=%d pa=0x%lx\n",
+        framework::LogInfo("UBCC", "[RESIDENT-CAPACITY-REPLAY] home={} pa=0x{:x}",
                 _nodeId, pa);
-        fflush(stderr);
         replayResidentWaiters(pa);
     }
     _capacityReplayActive = false;
@@ -1373,12 +1346,12 @@ UBCCController::processOuterRequest(
     baseEpoch = normalizeEpoch(baseEpoch);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processOuterRequest PA=0x%lx req=%d write=%d "
-            "requesterNode=%d requesterSocket=%d baseEpoch=%lu reqId=%lu\n",
+            "UBCC node_id={}: processOuterRequest PA=0x{:x} req={} write={} "
+            "requesterNode={} requesterSocket={} baseEpoch={} reqId={}",
             _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
             requesterNode, requesterSocket, baseEpoch, reqId);
-    printf("[UBCC-OUTER-REQ] home=%d pa=0x%lx req=%d write=%d requester=%d "
-           "sock=%d baseEpoch=%lu reqId=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-OUTER-REQ] home={} pa=0x{:x} req={} write={} requester={} "
+           "sock={} baseEpoch={} reqId={}",
            _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
            requesterNode, requesterSocket, baseEpoch, reqId);
 
@@ -1391,19 +1364,19 @@ UBCCController::processOuterRequest(
 
     // Validate: only DSM addresses for this home node
     if (!isDsmAddr(line_pa)) {
-        fatal("UBCC node_id=%d: non-home-DSM address PA=0x%lx in outer request\n",
+        fatal("UBCC node_id={}: non-home-DSM address PA=0x{:x} in outer request",
               _nodeId, line_pa);
     }
 
     // Validate: Shared + true is illegal
     if (reqType == UBCC_OuterReqType::GlobalReadShared && writeIntent) {
-        fatal("UBCC node_id=%d: illegal Shared+writeIntent=true for PA=0x%lx\n",
+        fatal("UBCC node_id={}: illegal Shared+writeIntent=true for PA=0x{:x}",
               _nodeId, line_pa);
     }
 
     // Validate requesterNode
     if (requesterNode < -1 || requesterNode >= 64) {
-        fatal("UBCC node_id=%d: requesterNode=%d out of range\n",
+        fatal("UBCC node_id={}: requesterNode={} out of range",
               _nodeId, requesterNode);
     }
 
@@ -1414,15 +1387,15 @@ UBCCController::processOuterRequest(
         auto& q = _h64PersistenceWaiters[line_pa];
         // Per-PA hard cap
         if ((int)q.size() >= kMaxH64PersistenceWaitersPerPA) {
-            if (_debugLog) std::fprintf(stderr,
-                "[DEBUG-H64-DSM-FULL-PA] home=%d pa=0x%lx perPA=%d\n",
+            if (_debugLog) framework::LogDebug("UBCC",
+                "[DEBUG-H64-DSM-FULL-PA] home={} pa=0x{:x} perPA={}",
                 _nodeId, line_pa, (int)q.size());
             return static_cast<UBCC_OuterGrantType>(-1); // BUSY
         }
         // Total hard cap
         if (_h64PersistenceWaitersTotal >= kMaxH64PersistenceWaitersTotal) {
-            if (_debugLog) std::fprintf(stderr,
-                "[DEBUG-H64-DSM-FULL-TOTAL] home=%d total=%d\n",
+            if (_debugLog) framework::LogDebug("UBCC",
+                "[DEBUG-H64-DSM-FULL-TOTAL] home={} total={}",
                 _nodeId, _h64PersistenceWaitersTotal);
             return static_cast<UBCC_OuterGrantType>(-1); // BUSY
         }
@@ -1437,8 +1410,8 @@ UBCCController::processOuterRequest(
         pr.waitReason = ResidentWaitReason::Capacity;
         q.push_back(pr);
         _h64PersistenceWaitersTotal++;
-        if (_debugLog) std::fprintf(stderr,
-            "[DEBUG-H64-DSM-WAIT] home=%d pa=0x%lx requester=%d perPA=%d total=%d\n",
+        if (_debugLog) framework::LogDebug("UBCC",
+            "[DEBUG-H64-DSM-WAIT] home={} pa=0x{:x} requester={} perPA={} total={}",
             _nodeId, line_pa, requesterNode, (int)q.size(), _h64PersistenceWaitersTotal);
         return static_cast<UBCC_OuterGrantType>(-1); // BUSY
     }
@@ -1454,8 +1427,8 @@ UBCCController::processOuterRequest(
     prCtx.reqId = reqId;
     ResidentAccessResult r = ensureResidentForAccess(
         line_pa, prCtx, entry);
-    printf("[UBCC-OUTER-REQ] home=%d pa=0x%lx residentResult=%d state=%s "
-           "sharers=0x%lx epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-OUTER-REQ] home={} pa=0x{:x} residentResult={} state={} "
+           "sharers=0x{:x} epoch={}",
            _nodeId, line_pa, static_cast<int>(r), mesiStateName(entry.state),
            entry.sharersMask, entry.epoch);
     if (r != ResidentAccessResult::Ready) {
@@ -1492,8 +1465,8 @@ UBCCController::processOuterRequest(
                 // of replayArmed or reqId match. The retry is idempotent.
                 if (existing->stage == OpStage::WAITING_CLEAR) {
                     framework::LogInfo("UBCC",
-                            "UBCC node_id=%d: grant hit PA=0x%lx "
-                            "requester=%d reqId=%lu intended=%s — granting\n",
+                            "UBCC node_id={}: grant hit PA=0x{:x} "
+                            "requester={} reqId={} intended={} — granting",
                             _nodeId, line_pa, requesterNode, reqId,
                              mesiStateName(existing->intendedState));
                     if (outDataSource) *outDataSource = existing->dataSource;
@@ -1507,9 +1480,9 @@ UBCCController::processOuterRequest(
                 }
                 // TC98 fix: rate-limit high-frequency BUSY log
                 { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                framework::LogInfo("UBCC",
-                        "UBCC node_id=%d: existing outstanding PA=0x%lx "
-                        "same requester=%d opType=%d stage=%d — BUSY (n=%lu)\n",
+                framework::LogDebug("UBCC",
+                        "UBCC node_id={}: existing outstanding PA=0x{:x} "
+                        "same requester={} opType={} stage={} — BUSY (n={})",
                         _nodeId, line_pa, requesterNode,
                         static_cast<int>(existing->opType),
                         static_cast<int>(existing->stage), _cnt); }
@@ -1531,8 +1504,8 @@ UBCCController::processOuterRequest(
                 if (pr.node == requesterNode && pr.reqId == reqId) {
                     // TC98 fix: rate-limit dup_retry log
                     { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                    printf("[UBCC-QUEUE] pa=0x%lx action=dup_retry "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                    framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=dup_retry "
+                           "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                            line_pa, requesterNode,
                            isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                     return static_cast<UBCC_OuterGrantType>(-1);
@@ -1555,23 +1528,23 @@ UBCCController::processOuterRequest(
                 q.push_back(pr);
                 // TC98 fix: rate-limit enqueue log
                 { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                printf("[UBCC-QUEUE] pa=0x%lx action=enqueue "
-                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=enqueue "
+                       "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                        line_pa, requesterNode,
                        isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 // TC98: Log recall wait state for hot-contention diagnostics
                 if (existing->stage == OpStage::WAITING_TARGET_RESP) {
                     static uint64_t _rcnt = 0; if (++_rcnt <= 3 || _rcnt % 1000 == 0)
-                    std::fprintf(stderr, "[UBCC-RECALL-WAIT] pa=0x%lx recall_target=%d "
-                                 "new_requester=%d queue_depth=%zu existing_requester=%d (n=%lu)\n",
+                    framework::LogDebug("UBCC", "[UBCC-RECALL-WAIT] pa=0x{:x} recall_target={} "
+                                 "new_requester={} queue_depth={} existing_requester={} (n={})",
                                  line_pa, existing->targetNode, requesterNode,
                                  q.size(), existing->requesterNode, _rcnt);
                 }
             } else {
                 // TC98 fix: rate-limit drop_full log
                 { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                printf("[UBCC-QUEUE] pa=0x%lx action=drop_full "
-                       "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=drop_full "
+                       "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                        line_pa, requesterNode,
                        isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
             }
@@ -1585,7 +1558,7 @@ UBCCController::processOuterRequest(
     if (checkTombstone(line_pa, baseEpoch, reqId, tsAccepted)) {
         // Already committed — return idempotent grant
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: tombstone HIT for PA=0x%lx — idempotent grant\n",
+                "UBCC node_id={}: tombstone HIT for PA=0x{:x} — idempotent grant",
                 _nodeId, line_pa);
         Tick now = curTick();
         if (outGrantVisibleTick) *outGrantVisibleTick = now;
@@ -1691,7 +1664,7 @@ UBCCController::processOuterRequest(
                     if (outAuthEpoch) *outAuthEpoch = oreq->baseEpoch;
                 }
 
-                printf("[UBCC-GSRS-FAST] pa=0x%lx requester=%d sharers=0x%lx\n",
+                framework::LogInfo("UBCC","[UBCC-GSRS-FAST] pa=0x{:x} requester={} sharers=0x{:x}",
                        line_pa, requesterNode, entry.sharersMask);
             } else {
                 // Unique request — invalidation needed for non-requester sharers
@@ -1707,15 +1680,15 @@ UBCCController::processOuterRequest(
                 bool isExistingSharer = (requesterNode >= 0) &&
                     (entry.sharersMask & (1ULL << requesterNode));
                 if (isExistingSharer) {
-                    printf("[UBCC-SHARER-UPGRADE] pa=0x%lx requester=%d "
-                           "is existing sharer — deferring to UPGRADE_PENDING\n",
+                    framework::LogInfo("UBCC","[UBCC-SHARER-UPGRADE] pa=0x{:x} requester={} "
+                           "is existing sharer — deferring to UPGRADE_PENDING",
                            line_pa, requesterNode);
                     return static_cast<UBCC_OuterGrantType>(-1);
                 }
 
                 if (otherSharers != 0) {
-                    printf("[UBCC-INVALIDATE-CREATE] home=%d pa=0x%lx requester=%d "
-                           "otherSharers=0x%lx reservedEpoch=%lu writeIntent=%d\n",
+                    framework::LogWarn("UBCC","[UBCC-INVALIDATE-CREATE] home={} pa=0x{:x} requester={} "
+                           "otherSharers=0x{:x} reservedEpoch={} writeIntent={}",
                            _nodeId, line_pa, requesterNode, otherSharers,
                            reservedEpoch, writeIntent);
                     // v4: Create INVALIDATE + GRANT_HANDSHAKE
@@ -1759,9 +1732,9 @@ UBCCController::processOuterRequest(
                         // WAITING_ALL_ACKS with pendingAckCount==0 and no ack to
                         // trigger the transition.
                         if (effectiveMask == 0) {
-                            printf("[UBCC-INVALIDATE-EMPTY] home=%d pa=0x%lx "
-                                   "requester=%d — no live sharers, converting "
-                                   "to GRANT_HANDSHAKE immediately\n",
+                            framework::LogWarn("UBCC","[UBCC-INVALIDATE-EMPTY] home={} pa=0x{:x} "
+                                   "requester={} — no live sharers, converting "
+                                   "to GRANT_HANDSHAKE immediately",
                                    _nodeId, line_pa, requesterNode);
                             invOreq->invalidateBarrierDone = true;
                             invOreq->opType = OpType::GRANT_HANDSHAKE;
@@ -1772,9 +1745,9 @@ UBCCController::processOuterRequest(
                                 CoherenceMessage push;
                                 buildGrantResponse(*invOreq, push);
                                 _outbound->sendGrantPush(push);
-                                printf("[PUSH-GRANT] INVALIDATE-EMPTY home=%d "
-                                       "pa=0x%lx requester=%d sock=%d reqId=%lu "
-                                       "grantType=%d\n",
+                                framework::LogWarn("UBCC","[PUSH-GRANT] INVALIDATE-EMPTY home={} "
+                                       "pa=0x{:x} requester={} sock={} reqId={} "
+                                       "grantType={}",
                                        _nodeId, line_pa, invOreq->requesterNode,
                                        invOreq->requesterSocket, invOreq->reqId,
                                        static_cast<int>(
@@ -1872,13 +1845,13 @@ UBCCController::processOuterRequest(
                 } else {
                     // Failed to create GRANT_HANDSHAKE — restore RECALL
                     // (should not happen since PA was freed above)
-                    fatal("UBCC node_id=%d: failed to create GRANT_HANDSHAKE "
-                          "after removing DONE RECALL PA=0x%lx\n",
+                    fatal("UBCC node_id={}: failed to create GRANT_HANDSHAKE "
+                          "after removing DONE RECALL PA=0x{:x}",
                           _nodeId, line_pa);
                 }
                 framework::LogInfo("UBCC",
-                        "UBCC node_id=%d: RECALL→GRANT_HANDSHAKE transition "
-                        "PA=0x%lx requester=%d intended=%s dataSource=RecallBuffer (NEW object)\n",
+                        "UBCC node_id={}: RECALL→GRANT_HANDSHAKE transition "
+                        "PA=0x{:x} requester={} intended={} dataSource=RecallBuffer (NEW object)",
                         _nodeId, line_pa, requesterNode,
                         grantOreq ? mesiStateName(grantOreq->intendedState)
                                   : "none");
@@ -1906,8 +1879,8 @@ UBCCController::processOuterRequest(
                     if (pr.node == requesterNode && pr.reqId == reqId) {
                         // TC98 fix: rate-limit dup_retry log (RECALL.DONE path)
                         { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                        printf("[UBCC-QUEUE] pa=0x%lx action=dup_retry "
-                               "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                        framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=dup_retry "
+                               "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                                line_pa, requesterNode,
                                isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                         return static_cast<UBCC_OuterGrantType>(-1);
@@ -1928,15 +1901,15 @@ UBCCController::processOuterRequest(
                     q.push_back(pr);
                     // TC98 fix: rate-limit enqueue log (RECALL.DONE path)
                     { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                    printf("[UBCC-QUEUE] pa=0x%lx action=enqueue "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                    framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=enqueue "
+                           "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                            line_pa, requesterNode,
                            isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 } else {
                     // TC98 fix: rate-limit drop_full log (RECALL.DONE path)
                     { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-                    printf("[UBCC-QUEUE] pa=0x%lx action=drop_full "
-                           "requester=%d reqType=%s writeIntent=%d reqId=%lu depth=%zu (n=%lu)\n",
+                    framework::LogDebug("UBCC","[UBCC-QUEUE] pa=0x{:x} action=drop_full "
+                           "requester={} reqType={} writeIntent={} reqId={} depth={} (n={})",
                            line_pa, requesterNode,
                            isRS ? "RS" : "RU", writeIntent, reqId, q.size(), _cnt); }
                 }
@@ -1946,15 +1919,15 @@ UBCCController::processOuterRequest(
             if (existingOwner >= 0 && existingOwner != requesterNode
                 && !recallAlreadyDone) {
                 // v4: Recall needed — create outstanding FIRST, then send RecallReq
-                printf("[RECALL-CREATE] UBCC node=%d PA=0x%lx existingOwner=%d requester=%d\n",
+                framework::LogInfo("UBCC","[RECALL-CREATE] UBCC node={} PA=0x{:x} existingOwner={} requester={}",
                        _nodeId, line_pa, existingOwner, requesterNode);
 
                 OutstandingRequest *recallOreq = createOutstanding(
                     line_pa, OpType::RECALL, requesterNode, existingOwner,
                     requesterSocket);
                 if (!recallOreq) {
-                    warn("UBCC node_id=%d: failed to create RECALL outstanding "
-                         "PA=0x%lx requester=%d owner=%d\n",
+                    warn("UBCC node_id={}: failed to create RECALL outstanding "
+                         "PA=0x{:x} requester={} owner={}",
                          _nodeId, line_pa, requesterNode, existingOwner);
                     return static_cast<UBCC_OuterGrantType>(-1);
                 }
@@ -1971,19 +1944,18 @@ UBCCController::processOuterRequest(
                 // path must use RecallBuffer, never HomeMemory.
                 if (entry.state == MESIState::G_M &&
                     recallOreq->dataSource != GrantDataSource::RecallBuffer) {
-                    std::fprintf(stderr,
-                                 "[UBCC-SPILL-DIRTY-GRANT-GUARD] home=%d pa=0x%lx "
-                                 "G_M+owner recall dataSource=%d (expected=%d) "
-                                 "policy=%s owner=%d requester=%d\n",
+                    framework::LogInfo("UBCC",
+                                 "[UBCC-SPILL-DIRTY-GRANT-GUARD] home={} pa=0x{:x} "
+                                 "G_M+owner recall dataSource={} (expected={}) "
+                                 "policy={} owner={} requester={}",
                                  _nodeId, line_pa,
                                  static_cast<int>(recallOreq->dataSource),
                                  static_cast<int>(GrantDataSource::RecallBuffer),
                                  (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict)
                                      ? "naive" : "spill",
                                  existingOwner, requesterNode);
-                    std::fflush(stderr);
-                    fatal("UBCC node_id=%d: %s-mode G_M+owner recall dataSource "
-                          "mismatch PA=0x%lx\n",
+                    fatal("UBCC node_id={}: {}-mode G_M+owner recall dataSource "
+                          "mismatch PA=0x{:x}",
                           _nodeId,
                           (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict)
                               ? "naive" : "spill",
@@ -1991,8 +1963,8 @@ UBCCController::processOuterRequest(
                 }
 
                 if (!initiateRecall(line_pa, entry, *recallOreq)) {
-                    warn("UBCC node_id=%d: initiateRecall failed PA=0x%lx — "
-                         "removing outstanding\n",
+                    warn("UBCC node_id={}: initiateRecall failed PA=0x{:x} - "
+                         "removing outstanding",
                          _nodeId, line_pa);
                     removeOutstanding(line_pa);
                     return static_cast<UBCC_OuterGrantType>(-1);
@@ -2056,15 +2028,15 @@ UBCCController::processOuterRequest(
     // Committed DirEntry stays as-is until matching Clear is accepted.
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: v4 grant decision PA=0x%lx "
-            "prev=%s intended_state=%s grant=%d reservedEpoch=%lu "
-            "(committed DirEntry NOT modified)\n",
+            "UBCC node_id={}: v4 grant decision PA=0x{:x} "
+            "prev={} intended_state={} grant={} reservedEpoch={} "
+            "(committed DirEntry NOT modified)",
             _nodeId, line_pa,
             mesiStateName(prevState),
             oreq ? mesiStateName(oreq->intendedState) : "none",
             static_cast<int>(grant), reservedEpoch);
-    printf("[UBCC-GRANT-READY] home=%d pa=0x%lx requester=%d grant=%d prev=%s "
-           "intended=%s baseEpoch=%lu reservedEpoch=%lu reqId=%lu dataSource=%d\n",
+    framework::LogInfo("UBCC","[UBCC-GRANT-READY] home={} pa=0x{:x} requester={} grant={} prev={} "
+           "intended={} baseEpoch={} reservedEpoch={} reqId={} dataSource={}",
            _nodeId, line_pa, requesterNode, static_cast<int>(grant),
            mesiStateName(prevState),
            oreq ? mesiStateName(oreq->intendedState) : "none",
@@ -2083,7 +2055,7 @@ UBCCController::processOuterRequest(
     // v4-latency: log OUTSTANDING state change
     if (oreq) {
         framework::LogInfo("UBCC-latency",
-                "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=OUTSTANDING\n",
+                "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=OUTSTANDING",
                 curTick(), _nodeId, _socketId, line_pa,
                 mesiStateName(prevState),
                 mesiStateName(oreq->intendedState),
@@ -2200,7 +2172,7 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
                                const OutstandingRequest &recallOreq)
 {
     if (!_outbound) {
-        warn("UBCC node_id=%d: initiateRecall called with no outbound sender\n",
+        warn("UBCC node_id={}: initiateRecall called with no outbound sender",
              _nodeId);
         return false;
     }
@@ -2209,7 +2181,7 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
         ? recallOreq.targetNode
         : DirEntry::ownerFromSharers(entry);
     if (ownerNode < 0 || ownerNode >= 64) {
-        warn("UBCC node_id=%d: initiateRecall invalid ownerNode=%d PA=0x%lx\n",
+        warn("UBCC node_id={}: initiateRecall invalid ownerNode={} PA=0x{:x}",
              _nodeId, ownerNode, line_pa);
         return false;
     }
@@ -2239,11 +2211,11 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
         msg.h.flags |= static_cast<uint32_t>(CFLAG_IS_READ_RECALL);
     msg.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
 
-    printf("[RECALL-TRACE-A] UBCC n=%d initiateRecall PA=0x%lx owner=%d requester=%d\n",
+    framework::LogInfo("UBCC","[RECALL-TRACE-A] UBCC n={} initiateRecall PA=0x{:x} owner={} requester={}",
            _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
 
     if (!_outbound->sendRecallReq(msg)) {
-        warn("UBCC node_id=%d: sendRecallReq failed PA=0x%lx owner=%d requester=%d\n",
+        warn("UBCC node_id={}: sendRecallReq failed PA=0x{:x} owner={} requester={}",
              _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
         return false;
     }
@@ -2259,21 +2231,21 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 {
     responseEpoch = normalizeEpoch(responseEpoch);
 
-    printf("[RECALL-DIAG] UBCC node_id=%d processRecallResponse PA=0x%lx "
-           "owner=%d epoch=%lu reqId=%lu\n",
+    framework::LogInfo("UBCC","[RECALL-DIAG] UBCC node_id={} processRecallResponse PA=0x{:x} "
+           "owner={} epoch={} reqId={}",
            _nodeId, line_pa, ownerNode, responseEpoch, reqId);
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processRecallResponse PA=0x%lx entry not found\n",
+        framework::LogDebug("UBCC",
+                "UBCC node_id={}: processRecallResponse PA=0x{:x} entry not found",
                 _nodeId, line_pa);
         return false;
     }
 
     if (!checkEpochForLine(line_pa, responseEpoch)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processRecallResponse PA=0x%lx "
-                "STALE epoch — REJECTED\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processRecallResponse PA=0x{:x} "
+                "STALE epoch — REJECTED",
                 _nodeId, line_pa);
         _staleRejectedCount++;
         return false;
@@ -2281,19 +2253,19 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost || ost->opType != OpType::RECALL) {
-        printf("[RECALL-DIAG] UBCC node_id=%d PA=0x%lx no RECALL outstanding\n",
+        framework::LogInfo("UBCC","[RECALL-DIAG] UBCC node_id={} PA=0x{:x} no RECALL outstanding",
                _nodeId, line_pa);
         return false;
     }
 
     if (ost->targetNode >= 0 && ost->targetNode != ownerNode) {
-        warn("UBCC node_id=%d: recall owner mismatch PA=0x%lx expected=%d got=%d\n",
+        warn("UBCC node_id={}: recall owner mismatch PA=0x{:x} expected={} got={}",
              _nodeId, line_pa, ost->targetNode, ownerNode);
         return false;
     }
 
     if (ost->reqId != 0 && ost->reqId != reqId) {
-        warn("UBCC node_id=%d: recall reqId mismatch PA=0x%lx expected=%lu got=%lu\n",
+        warn("UBCC node_id={}: recall reqId mismatch PA=0x{:x} expected={} got={}",
              _nodeId, line_pa, ost->reqId, reqId);
         return false;
     }
@@ -2308,13 +2280,13 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         DirEntry::protoDirty(entry) && !dataReceived) {
         constexpr uint8_t kMaxRecallRetries = 3;
         if (ost->recallRetries >= kMaxRecallRetries) {
-            std::fprintf(stderr,
-                         "[UBCC-NAIVE-DIRTY-RECALL-EXHAUSTED] home=%d socket=%d "
-                         "pa=0x%lx responseOwner=%d target=%d requester=%d "
-                         "state=%s sharers=0x%lx residentDirty=%d "
-                         "responseEpoch=%lu entryEpoch=%lu reqId=%lu "
-                         "baseEpoch=%lu reservedEpoch=%lu stage=%d retries=%u "
-                         "dataReceived=%d\n",
+            framework::LogInfo("UBCC",
+                         "[UBCC-NAIVE-DIRTY-RECALL-EXHAUSTED] home={} socket={} "
+                         "pa=0x{:x} responseOwner={} target={} requester={} "
+                         "state={} sharers=0x{:x} residentDirty={} "
+                         "responseEpoch={} entryEpoch={} reqId={} "
+                         "baseEpoch={} reservedEpoch={} stage={} retries={} "
+                         "dataReceived={}",
                          _nodeId, _socketId, line_pa, ownerNode,
                          ost->targetNode, ost->requesterNode,
                          mesiStateName(entry.state), entry.sharersMask,
@@ -2323,20 +2295,19 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                          ost->reservedEpoch, static_cast<int>(ost->stage),
                          static_cast<unsigned>(ost->recallRetries),
                          dataReceived ? 1 : 0);
-            std::fflush(stderr);
-            fatal("UBCC node_id=%d: dirty capacity recall exhausted retries "
-                  "PA=0x%lx owner=%d reqId=%lu\n",
+            fatal("UBCC node_id={}: dirty capacity recall exhausted retries "
+                  "PA=0x{:x} owner={} reqId={}",
                   _nodeId, line_pa, ownerNode, ost->reqId);
         }
         ++ost->recallRetries;
         ost->createTick = curTick();
-        std::fprintf(stderr,
-                     "[UBCC-NAIVE-DIRTY-RECALL-NODATA] home=%d socket=%d "
-                     "pa=0x%lx responseOwner=%d target=%d requester=%d "
-                     "state=%s sharers=0x%lx residentDirty=%d "
-                     "responseEpoch=%lu entryEpoch=%lu reqId=%lu "
-                     "baseEpoch=%lu reservedEpoch=%lu stage=%d "
-                     "attempt=%u/%u\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-NAIVE-DIRTY-RECALL-NODATA] home={} socket={} "
+                     "pa=0x{:x} responseOwner={} target={} requester={} "
+                     "state={} sharers=0x{:x} residentDirty={} "
+                     "responseEpoch={} entryEpoch={} reqId={} "
+                     "baseEpoch={} reservedEpoch={} stage={} "
+                     "attempt={}/{}",
                      _nodeId, _socketId, line_pa, ownerNode,
                      ost->targetNode, ost->requesterNode,
                      mesiStateName(entry.state), entry.sharersMask,
@@ -2344,14 +2315,13 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                      entry.epoch, ost->reqId, ost->baseEpoch,
                      ost->reservedEpoch, static_cast<int>(ost->stage),
                      ost->recallRetries, kMaxRecallRetries);
-        std::fflush(stderr);
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: retrying dirty no-data recall PA=0x%lx "
-                "owner=%d reqId=%lu attempt=%u\n",
+                "UBCC node_id={}: retrying dirty no-data recall PA=0x{:x} "
+                "owner={} reqId={} attempt={}",
                 _nodeId, line_pa, ownerNode, ost->reqId, ost->recallRetries);
         if (!initiateRecall(line_pa, entry, *ost)) {
-            fatal("UBCC node_id=%d: dirty capacity recall resend failed "
-                  "PA=0x%lx owner=%d reqId=%lu\n",
+            fatal("UBCC node_id={}: dirty capacity recall resend failed "
+                  "PA=0x{:x} owner={} reqId={}",
                   _nodeId, line_pa, ownerNode, ost->reqId);
         }
         return false;
@@ -2376,18 +2346,16 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     if (reqType == UBCC_OuterReqType::GlobalInvalidate) {
         if (recallDone.dataValid && _host) {
             _host->writeDsmData(line_pa, recallDone.dataBuf);
-            std::fprintf(stderr,
-                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home=%d pa=0x%lx "
-                         "owner=%d epoch=%lu\n",
+            framework::LogInfo("UBCC",
+                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home={} pa=0x{:x} "
+                         "owner={} epoch={}",
                          _nodeId, line_pa, ownerNode,
                          recallDone.reservedEpoch);
-            std::fflush(stderr);
         } else {
-            std::fprintf(stderr,
-                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home=%d pa=0x%lx "
-                         "owner=%d data=0\n",
+            framework::LogInfo("UBCC",
+                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home={} pa=0x{:x} "
+                         "owner={} data=0",
                          _nodeId, line_pa, ownerNode);
-            std::fflush(stderr);
         }
         entry.state = MESIState::G_I;
         entry.sharersMask = 0;
@@ -2399,10 +2367,9 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         _evictionPendingRemoval.erase(line_pa);
         replayResidentWaitersForCapacity(line_pa);
         _recallResponseCount++;
-        std::fprintf(stderr,
-                     "[UBCC-NAIVE-EVICT-DONE] home=%d pa=0x%lx owner=%d data=%d\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-NAIVE-EVICT-DONE] home={} pa=0x{:x} owner={} data={}",
                      _nodeId, line_pa, ownerNode, recallDone.dataValid ? 1 : 0);
-        std::fflush(stderr);
         return true;
     }
 
@@ -2410,8 +2377,8 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1,
         recallDone.requesterSocket);
     if (!grantOst) {
-        fatal("UBCC node_id=%d: failed to create GRANT_HANDSHAKE after "
-              "RecallResp PA=0x%lx requester=%d\n",
+        fatal("UBCC node_id={}: failed to create GRANT_HANDSHAKE after "
+              "RecallResp PA=0x{:x} requester={}",
               _nodeId, line_pa, requesterNode);
     }
 
@@ -2454,26 +2421,25 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         CoherenceMessage push;
         buildGrantResponse(*grantOst, push);
         bool pushOk = _outbound->sendGrantPush(push);
-        printf("[PUSH-GRANT] RECALL home=%d pa=0x%lx requester=%d sock=%d "
-               "reqId=%lu grantType=%d dataSource=%d pushOk=%d\n",
+        framework::LogInfo("UBCC","[PUSH-GRANT] RECALL home={} pa=0x{:x} requester={} sock={} "
+               "reqId={} grantType={} dataSource={} pushOk={}",
                _nodeId, line_pa, grantOst->requesterNode,
                grantOst->requesterSocket, grantOst->reqId,
                static_cast<int>(grantTypeFromIntended(grantOst->intendedState)),
                static_cast<int>(grantOst->dataSource),
                pushOk ? 1 : 0);
         if (!pushOk) {
-            std::fprintf(stderr,
-                "[PUSH-GRANT-FAIL] home=%d pa=0x%lx requester=%d sock=%d "
-                "reqId=%lu\n",
+            framework::LogError("UBCC",
+                "[PUSH-GRANT-FAIL] home={} pa=0x{:x} requester={} sock={} "
+                "reqId={}",
                 _nodeId, line_pa, grantOst->requesterNode,
                 grantOst->requesterSocket, grantOst->reqId);
-            std::fflush(stderr);
         }
     }
 
     _recallResponseCount++;
-    printf("[RECALL-TO-GRANT] home=%d pa=0x%lx requester=%d owner=%d intended=%s "
-           "baseEpoch=%lu reservedEpoch=%lu reqId=%lu dataSource=%d\n",
+    framework::LogInfo("UBCC","[RECALL-TO-GRANT] home={} pa=0x{:x} requester={} owner={} intended={} "
+           "baseEpoch={} reservedEpoch={} reqId={} dataSource={}",
            _nodeId, line_pa, requesterNode, ownerNode,
            mesiStateName(grantOst->intendedState),
            grantOst->baseEpoch, grantOst->reservedEpoch, grantOst->reqId,
@@ -2530,25 +2496,25 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
     // Validate ackNode boundaries
     if (ackNode < 0 || ackNode >= 64) {
-        warn("UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-             "ackNode=%d out of range — REJECTED\n",
+        warn("UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+             "ackNode={} out of range - REJECTED",
              _nodeId, line_pa, ackNode);
         return false;
     }
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "entry not found\n", _nodeId, line_pa);
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "entry not found", _nodeId, line_pa);
         return false;
     }
 
     // v4: Half-range epoch check
     if (!checkEpochForLine(line_pa, responseEpoch)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "STALE epoch: response=%lu directory=%lu — REJECTED\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "STALE epoch: response={} directory={} — REJECTED",
                 _nodeId, line_pa, responseEpoch, entry.epoch);
         _staleRejectedCount++;
         return false;
@@ -2558,9 +2524,9 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost) {
         // Already completed — idempotent
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "no outstanding — idempotent\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "no outstanding — idempotent",
                 _nodeId, line_pa);
         return true;
     }
@@ -2574,9 +2540,9 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
     if (!isInvalidatePath && !isNaiveEvictPath && !isUpgradePath) {
         // Wrong op type or stage — idempotent
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "opType=%d stage=%d — not applicable, idempotent\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "opType={} stage={} — not applicable, idempotent",
                 _nodeId, line_pa,
                 static_cast<int>(ost->opType), static_cast<int>(ost->stage));
         return true;
@@ -2588,17 +2554,17 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
     uint64_t &effAckMask = isUpgradePath ? ost->upgradeAckMask : ost->ackMask;
 
     if (!(effTargetMask & nodeBit)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "ackNode=%d not in targetMask=0x%lx\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "ackNode={} not in targetMask=0x{:x}",
                 _nodeId, line_pa, ackNode, effTargetMask);
         return false;
     }
 
     if (effAckMask & nodeBit) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processInvalidationAck PA=0x%lx "
-                "duplicate ack from node %d — ignoring\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "duplicate ack from node {} — ignoring",
                 _nodeId, line_pa, ackNode);
         return true;
     }
@@ -2630,16 +2596,16 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             line_pa, ackNode, ost->pendingAckCount, ost->ackMask);
     }
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id=%d: invalidation ack PA=0x%lx ackNode=%d op=%s "
-            "remaining=%d ackMask=0x%lx targetMask=0x%lx\n",
+    framework::LogWarn("UBCC",
+            "UBCC node_id={}: invalidation ack PA=0x{:x} ackNode={} op={} "
+            "remaining={} ackMask=0x{:x} targetMask=0x{:x}",
             _nodeId, line_pa, ackNode,
             isUpgradePath ? "UPGRADE" :
             (isNaiveEvictPath ? "NAIVE_EVICT" : "INVALIDATE"),
             isUpgradePath ? ost->upgradePendingAckCount : ost->pendingAckCount,
             effAckMask, effTargetMask);
-    printf("[UBCC-INV-ACK] home=%d pa=0x%lx ackNode=%d op=%s remaining=%d "
-           "ackMask=0x%lx targetMask=0x%lx dirState=%s dirSharers=0x%lx\n",
+    framework::LogInfo("UBCC","[UBCC-INV-ACK] home={} pa=0x{:x} ackNode={} op={} remaining={} "
+           "ackMask=0x{:x} targetMask=0x{:x} dirState={} dirSharers=0x{:x}",
            _nodeId, line_pa, ackNode,
            isUpgradePath ? "UPGRADE" :
            (isNaiveEvictPath ? "NAIVE_EVICT" : "INVALIDATE"),
@@ -2654,11 +2620,11 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                                      : (ost->pendingAckCount == 0);
 
     if (allAcksDone) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: all invalidations complete PA=0x%lx\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: all invalidations complete PA=0x{:x}",
                 _nodeId, line_pa);
-        printf("[UBCC-INV-DONE] home=%d pa=0x%lx op=%s requester=%d "
-               "intended=%s baseEpoch=%lu reservedEpoch=%lu reqId=%lu\n",
+        framework::LogInfo("UBCC","[UBCC-INV-DONE] home={} pa=0x{:x} op={} requester={} "
+               "intended={} baseEpoch={} reservedEpoch={} reqId={}",
                _nodeId, line_pa,
                isUpgradePath ? "UPGRADE" : "INVALIDATE",
                ost->requesterNode, mesiStateName(ost->intendedState),
@@ -2671,8 +2637,8 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             ost->stage = OpStage::WAITING_LOCAL_DONE;
             ost->respTick = curTick();
 
-            printf("[UBCC-UPGRADE-ACK] pa=0x%lx requester=%d accepted=1 "
-                   "ackMask=0x%lx targetMask=0x%lx\n",
+            framework::LogInfo("UBCC","[UBCC-UPGRADE-ACK] pa=0x{:x} requester={} accepted=1 "
+                   "ackMask=0x{:x} targetMask=0x{:x}",
                    line_pa, ost->requesterNode, ost->upgradeAckMask, ost->upgradeTargetMask);
 
             // Notify the requester that OuterUpgradeAck(true) is ready.
@@ -2683,8 +2649,8 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             // a PANIC and leaving the upgrade pending forever → TC3/8/10/11
             // deadlock.)
             if (!_outbound) {
-                fatal("UBCC node_id=%d: outbound required for UpgradeAckNotify "
-                      "PA=0x%lx requester=%d\n",
+                fatal("UBCC node_id={}: outbound required for UpgradeAckNotify "
+                      "PA=0x{:x} requester={}",
                       _nodeId, line_pa, ost->requesterNode);
             }
             CoherenceMessage notifyMsg;
@@ -2705,8 +2671,8 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
 
             // TENTATIVE: if Done arrived early (upgradeDoneArrived), auto-commit now
             if (ost->upgradeDoneArrived) {
-                printf("[UPGRADE-TENTATIVE-DONE-CACHED] pa=0x%lx requester=%d "
-                       "committing after acks complete (Done was cached)\n",
+                framework::LogInfo("UBCC","[UPGRADE-TENTATIVE-DONE-CACHED] pa=0x{:x} requester={} "
+                       "committing after acks complete (Done was cached)",
                        line_pa, ost->requesterNode);
                 int intendedOwner = ost->intendedOwnerNode;
                 uint64_t reservedEp = ost->reservedEpoch;
@@ -2717,7 +2683,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 removeOutstanding(line_pa);
                 refreshPinnedBit(line_pa);
 
-                printf("[UBCC-UPGRADE-COMMIT] pa=0x%lx owner=%d reservedEpoch=%lu\n",
+                framework::LogInfo("UBCC","[UBCC-UPGRADE-COMMIT] pa=0x{:x} owner={} reservedEpoch={}",
                        line_pa, intendedOwner, reservedEp);
 
                 // Replay queued requesters after commit
@@ -2754,15 +2720,15 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 CoherenceMessage push;
                 buildGrantResponse(*ost, push);
                 _outbound->sendGrantPush(push);
-                printf("[PUSH-GRANT] INVALIDATE home=%d pa=0x%lx requester=%d "
-                       "sock=%d reqId=%lu grantType=%d\n",
+                framework::LogWarn("UBCC","[PUSH-GRANT] INVALIDATE home={} pa=0x{:x} requester={} "
+                       "sock={} reqId={} grantType={}",
                        _nodeId, line_pa, ost->requesterNode,
                        ost->requesterSocket, ost->reqId,
                        static_cast<int>(grantTypeFromIntended(ost->intendedState)));
             }
 
-            printf("[UBCC-INV-TO-GRANT] home=%d pa=0x%lx requester=%d stage=%d "
-                   "intended=%s baseEpoch=%lu reservedEpoch=%lu reqId=%lu\n",
+            framework::LogInfo("UBCC","[UBCC-INV-TO-GRANT] home={} pa=0x{:x} requester={} stage={} "
+                   "intended={} baseEpoch={} reservedEpoch={} reqId={}",
                    _nodeId, line_pa, ost->requesterNode,
                    static_cast<int>(ost->stage), mesiStateName(ost->intendedState),
                    ost->baseEpoch, ost->reservedEpoch, ost->reqId);
@@ -2870,14 +2836,13 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     epochVal = normalizeEpoch(epochVal);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processWriteback PA=0x%lx "
-            "requesterNode=%d epoch=%lu keepAsClean=%d\n",
+            "UBCC node_id={}: processWriteback PA=0x{:x} "
+            "requesterNode={} epoch={} keepAsClean={}",
             _nodeId, line_pa, requesterNode, epochVal, keepAsClean);
-    printf("[UBCC-WB-ENTER] home=%d pa=0x%lx node=%d keepAsClean=%d epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-WB-ENTER] home={} pa=0x{:x} node={} keepAsClean={} epoch={}",
            _nodeId, line_pa, requesterNode, keepAsClean, epochVal);
-    fprintf(stderr, "[UBCC-WB-REQ] home=%d pa=0x%lx type=WritebackReq node=%d keepAsClean=%d\n",
+    framework::LogInfo("UBCC", "[UBCC-WB-REQ] home={} pa=0x{:x} type=WritebackReq node={} keepAsClean={}",
             _nodeId, line_pa, requesterNode, keepAsClean);
-    fflush(stderr);
 
     DirEntry entry;
     PendingRequester prCtx;
@@ -2899,19 +2864,18 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         OutstandingRequest *blocked = findOutstanding(line_pa);
         if (blocked && blocked->opType == OpType::RECALL &&
             blocked->reqType == UBCC_OuterReqType::GlobalInvalidate) {
-            std::fprintf(stderr,
+            framework::LogInfo("UBCC",
                          "[UBCC-NAIVE-DIRTY-RECALL-WB-RESIDENT-BLOCK] "
-                         "home=%d socket=%d pa=0x%lx requester=%d "
-                         "wbEpoch=%lu keepAsClean=%d hasData=%d "
-                         "residentResult=%d target=%d reqId=%lu "
-                         "baseEpoch=%lu reservedEpoch=%lu stage=%d\n",
+                         "home={} socket={} pa=0x{:x} requester={} "
+                         "wbEpoch={} keepAsClean={} hasData={} "
+                         "residentResult={} target={} reqId={} "
+                         "baseEpoch={} reservedEpoch={} stage={}",
                          _nodeId, _socketId, line_pa, requesterNode,
                          epochVal, keepAsClean ? 1 : 0, data ? 1 : 0,
                          static_cast<int>(rr), blocked->targetNode,
                          blocked->reqId, blocked->baseEpoch,
                          blocked->reservedEpoch,
                          static_cast<int>(blocked->stage));
-            std::fflush(stderr);
         }
         return false;
     }
@@ -2929,14 +2893,14 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         const bool epochMatch = normalizeEpoch(active->baseEpoch) == epochVal;
         const bool payloadMatch = data != nullptr;
         const bool dirtyRelease = !keepAsClean;
-        std::fprintf(stderr,
-                     "[UBCC-NAIVE-DIRTY-RECALL-WB-CHECK] home=%d socket=%d "
-                     "pa=0x%lx requester=%d target=%d state=%s "
-                     "sharers=0x%lx residentDirty=%d wbEpoch=%lu "
-                     "entryEpoch=%lu baseEpoch=%lu reservedEpoch=%lu "
-                     "reqId=%lu stage=%d keepAsClean=%d hasData=%d "
-                     "stageMatch=%d ownerMatch=%d epochMatch=%d "
-                     "payloadMatch=%d dirtyRelease=%d\n",
+        framework::LogInfo("UBCC",
+                     "[UBCC-NAIVE-DIRTY-RECALL-WB-CHECK] home={} socket={} "
+                     "pa=0x{:x} requester={} target={} state={} "
+                     "sharers=0x{:x} residentDirty={} wbEpoch={} "
+                     "entryEpoch={} baseEpoch={} reservedEpoch={} "
+                     "reqId={} stage={} keepAsClean={} hasData={} "
+                     "stageMatch={} ownerMatch={} epochMatch={} "
+                     "payloadMatch={} dirtyRelease={}",
                      _nodeId, _socketId, line_pa, requesterNode,
                      active->targetNode, mesiStateName(entry.state),
                      entry.sharersMask, entry.residentDirty ? 1 : 0,
@@ -2946,7 +2910,6 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
                      data ? 1 : 0, stageMatch ? 1 : 0,
                      ownerMatch ? 1 : 0, epochMatch ? 1 : 0,
                      payloadMatch ? 1 : 0, dirtyRelease ? 1 : 0);
-        std::fflush(stderr);
     }
     if (active && active->opType == OpType::RECALL &&
         active->reqType == UBCC_OuterReqType::GlobalInvalidate &&
@@ -2960,11 +2923,10 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
             line_pa, requesterNode, true, epochVal, active->reqId, &payload);
         if (accepted) {
             ++_writebackCount;
-            std::fprintf(stderr,
-                         "[UBCC-NAIVE-DIRTY-RECALL-WB-MERGE] home=%d "
-                         "pa=0x%lx owner=%d epoch=%lu\n",
+            framework::LogInfo("UBCC",
+                         "[UBCC-NAIVE-DIRTY-RECALL-WB-MERGE] home={} "
+                         "pa=0x{:x} owner={} epoch={}",
                          _nodeId, line_pa, requesterNode, epochVal);
-            std::fflush(stderr);
         }
         return accepted;
     }
@@ -2973,18 +2935,18 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     if (isLineBusy(line_pa)) {
         // TC98 fix: rate-limit writeback BUSY log
         { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processWriteback PA=0x%lx "
-                "line busy (outstanding active) — BUSY/RETRY (n=%lu)\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processWriteback PA=0x{:x} "
+                "line busy (outstanding active) — BUSY/RETRY (n={})",
                 _nodeId, line_pa, _cnt); }
         return false;
     }
 
     // ---- M7: Stale epoch check ----
     if (!checkEpochForLine(line_pa, epochVal)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processWriteback PA=0x%lx "
-                "STALE epoch: msg=%lu directory=%lu — REJECTED\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processWriteback PA=0x{:x} "
+                "STALE epoch: msg={} directory={} — REJECTED",
                 _nodeId, line_pa, epochVal, entry.epoch);
         _staleRejectedCount++;
         return false;
@@ -3001,27 +2963,26 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         const uint64_t requesterBit = requesterNode >= 0 && requesterNode < 64
             ? (1ULL << requesterNode) : 0;
         if (!requesterBit || !(entry.sharersMask & requesterBit) || keepAsClean) {
-            framework::LogInfo("UBCC",
-                    "UBCC node_id=%d: shared release rejected PA=0x%lx "
-                    "requesterNode=%d sharersMask=0x%lx keepAsClean=%d\n",
+            framework::LogWarn("UBCC",
+                    "UBCC node_id={}: shared release rejected PA=0x{:x} "
+                    "requesterNode={} sharersMask=0x{:x} keepAsClean={}",
                     _nodeId, line_pa, requesterNode, entry.sharersMask,
                     keepAsClean ? 1 : 0);
             return false;
         }
         entry.sharersMask &= ~requesterBit;
         entry.state = entry.sharersMask ? MESIState::G_S : MESIState::G_I;
-        fprintf(stderr,
-                "[UBCC-SHARED-RELEASE] home=%d pa=0x%lx node=%d hasData=%d "
-                "remainingSharers=0x%lx\n",
+        framework::LogInfo("UBCC",
+                "[UBCC-SHARED-RELEASE] home={} pa=0x{:x} node={} hasData={} "
+                "remainingSharers=0x{:x}",
                 _nodeId, line_pa, requesterNode, hasData ? 1 : 0,
                 entry.sharersMask);
-        fflush(stderr);
     } else if (entry.state == MESIState::G_E) {
         // G_E is clean: its normal release is EvictReq. Accepting WritebackReq
         // would blur clean eviction and dirty-data persistence contracts.
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: G_E WritebackReq rejected PA=0x%lx "
-                "requesterNode=%d hasData=%d; use EvictReq\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: G_E WritebackReq rejected PA=0x{:x} "
+                "requesterNode={} hasData={}; use EvictReq",
                 _nodeId, line_pa, requesterNode, hasData ? 1 : 0);
         return false;
     } else {
@@ -3030,18 +2991,18 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     // idempotent duplicate carrying the already-issued dirty payload.
     int ownerNode = DirEntry::ownerFromSharers(entry);
     if (ownerNode >= 0 && ownerNode != requesterNode) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processWriteback PA=0x%lx "
-                "OWNER MISMATCH: requesterNode=%d != ownerNode=%d — REJECTED\n",
+        framework::LogError("UBCC",
+                "UBCC node_id={}: processWriteback PA=0x{:x} "
+                "OWNER MISMATCH: requesterNode={} != ownerNode={} — REJECTED",
                 _nodeId, line_pa, requesterNode, ownerNode);
         _ownerMismatchRejectedCount++;
         return false;
     }
 
     if (entry.state == MESIState::G_M && !hasData) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: G_M WritebackReq rejected PA=0x%lx "
-                "requesterNode=%d missing dirty payload\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: G_M WritebackReq rejected PA=0x{:x} "
+                "requesterNode={} missing dirty payload",
                 _nodeId, line_pa, requesterNode);
         return false;
     }
@@ -3067,18 +3028,17 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     _writebackCount++;
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processWriteback PA=0x%lx complete "
-             "newState=%s ownerNode=%d dirty=%d\n",
+            "UBCC node_id={}: processWriteback PA=0x{:x} complete "
+             "newState={} ownerNode={} dirty={}",
              _nodeId, line_pa, mesiStateName(entry.state),
              DirEntry::ownerFromSharers(entry), DirEntry::protoDirty(entry));
 
     // Make home data authoritative before publishing the owner release.
     if (data && _host) {
         _host->writeDsmData(line_pa, data);
-        std::fprintf(stderr,
-                     "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=writeback\n",
+        framework::LogInfo("UBCC",
+                     "[WB-DATA-PERSIST] home={} pa=0x{:x} node={} source=writeback",
                      _nodeId, line_pa, requesterNode);
-        std::fflush(stderr);
         // ── Phase C4 trace point 5: persisted word ──
         {
             uint64_t off = line_pa & 0x1FFFULL;
@@ -3086,10 +3046,9 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
             if (ckOff < 0x80000ULL && (off % 64 == 0)) {
                 uint64_t w0;
                 std::memcpy(&w0, data, 8);
-                std::fprintf(stderr,
-                    "[C4-PERSIST] home=%d pa=0x%lx off=0x%lx w0=0x%016lx\n",
+                framework::LogInfo("UBCC",
+                    "[C4-PERSIST] home={} pa=0x{:x} off=0x{:x} w0=0x{:x}",
                     _nodeId, line_pa, off, w0);
-                std::fflush(stderr);
             }
         }
     }
@@ -3124,7 +3083,7 @@ UBCCController::processWritebackWithData(uint64_t line_pa, int requesterNode,
 void
 UBCCController::notifyHomeWritebackComplete(uint64_t homePa)
 {
-    printf("[UBCC-HOME-WB] home=%d pa=0x%lx\n", _nodeId, homePa);
+    framework::LogInfo("UBCC","[UBCC-HOME-WB] home={} pa=0x{:x}", _nodeId, homePa);
     DirEntry entry;
     if (!_directory.lookup(homePa, entry)) {
         return;
@@ -3139,13 +3098,13 @@ UBCCController::notifyHomeWritebackComplete(uint64_t homePa)
     if (isLineBusy(homePa)) {
         // TC98 fix: rate-limit home-WB BUSY log
         { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-        printf("[UBCC-HOME-WB] home=%d pa=0x%lx BUSY — deferred (n=%lu)\n",
+        framework::LogDebug("UBCC","[UBCC-HOME-WB] home={} pa=0x{:x} BUSY — deferred (n={})",
                _nodeId, homePa, _cnt); }
         return;
     }
 
     int oldOwner = DirEntry::ownerFromSharers(entry);
-    printf("[UBCC-HOME-WB] home=%d pa=0x%lx oldState=%s owner=%d epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-HOME-WB] home={} pa=0x{:x} oldState={} owner={} epoch={}",
            _nodeId, homePa, mesiStateName(entry.state), oldOwner, entry.epoch);
 
     entry.state = MESIState::G_I;
@@ -3169,8 +3128,8 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     epochVal = normalizeEpoch(epochVal);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processEvict PA=0x%lx "
-            "evictingNode=%d epoch=%lu\n",
+            "UBCC node_id={}: processEvict PA=0x{:x} "
+            "evictingNode={} epoch={}",
             _nodeId, line_pa, evictingNode, epochVal);
 
     DirEntry entry;
@@ -3190,9 +3149,9 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // ---- M7: Stale epoch check ----
     if (!checkEpochForLine(line_pa, epochVal)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processEvict PA=0x%lx "
-                "STALE epoch: msg=%lu directory=%lu — REJECTED\n",
+        framework::LogDebug("UBCC",
+                "UBCC node_id={}: processEvict PA=0x{:x} "
+                "STALE epoch: msg={} directory={} — REJECTED",
                 _nodeId, line_pa, epochVal, entry.epoch);
         _staleRejectedCount++;
         return false;
@@ -3202,9 +3161,9 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     if (isLineBusy(line_pa)) {
         // TC98 fix: rate-limit evict BUSY log
         { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processEvict PA=0x%lx "
-                "line busy — rejected (n=%lu)\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processEvict PA=0x{:x} "
+                "line busy — rejected (n={})",
                 _nodeId, line_pa, _cnt); }
         return false;
     }
@@ -3230,8 +3189,8 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
         // Dirty owners (G_M) must writeback first.
         if (DirEntry::protoDirty(entry)) {
             framework::LogInfo("UBCC",
-                    "UBCC node_id=%d: processEvict PA=0x%lx "
-                    "dirty owner evict not allowed — must writeback first\n",
+                    "UBCC node_id={}: processEvict PA=0x{:x} "
+                    "dirty owner evict not allowed — must writeback first",
                     _nodeId, line_pa);
             return false;
         }
@@ -3241,10 +3200,10 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
 
     // ---- M7 P0-3: Reject evict if node is neither owner nor sharer ----
     if (!removedFromSharer && !removedFromOwner) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processEvict PA=0x%lx "
-                "evictingNode=%d is neither owner (ownerNode=%d) nor sharer "
-                "(sharersMask=0x%lx) — REJECTED\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processEvict PA=0x{:x} "
+                "evictingNode={} is neither owner (ownerNode={}) nor sharer "
+                "(sharersMask=0x{:x}) — REJECTED",
                 _nodeId, line_pa, evictingNode,
                 ownerNode, entry.sharersMask);
         return false;
@@ -3271,9 +3230,9 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     _evictCount++;
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processEvict PA=0x%lx complete "
-            "removedSharer=%d removedOwner=%d newState=%s "
-             "sharersMask=0x%lx ownerNode=%d\n",
+            "UBCC node_id={}: processEvict PA=0x{:x} complete "
+            "removedSharer={} removedOwner={} newState={} "
+             "sharersMask=0x{:x} ownerNode={}",
              _nodeId, line_pa, removedFromSharer, removedFromOwner,
              mesiStateName(entry.state),
              entry.sharersMask, DirEntry::ownerFromSharers(entry));
@@ -3304,8 +3263,8 @@ UBCCController::processOuterUpgradeReq(
         *outDeferred = false;
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processOuterUpgradeReq PA=0x%lx "
-            "requesterNode=%d epoch=%lu reqId=%lu desiredPerm=%d\n",
+            "UBCC node_id={}: processOuterUpgradeReq PA=0x{:x} "
+            "requesterNode={} epoch={} reqId={} desiredPerm={}",
             _nodeId, line_pa, requesterNode, epoch, reqId, desiredPerm);
 
     DirEntry entry;
@@ -3331,9 +3290,9 @@ UBCCController::processOuterUpgradeReq(
     if (requesterNode >= 0) {
         uint64_t reqBit = (1ULL << requesterNode);
         if (!(entry.sharersMask & reqBit)) {
-            framework::LogInfo("UBCC",
-                    "UBCC node_id=%d: upgrade rejected — "
-                    "PA=0x%lx requesterNode=%d not in sharersMask=0x%lx\n",
+            framework::LogWarn("UBCC",
+                    "UBCC node_id={}: upgrade rejected — "
+                    "PA=0x{:x} requesterNode={} not in sharersMask=0x{:x}",
                     _nodeId, line_pa, requesterNode, entry.sharersMask);
             // PERMANENT reject: requester was invalidated (lost the race). It
             // must abandon and re-fetch via ReadUnique instead of retrying.
@@ -3354,9 +3313,9 @@ UBCCController::processOuterUpgradeReq(
         existing->requesterSocket == requesterSocket &&
         existing->baseEpoch == epoch && existing->reqId == reqId) {
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: replaying exact UpgradeReq PA=0x%lx "
-                "requesterNode=%d requesterSocket=%d epoch=%lu reqId=%lu "
-                "stage=%d\n",
+                "UBCC node_id={}: replaying exact UpgradeReq PA=0x{:x} "
+                "requesterNode={} requesterSocket={} epoch={} reqId={} "
+                "stage={}",
                 _nodeId, line_pa, requesterNode, requesterSocket, epoch, reqId,
                 static_cast<int>(existing->stage));
         return true;
@@ -3364,9 +3323,9 @@ UBCCController::processOuterUpgradeReq(
 
     // Any non-matching outstanding still conflicts with this upgrade.
     if (existing) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: upgrade rejected — "
-                "existing outstanding for PA=0x%lx\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: upgrade rejected — "
+                "existing outstanding for PA=0x{:x}",
                 _nodeId, line_pa);
         return false;
     }
@@ -3384,9 +3343,9 @@ UBCCController::processOuterUpgradeReq(
         line_pa, OpType::UPGRADE_PENDING, requesterNode, -1,
         requesterSocket);
     if (!oreq) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: upgrade rejected — "
-                "failed to create outstanding for PA=0x%lx\n",
+        framework::LogError("UBCC",
+                "UBCC node_id={}: upgrade rejected — "
+                "failed to create outstanding for PA=0x{:x}",
                 _nodeId, line_pa);
         return false;
     }
@@ -3437,14 +3396,14 @@ UBCCController::processOuterUpgradeReq(
         oreq->upgradeAckMask = 0;
         oreq->invalidateBarrierDone = false;
 
-        printf("[UBCC-UPGRADE] pa=0x%lx requester=%d stage=WAITING_ALL_ACKS "
-               "targetMask=0x%lx pendingAckCount=%d\n",
+        framework::LogInfo("UBCC","[UBCC-UPGRADE] pa=0x{:x} requester={} stage=WAITING_ALL_ACKS "
+               "targetMask=0x{:x} pendingAckCount={}",
                line_pa, requesterNode, effectiveMask, oreq->upgradePendingAckCount);
 
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: upgrade accepted pending PA=0x%lx "
-                "reservedEpoch=%lu reqId=%lu targetMask=0x%lx — "
-                "waiting for invalidation acks before Ack(true)\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: upgrade accepted pending PA=0x{:x} "
+                "reservedEpoch={} reqId={} targetMask=0x{:x} — "
+                "waiting for invalidation acks before Ack(true)",
                 _nodeId, line_pa, reservedEpoch, reqId, effectiveMask);
     } else {
         // upgrade_invalidate_fix: no other sharers — fast path
@@ -3454,13 +3413,13 @@ UBCCController::processOuterUpgradeReq(
         oreq->upgradePendingAckCount = 0;
         oreq->upgradeAckMask = 0;
 
-        printf("[UBCC-UPGRADE] pa=0x%lx requester=%d stage=WAITING_LOCAL_DONE "
-               "targetMask=0 (no other sharers)\n",
+        framework::LogInfo("UBCC","[UBCC-UPGRADE] pa=0x{:x} requester={} stage=WAITING_LOCAL_DONE "
+               "targetMask=0 (no other sharers)",
                line_pa, requesterNode);
 
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: upgrade accepted immediate PA=0x%lx "
-                "reservedEpoch=%lu reqId=%lu — no other sharers, Ack(true) now\n",
+                "UBCC node_id={}: upgrade accepted immediate PA=0x{:x} "
+                "reservedEpoch={} reqId={} — no other sharers, Ack(true) now",
                 _nodeId, line_pa, reservedEpoch, reqId);
     }
 
@@ -3477,15 +3436,15 @@ UBCCController::processOuterUpgradeDone(
     epoch = normalizeEpoch(epoch);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
-            "requesterNode=%d epoch=%lu reqId=%lu\n",
+            "UBCC node_id={}: processOuterUpgradeDone PA=0x{:x} "
+            "requesterNode={} epoch={} reqId={}",
             _nodeId, line_pa, requesterNode, epoch, reqId);
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
-                "entry not found\n", _nodeId, line_pa);
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processOuterUpgradeDone PA=0x{:x} "
+                "entry not found", _nodeId, line_pa);
         return false;
     }
 
@@ -3493,14 +3452,14 @@ UBCCController::processOuterUpgradeDone(
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (!ost || ost->opType != OpType::UPGRADE_PENDING) {
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
-                "no UPGRADE_PENDING outstanding\n", _nodeId, line_pa);
+                "UBCC node_id={}: processOuterUpgradeDone PA=0x{:x} "
+                "no UPGRADE_PENDING outstanding", _nodeId, line_pa);
         return false;
     }
 
     // Verify matching tuple
     if (ost->requesterNode != requesterNode) {
-        warn("UBCC node_id=%d: UpgradeDone requester mismatch PA=0x%lx\n",
+        warn("UBCC node_id={}: UpgradeDone requester mismatch PA=0x{:x}",
              _nodeId, line_pa);
         return false;
     }
@@ -3513,32 +3472,32 @@ UBCCController::processOuterUpgradeDone(
         ost->upgradeDoneReqId = reqId;
         ost->upgradeSavedStage = ost->stage;
 
-        printf("[UPGRADE-TENTATIVE-DONE-CACHED] pa=0x%lx requester=%d "
+        framework::LogInfo("UBCC","[UPGRADE-TENTATIVE-DONE-CACHED] pa=0x{:x} requester={} "
                "stage=WAITING_ALL_ACKS (Done arrived before all acks) "
-               "cachedEpoch=%lu cachedReqId=%lu\n",
+               "cachedEpoch={} cachedReqId={}",
                line_pa, requesterNode, epoch, reqId);
 
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: UpgradeDone TENTATIVE cached PA=0x%lx "
-                "requester=%d — waiting for remaining acks\n",
+                "UBCC node_id={}: UpgradeDone TENTATIVE cached PA=0x{:x} "
+                "requester={} — waiting for remaining acks",
                 _nodeId, line_pa, requesterNode);
 
         return true; // accepted but not committed
     }
 
     if (ost->stage != OpStage::WAITING_LOCAL_DONE) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
-                "wrong stage=%d — rejecting\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processOuterUpgradeDone PA=0x{:x} "
+                "wrong stage={} — rejecting",
                 _nodeId, line_pa, static_cast<int>(ost->stage));
         return false;
     }
 
     // upgrade_invalidate_fix: only commit when WAITING_LOCAL_DONE and accepted
     if (!ost->accepted) {
-        framework::LogInfo("UBCC",
-                "UBCC node_id=%d: processOuterUpgradeDone PA=0x%lx "
-                "not yet accepted — rejecting\n",
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processOuterUpgradeDone PA=0x{:x} "
+                "not yet accepted — rejecting",
                 _nodeId, line_pa);
         return false;
     }
@@ -3557,13 +3516,12 @@ UBCCController::processOuterUpgradeDone(
     removeOutstanding(line_pa);
     refreshPinnedBit(line_pa);
 
-    printf("[UBCC-UPGRADE-COMMIT] pa=0x%lx owner=%d reservedEpoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-UPGRADE-COMMIT] pa=0x{:x} owner={} reservedEpoch={}",
            line_pa, intendedOwner, reservedEp);
-    fflush(stdout);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: upgrade committed PA=0x%lx "
-            "newState=%s owner=%d epoch=%lu\n",
+            "UBCC node_id={}: upgrade committed PA=0x{:x} "
+            "newState={} owner={} epoch={}",
             _nodeId, line_pa, mesiStateName(entry.state),
             DirEntry::ownerFromSharers(entry), entry.epoch);
 
@@ -3582,8 +3540,8 @@ UBCCController::processClear(
     uint64_t epoch, uint64_t reqId)
 {
     if (_debugClearTrace) {
-        std::fprintf(stderr,
-                     "[DEBUG-UBCC-CLEAR] enter home=%d pa=0x%lx srcNode=%d epoch=%lu reqId=%lu\n",
+        framework::LogInfo("UBCC",
+                     "[DEBUG-UBCC-CLEAR] enter home={} pa=0x{:x} srcNode={} epoch={} reqId={}",
                      _nodeId, line_pa, srcNode, epoch, reqId);
     }
     epoch = normalizeEpoch(epoch);
@@ -3593,8 +3551,8 @@ UBCCController::processClear(
         line_pa, epoch, reqId);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: processClear PA=0x%lx "
-            "srcNode=%d epoch=%lu reqId=%lu\n",
+            "UBCC node_id={}: processClear PA=0x{:x} "
+            "srcNode={} epoch={} reqId={}",
             _nodeId, line_pa, srcNode, epoch, reqId);
 
     // Check tombstone first (duplicate Clear within window W)
@@ -3603,16 +3561,16 @@ UBCCController::processClear(
         // UBInvariant: log tombstone replay (warning-level)
         _tombstoneReplayCount++;
         framework::LogInfo("UBCC-invariant",
-                "[UBINV-INFO] tombstone replay #%lu PA=0x%lx "
-                "epoch=%lu reqId=%lu accepted=%d\n",
+                "[UBINV-INFO] tombstone replay #{} PA=0x{:x} "
+                "epoch={} reqId={} accepted={}",
                 _tombstoneReplayCount, line_pa, epoch, reqId, tsAccepted);
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d: tombstone replay PA=0x%lx "
-                "epoch=%lu reqId=%lu accepted=%d\n",
+                "UBCC node_id={}: tombstone replay PA=0x{:x} "
+                "epoch={} reqId={} accepted={}",
                 _nodeId, line_pa, epoch, reqId, tsAccepted);
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] tombstone-replay home=%d pa=0x%lx epoch=%lu reqId=%lu accepted=%d\n",
+            framework::LogInfo("UBCC",
+                         "[DEBUG-UBCC-CLEAR] tombstone-replay home={} pa=0x{:x} epoch={} reqId={} accepted={}",
                          _nodeId, line_pa, epoch, reqId, tsAccepted ? 1 : 0);
         }
         return tsAccepted;
@@ -3622,11 +3580,11 @@ UBCCController::processClear(
     if (!_directory.lookup(line_pa, entry)) {
         // Stale Clear for unknown line — log and drop (§3.5)
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=unknown_line epoch=%lu reqId=%lu\n",
+            framework::LogWarn("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=unknown_line epoch={} reqId={}",
                          _nodeId, line_pa, epoch, reqId);
         }
-        warn("UBCC node_id=%d: stale Clear for unknown PA=0x%lx — dropped\n",
+        warn("UBCC node_id={}: stale Clear for unknown PA=0x{:x} - dropped",
              _nodeId, line_pa);
         return false;
     }
@@ -3634,34 +3592,34 @@ UBCCController::processClear(
     // Verify GRANT_HANDSHAKE outstanding
     OutstandingRequest *ost = findOutstanding(line_pa);
     if (_debugClearTrace) {
-        std::fprintf(stderr,
-                     "[DEBUG-TC5-CLEAR-TRACE] processClearEnter home=%d pa=0x%lx src=%d "
-                     "epoch=%lu reqId=%lu hasOutstanding=%d",
+        framework::LogInfo("UBCC",
+                     "[DEBUG-TC5-CLEAR-TRACE] processClearEnter home={} pa=0x{:x} src={} "
+                     "epoch={} reqId={} hasOutstanding={}",
                      _nodeId, line_pa, srcNode, epoch, reqId, ost ? 1 : 0);
         if (ost) {
-            std::fprintf(stderr,
-                         " opType=%d stage=%d ostRequester=%d ostBase=%lu ostReserved=%lu ostReqId=%lu",
+            framework::LogInfo("UBCC",
+                         " opType={} stage={} ostRequester={} ostBase={} ostReserved={} ostReqId={}",
                          static_cast<int>(ost->opType), static_cast<int>(ost->stage),
                          ost->requesterNode, ost->baseEpoch, ost->reservedEpoch,
                          ost->reqId);
         }
-        std::fprintf(stderr, "\n");
+        framework::LogInfo("UBCC", "");
     }
 
     if (!ost || ost->opType != OpType::GRANT_HANDSHAKE) {
         // No active GRANT_HANDSHAKE — check for already-completed
         // (might be tombstone already cleaned up)
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
-                         "reason=no_grant_handshake\n",
+            framework::LogWarn("UBCC",
+                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
+                         "reason=no_grant_handshake",
                          _nodeId, line_pa, srcNode);
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=no_grant_handshake epoch=%lu reqId=%lu\n",
+            framework::LogWarn("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=no_grant_handshake epoch={} reqId={}",
                          _nodeId, line_pa, epoch, reqId);
         }
-        warn("UBCC node_id=%d: processClear PA=0x%lx "
-             "no GRANT_HANDSHAKE outstanding — dropped\n",
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+             "no GRANT_HANDSHAKE outstanding - dropped",
              _nodeId, line_pa);
         return false;
     }
@@ -3671,18 +3629,18 @@ UBCCController::processClear(
     // Compare against baseEpoch (not reservedEpoch) for matching.
     if (normalizeEpoch(ost->baseEpoch) != epoch) {
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
-                         "reason=epoch_mismatch ostBase=%lu clear=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
+                         "reason=epoch_mismatch ostBase={} clear={}",
                          _nodeId, line_pa, srcNode,
                          normalizeEpoch(ost->baseEpoch), epoch);
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=epoch_mismatch ostBase=%lu clear=%lu reqId=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=epoch_mismatch ostBase={} clear={} reqId={}",
                          _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch, reqId);
         }
-        warn("UBCC node_id=%d: processClear PA=0x%lx "
-              "epoch mismatch: ost_base=%lu clear=%lu — dropping, "
-              "retiring stale GRANT_HANDSHAKE\n",
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+               "epoch mismatch: ost_base={} clear={} - dropping, "
+               "retiring stale GRANT_HANDSHAKE",
               _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch);
         // v4 D-18: Retire stale GRANT_HANDSHAKE so it doesn't block
         // future RECALL/INVALIDATE creation for this PA.
@@ -3694,16 +3652,16 @@ UBCCController::processClear(
     // Verify reqId match
     if (ost->reqId != reqId) {
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
-                         "reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
+                         "reason=reqid_mismatch ostReqId={} clearReqId={}",
                          _nodeId, line_pa, srcNode, ost->reqId, reqId);
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=reqid_mismatch ostReqId={} clearReqId={}",
                          _nodeId, line_pa, ost->reqId, reqId);
         }
-        warn("UBCC node_id=%d: processClear PA=0x%lx "
-             "reqId mismatch: ost=%lu clear=%lu — dropped\n",
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+             "reqId mismatch: ost={} clear={} - dropped",
              _nodeId, line_pa, ost->reqId, reqId);
         return false;
     }
@@ -3711,16 +3669,16 @@ UBCCController::processClear(
     // F2: Strong validation — requesterNode must match srcNode
     if (ost->requesterNode >= 0 && ost->requesterNode != srcNode) {
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
-                         "reason=requester_mismatch ostRequester=%d\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
+                         "reason=requester_mismatch ostRequester={}",
                          _nodeId, line_pa, srcNode, ost->requesterNode);
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=requester_mismatch ostRequester=%d srcNode=%d reqId=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=requester_mismatch ostRequester={} srcNode={} reqId={}",
                          _nodeId, line_pa, ost->requesterNode, srcNode, reqId);
         }
-        warn("UBCC node_id=%d: processClear PA=0x%lx "
-              "requesterNode mismatch: ost=%d clear=%d — dropped\n",
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+               "requesterNode mismatch: ost={} clear={} - dropped",
               _nodeId, line_pa, ost->requesterNode, srcNode);
         return false;
     }
@@ -3729,16 +3687,16 @@ UBCCController::processClear(
     // GRANT_HANDSHAKE that is actually expecting a Clear commit.
     if (ost->stage != OpStage::WAITING_CLEAR) {
         if (_debugClearTrace) {
-            std::fprintf(stderr,
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
-                         "reason=stage_mismatch stage=%d\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
+                         "reason=stage_mismatch stage={}",
                          _nodeId, line_pa, srcNode, static_cast<int>(ost->stage));
-            std::fprintf(stderr,
-                         "[DEBUG-UBCC-CLEAR] drop home=%d pa=0x%lx reason=stage_mismatch stage=%d reqId=%lu\n",
+            framework::LogError("UBCC",
+                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=stage_mismatch stage={} reqId={}",
                          _nodeId, line_pa, static_cast<int>(ost->stage), reqId);
         }
-        warn("UBCC node_id=%d: processClear PA=0x%lx "
-              "stage mismatch: expected WAITING_CLEAR got %d — dropped\n",
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+               "stage mismatch: expected WAITING_CLEAR got {} - dropped",
               _nodeId, line_pa, static_cast<int>(ost->stage));
         return false;
     }
@@ -3756,7 +3714,7 @@ UBCCController::processClear(
 
     // v4-latency: log COMMIT state change
     framework::LogInfo("UBCC-latency",
-            "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=COMMIT\n",
+            "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=COMMIT",
             curTick(), _nodeId, _socketId, line_pa,
             mesiStateName(oldState),
             mesiStateName(entry.state),
@@ -3776,18 +3734,18 @@ UBCCController::processClear(
 
     // Order log audit (§3.6)
     if (_debugClearTrace) {
-        std::fprintf(stderr,
-                     "[DEBUG-TC5-CLEAR-TRACE] processClearAccept home=%d pa=0x%lx src=%d "
-                     "epoch=%lu reqId=%lu newState=%s\n",
+        framework::LogInfo("UBCC",
+                     "[DEBUG-TC5-CLEAR-TRACE] processClearAccept home={} pa=0x{:x} src={} "
+                     "epoch={} reqId={} newState={}",
            _nodeId, line_pa, srcNode, epoch, reqId,
            mesiStateName(entry.state));
-        std::fprintf(stderr,
-                     "[DEBUG-UBCC-ORDER] pa=0x%lx epoch=%lu reqId=%lu op=ClearGrantHandshake "
-                     "requester=%d state=%s\n",
+        framework::LogInfo("UBCC",
+                     "[DEBUG-UBCC-ORDER] pa=0x{:x} epoch={} reqId={} op=ClearGrantHandshake "
+                     "requester={} state={}",
                      line_pa, epoch, reqId, srcNode,
                      mesiStateName(entry.state));
-        std::fprintf(stderr,
-                     "[DEBUG-UBCC-CLEAR] accept home=%d pa=0x%lx srcNode=%d epoch=%lu reqId=%lu newState=%s\n",
+        framework::LogInfo("UBCC",
+                     "[DEBUG-UBCC-CLEAR] accept home={} pa=0x{:x} srcNode={} epoch={} reqId={} newState={}",
                      _nodeId, line_pa, srcNode, epoch, reqId,
                      mesiStateName(entry.state));
     }
@@ -3871,7 +3829,7 @@ UBCCController::onDsmPersistComplete(uint64_t linePa)
 {
     _h64DsmPending.erase(linePa);
     if (_debugLog) {
-        std::fprintf(stderr, "[DEBUG-H64-DSM-DONE] home=%d pa=0x%lx\n", _nodeId, linePa);
+        framework::LogInfo("UBCC", "[DEBUG-H64-DSM-DONE] home={} pa=0x{:x}", _nodeId, linePa);
     }
     // Replay queued waiters — each dequeued item decrements total counter
     auto wit = _h64PersistenceWaiters.find(linePa);
@@ -3913,7 +3871,7 @@ UBCCController::onDsmPersistFailed(uint64_t linePa)
 {
     _h64DsmPending.erase(linePa);
     if (_debugLog) {
-        std::fprintf(stderr, "[DEBUG-H64-DSM-FAIL] home=%d pa=0x%lx — completing waiters with failure\n",
+        framework::LogError("UBCC", "[DEBUG-H64-DSM-FAIL] home={} pa=0x{:x} — completing waiters with failure",
                      _nodeId, linePa);
     }
     // DSM write failed: data is NOT in DsmDataStore.
@@ -3930,8 +3888,8 @@ UBCCController::onDsmPersistFailed(uint64_t linePa)
         for (auto& pr : waiters) {
             // Return BUSY via same path as capacity overflow
             // Grant type -1 signals BUSY to the caller
-            if (_debugLog) std::fprintf(stderr,
-                "[DEBUG-H64-DSM-FAIL-REPLAY] home=%d pa=0x%lx requester=%d — BUSY\n",
+            if (_debugLog) framework::LogDebug("UBCC",
+                "[DEBUG-H64-DSM-FAIL-REPLAY] home={} pa=0x{:x} requester={} — BUSY",
                 _nodeId, linePa, pr.node);
         }
     }
@@ -3945,10 +3903,10 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
     cnt++;
     if (cnt > 1) {
         _invariantWarnCount++;
-        framework::LogInfo("UBCC-invariant",
-                "[UBINV-WARN] double-commit #%u PA=0x%lx cnt=%d\n",
+        framework::LogWarn("UBCC-invariant",
+                "[UBINV-WARN] double-commit #{} PA=0x{:x} cnt={}",
                 _invariantWarnCount, ost.linePa, cnt);
-        warn("[UBINV] double-commit PA=0x%lx cnt=%d (warn #%u)\n",
+        warn("[UBINV] double-commit PA=0x{:x} cnt={} (warn #{})",
              ost.linePa, cnt, _invariantWarnCount);
     }
 
@@ -3977,8 +3935,8 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
                 // Too many in-flight DSM writes — log and fall through.
                 // The data remains in dataBuf for immediate grant; later
                 // HomeMemory grants will be BUSY until some complete.
-                if (_debugLog) std::fprintf(stderr,
-                    "[DEBUG-H64-DSM-PENDING-FULL] home=%d pa=0x%lx size=%d\n",
+                if (_debugLog) framework::LogDebug("UBCC",
+                    "[DEBUG-H64-DSM-PENDING-FULL] home={} pa=0x{:x} size={}",
                     _nodeId, ost.linePa, (int)_h64DsmPending.size());
             } else {
                 _h64DsmPending.insert(ost.linePa);
@@ -4000,12 +3958,12 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
 
     panic_if((entry.state == MESIState::G_E || entry.state == MESIState::G_M) &&
              __builtin_popcountll(entry.sharersMask) != 1,
-             "UBCC canonical assert failed PA=0x%lx state=%d sharers=0x%lx",
+              "UBCC canonical assert failed PA=0x{:x} state={} sharers=0x{:x}",
              ost.linePa, static_cast<int>(entry.state), entry.sharersMask);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: commitIntendedResult PA=0x%lx "
-            "state=%s owner=%d sharers=0x%lx dirty=%d epoch=%lu\n",
+            "UBCC node_id={}: commitIntendedResult PA=0x{:x} "
+            "state={} owner={} sharers=0x{:x} dirty={} epoch={}",
             _nodeId, ost.linePa,
             mesiStateName(entry.state), DirEntry::ownerFromSharers(entry),
             entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch);
@@ -4031,15 +3989,15 @@ UBCCController::retireToTombstone(const OutstandingRequest &ost, bool accepted)
     _tombstones[ost.linePa].push_back(ts);
 
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: retireToTombstone PA=0x%lx "
-            "baseEpoch=%lu reservedEpoch=%lu reqId=%lu expireTick=%lu depth=%zu\n",
+            "UBCC node_id={}: retireToTombstone PA=0x{:x} "
+            "baseEpoch={} reservedEpoch={} reqId={} expireTick={} depth={}",
             _nodeId, ost.linePa, ost.baseEpoch, ost.reservedEpoch, ost.reqId,
             ts.expireTick,
             _tombstones[ost.linePa].size());
 
     // v4-latency: log RETIRE state change
     framework::LogInfo("UBCC-latency",
-            "[UBST] tick=%lu home=%d,%d pa=0x%lx old=%s new=%s epoch=%lu sharers=0x%lx action=RETIRE\n",
+            "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=RETIRE",
             curTick(), _nodeId, _socketId, ost.linePa,
             mesiStateName(ost.intendedState),
             "Tombstone",
@@ -4062,8 +4020,8 @@ UBCCController::checkTombstone(uint64_t linePa, uint64_t epoch, uint64_t reqId,
         if (ts.epoch == epoch && ts.reqId == reqId) {
             outAccepted = ts.accepted;
             framework::LogInfo("UBCC",
-                    "UBCC node_id=%d: checkTombstone HIT PA=0x%lx "
-                    "epoch=%lu reqId=%lu accepted=%d\n",
+                    "UBCC node_id={}: checkTombstone HIT PA=0x{:x} "
+                    "epoch={} reqId={} accepted={}",
                     _nodeId, linePa, epoch, reqId, ts.accepted);
             return true;
         }
@@ -4080,8 +4038,8 @@ UBCCController::cleanupTombstones()
         // Remove expired entries from the front (FIFO push order)
         while (!deq.empty() && deq.front().expireTick <= now) {
             framework::LogInfo("UBCC",
-                    "UBCC node_id=%d: tombstone expired PA=0x%lx "
-                    "epoch=%lu reqId=%lu\n",
+                    "UBCC node_id={}: tombstone expired PA=0x{:x} "
+                    "epoch={} reqId={}",
                     _nodeId, deq.front().linePa,
                     deq.front().epoch, deq.front().reqId);
             deq.pop_front();
@@ -4121,24 +4079,24 @@ UBCCController::cleanupExpiredRecallIfNeeded(uint64_t linePa,
     // and strands the requester. Retry the exact tuple with a fixed bound.
     constexpr uint8_t kMaxRecallRetries = 3;
     if (ost->recallRetries >= kMaxRecallRetries) {
-        fatal("UBCC node_id=%d: recall timed out after retries "
-              "PA=0x%lx owner=%d requester=%d reqId=%lu\n",
+        fatal("UBCC node_id={}: recall timed out after retries "
+              "PA=0x{:x} owner={} requester={} reqId={}",
               _nodeId, linePa, ost->targetNode, ost->requesterNode, ost->reqId);
     }
     DirEntry entry;
     if (!_directory.lookup(linePa, entry)) {
-        fatal("UBCC node_id=%d: recall lost directory entry PA=0x%lx\n",
+        fatal("UBCC node_id={}: recall lost directory entry PA=0x{:x}",
               _nodeId, linePa);
     }
     ++ost->recallRetries;
     ost->createTick = curTick();
     framework::LogInfo("UBCC",
-            "UBCC node_id=%d: retrying timed-out recall PA=0x%lx owner=%d "
-            "requester=%d reqId=%lu attempt=%u\n",
+            "UBCC node_id={}: retrying timed-out recall PA=0x{:x} owner={} "
+            "requester={} reqId={} attempt={}",
             _nodeId, linePa, ost->targetNode, ost->requesterNode, ost->reqId,
             ost->recallRetries);
     if (!initiateRecall(linePa, entry, *ost)) {
-        fatal("UBCC node_id=%d: recall resend failed PA=0x%lx\n",
+        fatal("UBCC node_id={}: recall resend failed PA=0x{:x}",
               _nodeId, linePa);
     }
     return true;
@@ -4184,14 +4142,14 @@ UBCCController::cleanupExpiredInvalidations()
         if (pendingMask == 0)
             continue;
         if (ost->recallRetries >= kMaxInvalidateRetries) {
-            fatal("UBCC node_id=%d: invalidation timed out after retries "
-                  "PA=0x%lx reqId=%lu pendingMask=0x%lx\n",
+            fatal("UBCC node_id={}: invalidation timed out after retries "
+                  "PA=0x{:x} reqId={} pendingMask=0x{:x}",
                   _nodeId, linePa, ost->reqId, pendingMask);
         }
 
         DirEntry entry;
         if (!_directory.lookup(linePa, entry)) {
-            fatal("UBCC node_id=%d: invalidation lost directory entry PA=0x%lx\n",
+            fatal("UBCC node_id={}: invalidation lost directory entry PA=0x{:x}",
                   _nodeId, linePa);
         }
         ++ost->recallRetries;
@@ -4201,16 +4159,15 @@ UBCCController::cleanupExpiredInvalidations()
                 linePa, pendingMask, entry.epoch, ost->reqId,
                 ost->requesterNode, ost->reqType, ost->writeIntent,
                 &effectiveMask)) {
-            fatal("UBCC node_id=%d: invalidation resend failed PA=0x%lx "
-                  "reqId=%lu\n", _nodeId, linePa, ost->reqId);
+            fatal("UBCC node_id={}: invalidation resend failed PA=0x{:x} "
+                  "reqId={}", _nodeId, linePa, ost->reqId);
         }
-        std::fprintf(stderr,
-                     "[UBCC-INVALIDATE-RETRY] home=%d pa=0x%lx reqId=%lu "
-                     "pendingMask=0x%lx attempt=%u/%u\n",
+        framework::LogWarn("UBCC",
+                     "[UBCC-INVALIDATE-RETRY] home={} pa=0x{:x} reqId={} "
+                     "pendingMask=0x{:x} attempt={}/{}",
                      _nodeId, linePa, ost->reqId, effectiveMask,
                      static_cast<unsigned>(ost->recallRetries),
                      static_cast<unsigned>(kMaxInvalidateRetries));
-        std::fflush(stderr);
     }
 }
 
@@ -4232,11 +4189,10 @@ void
 UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
-    fprintf(stderr, "[RESIDENT-FILL-DONE] tick=%lu home=%d pa=0x%lx found=%d waiters=%zu\n",
+    framework::LogInfo("UBCC", "[RESIDENT-FILL-DONE] tick={} home={} pa=0x{:x} found={} waiters={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, linePa, found ? 1 : 0,
            _residentWaiters.count(linePa) ? _residentWaiters[linePa].size() : 0);
-    fflush(stderr);
     DirEntry e;
     if (!_directory.lookup(linePa, e)) {
         e.lineAddr = linePa;
@@ -4253,25 +4209,23 @@ UBCCController::onBackstoreFillComplete(
         if (entry.state == MESIState::G_M) {
             int ownerPopcount = __builtin_popcountll(entry.sharersMask);
             if (ownerPopcount != 1 || entry.epoch == 0) {
-                std::fprintf(stderr,
-                             "[UBCC-SPILL-DIRTY-CORRUPT] home=%d pa=0x%lx "
-                             "restored G_M with sharersMask=0x%lx (popcount=%d) "
-                             "epoch=%lu — fatal\n",
+                framework::LogInfo("UBCC",
+                             "[UBCC-SPILL-DIRTY-CORRUPT] home={} pa=0x{:x} "
+                             "restored G_M with sharersMask=0x{:x} (popcount={}) "
+                             "epoch={} — fatal",
                              _nodeId, linePa, entry.sharersMask,
                              ownerPopcount, entry.epoch);
-                std::fflush(stderr);
-                fatal("UBCC node_id=%d: backstore returned corrupt G_M "
-                      "metadata PA=0x%lx sharersMask=0x%lx epoch=%lu\n",
+                fatal("UBCC node_id={}: backstore returned corrupt G_M "
+                      "metadata PA=0x{:x} sharersMask=0x{:x} epoch={}",
                       _nodeId, linePa, entry.sharersMask, entry.epoch);
             }
             int restoredOwner = (ownerPopcount == 1)
                 ? __builtin_ctzll(entry.sharersMask) : -1;
-            std::fprintf(stderr,
-                         "[UBCC-SPILL-DIRTY-FILL] home=%d pa=0x%lx "
-                         "restored G_M owner=%d sharersMask=0x%lx epoch=%lu\n",
+            framework::LogInfo("UBCC",
+                         "[UBCC-SPILL-DIRTY-FILL] home={} pa=0x{:x} "
+                         "restored G_M owner={} sharersMask=0x{:x} epoch={}",
                          _nodeId, linePa, restoredOwner,
                          entry.sharersMask, entry.epoch);
-            std::fflush(stderr);
         }
         e.state = entry.state;
         e.sharersMask = entry.sharersMask;
@@ -4289,8 +4243,8 @@ UBCCController::onBackstoreFillComplete(
         "ubcc_fill_complete.log",
         "[FILL-COMPLETE] pa=0x%lx found=%d state=%d sharers=0x%lx\n",
         linePa, found ? 1 : 0, static_cast<int>(e.state), e.sharersMask);
-    printf("[UBCC-FILL-DONE] home=%d pa=0x%lx found=%d state=%s sharers=0x%lx "
-           "epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-FILL-DONE] home={} pa=0x{:x} found={} state={} sharers=0x{:x} "
+           "epoch={}",
            _nodeId, linePa, found ? 1 : 0, mesiStateName(e.state),
            e.sharersMask, e.epoch);
     _directory.update(linePa, e);
@@ -4305,12 +4259,11 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa)
 {
-    fprintf(stderr, "[RESIDENT-SPILL-DONE] tick=%lu home=%d pa=0x%lx evictionPending=%d async=%d\n",
+    framework::LogInfo("UBCC", "[RESIDENT-SPILL-DONE] tick={} home={} pa=0x{:x} evictionPending={} async={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, linePa,
             _evictionPendingRemoval.count(linePa) ? 1 : 0,
            _asyncWbSnapshots.count(linePa) ? 1 : 0);
-    fflush(stderr);
 
     // Phase 3: successful backstore write — Bloom already inserted by caller.
     // No exact-PA shadow set.
@@ -4371,7 +4324,7 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
 {
     uint64_t linePa = comp.linePa;
 
-    if (_debugLog) fprintf(stderr, "[BACKSTORE-H64-COMPLETE] home=%d pa=0x%lx op=%s status=%s found=%d epoch=%lu snapshotEpoch=%lu\n",
+    if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-COMPLETE] home={} pa=0x{:x} op={} status={} found={} epoch={} snapshotEpoch={}",
             _nodeId, linePa,
             backstoreOpName(comp.op),
             backstoreStatusName(comp.status),
@@ -4396,8 +4349,8 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
             onBackstoreFillComplete(linePa, comp.found, entry);
         } else {
             // Error retains fill pin — caller must retry or fail
-            if (_debugLog) fprintf(stderr, "[BACKSTORE-H64-LOOKUP-ERR] home=%d pa=0x%lx status=%s — "
-                    "fill pin retained, no G_I fabricated\n",
+            if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-LOOKUP-ERR] home={} pa=0x{:x} status={} — "
+                    "fill pin retained, no G_I fabricated",
                     _nodeId, linePa, backstoreStatusName(comp.status));
             // Do NOT call onBackstoreFillComplete with found=false on error
         }
@@ -4417,10 +4370,10 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
                 return;
             }
             // A non-async stale write must never be counted as durable.
-            if (_debugLog) fprintf(stderr, "[BACKSTORE-H64-UPSERT-STALE] home=%d pa=0x%lx "
-                    "snapshotEpoch=%lu — write rejected\n",
+            if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-UPSERT-STALE] home={} pa=0x{:x} "
+                    "snapshotEpoch={} — write rejected",
                     _nodeId, linePa, comp.snapshotEpoch);
-            fatal("UBCC node_id=%d: non-async H64 upsert stale PA=0x%lx\n",
+            fatal("UBCC node_id={}: non-async H64 upsert stale PA=0x{:x}",
                   _nodeId, linePa);
         } else if (comp.status == BackstoreStatus::RetryableBusy) {
             // The Host rejected admission before a durable transaction began.
@@ -4435,10 +4388,10 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
             _evictionPendingRemoval.erase(linePa);
             refreshPinnedBit(linePa);
         } else {
-            if (_debugLog) fprintf(stderr, "[BACKSTORE-H64-UPSERT-ERR] home=%d pa=0x%lx status=%s — "
-                    "fatal\n",
+            if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-UPSERT-ERR] home={} pa=0x{:x} status={} — "
+                    "fatal",
                     _nodeId, linePa, backstoreStatusName(comp.status));
-            fatal("UBCC node_id=%d: H64 upsert failed PA=0x%lx status=%s\n",
+            fatal("UBCC node_id={}: H64 upsert failed PA=0x{:x} status={}",
                   _nodeId, linePa, backstoreStatusName(comp.status));
         }
         break;
@@ -4449,8 +4402,8 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
             // Delete ack: may retain stale Bloom bit
             onBackstoreDeleteAck(linePa, comp.existed);
         } else {
-            if (_debugLog) fprintf(stderr, "[BACKSTORE-H64-ERASE-ERR] home=%d pa=0x%lx status=%s — "
-                    "delete pin retained\n",
+            if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-ERASE-ERR] home={} pa=0x{:x} status={} — "
+                    "delete pin retained",
                     _nodeId, linePa, backstoreStatusName(comp.status));
         }
         break;
@@ -4634,9 +4587,9 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
         // handleRemoteMiss/sendClear ensures this by reading getOutstandingBaseEpoch().
         uint64_t rebaseEpoch = entry.epoch;
 
-        printf("[UBCC-QUEUE-REPLAY] pa=0x%lx requester=%d reqType=%s "
-               "writeIntent=%d reqId=%lu originalEpoch=%lu rebaseEpoch=%lu "
-               "committedState=%s\n",
+        framework::LogInfo("UBCC","[UBCC-QUEUE-REPLAY] pa=0x{:x} requester={} reqType={} "
+               "writeIntent={} reqId={} originalEpoch={} rebaseEpoch={} "
+               "committedState={}",
                linePa, pr.node,
                (pr.reqType == UBCC_OuterReqType::GlobalReadShared) ? "RS" : "RU",
                pr.writeIntent, pr.reqId, pr.epoch, rebaseEpoch,
@@ -4647,8 +4600,8 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             entry.state == MESIState::G_S &&
             pr.reqType == UBCC_OuterReqType::GlobalReadShared) {
 
-            printf("[UBCC-QUEUE-REPLAY-BATCH] pa=0x%lx requester=%d "
-                   "reqType=RS rebaseEpoch=%lu committedState=%s\n",
+            framework::LogInfo("UBCC","[UBCC-QUEUE-REPLAY-BATCH] pa=0x{:x} requester={} "
+                   "reqType=RS rebaseEpoch={} committedState={}",
                    linePa, pr.node, rebaseEpoch, mesiStateName(entry.state));
 
             // Build a temporary outstanding for commit/tombstone/grant construction
@@ -4683,8 +4636,8 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                 CoherenceMessage push;
                 buildGrantResponse(tempOst, push);
                 _outbound->sendGrantPush(push);
-                printf("[PUSH-GRANT] BATCH-RS home=%d pa=0x%lx "
-                       "requester=%d sock=%d grantType=%d\n",
+                framework::LogInfo("UBCC","[PUSH-GRANT] BATCH-RS home={} pa=0x{:x} "
+                       "requester={} sock={} grantType={}",
                        _nodeId, linePa, pr.node, pr.socket,
                        static_cast<int>(grantTypeFromIntended(tempOst.intendedState)));
             }
@@ -4721,8 +4674,8 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                     CoherenceMessage push;
                     buildGrantResponse(*ost, push);
                     _outbound->sendGrantPush(push);
-                    printf("[PUSH-GRANT] QUEUE-REPLAY home=%d pa=0x%lx "
-                           "requester=%d sock=%d reqId=%lu grantType=%d\n",
+                    framework::LogInfo("UBCC","[PUSH-GRANT] QUEUE-REPLAY home={} pa=0x{:x} "
+                           "requester={} sock={} reqId={} grantType={}",
                            _nodeId, linePa, ost->requesterNode,
                            ost->requesterSocket, ost->reqId,
                            static_cast<int>(
@@ -4753,7 +4706,7 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
                                         uint64_t *outEffectiveMask)
 {
     if (!_outbound) {
-        warn("UBCC node_id=%d: fanoutInvalidateTargets called with no outbound sender\n",
+        warn("UBCC node_id={}: fanoutInvalidateTargets called with no outbound sender",
              _nodeId);
         return false;
     }
@@ -4775,8 +4728,8 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
             uint64_t liveSharers = curEntry.sharersMask;
             uint64_t dropped = targetMask & ~liveSharers;
             if (dropped) {
-                printf("[UBCC-FANOUT-STALE] home=%d pa=0x%lx requested=0x%lx "
-                       "liveSharers=0x%lx dropped=0x%lx (not current sharers)\n",
+                framework::LogWarn("UBCC","[UBCC-FANOUT-STALE] home={} pa=0x{:x} requested=0x{:x} "
+                       "liveSharers=0x{:x} dropped=0x{:x} (not current sharers)",
                        _nodeId, linePa, targetMask, liveSharers, dropped);
             }
             effectiveMask = targetMask & liveSharers;
@@ -4815,11 +4768,11 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
         msg.h.reqId = reqId;
         msg.h.seqNum = 0;
 
-        printf("[UBCC-FANOUT] home=%d pa=0x%lx target=%d epoch=%lu reqId=%lu\n",
+        framework::LogInfo("UBCC","[UBCC-FANOUT] home={} pa=0x{:x} target={} epoch={} reqId={}",
                _nodeId, linePa, target, committedEpoch, reqId);
 
         if (!_outbound->sendInvalidateReq(msg)) {
-            warn("UBCC node_id=%d: invalidate fanout failed target=%d\n",
+            warn("UBCC node_id={}: invalidate fanout failed target={}",
                  _nodeId, target);
             return false;
         }
@@ -4847,7 +4800,7 @@ UBCCController::createOutstanding(uint64_t linePa, OpType opType,
     if (_outstandingReqs.count(linePa))
         return nullptr;
     if (_outstandingReqs.size() >= MAX_OUTSTANDING_TOTAL) {
-        warn("UBCC node_id=%d: outstanding table full (%zu), PA=0x%lx stays BUSY\n",
+        warn("UBCC node_id={}: outstanding table full ({}), PA=0x{:x} stays BUSY",
              _nodeId, _outstandingReqs.size(), linePa);
         return nullptr;
     }
@@ -4975,13 +4928,12 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
         if (ckOff < 0x80000ULL && (off % 64 == 0)) {
             uint64_t w0;
             std::memcpy(&w0, push.b.readResp.grantData, 8);
-            std::fprintf(stderr,
-                "[C4-PUSHGRANT] home=%d pa=0x%lx off=0x%lx hasData=%d "
-                "dataSource=%d w0=0x%016lx\n",
+            framework::LogInfo("UBCC",
+                "[C4-PUSHGRANT] home={} pa=0x{:x} off=0x{:x} hasData={} "
+                "dataSource={} w0=0x{:x}",
                 _nodeId, grantOst.linePa, off,
                 (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) ? 1 : 0,
                 static_cast<int>(push.b.readResp.dataSource), w0);
-            std::fflush(stderr);
         }
     }
 
@@ -5022,22 +4974,22 @@ UBCCController::processHomeWritebackNotify(uint64_t homePa, uint64_t notifyEpoch
 {
     notifyEpoch = normalizeEpoch(notifyEpoch);
 
-    printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx epoch=%lu\n",
+    framework::LogInfo("UBCC","[UBCC-HOME-WB-NOTIFY] home={} socket={} pa=0x{:x} epoch={}",
            _nodeId, _socketId, homePa, notifyEpoch);
 
     DirEntry entry;
     if (!_directory.lookup(homePa, entry)) {
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d socket=%d: HomeWritebackNotify PA=0x%lx "
-                "no directory entry — ignored\n",
+                "UBCC node_id={} socket={}: HomeWritebackNotify PA=0x{:x} "
+                "no directory entry — ignored",
                 _nodeId, _socketId, homePa);
         return;
     }
 
     if (entry.state == MESIState::G_I) {
         framework::LogInfo("UBCC",
-                "UBCC node_id=%d socket=%d: HomeWritebackNotify PA=0x%lx "
-                "already G_I — ignored\n",
+                "UBCC node_id={} socket={}: HomeWritebackNotify PA=0x{:x} "
+                "already G_I — ignored",
                 _nodeId, _socketId, homePa);
         return;
     }
@@ -5046,23 +4998,23 @@ UBCCController::processHomeWritebackNotify(uint64_t homePa, uint64_t notifyEpoch
     if (isLineBusy(homePa)) {
         // TC98 fix: rate-limit home-WB-NOTIFY BUSY log
         { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
-        printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx BUSY — deferred (n=%lu)\n",
+        framework::LogDebug("UBCC","[UBCC-HOME-WB-NOTIFY] home={} socket={} pa=0x{:x} BUSY — deferred (n={})",
                _nodeId, _socketId, homePa, _cnt); }
         return;
     }
 
     // Optimistic stale epoch check
     if (notifyEpoch != 0 && !checkEpochForLine(homePa, notifyEpoch)) {
-        printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx "
-               "STALE epoch notify=%lu dir=%lu — dropped\n",
+        framework::LogWarn("UBCC","[UBCC-HOME-WB-NOTIFY] home={} socket={} pa=0x{:x} "
+               "STALE epoch notify={} dir={} — dropped",
                _nodeId, _socketId, homePa, notifyEpoch, entry.epoch);
         return;
     }
 
     // Release directory ownership
     int oldOwner = DirEntry::ownerFromSharers(entry);
-    printf("[UBCC-HOME-WB-NOTIFY] home=%d socket=%d pa=0x%lx "
-           "oldState=%s owner=%d — releasing to G_I\n",
+    framework::LogInfo("UBCC","[UBCC-HOME-WB-NOTIFY] home={} socket={} pa=0x{:x} "
+           "oldState={} owner={} — releasing to G_I",
            _nodeId, _socketId, homePa, mesiStateName(entry.state), oldOwner);
 
     entry.state = MESIState::G_I;
@@ -5084,7 +5036,7 @@ UBCCController::validateEpochMonotonic(uint64_t oldEpoch, uint64_t newEpoch,
                                         uint64_t pa) const
 {
     if (newEpoch < oldEpoch) {
-        panic("[UBInv] PA=0x%lx epoch DECREASED %lu -> %lu", pa, oldEpoch, newEpoch);
+        panic("[UBInv] PA=0x{:x} epoch DECREASED {} -> {}", pa, oldEpoch, newEpoch);
     }
 }
 
@@ -5094,12 +5046,12 @@ UBCCController::validateSharersCanonical(uint64_t pa) const
     DirEntry entry;
     if (!_directory.lookup(pa, entry)) return;
     if (entry.state == MESIState::G_I && entry.sharersMask != 0)
-        panic("[UBInv] PA=0x%lx G_I with non-zero sharers 0x%lx", pa, entry.sharersMask);
+        panic("[UBInv] PA=0x{:x} G_I with non-zero sharers 0x{:x}", pa, entry.sharersMask);
     if (entry.state == MESIState::G_S && entry.sharersMask == 0)
-        panic("[UBInv] PA=0x%lx G_S with zero sharers", pa);
+        panic("[UBInv] PA=0x{:x} G_S with zero sharers", pa);
     if ((entry.state == MESIState::G_E || entry.state == MESIState::G_M)
         && __builtin_popcountll(entry.sharersMask) != 1)
-        panic("[UBInv] PA=0x%lx G_E/G_M with non-one-hot sharers 0x%lx", pa, entry.sharersMask);
+        panic("[UBInv] PA=0x{:x} G_E/G_M with non-one-hot sharers 0x{:x}", pa, entry.sharersMask);
 }
 
 } // namespace glob

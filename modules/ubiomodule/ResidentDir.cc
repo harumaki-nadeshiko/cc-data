@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "framework/iface/Log.hh"
 #include "modules/ubiomodule/ubio_base.hh"
 
 namespace cc
@@ -213,10 +214,10 @@ ResidentDir::init(const ResidentDirConfig &cfg)
     if (cfg.sram_bytes >= 64 * 1024) {
         size_t gb = cfg.effectiveGroupIndexBytes();
         if (gb != groupIndexStorage) {
-            std::fprintf(stderr,
-                "[ResidentDir-FATAL] group_index_bytes=%zu != %zu "
+            framework::LogError("ResidentDir",
+                "[ResidentDir-FATAL] group_index_bytes={} != {} "
                 "(sizeof(GroupIndex)*BloomGroups). "
-                "Fix config or use sram < 65536 for tiny test mode.\n",
+                "Fix config or use sram < 65536 for tiny test mode.",
                 gb, groupIndexStorage);
             std::abort();
         }
@@ -232,10 +233,10 @@ ResidentDir::init(const ResidentDirConfig &cfg)
                                  + blc_reserved
                                  + desc_reserved;
 
-    std::fprintf(stderr,
-        "[ResidentDir] layout: %d sets x %d ways = %zu entries, "
-        "tag=%d entry=%d bits, set_total=%d bits, dir=%zuKB, "
-        "bloom=%zuKB, sharers=%d, epoch=%d, pa=%d\n",
+    framework::LogInfo("ResidentDir",
+        "[ResidentDir] layout: {} sets x {} ways = {} entries, "
+        "tag={} entry={} bits, set_total={} bits, dir={}KB, "
+        "bloom={}KB, sharers={}, epoch={}, pa={}",
         _layout.num_sets, _layout.ways, _layout.capacity,
         _layout.tag_bits, _layout.entry_bits, _layout.set_total_bits,
         total_dir_bytes / 1024, _bloomBytes / 1024,
@@ -246,11 +247,11 @@ ResidentDir::init(const ResidentDirConfig &cfg)
     // Tiny test configs (evict_test, resident_dir_bench small modes) are
     // exempt to avoid aborting on GroupIndex storage that the test
     // doesn't use but must still allocate as an in-object member.
-    std::fprintf(stderr,
-        "[ResidentDir-BUDGET] total_on_chip=%zu KiB  breakdown: "
-        "dir=%zu KiB  bloom=%zu KiB  groupIndex[16]=%zu KiB  "
-        "blc_reserved=%zu KiB  desc_reserved=%zu KiB  "
-        "sram_budget=%zu KiB  limit=512 KiB %s\n",
+    framework::LogInfo("ResidentDir",
+        "[ResidentDir-BUDGET] total_on_chip={} KiB  breakdown: "
+        "dir={} KiB  bloom={} KiB  groupIndex[16]={} KiB  "
+        "blc_reserved={} KiB  desc_reserved={} KiB  "
+        "sram_budget={} KiB  limit=512 KiB {}",
         total_on_chip / 1024,
         total_dir_bytes / 1024,
         _bloomBytes / 1024,
@@ -262,31 +263,30 @@ ResidentDir::init(const ResidentDirConfig &cfg)
 
     if (cfg.sram_bytes >= 64 * 1024) {
         if (cfg.sram_bytes > 512 * 1024) {
-            std::fprintf(stderr, "[ResidentDir-BUDGET] ERROR: sram_bytes=%zu exceeds 512 KiB hard limit\n",
-                         cfg.sram_bytes);
+            framework::LogError("ResidentDir", "[ResidentDir-BUDGET] ERROR: sram_bytes={} exceeds 512 KiB hard limit",
+                                cfg.sram_bytes);
             std::abort();
         }
         if (total_on_chip > cfg.sram_bytes) {
-            std::fprintf(stderr,
-                "[ResidentDir-BUDGET] ERROR: total_on_chip=%zu > sram_budget=%zu — "
-                "reduce bloom, group_index, blc, or desc_scratch\n",
+            framework::LogError("ResidentDir",
+                "[ResidentDir-BUDGET] ERROR: total_on_chip={} > sram_budget={} — "
+                "reduce bloom, group_index, blc, or desc_scratch",
                 total_on_chip, cfg.sram_bytes);
             std::abort();
         }
         if (total_on_chip > 512 * 1024) {
-            std::fprintf(stderr,
-                "[ResidentDir-BUDGET] ERROR: total_on_chip=%zu > 512 KiB hard limit\n",
+            framework::LogError("ResidentDir",
+                "[ResidentDir-BUDGET] ERROR: total_on_chip={} > 512 KiB hard limit",
                 total_on_chip);
             std::abort();
         }
     } else {
         // Tiny test: just report the numbers, don't enforce.
-        std::fprintf(stderr,
+        framework::LogInfo("ResidentDir",
             "[ResidentDir-BUDGET] tiny-test mode: assertion skipped "
-            "(sram=%zu < 64KiB)\n", cfg.sram_bytes);
+            "(sram={} < 64KiB)", cfg.sram_bytes);
     }
 
-    std::fflush(stderr);
 }
 
 // ========================================================================
@@ -417,8 +417,9 @@ ResidentDir::encodeEntry(int set, int way, uint64_t pa, const UBCCDirEntry &in)
     // (kMask10 in BackstoreTypes.hh). SRAM default is 8-bit — verified safe for
     // 8 nodes (no overflow). For 16-node expansion, --sharers-bits=10 MUST be
     // passed or this assert fires and backstore data loses high sharer bits.
-    assert(_layout.sharers_bits <= 10 &&
-           "sharers_bits exceeds CompactCodec kMask10 capacity");
+    framework::LogAssertIf(
+        _layout.sharers_bits <= 10, "ResidentDir",
+        "sharers_bits exceeds CompactCodec kMask10 capacity");
     validateCanonical(in, pa);
     setValid(set, way, true);
     setTag(set, way, tagOf(pa));
@@ -1074,17 +1075,17 @@ void
 ResidentDir::validateCanonical(const UBCCDirEntry &in, uint64_t pa) const
 {
     if (UBCCDirEntry::canonicalOneHotRequired(in)) {
-        panic_if(__builtin_popcountll(in.sharersMask) != 1,
-                 "ResidentDir invalid exclusive entry PA=0x%lx sharers=0x%lx",
+        framework::LogAssertIf(__builtin_popcountll(in.sharersMask) == 1,
+                 "ResidentDir", "ResidentDir invalid exclusive entry PA=0x{:x} sharers=0x{:x}",
                  pa, in.sharersMask);
     }
     if (in.state == UBCCMESIState::G_S) {
-        panic_if(in.sharersMask == 0,
-                 "ResidentDir invalid shared entry PA=0x%lx sharers=0", pa);
+        framework::LogAssertIf(in.sharersMask != 0, "ResidentDir",
+                 "ResidentDir invalid shared entry PA=0x{:x} sharers=0", pa);
     }
     if (in.state == UBCCMESIState::G_I) {
-        panic_if(in.sharersMask != 0,
-                 "ResidentDir invalid G_I entry PA=0x%lx sharers=0x%lx",
+        framework::LogAssertIf(in.sharersMask == 0, "ResidentDir",
+                 "ResidentDir invalid G_I entry PA=0x{:x} sharers=0x{:x}",
                  pa, in.sharersMask);
     }
 }
@@ -1092,10 +1093,10 @@ ResidentDir::validateCanonical(const UBCCDirEntry &in, uint64_t pa) const
 void
 ResidentDir::dumpStatsJson() const
 {
-    std::fprintf(stderr,
-        "[ResidentDirStats] {\"dir_hits\":%lu,\"dir_misses\":%lu,"
-        "\"dir_evictions\":%lu,\"bloom_fp_count\":%lu,"
-        "\"capacity\":%zu,\"count\":%zu}\n",
+    framework::LogInfo("ResidentDir",
+        "[ResidentDirStats] {{\"dir_hits\":{},\"dir_misses\":{},"
+        "\"dir_evictions\":{},\"bloom_fp_count\":{},"
+        "\"capacity\":{},\"count\":{}}}",
         _dirHits, _dirMisses, _dirEvictions, _bloomFpCount,
         _layout.capacity, _count);
 }

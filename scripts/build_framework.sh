@@ -1,8 +1,10 @@
 #!/bin/bash
-# Build the shared framework static library (libframework.a) and install public headers.
+# Build the stable opaque framework local backend and install iface headers.
+# This script always builds the local backend; backend selection is performed
+# by consumers through FRAMEWORK_BACKEND and FRAMEWORK_BACKEND_LIB.
 # Produces:
-#   build/framework/lib/libframework.a
-#   build/framework/include/framework/{Port.hh, MemMessage.hh, Log.hh}
+#   build/framework/lib/libframework_local.a
+#   build/framework/include/framework/iface/{Message.hh, Port.hh, Log.hh}
 #   build/framework/manifest.txt
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,34 +15,31 @@ ZMQ_LIB="$ROOT/thirdparty/zeromq/lib"
 
 mkdir -p "$OUT/lib" "$OUT/include" "$OUT/obj"
 rm -rf "$OUT/include/framework"
-mkdir -p "$OUT/include/framework"
+mkdir -p "$OUT/include/framework/iface"
+rm -f "$OUT/obj"/*.o "$OUT/lib/libframework_local.a"
 
 CXXFLAGS="-std=c++17 -O2 -Wall -pthread -I$ROOT -I$FW -I$ZMQ_INC"
 
-# Compile framework sources
+# Compile the local ZMQ backend.  Its object layout is private to Port.cc.
 g++ $CXXFLAGS -c "$FW/Port.cc" -o "$OUT/obj/Port.o"
 g++ $CXXFLAGS -c "$FW/Log.cc" -o "$OUT/obj/Log.o"
 
-# (ZMQChannel.cc is legacy/unused at runtime but kept in the archive for compat;
-#  compile only if present)
-if [ -f "$FW/ZMQChannel.cc" ]; then
-    g++ $CXXFLAGS -c "$FW/ZMQChannel.cc" -o "$OUT/obj/ZMQChannel.o" 2>/dev/null || true
-fi
+ar rcs "$OUT/lib/libframework_local.a" "$OUT/obj/Port.o" "$OUT/obj/Log.o"
 
-ar rcs "$OUT/lib/libframework.a" "$OUT/obj"/*.o
-
-# Install public headers
-cp "$FW/Port.hh" "$OUT/include/framework/Port.hh"
-cp "$FW/MemMessage.hh" "$OUT/include/framework/MemMessage.hh"
-cp "$FW/Log.hh" "$OUT/include/framework/Log.hh"
+# Install only the stable opaque interface.  Legacy concrete Port/MemMessage
+# headers intentionally are not public artifacts.
+cp "$FW/iface/Message.hh" "$OUT/include/framework/iface/Message.hh"
+cp "$FW/iface/Port.hh" "$OUT/include/framework/iface/Port.hh"
+cp "$FW/iface/Log.hh" "$OUT/include/framework/iface/Log.hh"
 
 cat > "$OUT/manifest.txt" <<EOF
-libframework.a
+libframework_local.a
   Port.o
-  $(ls "$OUT/obj"/*.o | xargs -n1 basename | grep -v Port.o | tr '\n' ' ')
+  Log.o
 headers
-  framework/Port.hh
-  framework/MemMessage.hh
+  framework/iface/Message.hh
+  framework/iface/Port.hh
+  framework/iface/Log.hh
 EOF
 
-echo "[build_framework] $(ls -lh "$OUT/lib/libframework.a" | awk '{print $5}') -> $OUT/lib/libframework.a"
+echo "[build_framework] $(ls -lh "$OUT/lib/libframework_local.a" | awk '{print $5}') -> $OUT/lib/libframework_local.a"

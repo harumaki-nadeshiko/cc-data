@@ -19,6 +19,7 @@ STATS_RE = re.compile(r"\[UBCC-STATS\] \{.*\"residentCapacity\":(\d+).*")
 H64_EXACT_RE = re.compile(
     r"\[UBCC-STATS\] \{\"h64ExactLiveKnown\":(\d+),\"h64ExactLiveCount\":(\d+)\}")
 PERF_RE = re.compile(r"\[EP-PERF\] kind=(\w+) node=\d+ pa=0x[0-9a-f]+.*latency_ps=(\d+)")
+LOG_BASENAMES = {"stdout.log", "stderr.log"}
 
 
 def coverage(log_dir):
@@ -27,7 +28,7 @@ def coverage(log_dir):
     policy = None
     for root, _, files in os.walk(log_dir):
         for name in files:
-            if name != "stderr.log":
+            if name not in LOG_BASENAMES:
                 continue
             with open(os.path.join(root, name), errors="replace") as stream:
                 for line in stream:
@@ -60,7 +61,7 @@ def mean_protocol_latency(log_dir, kind="outer"):
     values = []
     for root, _, files in os.walk(log_dir):
         for name in files:
-            if name != "stderr.log":
+            if name not in LOG_BASENAMES:
                 continue
             with open(os.path.join(root, name), errors="replace") as stream:
                 for line in stream:

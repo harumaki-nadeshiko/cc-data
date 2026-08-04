@@ -1,7 +1,9 @@
-#include "framework/Port.hh"
-#include "framework/MemMessage.hh"
+#include "framework/iface/Message.hh"
+#include "framework/iface/Port.hh"
+#include "framework/iface/Log.hh"
 #include "protocol/TracePerfPolicy.hh"
 
+#include <algorithm>
 #include <cstdio>
 #include <signal.h>
 #include <cstring>
@@ -15,6 +17,7 @@
 #include <thread>
 #include <sstream>
 #include <cstdlib>
+#include <stdexcept>
 
 using namespace framework;
 
@@ -39,7 +42,7 @@ struct Link {
 
 struct PendingFwd {
     uint64_t readyTick;
-    MemMessage msg;
+    Message *msg;
     int dst_mod;
 };
 
@@ -47,7 +50,7 @@ class NetworkSim {
     std::vector<Link> _links;
     // Keyed by module ID only. Each module has exactly one IPC channel to nsim;
     // topology port IDs are a link-latency attribute, not a routing selector.
-    std::map<int, std::unique_ptr<Port>> _ports;
+    std::map<int, Port *> _ports;
     // Per-(src,dst) link latency (ps). Bidirectional: both (a,b) and (b,a)
     // are stored.  TODO(2-hop): cross-node+cross-socket currently single-hop
     // heterogeneous delay. Revert to multi-hop when nsim supports it.
@@ -58,15 +61,23 @@ class NetworkSim {
     size_t _maxPendingFwd = 65536;
 
 public:
-    NetworkSim(const std::string& topoPath)
+    NetworkSim(const std::string& topoPath, int numNodes, int numSockets)
+        : _numNodes(numNodes), _numSockets(numSockets)
     {
         if (const char* env = std::getenv("EP_NSIM_MAX_PENDING")) {
             const long requested = std::strtol(env, nullptr, 10);
             if (requested > 0 && requested <= 1048576)
                 _maxPendingFwd = static_cast<size_t>(requested);
         }
-        loadTopology(topoPath); buildPorts(); buildRoutes();
+        loadTopology(topoPath);
+        if (requiredModules(_links) > _numNodes * _numSockets)
+            throw std::runtime_error("networksim topology exceeds configured dimensions");
+        buildPorts(); buildRoutes();
+        if (_ports.empty())
+            throw std::runtime_error("networksim created no transport ports");
     }
+
+    ~NetworkSim();
 
     void loadTopology(const std::string& path);
     void buildPorts();
@@ -74,23 +85,62 @@ public:
     void notifyPeerExit(int exitedMod);
     void step();
     void run(int maxSteps = -1);
+
+private:
+    static int requiredModules(const std::vector<Link> &links);
+    int _numNodes;
+    int _numSockets;
 };
 
+int NetworkSim::requiredModules(const std::vector<Link> &links)
+{
+    int required = 0;
+    for (const Link &link : links)
+        required = std::max(required, std::max(link.src_mod, link.dst_mod) + 1);
+    return required;
+}
+
+NetworkSim::~NetworkSim()
+{
+    for (auto &pending : _fifo)
+        ReleaseMessage(pending.msg);
+    _fifo.clear();
+    for (auto &kv : _ports) {
+        TerminatePort(kv.second);
+        DestroyPort(kv.second);
+    }
+}
+
 void NetworkSim::buildPorts() {
-    std::set<int> mods;
-    for (auto& l : _links) {
-        mods.insert(l.src_mod);
-        mods.insert(l.dst_mod);
-    }
-    for (int mod : mods) {
-        framework::PortParams pp = framework::PortEnvLoader::nsimUbioPort(mod);
-        auto p = std::make_unique<Port>();
-        if (!p->init(pp)) {
-            std::fprintf(stderr, "[NetworkSim] port init failed mod=%d\n", mod);
-            return;
+    const auto moduleId = [this](int node, int socket) {
+        return node * _numSockets + socket;
+    };
+    std::map<int, Port *> ports;
+    for (int node = 0; node < _numNodes; ++node) {
+        for (int socket = 0; socket < _numSockets; ++socket) {
+            const int mod = moduleId(node, socket);
+            PortConfig config;
+            config.selfRole = "networksim";
+            config.peerRole = "ubio";
+            config.channelName = "network";
+            config.nodeId = node;
+            config.socketId = socket;
+            config.numNodes = _numNodes;
+            config.numSockets = _numSockets;
+            Port *p = CreatePort(config);
+            if (!p) {
+                LogError("NetworkSim", "[NetworkSim] port init failed mod={}", mod);
+                for (auto &kv : ports) {
+                    TerminatePort(kv.second);
+                    DestroyPort(kv.second);
+                }
+                throw std::runtime_error(
+                    "networksim failed to create all configured transport ports");
+            }
+            ports[mod] = p;
         }
-        _ports[mod] = std::move(p);
     }
+    _ports.swap(ports);
 }
 
 void NetworkSim::notifyPeerExit(int exitedMod)
@@ -99,23 +149,40 @@ void NetworkSim::notifyPeerExit(int exitedMod)
         const int targetMod = kv.first;
         if (targetMod == exitedMod || _donePorts.count(targetMod))
             continue;
-        MemMessage* notice = kv.second->allocateSendBuffer(_tick);
-        if (!notice)
+        Message *notice = AllocateSendMessage(kv.second, _tick);
+        if (!notice) {
+            LogError("NetworkSim",
+                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=allocate",
+                     exitedMod, targetMod);
             continue;
-        notice->hdr.type = static_cast<uint32_t>(MemMessageType::TERMINATE);
-        notice->hdr.sourceId = exitedMod;
-        notice->hdr.targetId = targetMod;
-        TerminatePayload payload{};
+        }
+        SetMessageType(notice, MessageType::Terminate);
+        SetMessageSourceId(notice, exitedMod);
+        SetMessageTargetId(notice, targetMod);
+        TerminateInfo payload{};
         payload.reason = 2; // peer_lost: source plane completed normally.
+        payload.exitCode = 0;
         payload.sender = static_cast<uint32_t>(exitedMod);
-        notice->setPayload(payload);
-        kv.second->send(notice);
+        if (sizeof(payload) > GetMaxPayloadSize()) {
+            ReleaseMessage(notice);
+            LogError("NetworkSim",
+                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=payload_size",
+                     exitedMod, targetMod);
+            continue;
+        }
+        SetMessagePayload(notice, &payload, sizeof(payload));
+        if (!SendMessage(kv.second, notice)) {
+            // SendMessage consumes notice even on failure; it cannot be retried.
+            LogError("NetworkSim",
+                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=send",
+                     exitedMod, targetMod);
+        }
     }
 }
 
 void NetworkSim::loadTopology(const std::string& path) {
     std::ifstream f(path);
-    if (!f.is_open()) { std::fprintf(stderr,"[NetworkSim] bad topo %s\n",path.c_str()); return; }
+    if (!f.is_open()) { LogError("NetworkSim", "[NetworkSim] bad topo {}", path.c_str()); return; }
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     size_t pos = json.find("\"links\"");
     if (pos == std::string::npos) return;
@@ -136,7 +203,7 @@ void NetworkSim::loadTopology(const std::string& path) {
                             &l.src_mod, &l.src_port, &l.dst_mod, &l.dst_port, &l.latency);
         if (n >= 4) { if (n < 5) l.latency = 1; _links.push_back(l); }
     }
-    std::printf("[NetworkSim] loaded %zu links\n", _links.size());
+    LogInfo("NetworkSim", "[NetworkSim] loaded {} links", _links.size());
 }
 
 void NetworkSim::buildRoutes() {
@@ -148,40 +215,62 @@ void NetworkSim::buildRoutes() {
 }
 
 void NetworkSim::step() {
-    int totalRecv = 0, totalFwd = 0;
+    int totalRecv = 0, totalFwdAttempted = 0, totalFwdSuccessful = 0;
     for (auto& kv : _ports) {
         int mod = kv.first;
         if (_donePorts.count(mod)) continue;
-        Port* p = kv.second.get();
-        p->emitSync(_tick);
+        Port *p = kv.second;
+        EmitSync(p, _tick);
         // Stop receiving before the bounded FIFO is full. The bounded Port
         // HWM then backpressures the source rather than allocating forever.
         while (_fifo.size() < _maxPendingFwd) {
-            MemMessage* m = p->recv(_tick);
-            if (!m)
+            ReceiveStatus status;
+            const Message *m = ReceiveMessage(p, _tick, &status);
+            if (status != ReceiveStatus::Message || !m)
                 break;
-            if (m->hdr.type == (uint32_t)MemMessageType::TERMINATE) {
+            if (GetMessageType(m) == MessageType::Terminate) {
                 _donePorts.insert(mod);
                 notifyPeerExit(mod);
                 break;
             }
-            if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
+            if (GetMessageType(m) == MessageType::ControlSync) continue;
             totalRecv++;
+            const uint64_t timestamp = GetMessageTimestamp(m);
+            const uint64_t requestId = GetMessageRequestId(m);
+            const uint32_t sourceId = GetMessageSourceId(m);
+            const uint32_t targetId = GetMessageTargetId(m);
             if (TracePerfPolicy::get().shouldEmit("nsim")) {
-                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
-                             m->hdr.timestamp, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
+                LogInfo("NetworkSim", "[TRACE-PERF] {}|{}|nsim|{}|0x0|RECV|src={} dst={}",
+                        timestamp, mod, requestId, sourceId, targetId);
             }
 
             uint64_t lat = 1;
-            auto lit = _linkLatency.find({(int)m->hdr.sourceId,
-                                           (int)m->hdr.targetId});
+            auto lit = _linkLatency.find({static_cast<int>(sourceId),
+                                           static_cast<int>(targetId)});
             if (lit != _linkLatency.end()) lat = lit->second;
             else
-                std::fprintf(stderr, "[NSIM-NOROUTE] src=%u dst=%u falling back to 1ps\n",
-                             m->hdr.sourceId, m->hdr.targetId);
+                LogWarn("NetworkSim", "[NSIM-NOROUTE] src={} dst={} falling back to 1ps",
+                        sourceId, targetId);
 
             uint64_t readyTick = _tick + lat;
-            PendingFwd pf{readyTick, *m, m->hdr.targetId};
+            auto destination = _ports.find(static_cast<int>(targetId));
+            if (destination == _ports.end()) {
+                static int miss_ct = 0;
+                if (++miss_ct <= 3)
+                    LogWarn("NetworkSim", "[NSIM-MISS] tick={} dst={}:{} (no port)",
+                            _tick, targetId, 0);
+                continue;
+            }
+            Message *owned = AllocateSendMessage(destination->second, readyTick);
+            if (!owned) {
+                static int no_ct = 0;
+                if (++no_ct <= 3)
+                    LogWarn("NetworkSim", "[NSIM-NOBUF] tick={} dst={}:{}",
+                            _tick, targetId, 0);
+                continue;
+            }
+            CopyMessage(owned, m);
+            PendingFwd pf{readyTick, owned, static_cast<int>(targetId)};
             auto ins = _fifo.begin();
             while (ins != _fifo.end() && ins->readyTick <= readyTick) ++ins;
             _fifo.insert(ins, pf);
@@ -189,39 +278,40 @@ void NetworkSim::step() {
     }
 
     while (!_fifo.empty() && _fifo.front().readyTick <= _tick) {
-        auto pf = _fifo.front(); _fifo.pop_front();
-        totalFwd++;
+        PendingFwd pf = _fifo.front(); _fifo.pop_front();
+        totalFwdAttempted++;
         auto it = _ports.find(pf.dst_mod);
         if (it != _ports.end()) {
-            framework::MemMessage* buf = it->second->allocateSendBuffer(_tick);
-            if (buf) {
-                uint64_t ts = buf->hdr.timestamp;
-                *buf = pf.msg;
-                buf->hdr.timestamp = ts;
-                it->second->send(buf);
-                if (TracePerfPolicy::get().shouldEmit("nsim")) {
-                    std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
-                                 pf.readyTick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
-                }
+            const uint64_t requestId = GetMessageRequestId(pf.msg);
+            const bool sent = SendMessage(it->second, pf.msg);
+            // SendMessage consumes pf.msg even on failure; never reuse it.
+            if (sent) {
+                totalFwdSuccessful++;
             } else {
-                static int no_ct = 0;
-                if (++no_ct <= 3)
-                    std::fprintf(stderr, "[NSIM-NOBUF] tick=%lu dst=%u:%u\n",
-                                 _tick, pf.dst_mod, 0);
+                LogError("NetworkSim",
+                         "[NSIM-FWD-FAIL] tick={} dst={} requestId={}",
+                         _tick, pf.dst_mod, requestId);
+            }
+            if (sent && TracePerfPolicy::get().shouldEmit("nsim")) {
+                LogInfo("NetworkSim", "[TRACE-PERF] {}|{}|nsim|{}|0x0|FWD|dst={}",
+                        pf.readyTick, pf.dst_mod, requestId, pf.dst_mod);
             }
         } else {
+            ReleaseMessage(pf.msg);
             static int miss_ct = 0;
             if (++miss_ct <= 3)
-                std::fprintf(stderr, "[NSIM-MISS] tick=%lu dst=%u:%u (no port)\n",
-                             _tick, pf.dst_mod, 0);
+                LogWarn("NetworkSim", "[NSIM-MISS] tick={} dst={}:{} (no port)",
+                        _tick, pf.dst_mod, 0);
         }
     }
 
-    if (totalRecv > 0 || totalFwd > 0 || _fifo.size() > 500) {
+    if (totalRecv > 0 || totalFwdAttempted > 0 || _fifo.size() > 500) {
         static int stat_ct = 0;
         if (++stat_ct <= 30 || _fifo.size() > (_maxPendingFwd * 3) / 4)
-            std::fprintf(stderr, "[NSIM-STAT] tick=%lu recv=%d fwd=%d fifo=%zu\n",
-                          _tick, totalRecv, totalFwd, _fifo.size());
+            LogDebug("NetworkSim",
+                     "[NSIM-STAT] tick={} recv={} fwd_attempted={} fwd_successful={} fifo={}",
+                     _tick, totalRecv, totalFwdAttempted, totalFwdSuccessful,
+                     _fifo.size());
     }
 }
 
@@ -235,7 +325,7 @@ void NetworkSim::run(int maxSteps) {
         uint64_t minTs = UINT64_MAX;
         for (auto& kv : _ports) {
             if (_donePorts.count(kv.first)) continue;
-            uint64_t b = kv.second->safeTs(_tick);
+            uint64_t b = SafeTimestamp(kv.second, _tick);
             if (b < minTs) minTs = b;
         }
         if (minTs > _tick) {
@@ -246,18 +336,36 @@ void NetworkSim::run(int maxSteps) {
             std::this_thread::yield();
         }
     }
-    std::printf("[NetworkSim] done after %d steps\n", s);
+    LogInfo("NetworkSim", "[NetworkSim] done after {} steps", s);
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::fprintf(stderr,"usage: networksim <topology.json>\n"); return 1; }
+    if (argc < 2) {
+        LogError("NetworkSim", "usage: networksim <topology.json> [num_nodes] [num_sockets]");
+        return 1;
+    }
+    const char *nodesEnv = std::getenv("NUM_NODES");
+    const char *socketsEnv = std::getenv("NUM_SOCKETS");
+    const int numNodes = argc > 2 ? std::atoi(argv[2])
+        : (nodesEnv ? std::atoi(nodesEnv) : 3);
+    const int numSockets = argc > 3 ? std::atoi(argv[3])
+        : (socketsEnv ? std::atoi(socketsEnv) : 1);
+    if (numNodes <= 0 || numSockets <= 0) {
+        LogError("NetworkSim", "networksim topology dimensions must be positive");
+        return 1;
+    }
     struct sigaction shutdownAction {};
     shutdownAction.sa_handler = requestShutdown;
     sigemptyset(&shutdownAction.sa_mask);
     // Do not restart a blocked ZeroMQ send after shutdown is requested.
     sigaction(SIGTERM, &shutdownAction, nullptr);
     sigaction(SIGINT, &shutdownAction, nullptr);
-    NetworkSim nsim(argv[1]);
-    nsim.run();
+    try {
+        NetworkSim nsim(argv[1], numNodes, numSockets);
+        nsim.run();
+    } catch (const std::exception &error) {
+        LogError("NetworkSim", "[NetworkSim] startup failed: {}", error.what());
+        return 1;
+    }
     return 0;
 }

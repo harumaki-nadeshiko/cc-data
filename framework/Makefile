@@ -1,21 +1,24 @@
 CXXFLAGS = -std=c++17 -Wall -pthread -I.. -I../thirdparty/zeromq/include
 LDFLAGS  = -L../thirdparty/zeromq/lib -lzmq -pthread
 
-OBJS = ZMQChannel.o Port.o Log.o
+OBJS = Port.o Log.o
 
-all: libframework.a port_sync_smoke
+all: libframework_local.a iface_contract_test
 
-libframework.a: $(OBJS)
+libframework_local.a: $(OBJS)
 	ar rcs $@ $^
 
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-port_sync_smoke: tests/port_sync_smoke.o libframework.a
-	$(CXX) $(CXXFLAGS) -o $@ $^
+iface_contract_test: tests/iface_contract_test.o libframework_local.a
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-tests/port_sync_smoke.o: tests/port_sync_smoke.cc
+tests/iface_contract_test.o: tests/iface_contract_test.cc
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+test: iface_contract_test
+	./iface_contract_test
+
 clean:
-	rm -f *.o *.a tests/*.o port_sync_smoke
+	rm -f *.o *.a tests/*.o iface_contract_test

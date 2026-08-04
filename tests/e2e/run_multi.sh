@@ -425,24 +425,26 @@ _start_memory_monitor() {
 # keep the supervisor's own work bounded as logs grow.
 _aggregate_protocol_tick() {
     local max_tick=0
-    local log tick
+    local stream log tick
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
-            log="$LOG_BASE/ubio_n${nid}_s${sid}/stderr.log"
-            [ -f "$log" ] || continue
-            tick=$(perl -e '
-                $f = shift;
-                open(my $fh, "<", $f) or exit;
-                $n = -s $fh;
-                seek($fh, $n > 1048576 ? $n - 1048576 : 0, 0);
-                local $/;
-                $s = <$fh>;
-                while ($s =~ /tick=(\d+)/g) { $last = $1; }
-                print $last // 0;
-            ' "$log")
-            if [ "$tick" -gt "$max_tick" ] 2>/dev/null; then
-                max_tick=$tick
-            fi
+            for stream in stdout.log stderr.log; do
+                log="$LOG_BASE/ubio_n${nid}_s${sid}/$stream"
+                [ -f "$log" ] || continue
+                tick=$(perl -e '
+                    $f = shift;
+                    open(my $fh, "<", $f) or exit;
+                    $n = -s $fh;
+                    seek($fh, $n > 1048576 ? $n - 1048576 : 0, 0);
+                    local $/;
+                    $s = <$fh>;
+                    while ($s =~ /tick=(\d+)/g) { $last = $1; }
+                    print $last // 0;
+                ' "$log")
+                if [ "$tick" -gt "$max_tick" ] 2>/dev/null; then
+                    max_tick=$tick
+                fi
+            done
         done
     done
     printf '%s\n' "$max_tick"
@@ -654,7 +656,8 @@ run_tc() {
     echo "[launch] networksim (NMOD=$NMOD)"
     (
       set +e
-      "$NSIM_BIN" "$TOPO_JSON" >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
+      "$NSIM_BIN" "$TOPO_JSON" "$NUM_NODES" "$NUM_SOCKETS" \
+          >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
       local_nsim_child=$!
       printf '%s\n' "$local_nsim_child" >"$nsim_pid_file"
       wait "$local_nsim_child"
@@ -836,10 +839,13 @@ run_tc() {
             # without it a valid H64 backstore run is killed mid-transaction.
             for nid in $(seq 0 $((NUM_NODES-1))); do
                 for sid in $(seq 0 $((NUM_SOCKETS-1))); do
-                    local protocol_log="$LOG_BASE/ubio_n${nid}_s${sid}/stderr.log"
-                    if [ -f "$protocol_log" ]; then
-                        current_size=$((current_size + $(stat -c %s "$protocol_log")))
-                    fi
+                    local protocol_stream protocol_log
+                    for protocol_stream in stdout.log stderr.log; do
+                        protocol_log="$LOG_BASE/ubio_n${nid}_s${sid}/$protocol_stream"
+                        if [ -f "$protocol_log" ]; then
+                            current_size=$((current_size + $(stat -c %s "$protocol_log")))
+                        fi
+                    done
                 done
             done
             if [ "$current_size" -ne "$progress_size" ]; then

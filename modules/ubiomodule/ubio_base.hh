@@ -12,8 +12,9 @@
 // is no longer used.)
 
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
+
+#include "framework/iface/Log.hh"
 
 namespace cc {
 
@@ -34,19 +35,19 @@ inline Tick curTick() { return ubioTickSource ? *ubioTickSource : 0; }
 
 // ── Error / diagnostic macros ───────────────────────────────────────
 #define panic(fmt, ...) do { \
-    std::fprintf(stderr, "PANIC: " fmt "\n", ##__VA_ARGS__); \
+    framework::LogError("ubio", "PANIC: " fmt, ##__VA_ARGS__); \
     std::abort(); \
 } while(0)
 
 #define panic_if(cond, fmt, ...) do { \
-    if (cond) { panic(fmt, ##__VA_ARGS__); } \
+    framework::LogAssertIf(!(cond), "ubio", "PANIC: " fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define fatal(fmt, ...) panic(fmt, ##__VA_ARGS__)
 #define fatal_if(cond, fmt, ...) panic_if(cond, fmt, ##__VA_ARGS__)
 
 #define warn(fmt, ...) \
-    std::fprintf(stderr, "WARN: " fmt "\n", ##__VA_ARGS__)
+    framework::LogWarn("ubio", "WARN: " fmt, ##__VA_ARGS__)
 
 // ── 64-byte cache-line data container ───────────────────────────────
 namespace cc { namespace glob {
