@@ -1,10 +1,10 @@
 /* TC143: topology-portable B-tree root-to-leaf traversal and updates. */
 #include "portable_large_workload.h"
 
-#define BATCHES 32
+#define BATCHES PORTABLE_BATCHES
 #define TRANSACTIONS_PER_BATCH 16
 #define OPS_PER_BATCH 64
-#define PRESSURE_PER_BATCH 24
+#define HOT_LINES_PER_PLANE 137
 #define DATA_BASE 0x00400000u
 #define PRESSURE_BASE 0x04000000u
 #define VALUE_BASE 0x14300000u
@@ -21,6 +21,8 @@ int main(int argc, char **argv)
     uint32_t leaf = shard + 0x2000u;
     uint32_t record = shard + 0x4000u;
     portable_emit_meta(plane, "TC143");
+    portable_emit_pressure_config(
+        plane, PORTABLE_PLANES * HOT_LINES_PER_PLANE);
     emit_timer_selftest(plane);
 
     PORTABLE_SERIAL_FOR_EACH_PLANE(plane, {
@@ -48,11 +50,12 @@ int main(int argc, char **argv)
     uint64_t service_ticks = 0;
     uint64_t end_to_end_start = read_counter_serialized();
     for (int batch = 0; batch < BATCHES; ++batch) {
-        int first = batch * PRESSURE_PER_BATCH;
-        for (int line = plane; line < PRESSURE_PER_BATCH;
+        int first = portable_pressure_begin(batch);
+        int last = portable_pressure_end(batch);
+        for (int line = first + plane; line < last;
              line += PORTABLE_PLANES)
-            dsm_store(0, portable_global_pressure(PRESSURE_BASE, first + line),
-                      VALUE_BASE | 0x00800000u | (uint32_t)(first + line));
+            dsm_store(0, portable_global_pressure(PRESSURE_BASE, line),
+                      VALUE_BASE | 0x00800000u | (uint32_t)line);
         __asm__ volatile("dsb sy" ::: "memory");
         portable_barrier();
 

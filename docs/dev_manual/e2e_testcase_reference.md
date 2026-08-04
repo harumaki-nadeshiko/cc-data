@@ -994,6 +994,16 @@ policy 收益，`spill-opt vs spill-noopt` 仅用于判断额外优化是否实�
 - **通过标准**: ≥3 读全部 MATCH; [UBFAULT] 证据
 - **状态**: PASS ✅
 
+### TC148: 高密度 ClearReq 故障 Qualification
+- **Workload**: `e2e_tc148_fault_qualification.c`
+- **拓扑**: 3n1s
+- **目的**: 将 fault smoke 扩展为有界、可重复、逐规则验收的高密度 qualification
+- **流量**: Node0 向 home node1 写 32 条不同 PA，Node1 随后读回全部 32 条
+- **故障分布**: Drop 8、Duplicate 8、Delay 8（20,000 ticks）、Reorder 8（100,000 ticks）
+- **通过标准**: 32/32 读全部 MATCH；32/32 规则实际命中且每条恰好一次；四种 action 各命中 8 次
+- **正式结果**: `logs/fault_all_20260803_strict`，PASS ✅
+- **边界**: 这是 ClearReq Level-1 qualification，不代表其他消息类型已完成 E2E qualification
+
 ---
 
 ## Fault Injection 策略汇总
@@ -1008,6 +1018,7 @@ policy 收益，`spill-opt vs spill-noopt` 仅用于判断额外优化是否实�
 | 117 | `tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1` | ClearReq | reorder (延迟投递) | 乱序恢复——首个 reorder 覆盖 |
 | 118 | `tc118_drop:...:drop::1;tc118_delay:...:delay:100000:1` | ClearReq ×2 | drop+delay (双故障) | epoch 单调性 + tombstone |
 | 119 | `tc119_drop/dup/delay:...` (三规则) | ClearReq ×3 | drop+dup+delay (三合一) | 最严苛多类型并发故障 |
+| 148 | 32 条按 PA 精确匹配的规则 | ClearReq ×32 | 8 drop + 8 dup + 8 delay + 8 reorder | 逐规则 hit-count 与 32-line 收敛 |
 
 **Fault 规则格式**: `name:msgType:srcNode:dstNode:plane:action:reserved:maxCount`
 

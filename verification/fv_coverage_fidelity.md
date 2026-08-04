@@ -1,6 +1,7 @@
 # Formal Verification — Coverage, Scope & Fidelity
 
-> Produced: 2026-07-08 | Companion to `CONSOLIDATED_REPORT.md`
+> Produced: 2026-07-08 | Current-implementation sync: 2026-08-03
+> Companion to `CONSOLIDATED_REPORT.md`
 > Purpose: answer three review questions that raw state/depth counts do NOT:
 >   (A1) Is coverage quantified?  (A2) What scope is covered vs not?
 >   (A3) How do we argue the model corresponds to the code?
@@ -83,7 +84,8 @@ honestly, exactly what has been *exhaustively* covered and what has NOT.
 | **≥3 sockets & cross-socket message routing** | Multi-socket coherence routing (1-hop vs 2-hop latency) | Planned formal (Stage D2); currently E2E |
 | **Bloom filter / backstore / MetaRNF** | Performance/infra layer | Abstracted by design (see A3); resident-dir is authoritative — argued in CONSOLIDATED_REPORT §7.2 |
 | **Real time / latency / ZMQ timing** | Timeout tuning, message ordering under delay | Not a formal target — E2E simulation (`docs/measure/`) |
-| **EP-RNF snoop conflict arbitration (STALE/IMMED matrix)** | Per-cacheline snoop conflict resolution between stale and immediate states | Deferred to next phase, currently covered by E2E 71/71 TC |
+| **EP-RNF snoop conflict arbitration (STALE/IMMED matrix)** | Per-cacheline conflict between ReadShared/ReadUnique/CleanUnique and SnpCleanInvalid/SnpUnique/SnpOnce | **DONE (focused model)**: `ep_rnf_snoop_arbitration.tla` exhaustively checks active-recall priority, immediate ReadShared+SnpOnce data response, immediate STALE responses for conflicting write-class snoops, and rejection of preserving snoops. PASS: 328 distinct states, depth 7 (2026-08-03). |
+| **ResidentDir capacity and TC224 committed waiter lifecycle** | Capacity waiters, exact tuple retirement, non-Read payload ownership, replay after synchronous queue erase | **PARTIAL FORMAL / FULL E2E**: `ubcc_tc224_waiter_retirement.tla` proves exact commit retirement and preservation in a bounded focused model (274,593 states, depth 6, PASS). Capacity victim selection, H64 fill/writeback, and set pressure remain implementation/E2E territory; TC224 8,192/65,536 full-scale PASS. |
 | ~~**Fault types beyond Clear drop/dup**~~ | InvAck/RecallResp/UpgradeAck loss/reorder | **DONE (Stage B1-B3)**: `ubcc_transport_faults.tla` now exhaustively enumerates Clear/InvAck/RecallResp/UpgradeAck × drop/dup/reorder; safety PASS (23.2M states) + liveness PASS. See CONSOLIDATED_REPORT §5.1 |
 
 ### Coverage claim (defensible wording)
@@ -130,7 +132,14 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
 | `Writeback` / `Evict` | owner writeback / sharer eviction | writeback / evict handlers |
 | epoch reserve/commit | `allocateReservedEpoch` monotonicity | `allocateReservedEpoch`, `validateCanonical` |
 
-### A3.2 What is deliberately abstracted away (and why it's sound)
+### A3.2 Focused current-implementation models
+
+| Model | C++ behavior | Exact anchors | Checked invariants |
+|-------|--------------|---------------|--------------------|
+| `ubcc_tc224_waiter_retirement.tla` | Clear commit removes only the committed stale Read waiter; legacy `reqId=0` also matches base epoch; nonmatching and Writeback/Upgrade/Evict waiters survive; replay tolerates queue erase | `UBCCController.cc`: `retireCommittedResidentWaiters`, `processClear`, `replayResidentWaiters` | no committed Read waiter remains; non-Read preservation; queue-presence consistency; replay safe after erase |
+| `ep_rnf_snoop_arbitration.tla` | Active recall has priority; no-inflight snoops are immediate; ReadShared+SnpOnce coexists; conflicting write-class snoops receive immediate STALE; SnpShared/Fwd is rejected outside recall cleanup | `EPRNFController.cc`: `recvSnoopMsg`, `finishChiTxn` | matrix correctness; no stale snoop queue; read/read coexistence; preserving-snoop rejection |
+
+### A3.3 What is deliberately abstracted away (and why it's sound)
 
 | Abstracted | Reason it does not affect protocol correctness |
 |------------|-----------------------------------------------|
@@ -140,7 +149,7 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
 | Real time / ZMQ / latency | Protocol correctness is timing-independent; timing handled by E2E |
 | Data payload bytes | Modelled as version/owner, not raw bytes; integrity checked in E2E (FV-7 memcpy chain) |
 
-### A3.3 Fidelity risks (known, disclosed)
+### A3.4 Fidelity risks (known, disclosed)
 
 1. **Hand-modelling drift**: a model edit may lag a code change. Mitigation:
    this mapping table + review; ideally trace validation (Stage E).
@@ -152,6 +161,10 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
    `WF` to `TickOnly` (time advances); the code assumes `wakeup()` is called
    periodically even when idle. This assumption is not itself verified in code —
    flagged as a follow-up (see CONSOLIDATED_REPORT liveness notes / Stage C2).
+4. **Focused models are not a proof of the complete production implementation**:
+   the TC224 model abstracts away ResidentDir victim selection and H64 timing;
+   the EP arbitration model abstracts CHI payload/TBE behavior. Their purpose is
+   to close the exact semantic drift identified in the current C++ anchors.
 
 ---
 

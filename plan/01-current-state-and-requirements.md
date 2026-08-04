@@ -47,7 +47,7 @@
 - 计划必须足够详细，使其他 Coding Agent 可直接执行。
 - 计划必须显式写出每阶段目标、任务、验收标准、TestCase。
 - 计划必须显式写出 External Proxy 的内部状态、外部状态、请求转换、状态转换。
-- 计划必须显式指导 `coder-validator-orchestrator` 如何分派 `cache-coherence-implementer` 和 `strict-task-completion-reviewer`。
+- 计划必须显式指导主 agent（primary agent，承担 orchestrator 角色）如何分派 `intelligent-agent`（实现）和 `high-intelligent-agent`（审核）。
 
 ### 2.4 本轮新增用户决策
 

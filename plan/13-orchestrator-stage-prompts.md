@@ -1,6 +1,6 @@
 # Orchestrator Stage Prompts
 
-本文件提供 `coder-validator-orchestrator` 可直接使用或轻改的阶段派单 prompt 样板。
+本文件提供主 agent（primary agent，承担 orchestrator 角色）可直接使用或轻改的阶段派单 prompt 样板。
 
 使用原则:
 - 每次只派发一个阶段

@@ -2,29 +2,36 @@
 
 ## 1. 目标
 
-本文件指导 `coder-validator-orchestrator` 如何读取计划书，并把每个阶段的工作分派给:
-- `cache-coherence-implementer`
-- `strict-task-completion-reviewer`
+本文件指导主 agent（primary agent，承担 `coder-validator-orchestrator` 角色）如何读取计划书，并把每个阶段的工作分派给:
+- `intelligent-agent`（实现，复杂任务档）
+- `high-intelligent-agent`（审核，架构级档）
+
+Agent 均为 mode=all 全权限执行 agent，仅在模型/推理档位上区分：
+- `futsu-agent` / `medium-agent`：普通任务（低成本 / 常规）
+- `intelligent-agent`：复杂任务（默认实现主力）
+- `high-intelligent-agent`：高度复杂、架构级任务（默认审核主力）
+- `hitomi-agent`：多模态任务（图像/视觉内容）
+- `xhigh-intelligent-agent`：极复杂任务，仅用户明确指定时使用
 
 目标不是“尽快推进阶段”，而是“每阶段真实完成后才推进”。
 
 ## 2. Agent 职责
 
-### 2.1 `coder-validator-orchestrator`
+### 2.1 主 agent（primary agent，orchestrator 角色）
 
 职责:
 - 读取 `plan/00-plan-index.md` 到 `plan/05-agent-orchestration.md`
 - 选择当前阶段
-- 给 implementer 派发本阶段实现任务
-- 给 reviewer 派发本阶段审核任务
-- 根据 reviewer verdict 决定推进、回退或补修
+- 给实现 agent 派发本阶段实现任务
+- 给审核 agent 派发本阶段审核任务
+- 根据审核 verdict 决定推进、回退或补修
 
 输出:
 - 当前阶段推进状态
-- 需要 implementer 修复的问题列表
+- 需要实现 agent 修复的问题列表
 - 下一阶段是否允许开始
 
-### 2.2 `cache-coherence-implementer`
+### 2.2 `intelligent-agent`（实现 agent，对应原 `cache-coherence-implementer`）
 
 职责:
 - 按阶段实现最小必要代码
@@ -40,7 +47,7 @@
 - 在未明确说明的情况下大改 HN 状态机
 - 静默引入超出 HN 现有表达范围的 `EP_RNF` 特殊状态而不告警
 
-### 2.3 `strict-task-completion-reviewer`
+### 2.3 `high-intelligent-agent`（审核 agent，对应原 `strict-task-completion-reviewer`）
 
 职责:
 - 按阶段目标、任务、出口标准做严格审核

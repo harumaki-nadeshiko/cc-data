@@ -894,6 +894,47 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeAckNotify(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeResp(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
+    bool queryLineMetaFromBackstore(const CoherenceMessage &request) {
+        if (!_useH64 || !_h64Host) {
+            return false;
+        }
+        _h64Host->lookup(
+            request.h.homeLinePa,
+            [this, request](const BackstoreCompletion &comp) {
+                CoherenceMessage response;
+                response.h.type = CoherenceMessageType::QueryLineMetaResp;
+                response.h.srcNode = nodeId;
+                response.h.srcSocket = socketId;
+                response.h.dstNode = request.h.srcNode;
+                response.h.dstSocket = request.h.srcSocket;
+                response.h.homeLinePa = request.h.homeLinePa;
+                response.h.reqId = request.h.reqId;
+                const bool ok = comp.status == BackstoreStatus::Ok;
+                response.b.queryLineMetaResp.found = ok && comp.found;
+                response.b.queryLineMetaResp.epoch =
+                    response.b.queryLineMetaResp.found ? comp.epoch : 0;
+                if (response.b.queryLineMetaResp.found) {
+                    UBCCDirEntry entry;
+                    entry.state = comp.state;
+                    entry.sharersMask = comp.sharersMask;
+                    response.b.queryLineMetaResp.ownerNode =
+                        UBCCDirEntry::ownerFromSharers(entry);
+                } else {
+                    response.b.queryLineMetaResp.ownerNode = -1;
+                }
+                std::fprintf(stderr,
+                    "[QLM-H64-DONE] home=%d pa=0x%lx reqId=%lu status=%s "
+                    "found=%d epoch=%lu owner=%d\n",
+                    nodeId, request.h.homeLinePa, request.h.reqId,
+                    backstoreStatusName(comp.status),
+                    response.b.queryLineMetaResp.found ? 1 : 0,
+                    response.b.queryLineMetaResp.epoch,
+                    response.b.queryLineMetaResp.ownerNode);
+                std::fflush(stderr);
+                routeControlToTarget(response);
+            });
+        return true;
+    }
     bool sendGrantPush(const CoherenceMessage &msg) override {
         CoherenceMessage push = msg;
         // UBCC constructs replay pushes without direct access to the physical
@@ -1472,6 +1513,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         int recallOwnerNode = -1;
         GrantDataSource dataSource = GrantDataSource::HomeMemory;
         uint64_t authEpoch = 0;
+        uint64_t grantEpoch = 0;
 
         auto grant = ubcc.processOuterRequest(
             msg.h.homeLinePa, reqType,
@@ -1480,7 +1522,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
             msg.h.epoch, msg.h.reqId,
             &grantVisibleTick, &sentinelVisibleTick,
             &recallNeeded, &recallOwnerNode,
-            &dataSource, &authEpoch);
+            &dataSource, &authEpoch, &grantEpoch);
 
         // BUSY - don"t send poison ReadResp; caller will retry
         if (static_cast<int>(grant) < 0)
@@ -1522,6 +1564,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         response.b.readResp.recallNeeded = recallNeeded;
         response.b.readResp.recallOwnerNode = recallOwnerNode;
         response.b.readResp.authEpoch = authEpoch;
+        response.b.readResp.grantEpoch = grantEpoch;
         response.b.readResp.committedEpoch = committedEpoch;
         response.b.readResp.pendingInvMask = pendingInvMask;
         if (hasGrantData) {
@@ -1679,6 +1722,9 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         UBCCMESIState qState = UBCCMESIState::G_I;
         bool qFound = false;
         ubcc.queryLineMeta(msg.h.homeLinePa, qEpoch, qOwnerNode, qState, qFound);
+        if (!qFound && host.queryLineMetaFromBackstore(msg)) {
+            return true;
+        }
         response.h.type = CoherenceMessageType::QueryLineMetaResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;

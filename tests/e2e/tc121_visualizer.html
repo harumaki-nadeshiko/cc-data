@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>TRACE-PERF Request Chain Visualizer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+       background: #0f172a; color: #e2e8f0; font-size: 13px; }
+
+/* Header */
+.header { background: #1e293b; padding: 12px 16px; border-bottom: 1px solid #334155;
+           position: sticky; top: 0; z-index: 20; }
+.header-title { font-size: 18px; font-weight: 700; color: #f8fafc; margin-bottom: 8px; }
+.header-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.header-controls label { font-size: 11px; color: #94a3b8; }
+.header-controls input, .header-controls select {
+  background: #0f172a; border: 1px solid #475569; color: #e2e8f0;
+  padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.header-controls input:focus, .header-controls select:focus {
+  border-color: #3b82f6; outline: none; }
+.header-controls button {
+  background: #3b82f6; color: #fff; border: none; padding: 5px 12px;
+  border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
+.header-controls button:hover { background: #2563eb; }
+.header-stats { font-size: 11px; color: #64748b; margin-top: 6px; }
+
+/* Tabs */
+.tabs { display: flex; background: #1e293b; border-bottom: 1px solid #334155; }
+.tab { padding: 8px 16px; cursor: pointer; font-size: 12px; font-weight: 500;
+        color: #94a3b8; border-bottom: 2px solid transparent; }
+.tab:hover { color: #e2e8f0; }
+.tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+
+/* Main content */
+.main { display: flex; height: calc(100vh - 120px); }
+.sidebar { width: 320px; background: #1e293b; border-right: 1px solid #334155;
+            overflow-y: auto; flex-shrink: 0; }
+.content { flex: 1; overflow: auto; }
+
+/* Chain list in sidebar */
+.chain-item { padding: 8px 12px; border-bottom: 1px solid #1e293b; cursor: pointer;
+               font-size: 11px; }
+.chain-item:hover { background: #334155; }
+.chain-item.selected { background: #1e3a5f; border-left: 3px solid #3b82f6; }
+.chain-item .chain-type { display: inline-block; padding: 1px 4px; border-radius: 3px;
+                           font-size: 10px; font-weight: 600; margin-right: 4px; }
+.chain-item .chain-rid { color: #60a5fa; font-weight: 600; }
+.chain-item .chain-dur { color: #fbbf24; font-weight: 600; }
+.chain-item .chain-pa { color: #94a3b8; font-size: 10px; }
+.chain-item .chain-crit { color: #a78bfa; font-size: 10px; }
+
+/* Timeline view */
+.timeline-container { padding: 16px; }
+.timeline-header { display: flex; align-items: center; margin-bottom: 12px; }
+.timeline-ruler { background: #1e293b; border-radius: 4px; padding: 8px; margin-bottom: 8px;
+                   position: relative; height: 40px; }
+.ruler-mark { position: absolute; bottom: 0; border-left: 1px solid #475569; height: 8px; }
+.ruler-label { position: absolute; top: 6px; font-size: 10px; color: #94a3b8;
+                transform: translateX(-50%); white-space: nowrap; }
+
+/* Swimlane */
+.swimlane { background: #1e293b; border-radius: 4px; margin-bottom: 4px;
+             display: flex; align-items: stretch; min-height: 32px; }
+.swimlane:hover { background: #253347; }
+.swimlane.selected { background: #1e3a5f; }
+.swimlane-label { flex: 0 0 280px; padding: 6px 8px; font-size: 11px;
+                   border-right: 1px solid #334155; cursor: pointer; }
+.swimlane-canvas { flex: 1; position: relative; min-width: 200px; margin: 4px 8px 4px 0; }
+.seg { position: absolute; height: 20px; top: 2px; border-radius: 3px; cursor: pointer;
+        min-width: 2px; opacity: 0.85; transition: opacity 0.15s; }
+.seg:hover { opacity: 1; outline: 2px solid #f8fafc; z-index: 5; }
+
+/* Flow diagram */
+.flow-container { padding: 16px; }
+.flow-diagram { background: #1e293b; border-radius: 8px; padding: 16px; }
+.flow-node { display: inline-block; padding: 8px 16px; background: #334155;
+              border-radius: 6px; margin: 4px; font-size: 12px; font-weight: 600; }
+.flow-arrow { display: inline-block; margin: 0 8px; color: #60a5fa; font-size: 14px; }
+.flow-step { margin: 8px 0; display: flex; align-items: center; }
+.flow-msg { font-size: 10px; color: #94a3b8; margin-left: 8px; }
+
+/* Latency breakdown */
+.breakdown-container { padding: 16px; }
+.breakdown-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden;
+                  margin-bottom: 8px; }
+.breakdown-seg { height: 100%; position: relative; cursor: pointer; }
+.breakdown-seg:hover { opacity: 0.8; }
+.breakdown-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; font-size: 11px; }
+.legend-color { width: 12px; height: 12px; border-radius: 2px; margin-right: 4px; }
+
+/* Tooltip */
+.tooltip { display: none; position: fixed; background: #1e293b; color: #e2e8f0;
+            padding: 8px 12px; border-radius: 6px; font-size: 11px; z-index: 100;
+            pointer-events: none; max-width: 400px; line-height: 1.5;
+            border: 1px solid #475569; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+
+/* Detail panel */
+.detail-panel { background: #1e293b; border-top: 1px solid #334155; padding: 12px 16px;
+                 max-height: 300px; overflow-y: auto; }
+.detail-panel table { border-collapse: collapse; width: 100%; }
+.detail-panel td { padding: 2px 8px; font-size: 11px; }
+.detail-panel td.tick { color: #60a5fa; font-weight: 600; }
+.detail-panel td.dt { color: #fbbf24; }
+
+/* Segment colors */
+.seg-gem5-ubio { background: #3b82f6; }
+.seg-ubio-gem5 { background: #22c55e; }
+.seg-ubio-nsim { background: #f97316; }
+.seg-nsim_link { background: #7c3aed; }
+.seg-nsim_sync { background: #64748b; }
+.seg-nsim-ubio { background: #8b5cf6; }
+.seg-nsim_fifo { background: #71717a; }
+.seg-ubio_proc { background: #eab308; }
+.seg-gem5_proc { background: #16a34a; }
+.seg-other { background: #94a3b8; }
+
+/* Summary stats */
+.stats-container { padding: 16px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+               gap: 12px; }
+.stats-card { background: #1e293b; border-radius: 8px; padding: 12px; }
+.stats-card h3 { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+.stats-card .value { font-size: 24px; font-weight: 700; color: #f8fafc; }
+.stats-card .unit { font-size: 12px; color: #94a3b8; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-title">TRACE-PERF Request Chain Visualizer</div>
+  <div class="header-controls">
+    <label>PA:</label>
+    <input id="f-pa" placeholder="0x10000000" size="14" oninput="applyFilters()">
+    <label>reqId:</label>
+    <input id="f-rid" placeholder="7205759..." size="16" oninput="applyFilters()">
+    <label>Type:</label>
+    <select id="f-type" onchange="applyFilters()">
+      <option value="">All</option>
+      <option value="ReadReq">ReadReq</option>
+      <option value="UpgradeReq">UpgradeReq</option>
+      <option value="WriteReq">WriteReq</option>
+      <option value="ClearReq">ClearReq</option>
+    </select>
+    <label>Min hops:</label>
+    <input id="f-hops" type="number" value="2" min="1" style="width:45px" oninput="applyFilters()">
+    <label>Zoom:</label>
+    <input id="f-zoom" type="range" min="1" max="50" step="0.1" value="1" style="width:100px" oninput="applyFilters()">
+    <span id="zoom-val" style="font-size:11px;color:#94a3b8;min-width:30px">1.0x</span>
+    <button onclick="toggleAll()">Expand/Collapse</button>
+    <button onclick="exportCSV()">Export CSV</button>
+  </div>
+  <div class="header-stats" id="stats"></div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-view="timeline" onclick="switchView('timeline')">Timeline</div>
+  <div class="tab" data-view="flow" onclick="switchView('flow')">Flow Diagram</div>
+  <div class="tab" data-view="breakdown" onclick="switchView('breakdown')">Latency Breakdown</div>
+  <div class="tab" data-view="stats" onclick="switchView('stats')">Statistics</div>
+</div>
+
+<div class="main">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="content" id="content"></div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script id="chain-data" type="application/json">[{"key": "2:0x10010000", "reqId": 2, "pa": "0x10010000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 84073000, "last_tick": 84073000, "response_tick": 84073000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10010000 | ubio_0", "segments": [], "events": [{"tick": 84073000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "2:0x10010000#1", "reqId": 2, "pa": "0x10010000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 84073000, "last_tick": 84075500, "response_tick": 84075500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 3, "is_clear": false, "summary": "pa=0x10010000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 84073000, "to_tick": 84075500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 84073000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 84075500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 84075500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ReadResp|src=0", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 84073000, "dt_ps": 2500}]}, {"key": "2:0x10010000#2", "reqId": 2, "pa": "0x10010000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 84078500, "last_tick": 84078500, "response_tick": 84078500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10010000 | ubio_0", "segments": [], "events": [{"tick": 84078500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "2:0x10010000#3", "reqId": 2, "pa": "0x10010000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 84078500, "last_tick": 84078500, "response_tick": 84078500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10010000 | gem5_0", "segments": [], "events": [{"tick": 84078500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "2:0x10010000#4", "reqId": 2, "pa": "0x10010000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 84081000, "last_tick": 84081000, "response_tick": 84081000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10010000 | ubio_0", "segments": [], "events": [{"tick": 84081000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "2:0x10010000#5", "reqId": 2, "pa": "0x10010000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 84081000, "last_tick": 84081000, "response_tick": 84081000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10010000 | gem5_0", "segments": [], "events": [{"tick": 84081000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "3:0x10020000", "reqId": 3, "pa": "0x10020000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 91614000, "last_tick": 91614000, "response_tick": 91614000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10020000 | ubio_0", "segments": [], "events": [{"tick": 91614000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "3:0x10020000#1", "reqId": 3, "pa": "0x10020000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 91614000, "last_tick": 91616500, "response_tick": 91616500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10020000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 91614000, "to_tick": 91616500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 91614000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 91616500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 91614000, "dt_ps": 2500}]}, {"key": "9223372036854775808:0x1", "reqId": 9223372036854775808, "pa": "0x1", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 91616500, "last_tick": 91616500, "response_tick": 91616500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x1 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 91616500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 91616500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 91616500, "dt_ps": 0}]}, {"key": "3:0x10020000#2", "reqId": 3, "pa": "0x10020000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 91619500, "last_tick": 91619500, "response_tick": 91619500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10020000 | ubio_0", "segments": [], "events": [{"tick": 91619500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "3:0x10020000#3", "reqId": 3, "pa": "0x10020000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 91619500, "last_tick": 91619500, "response_tick": 91619500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10020000 | gem5_0", "segments": [], "events": [{"tick": 91619500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "3:0x10020000#4", "reqId": 3, "pa": "0x10020000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 91622000, "last_tick": 91622000, "response_tick": 91622000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10020000 | ubio_0", "segments": [], "events": [{"tick": 91622000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "3:0x10020000#5", "reqId": 3, "pa": "0x10020000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 91622000, "last_tick": 91622000, "response_tick": 91622000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10020000 | gem5_0", "segments": [], "events": [{"tick": 91622000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "4:0x10030000", "reqId": 4, "pa": "0x10030000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 99155000, "last_tick": 99155000, "response_tick": 99155000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 99155000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "4:0x10030000#1", "reqId": 4, "pa": "0x10030000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 99155000, "last_tick": 99157500, "response_tick": 99157500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10030000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 99155000, "to_tick": 99157500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 99155000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 99157500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 99155000, "dt_ps": 2500}]}, {"key": "9223372036854775809:0x2", "reqId": 9223372036854775809, "pa": "0x2", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 99157500, "last_tick": 99157500, "response_tick": 99157500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x2 | ubio_0", "segments": [], "events": [{"tick": 99157500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "4:0x10030000#2", "reqId": 4, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 99160500, "last_tick": 99160500, "response_tick": 99160500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 99160500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "4:0x10030000#3", "reqId": 4, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 99160500, "last_tick": 99160500, "response_tick": 99160500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | gem5_0", "segments": [], "events": [{"tick": 99160500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "4:0x10030000#4", "reqId": 4, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 99163000, "last_tick": 99163000, "response_tick": 99163000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 99163000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "4:0x10030000#5", "reqId": 4, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 99163000, "last_tick": 99163000, "response_tick": 99163000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | gem5_0", "segments": [], "events": [{"tick": 99163000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "5:0x10040000", "reqId": 5, "pa": "0x10040000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 106696000, "last_tick": 106696000, "response_tick": 106696000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10040000 | ubio_0", "segments": [], "events": [{"tick": 106696000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "5:0x10040000#1", "reqId": 5, "pa": "0x10040000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 106696000, "last_tick": 106698500, "response_tick": 106698500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10040000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 106696000, "to_tick": 106698500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 106696000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 106698500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 106696000, "dt_ps": 2500}]}, {"key": "9223372036854775810:0x3", "reqId": 9223372036854775810, "pa": "0x3", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 106698500, "last_tick": 106698500, "response_tick": 106698500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x3 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 106698500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 106698500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 106698500, "dt_ps": 0}]}, {"key": "5:0x10040000#2", "reqId": 5, "pa": "0x10040000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 106701500, "last_tick": 106701500, "response_tick": 106701500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10040000 | ubio_0", "segments": [], "events": [{"tick": 106701500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "5:0x10040000#3", "reqId": 5, "pa": "0x10040000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 106701500, "last_tick": 106701500, "response_tick": 106701500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10040000 | gem5_0", "segments": [], "events": [{"tick": 106701500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "5:0x10040000#4", "reqId": 5, "pa": "0x10040000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 106704000, "last_tick": 106704000, "response_tick": 106704000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10040000 | ubio_0", "segments": [], "events": [{"tick": 106704000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "5:0x10040000#5", "reqId": 5, "pa": "0x10040000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 106704000, "last_tick": 106704000, "response_tick": 106704000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10040000 | gem5_0", "segments": [], "events": [{"tick": 106704000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "6:0x10050000", "reqId": 6, "pa": "0x10050000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 114237000, "last_tick": 114237000, "response_tick": 114237000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10050000 | ubio_0", "segments": [], "events": [{"tick": 114237000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "6:0x10050000#1", "reqId": 6, "pa": "0x10050000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 114237000, "last_tick": 114239500, "response_tick": 114239500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10050000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 114237000, "to_tick": 114239500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 114237000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 114239500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 114237000, "dt_ps": 2500}]}, {"key": "9223372036854775811:0x4", "reqId": 9223372036854775811, "pa": "0x4", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 114239500, "last_tick": 114239500, "response_tick": 114239500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x4 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 114239500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 114239500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 114239500, "dt_ps": 0}]}, {"key": "6:0x10050000#2", "reqId": 6, "pa": "0x10050000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 114242500, "last_tick": 114242500, "response_tick": 114242500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10050000 | ubio_0", "segments": [], "events": [{"tick": 114242500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "6:0x10050000#3", "reqId": 6, "pa": "0x10050000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 114242500, "last_tick": 114242500, "response_tick": 114242500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10050000 | gem5_0", "segments": [], "events": [{"tick": 114242500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "6:0x10050000#4", "reqId": 6, "pa": "0x10050000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 114245000, "last_tick": 114245000, "response_tick": 114245000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10050000 | ubio_0", "segments": [], "events": [{"tick": 114245000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "9223372036854775812:0x5", "reqId": 9223372036854775812, "pa": "0x5", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 121780500, "last_tick": 121780500, "response_tick": 121780500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x5 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 121780500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 121780500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 121780500, "dt_ps": 0}]}, {"key": "8:0x10070000", "reqId": 8, "pa": "0x10070000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 129319000, "last_tick": 129319000, "response_tick": 129319000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10070000 | ubio_0", "segments": [], "events": [{"tick": 129319000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "8:0x10070000#1", "reqId": 8, "pa": "0x10070000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 129319000, "last_tick": 129321500, "response_tick": 129321500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10070000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 129319000, "to_tick": 129321500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 129319000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 129321500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 129319000, "dt_ps": 2500}]}, {"key": "9223372036854775813:0x6", "reqId": 9223372036854775813, "pa": "0x6", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 129321500, "last_tick": 129321500, "response_tick": 129321500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x6 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 129321500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 129321500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 129321500, "dt_ps": 0}]}, {"key": "8:0x10070000#2", "reqId": 8, "pa": "0x10070000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 129324500, "last_tick": 129324500, "response_tick": 129324500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10070000 | ubio_0", "segments": [], "events": [{"tick": 129324500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "8:0x10070000#3", "reqId": 8, "pa": "0x10070000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 129324500, "last_tick": 129324500, "response_tick": 129324500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10070000 | gem5_0", "segments": [], "events": [{"tick": 129324500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "8:0x10070000#4", "reqId": 8, "pa": "0x10070000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 129327000, "last_tick": 129327000, "response_tick": 129327000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10070000 | ubio_0", "segments": [], "events": [{"tick": 129327000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "8:0x10070000#5", "reqId": 8, "pa": "0x10070000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 129327000, "last_tick": 129327000, "response_tick": 129327000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10070000 | gem5_0", "segments": [], "events": [{"tick": 129327000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "9:0x10080000", "reqId": 9, "pa": "0x10080000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 136860000, "last_tick": 136860000, "response_tick": 136860000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10080000 | ubio_0", "segments": [], "events": [{"tick": 136860000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "9:0x10080000#1", "reqId": 9, "pa": "0x10080000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 136860000, "last_tick": 136862500, "response_tick": 136862500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10080000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 136860000, "to_tick": 136862500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 136860000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 136862500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 136860000, "dt_ps": 2500}]}, {"key": "9223372036854775814:0x7", "reqId": 9223372036854775814, "pa": "0x7", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 136862500, "last_tick": 136862500, "response_tick": 136862500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x7 | ubio_0", "segments": [], "events": [{"tick": 136862500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "9:0x10080000#2", "reqId": 9, "pa": "0x10080000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 136865500, "last_tick": 136865500, "response_tick": 136865500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10080000 | ubio_0", "segments": [], "events": [{"tick": 136865500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "9:0x10080000#3", "reqId": 9, "pa": "0x10080000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 136865500, "last_tick": 136865500, "response_tick": 136865500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10080000 | gem5_0", "segments": [], "events": [{"tick": 136865500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "9:0x10080000#4", "reqId": 9, "pa": "0x10080000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 136868000, "last_tick": 136868000, "response_tick": 136868000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10080000 | ubio_0", "segments": [], "events": [{"tick": 136868000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "9:0x10080000#5", "reqId": 9, "pa": "0x10080000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 136868000, "last_tick": 136868000, "response_tick": 136868000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10080000 | gem5_0", "segments": [], "events": [{"tick": 136868000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "10:0x10090000", "reqId": 10, "pa": "0x10090000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 144401000, "last_tick": 144401000, "response_tick": 144401000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 144401000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "10:0x10090000#1", "reqId": 10, "pa": "0x10090000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 144401000, "last_tick": 144403500, "response_tick": 144403500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x10090000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 144401000, "to_tick": 144403500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 144401000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 144403500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 144401000, "dt_ps": 2500}]}, {"key": "9223372036854775815:0x8", "reqId": 9223372036854775815, "pa": "0x8", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 144403500, "last_tick": 144403500, "response_tick": 144403500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x8 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 144403500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 144403500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 144403500, "dt_ps": 0}]}, {"key": "10:0x10090000#2", "reqId": 10, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 144406500, "last_tick": 144406500, "response_tick": 144406500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 144406500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "10:0x10090000#3", "reqId": 10, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 144406500, "last_tick": 144406500, "response_tick": 144406500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | gem5_0", "segments": [], "events": [{"tick": 144406500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "10:0x10090000#4", "reqId": 10, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 144409000, "last_tick": 144409000, "response_tick": 144409000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 144409000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "10:0x10090000#5", "reqId": 10, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 144409000, "last_tick": 144409000, "response_tick": 144409000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | gem5_0", "segments": [], "events": [{"tick": 144409000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "11:0x100a0000", "reqId": 11, "pa": "0x100a0000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 152106000, "last_tick": 152106000, "response_tick": 152106000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x100a0000 | ubio_0", "segments": [], "events": [{"tick": 152106000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "11:0x100a0000#1", "reqId": 11, "pa": "0x100a0000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 152106000, "last_tick": 152108500, "response_tick": 152108500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x100a0000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 152106000, "to_tick": 152108500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 152106000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 152108500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 152106000, "dt_ps": 2500}]}, {"key": "9223372036854775816:0x9", "reqId": 9223372036854775816, "pa": "0x9", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 152108500, "last_tick": 152108500, "response_tick": 152108500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x9 | ubio_0 \u2192 gem5_0", "segments": [], "events": [{"tick": 152108500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}, {"tick": 152108500, "comp": "gem5", "event": "RECV", "node": 0, "extra": "MetaRNFWriteReq|src=0", "msg_type": "MetaRNFWriteReq"}], "flow": [{"from": "ubio_0", "to": "gem5_0", "msg_type": "MetaRNFWriteReq", "tick": 152108500, "dt_ps": 0}]}, {"key": "11:0x100a0000#2", "reqId": 11, "pa": "0x100a0000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 152111500, "last_tick": 152111500, "response_tick": 152111500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100a0000 | ubio_0", "segments": [], "events": [{"tick": 152111500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "11:0x100a0000#3", "reqId": 11, "pa": "0x100a0000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 152111500, "last_tick": 152111500, "response_tick": 152111500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100a0000 | gem5_0", "segments": [], "events": [{"tick": 152111500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "11:0x100a0000#4", "reqId": 11, "pa": "0x100a0000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 152114000, "last_tick": 152114000, "response_tick": 152114000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100a0000 | ubio_0", "segments": [], "events": [{"tick": 152114000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "11:0x100a0000#5", "reqId": 11, "pa": "0x100a0000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 152114000, "last_tick": 152114000, "response_tick": 152114000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100a0000 | gem5_0", "segments": [], "events": [{"tick": 152114000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "12:0x100b0000", "reqId": 12, "pa": "0x100b0000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 159975000, "last_tick": 159975000, "response_tick": 159975000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x100b0000 | ubio_0", "segments": [], "events": [{"tick": 159975000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "12:0x100b0000#1", "reqId": 12, "pa": "0x100b0000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 159975000, "last_tick": 159977500, "response_tick": 159977500, "dur_ps": 2500, "dur_ns": 2.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": false, "summary": "pa=0x100b0000 | gem5_0 \u2192 ubio_0", "segments": [{"from_tick": 159975000, "to_tick": 159977500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}], "events": [{"tick": 159975000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 159977500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 159975000, "dt_ps": 2500}]}, {"key": "9223372036854775817:0x6", "reqId": 9223372036854775817, "pa": "0x6", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 159977500, "last_tick": 159977500, "response_tick": 159977500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x6 | ubio_0", "segments": [], "events": [{"tick": 159977500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "12:0x100b0000#2", "reqId": 12, "pa": "0x100b0000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 159980500, "last_tick": 159980500, "response_tick": 159980500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100b0000 | ubio_0", "segments": [], "events": [{"tick": 159980500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "12:0x100b0000#3", "reqId": 12, "pa": "0x100b0000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 159980500, "last_tick": 159980500, "response_tick": 159980500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100b0000 | gem5_0", "segments": [], "events": [{"tick": 159980500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "12:0x100b0000#4", "reqId": 12, "pa": "0x100b0000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 159983000, "last_tick": 159983000, "response_tick": 159983000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100b0000 | ubio_0", "segments": [], "events": [{"tick": 159983000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "12:0x100b0000#5", "reqId": 12, "pa": "0x100b0000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 159983000, "last_tick": 159983000, "response_tick": 159983000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x100b0000 | gem5_0", "segments": [], "events": [{"tick": 159983000, "comp": "gem5", "event": "RECV", "node": 0, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927937:0x10000000", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 371598500, "last_tick": 371598500, "response_tick": 371598500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10000000 | ubio_1", "segments": [], "events": [{"tick": 371598500, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "72057594037927937:0x10000000#1", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 371598500, "last_tick": 372460000, "response_tick": 372457500, "dur_ps": 859000, "dur_ns": 859.0, "crit_ps": 820000, "crit_ns": 820.0, "ev_count": 13, "is_clear": false, "summary": "pa=0x10000000 | gem5_1 \u2192 ubio_0 \u2192 nsim_1 \u2192 nsim_0 \u2192 ubio_0 \u2192 gem5_0 \u2192 ubio_0 \u2192 ubio_1 \u2192 nsim_0 \u2192 nsim_1 \u2192 ubio_1", "segments": [{"from_tick": 371598500, "to_tick": 371601000, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_NET", "from_node": 1, "to_node": 0}, {"from_tick": 371601000, "to_tick": 372011000, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}, {"from_tick": 372011000, "to_tick": 372015000, "dt_ps": 4000, "dt_ns": 4.0, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 0, "to_node": 0}, {"from_tick": 372015000, "to_tick": 372017500, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_NET", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}, {"from_tick": 372017500, "to_tick": 372041500, "dt_ps": 24000, "dt_ns": 24.0, "type": "ubio\u2192gem5", "from_ev": "ubio:SEND_GEM5", "to_ev": "gem5:SEND", "from_node": 0, "to_node": 0}, {"from_tick": 372041500, "to_tick": 372044000, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_GEM5", "to_ev": "ubio:SEND_NET", "from_node": 0, "to_node": 1}, {"from_tick": 372044000, "to_tick": 372454000, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}, {"from_tick": 372454000, "to_tick": 372457500, "dt_ps": 3500, "dt_ns": 3.5, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 1, "to_node": 1}], "events": [{"tick": 371598500, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 371601000, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 371601000, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 372011000, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}, {"tick": 372015000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 372017500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "RecallReq", "msg_type": "RecallReq"}, {"tick": 372041500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "RecallResp|dst=0", "msg_type": "RecallResp"}, {"tick": 372041500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "RecallResp", "msg_type": "RecallResp"}, {"tick": 372044000, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 372044000, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 372454000, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}, {"tick": 372457500, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 372460000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_1", "to": "ubio_0", "msg_type": "ReadReq", "tick": 371598500, "dt_ps": 2500}, {"from": "ubio_0", "to": "nsim_1", "msg_type": "ReadReq", "tick": 371601000, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 371601000, "dt_ps": 410000}, {"from": "nsim_0", "to": "ubio_0", "msg_type": "dst=0", "tick": 372011000, "dt_ps": 4000}, {"from": "ubio_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 372015000, "dt_ps": 2500}, {"from": "ubio_0", "to": "gem5_0", "msg_type": "RecallReq", "tick": 372017500, "dt_ps": 24000}, {"from": "gem5_0", "to": "ubio_0", "msg_type": "RecallResp", "tick": 372041500, "dt_ps": 0}, {"from": "ubio_0", "to": "ubio_1", "msg_type": "RecallResp", "tick": 372041500, "dt_ps": 2500}, {"from": "ubio_1", "to": "nsim_0", "msg_type": "ReadResp", "tick": 372044000, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 372044000, "dt_ps": 410000}, {"from": "nsim_1", "to": "ubio_1", "msg_type": "dst=1", "tick": 372454000, "dt_ps": 3500}]}, {"key": "9223372036854775818:0x8", "reqId": 9223372036854775818, "pa": "0x8", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 372017500, "last_tick": 372017500, "response_tick": 372017500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x8 | ubio_0", "segments": [], "events": [{"tick": 372017500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "72057594037927937:0x10000000#2", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 372463000, "last_tick": 372463000, "response_tick": 372463000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10000000 | ubio_1", "segments": [], "events": [{"tick": 372463000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927937:0x10000000#3", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 372463000, "last_tick": 372463000, "response_tick": 372463000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10000000 | gem5_1", "segments": [], "events": [{"tick": 372463000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927937:0x10000000#4", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 372465500, "last_tick": 372875500, "response_tick": 372875500, "dur_ps": 410000, "dur_ns": 410.0, "crit_ps": 410000, "crit_ns": 410.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10000000 | ubio_0 \u2192 nsim_1 \u2192 nsim_0", "segments": [{"from_tick": 372465500, "to_tick": 372875500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}], "events": [{"tick": 372465500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 372465500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 372875500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 372465500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 372465500, "dt_ps": 410000}]}, {"key": "72057594037927937:0x10000000#5", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 372880000, "last_tick": 372880000, "response_tick": 372880000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10000000 | ubio_0", "segments": [], "events": [{"tick": 372880000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927937:0x10000000#6", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 372882500, "last_tick": 373292500, "response_tick": 373292500, "dur_ps": 410000, "dur_ns": 410.0, "crit_ps": 410000, "crit_ns": 410.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10000000 | ubio_1 \u2192 nsim_0 \u2192 nsim_1", "segments": [{"from_tick": 372882500, "to_tick": 373292500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 372882500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 372882500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 373292500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 372882500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 372882500, "dt_ps": 410000}]}, {"key": "72057594037927937:0x10000000#7", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 373295000, "last_tick": 373295000, "response_tick": 373295000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10000000 | ubio_1", "segments": [], "events": [{"tick": 373295000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927937:0x10000000#8", "reqId": 72057594037927937, "pa": "0x10000000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 373297500, "last_tick": 373297500, "response_tick": 373297500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10000000 | ubio_0", "segments": [], "events": [{"tick": 373297500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927938:0x10030000", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 381542000, "last_tick": 381542000, "response_tick": 381542000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10030000 | ubio_1", "segments": [], "events": [{"tick": 381542000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#1", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 381542000, "last_tick": 382420000, "response_tick": 382417500, "dur_ps": 875500, "dur_ns": 875.5, "crit_ps": 820000, "crit_ns": 820.0, "ev_count": 13, "is_clear": false, "summary": "pa=0x10030000 | gem5_1 \u2192 ubio_0 \u2192 nsim_1 \u2192 nsim_0 \u2192 ubio_0 \u2192 gem5_0 \u2192 ubio_0 \u2192 ubio_1 \u2192 nsim_0 \u2192 nsim_1 \u2192 ubio_1", "segments": [{"from_tick": 381542000, "to_tick": 381544500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_NET", "from_node": 1, "to_node": 0}, {"from_tick": 381544500, "to_tick": 381954500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}, {"from_tick": 381954500, "to_tick": 381957500, "dt_ps": 3000, "dt_ns": 3.0, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 0, "to_node": 0}, {"from_tick": 381957500, "to_tick": 381960000, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_NET", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}, {"from_tick": 381960000, "to_tick": 382001000, "dt_ps": 41000, "dt_ns": 41.0, "type": "ubio\u2192gem5", "from_ev": "ubio:SEND_GEM5", "to_ev": "gem5:SEND", "from_node": 0, "to_node": 0}, {"from_tick": 382001000, "to_tick": 382003500, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_GEM5", "to_ev": "ubio:SEND_NET", "from_node": 0, "to_node": 1}, {"from_tick": 382003500, "to_tick": 382413500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}, {"from_tick": 382413500, "to_tick": 382417500, "dt_ps": 4000, "dt_ns": 4.0, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 1, "to_node": 1}], "events": [{"tick": 381542000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 381544500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 381544500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 381954500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}, {"tick": 381957500, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 381960000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "RecallReq", "msg_type": "RecallReq"}, {"tick": 382001000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "RecallResp|dst=0", "msg_type": "RecallResp"}, {"tick": 382001000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "RecallResp", "msg_type": "RecallResp"}, {"tick": 382003500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 382003500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 382413500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}, {"tick": 382417500, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 382420000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_1", "to": "ubio_0", "msg_type": "ReadReq", "tick": 381542000, "dt_ps": 2500}, {"from": "ubio_0", "to": "nsim_1", "msg_type": "ReadReq", "tick": 381544500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 381544500, "dt_ps": 410000}, {"from": "nsim_0", "to": "ubio_0", "msg_type": "dst=0", "tick": 381954500, "dt_ps": 3000}, {"from": "ubio_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 381957500, "dt_ps": 2500}, {"from": "ubio_0", "to": "gem5_0", "msg_type": "RecallReq", "tick": 381960000, "dt_ps": 41000}, {"from": "gem5_0", "to": "ubio_0", "msg_type": "RecallResp", "tick": 382001000, "dt_ps": 0}, {"from": "ubio_0", "to": "ubio_1", "msg_type": "RecallResp", "tick": 382001000, "dt_ps": 2500}, {"from": "ubio_1", "to": "nsim_0", "msg_type": "ReadResp", "tick": 382003500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 382003500, "dt_ps": 410000}, {"from": "nsim_1", "to": "ubio_1", "msg_type": "dst=1", "tick": 382413500, "dt_ps": 4000}]}, {"key": "9223372036854775819:0x4", "reqId": 9223372036854775819, "pa": "0x4", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 381960000, "last_tick": 381960000, "response_tick": 381960000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x4 | ubio_0", "segments": [], "events": [{"tick": 381960000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#2", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382423000, "last_tick": 382423000, "response_tick": 382423000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_1", "segments": [], "events": [{"tick": 382423000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#3", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382423000, "last_tick": 382423000, "response_tick": 382423000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | gem5_1", "segments": [], "events": [{"tick": 382423000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#4", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382425500, "last_tick": 382425500, "response_tick": 382425500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10030000 | ubio_0 \u2192 nsim_1", "segments": [], "events": [{"tick": 382425500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 382425500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 382425500, "dt_ps": 0}]}, {"key": "72057594037927938:0x10030000#5", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382463000, "last_tick": 382463000, "response_tick": 382463000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_1", "segments": [], "events": [{"tick": 382463000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#6", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382463000, "last_tick": 382463000, "response_tick": 382463000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | gem5_1", "segments": [], "events": [{"tick": 382463000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#7", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382465500, "last_tick": 382835500, "response_tick": 382835500, "dur_ps": 370000, "dur_ns": 370.0, "crit_ps": 370000, "crit_ns": 370.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10030000 | ubio_0 \u2192 nsim_1 \u2192 nsim_0", "segments": [{"from_tick": 382465500, "to_tick": 382835500, "dt_ps": 370000, "dt_ns": 370.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}], "events": [{"tick": 382465500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 382465500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 382835500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 382465500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 382465500, "dt_ps": 370000}]}, {"key": "72057594037927938:0x10030000#8", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382840000, "last_tick": 382840000, "response_tick": 382840000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 382840000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#9", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 382842500, "last_tick": 382875500, "response_tick": 382875500, "dur_ps": 33000, "dur_ns": 33.0, "crit_ps": 33000, "crit_ns": 33.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10030000 | ubio_1 \u2192 nsim_0", "segments": [{"from_tick": 382842500, "to_tick": 382875500, "dt_ps": 33000, "dt_ns": 33.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 0}], "events": [{"tick": 382842500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 382842500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 382875500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 382842500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_0", "msg_type": "src=0 dst=1", "tick": 382842500, "dt_ps": 33000}]}, {"key": "72057594037927938:0x10030000#10", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 382880000, "last_tick": 382880000, "response_tick": 382880000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 382880000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927938:0x10030000#11", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 382882500, "last_tick": 383252500, "response_tick": 383252500, "dur_ps": 370000, "dur_ns": 370.0, "crit_ps": 370000, "crit_ns": 370.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10030000 | ubio_1 \u2192 nsim_0 \u2192 nsim_1", "segments": [{"from_tick": 382882500, "to_tick": 383252500, "dt_ps": 370000, "dt_ns": 370.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 382882500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 382882500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 383252500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 382882500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 382882500, "dt_ps": 370000}]}, {"key": "72057594037927938:0x10030000#12", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 383255000, "last_tick": 383255000, "response_tick": 383255000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_1", "segments": [], "events": [{"tick": 383255000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927938:0x10030000#13", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 383257500, "last_tick": 383292500, "response_tick": 383292500, "dur_ps": 35000, "dur_ns": 35.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10030000 | ubio_0 \u2192 nsim_1", "segments": [{"from_tick": 383257500, "to_tick": 383292500, "dt_ps": 35000, "dt_ns": 35.0, "type": "ubio\u2192nsim", "from_ev": "ubio:SEND_GEM5", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 383257500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 383292500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearResp", "tick": 383257500, "dt_ps": 35000}]}, {"key": "72057594037927938:0x10030000#14", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 383295000, "last_tick": 383295000, "response_tick": 383295000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_1", "segments": [], "events": [{"tick": 383295000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927938:0x10030000#15", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 383297500, "last_tick": 383297500, "response_tick": 383297500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | ubio_0", "segments": [], "events": [{"tick": 383297500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927938:0x10030000#16", "reqId": 72057594037927938, "pa": "0x10030000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 383297500, "last_tick": 383297500, "response_tick": 383297500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10030000 | gem5_1", "segments": [], "events": [{"tick": 383297500, "comp": "gem5", "event": "RECV", "node": 1, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927939:0x10060000", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 390100000, "last_tick": 390100000, "response_tick": 390100000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 390100000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#1", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 390100000, "last_tick": 390977500, "response_tick": 390975000, "dur_ps": 875000, "dur_ns": 875.0, "crit_ps": 820000, "crit_ns": 820.0, "ev_count": 13, "is_clear": false, "summary": "pa=0x10060000 | gem5_1 \u2192 ubio_0 \u2192 nsim_1 \u2192 nsim_0 \u2192 ubio_0 \u2192 gem5_0 \u2192 ubio_0 \u2192 ubio_1 \u2192 nsim_0 \u2192 nsim_1 \u2192 ubio_1", "segments": [{"from_tick": 390100000, "to_tick": 390102500, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_NET", "from_node": 1, "to_node": 0}, {"from_tick": 390102500, "to_tick": 390512500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}, {"from_tick": 390512500, "to_tick": 390515000, "dt_ps": 2500, "dt_ns": 2.5, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 0, "to_node": 0}, {"from_tick": 390515000, "to_tick": 390517500, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_NET", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}, {"from_tick": 390517500, "to_tick": 390558500, "dt_ps": 41000, "dt_ns": 41.0, "type": "ubio\u2192gem5", "from_ev": "ubio:SEND_GEM5", "to_ev": "gem5:SEND", "from_node": 0, "to_node": 0}, {"from_tick": 390558500, "to_tick": 390561000, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_GEM5", "to_ev": "ubio:SEND_NET", "from_node": 0, "to_node": 1}, {"from_tick": 390561000, "to_tick": 390971000, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}, {"from_tick": 390971000, "to_tick": 390975000, "dt_ps": 4000, "dt_ns": 4.0, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 1, "to_node": 1}], "events": [{"tick": 390100000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 390102500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 390102500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 390512500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}, {"tick": 390515000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 390517500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "RecallReq", "msg_type": "RecallReq"}, {"tick": 390558500, "comp": "gem5", "event": "SEND", "node": 0, "extra": "RecallResp|dst=0", "msg_type": "RecallResp"}, {"tick": 390558500, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "RecallResp", "msg_type": "RecallResp"}, {"tick": 390561000, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 390561000, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 390971000, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}, {"tick": 390975000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 390977500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_1", "to": "ubio_0", "msg_type": "ReadReq", "tick": 390100000, "dt_ps": 2500}, {"from": "ubio_0", "to": "nsim_1", "msg_type": "ReadReq", "tick": 390102500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 390102500, "dt_ps": 410000}, {"from": "nsim_0", "to": "ubio_0", "msg_type": "dst=0", "tick": 390512500, "dt_ps": 2500}, {"from": "ubio_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 390515000, "dt_ps": 2500}, {"from": "ubio_0", "to": "gem5_0", "msg_type": "RecallReq", "tick": 390517500, "dt_ps": 41000}, {"from": "gem5_0", "to": "ubio_0", "msg_type": "RecallResp", "tick": 390558500, "dt_ps": 0}, {"from": "ubio_0", "to": "ubio_1", "msg_type": "RecallResp", "tick": 390558500, "dt_ps": 2500}, {"from": "ubio_1", "to": "nsim_0", "msg_type": "ReadResp", "tick": 390561000, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 390561000, "dt_ps": 410000}, {"from": "nsim_1", "to": "ubio_1", "msg_type": "dst=1", "tick": 390971000, "dt_ps": 4000}]}, {"key": "9223372036854775820:0x1", "reqId": 9223372036854775820, "pa": "0x1", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 390517500, "last_tick": 390517500, "response_tick": 390517500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x1 | ubio_0", "segments": [], "events": [{"tick": 390517500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#2", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 390980500, "last_tick": 390980500, "response_tick": 390980500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 390980500, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#3", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 390980500, "last_tick": 390980500, "response_tick": 390980500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | gem5_1", "segments": [], "events": [{"tick": 390980500, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#4", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 390983000, "last_tick": 391393000, "response_tick": 391393000, "dur_ps": 410000, "dur_ns": 410.0, "crit_ps": 410000, "crit_ns": 410.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10060000 | ubio_0 \u2192 nsim_1 \u2192 nsim_0", "segments": [{"from_tick": 390983000, "to_tick": 391393000, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}], "events": [{"tick": 390983000, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 390983000, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 391393000, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 390983000, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 390983000, "dt_ps": 410000}]}, {"key": "72057594037927939:0x10060000#5", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391397500, "last_tick": 391397500, "response_tick": 391397500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_0", "segments": [], "events": [{"tick": 391397500, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#6", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 391400000, "last_tick": 391400000, "response_tick": 391400000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10060000 | ubio_1 \u2192 nsim_0", "segments": [], "events": [{"tick": 391400000, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 391400000, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 391400000, "dt_ps": 0}]}, {"key": "72057594037927939:0x10060000#7", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391542000, "last_tick": 391542000, "response_tick": 391542000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 391542000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#8", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391542000, "last_tick": 391542000, "response_tick": 391542000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | gem5_1", "segments": [], "events": [{"tick": 391542000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#9", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391544500, "last_tick": 391544500, "response_tick": 391544500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10060000 | ubio_0 \u2192 nsim_1", "segments": [], "events": [{"tick": 391544500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 391544500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 391544500, "dt_ps": 0}]}, {"key": "72057594037927939:0x10060000#10", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391598500, "last_tick": 391598500, "response_tick": 391598500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 391598500, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#11", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391598500, "last_tick": 391598500, "response_tick": 391598500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | gem5_1", "segments": [], "events": [{"tick": 391598500, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#12", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391601000, "last_tick": 391810000, "response_tick": 391810000, "dur_ps": 209000, "dur_ns": 209.0, "crit_ps": 209000, "crit_ns": 209.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10060000 | ubio_0 \u2192 nsim_1", "segments": [{"from_tick": 391601000, "to_tick": 391810000, "dt_ps": 209000, "dt_ns": 209.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 1}], "events": [{"tick": 391601000, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 391601000, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 391810000, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 391601000, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_1", "msg_type": "src=1 dst=0", "tick": 391601000, "dt_ps": 209000}]}, {"key": "72057594037927939:0x10060000#13", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 391812500, "last_tick": 391812500, "response_tick": 391812500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 391812500, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927939:0x10060000#14", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 391815000, "last_tick": 391954500, "response_tick": 391954500, "dur_ps": 139500, "dur_ns": 139.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10060000 | ubio_0 \u2192 nsim_0", "segments": [{"from_tick": 391815000, "to_tick": 391954500, "dt_ps": 139500, "dt_ns": 139.5, "type": "ubio\u2192nsim", "from_ev": "ubio:SEND_GEM5", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 0}], "events": [{"tick": 391815000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 391954500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_0", "msg_type": "ClearResp", "tick": 391815000, "dt_ps": 139500}]}, {"key": "72057594037927939:0x10060000#15", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 391957500, "last_tick": 391957500, "response_tick": 391957500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_0", "segments": [], "events": [{"tick": 391957500, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#16", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 391960000, "last_tick": 392011000, "response_tick": 392011000, "dur_ps": 51000, "dur_ns": 51.0, "crit_ps": 51000, "crit_ns": 51.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10060000 | ubio_1 \u2192 nsim_0", "segments": [{"from_tick": 391960000, "to_tick": 392011000, "dt_ps": 51000, "dt_ns": 51.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 0}], "events": [{"tick": 391960000, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 391960000, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 392011000, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 391960000, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_0", "msg_type": "src=0 dst=1", "tick": 391960000, "dt_ps": 51000}]}, {"key": "72057594037927939:0x10060000#17", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 392015000, "last_tick": 392015000, "response_tick": 392015000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_0", "segments": [], "events": [{"tick": 392015000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927939:0x10060000#18", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 392017500, "last_tick": 392370000, "response_tick": 392370000, "dur_ps": 352500, "dur_ns": 352.5, "crit_ps": 352500, "crit_ns": 352.5, "ev_count": 3, "is_clear": true, "summary": "pa=0x10060000 | ubio_1 \u2192 nsim_0 \u2192 nsim_1", "segments": [{"from_tick": 392017500, "to_tick": 392370000, "dt_ps": 352500, "dt_ns": 352.5, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 392017500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 392017500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 392370000, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 392017500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 392017500, "dt_ps": 352500}]}, {"key": "72057594037927939:0x10060000#19", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 392372500, "last_tick": 392372500, "response_tick": 392372500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 392372500, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927939:0x10060000#20", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 392375000, "last_tick": 392427500, "response_tick": 392427500, "dur_ps": 52500, "dur_ns": 52.5, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10060000 | ubio_0 \u2192 nsim_1", "segments": [{"from_tick": 392375000, "to_tick": 392427500, "dt_ps": 52500, "dt_ns": 52.5, "type": "ubio\u2192nsim", "from_ev": "ubio:SEND_GEM5", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 392375000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 392427500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearResp", "tick": 392375000, "dt_ps": 52500}]}, {"key": "72057594037927939:0x10060000#21", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 392430000, "last_tick": 392430000, "response_tick": 392430000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_1", "segments": [], "events": [{"tick": 392430000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927939:0x10060000#22", "reqId": 72057594037927939, "pa": "0x10060000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 392432500, "last_tick": 392432500, "response_tick": 392432500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10060000 | ubio_0", "segments": [], "events": [{"tick": 392432500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927940:0x10090000", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 398657500, "last_tick": 398657500, "response_tick": 398657500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x10090000 | ubio_1", "segments": [], "events": [{"tick": 398657500, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ReadReq", "msg_type": "ReadReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#1", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ReadReq", "category": "ReadReq", "first_tick": 398657500, "last_tick": 399535000, "response_tick": 399532500, "dur_ps": 875000, "dur_ns": 875.0, "crit_ps": 820000, "crit_ns": 820.0, "ev_count": 13, "is_clear": false, "summary": "pa=0x10090000 | gem5_1 \u2192 ubio_0 \u2192 nsim_1 \u2192 nsim_0 \u2192 ubio_0 \u2192 gem5_0 \u2192 ubio_0 \u2192 ubio_1 \u2192 nsim_0 \u2192 nsim_1 \u2192 ubio_1", "segments": [{"from_tick": 398657500, "to_tick": 398660000, "dt_ps": 2500, "dt_ns": 2.5, "type": "gem5\u2192ubio", "from_ev": "gem5:SEND", "to_ev": "ubio:SEND_NET", "from_node": 1, "to_node": 0}, {"from_tick": 398660000, "to_tick": 399070000, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}, {"from_tick": 399070000, "to_tick": 399072500, "dt_ps": 2500, "dt_ns": 2.5, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 0, "to_node": 0}, {"from_tick": 399072500, "to_tick": 399075000, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_NET", "to_ev": "ubio:SEND_GEM5", "from_node": 0, "to_node": 0}, {"from_tick": 399075000, "to_tick": 399116000, "dt_ps": 41000, "dt_ns": 41.0, "type": "ubio\u2192gem5", "from_ev": "ubio:SEND_GEM5", "to_ev": "gem5:SEND", "from_node": 0, "to_node": 0}, {"from_tick": 399116000, "to_tick": 399118500, "dt_ps": 2500, "dt_ns": 2.5, "type": "ubio_proc", "from_ev": "ubio:RECV_GEM5", "to_ev": "ubio:SEND_NET", "from_node": 0, "to_node": 1}, {"from_tick": 399118500, "to_tick": 399528500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}, {"from_tick": 399528500, "to_tick": 399532500, "dt_ps": 4000, "dt_ns": 4.0, "type": "nsim_sync", "from_ev": "nsim:FWD", "to_ev": "ubio:RECV_NET", "from_node": 1, "to_node": 1}], "events": [{"tick": 398657500, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ReadReq|dst=0", "msg_type": "ReadReq"}, {"tick": 398660000, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 398660000, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 399070000, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}, {"tick": 399072500, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ReadReq", "msg_type": "ReadReq"}, {"tick": 399075000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "RecallReq", "msg_type": "RecallReq"}, {"tick": 399116000, "comp": "gem5", "event": "SEND", "node": 0, "extra": "RecallResp|dst=0", "msg_type": "RecallResp"}, {"tick": 399116000, "comp": "ubio", "event": "RECV_GEM5", "node": 0, "extra": "RecallResp", "msg_type": "RecallResp"}, {"tick": 399118500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 399118500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 399528500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}, {"tick": 399532500, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ReadResp", "msg_type": "ReadResp"}, {"tick": 399535000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ReadResp", "msg_type": "ReadResp"}], "flow": [{"from": "gem5_1", "to": "ubio_0", "msg_type": "ReadReq", "tick": 398657500, "dt_ps": 2500}, {"from": "ubio_0", "to": "nsim_1", "msg_type": "ReadReq", "tick": 398660000, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 398660000, "dt_ps": 410000}, {"from": "nsim_0", "to": "ubio_0", "msg_type": "dst=0", "tick": 399070000, "dt_ps": 2500}, {"from": "ubio_0", "to": "ubio_0", "msg_type": "ReadReq", "tick": 399072500, "dt_ps": 2500}, {"from": "ubio_0", "to": "gem5_0", "msg_type": "RecallReq", "tick": 399075000, "dt_ps": 41000}, {"from": "gem5_0", "to": "ubio_0", "msg_type": "RecallResp", "tick": 399116000, "dt_ps": 0}, {"from": "ubio_0", "to": "ubio_1", "msg_type": "RecallResp", "tick": 399116000, "dt_ps": 2500}, {"from": "ubio_1", "to": "nsim_0", "msg_type": "ReadResp", "tick": 399118500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 399118500, "dt_ps": 410000}, {"from": "nsim_1", "to": "ubio_1", "msg_type": "dst=1", "tick": 399528500, "dt_ps": 4000}]}, {"key": "9223372036854775821:0x4", "reqId": 9223372036854775821, "pa": "0x4", "primary_type": "MetaRNFWriteReq", "category": "MetaRNFWriteReq", "first_tick": 399075000, "last_tick": 399075000, "response_tick": 399075000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": false, "summary": "pa=0x4 | ubio_0", "segments": [], "events": [{"tick": 399075000, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "MetaRNFWriteReq", "msg_type": "MetaRNFWriteReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#2", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 399538000, "last_tick": 399538000, "response_tick": 399538000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_1", "segments": [], "events": [{"tick": 399538000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#3", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 399538000, "last_tick": 399538000, "response_tick": 399538000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | gem5_1", "segments": [], "events": [{"tick": 399538000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#4", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 399540500, "last_tick": 399950500, "response_tick": 399950500, "dur_ps": 410000, "dur_ns": 410.0, "crit_ps": 410000, "crit_ns": 410.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10090000 | ubio_0 \u2192 nsim_1 \u2192 nsim_0", "segments": [{"from_tick": 399540500, "to_tick": 399950500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 0}], "events": [{"tick": 399540500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 399540500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 399950500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 399540500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_0", "msg_type": "src=1 dst=0", "tick": 399540500, "dt_ps": 410000}]}, {"key": "72057594037927940:0x10090000#5", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 399955000, "last_tick": 399955000, "response_tick": 399955000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 399955000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#6", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 399957500, "last_tick": 399957500, "response_tick": 399957500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10090000 | ubio_1 \u2192 nsim_0", "segments": [], "events": [{"tick": 399957500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 399957500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 399957500, "dt_ps": 0}]}, {"key": "72057594037927940:0x10090000#7", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 400100000, "last_tick": 400100000, "response_tick": 400100000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_1", "segments": [], "events": [{"tick": 400100000, "comp": "ubio", "event": "RECV_GEM5", "node": 1, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#8", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 400100000, "last_tick": 400100000, "response_tick": 400100000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | gem5_1", "segments": [], "events": [{"tick": 400100000, "comp": "gem5", "event": "SEND", "node": 1, "extra": "ClearReq|dst=0", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#9", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 400102500, "last_tick": 400367500, "response_tick": 400367500, "dur_ps": 265000, "dur_ns": 265.0, "crit_ps": 265000, "crit_ns": 265.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10090000 | ubio_0 \u2192 nsim_1", "segments": [{"from_tick": 400102500, "to_tick": 400367500, "dt_ps": 265000, "dt_ns": 265.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 1, "to_node": 1}], "events": [{"tick": 400102500, "comp": "ubio", "event": "SEND_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}, {"tick": 400102500, "comp": "nsim", "event": "RECV", "node": 1, "extra": "src=1 dst=0", "msg_type": "src=1 dst=0"}, {"tick": 400367500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_0", "to": "nsim_1", "msg_type": "ClearReq", "tick": 400102500, "dt_ps": 0}, {"from": "nsim_1", "to": "nsim_1", "msg_type": "src=1 dst=0", "tick": 400102500, "dt_ps": 265000}]}, {"key": "72057594037927940:0x10090000#10", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400370000, "last_tick": 400370000, "response_tick": 400370000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_1", "segments": [], "events": [{"tick": 400370000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927940:0x10090000#11", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400372500, "last_tick": 400512500, "response_tick": 400512500, "dur_ps": 140000, "dur_ns": 140.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 2, "is_clear": true, "summary": "pa=0x10090000 | ubio_0 \u2192 nsim_0", "segments": [{"from_tick": 400372500, "to_tick": 400512500, "dt_ps": 140000, "dt_ns": 140.0, "type": "ubio\u2192nsim", "from_ev": "ubio:SEND_GEM5", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 0}], "events": [{"tick": 400372500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 400512500, "comp": "nsim", "event": "FWD", "node": 0, "extra": "dst=0", "msg_type": "dst=0"}], "flow": [{"from": "ubio_0", "to": "nsim_0", "msg_type": "ClearResp", "tick": 400372500, "dt_ps": 140000}]}, {"key": "72057594037927940:0x10090000#12", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearReq", "category": "ClearReq", "first_tick": 400515000, "last_tick": 400515000, "response_tick": 400515000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 400515000, "comp": "ubio", "event": "RECV_NET", "node": 0, "extra": "ClearReq", "msg_type": "ClearReq"}], "flow": []}, {"key": "72057594037927940:0x10090000#13", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400517500, "last_tick": 400927500, "response_tick": 400927500, "dur_ps": 410000, "dur_ns": 410.0, "crit_ps": 410000, "crit_ns": 410.0, "ev_count": 3, "is_clear": true, "summary": "pa=0x10090000 | ubio_1 \u2192 nsim_0 \u2192 nsim_1", "segments": [{"from_tick": 400517500, "to_tick": 400927500, "dt_ps": 410000, "dt_ns": 410.0, "type": "nsim_link", "from_ev": "nsim:RECV", "to_ev": "nsim:FWD", "from_node": 0, "to_node": 1}], "events": [{"tick": 400517500, "comp": "ubio", "event": "SEND_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}, {"tick": 400517500, "comp": "nsim", "event": "RECV", "node": 0, "extra": "src=0 dst=1", "msg_type": "src=0 dst=1"}, {"tick": 400927500, "comp": "nsim", "event": "FWD", "node": 1, "extra": "dst=1", "msg_type": "dst=1"}], "flow": [{"from": "ubio_1", "to": "nsim_0", "msg_type": "ClearResp", "tick": 400517500, "dt_ps": 0}, {"from": "nsim_0", "to": "nsim_1", "msg_type": "src=0 dst=1", "tick": 400517500, "dt_ps": 410000}]}, {"key": "72057594037927940:0x10090000#14", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400930000, "last_tick": 400930000, "response_tick": 400930000, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_1", "segments": [], "events": [{"tick": 400930000, "comp": "ubio", "event": "RECV_NET", "node": 1, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927940:0x10090000#15", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400932500, "last_tick": 400932500, "response_tick": 400932500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | ubio_0", "segments": [], "events": [{"tick": 400932500, "comp": "ubio", "event": "SEND_GEM5", "node": 0, "extra": "ClearResp", "msg_type": "ClearResp"}], "flow": []}, {"key": "72057594037927940:0x10090000#16", "reqId": 72057594037927940, "pa": "0x10090000", "primary_type": "ClearResp", "category": "ClearResp", "first_tick": 400932500, "last_tick": 400932500, "response_tick": 400932500, "dur_ps": 0, "dur_ns": 0.0, "crit_ps": 0, "crit_ns": 0.0, "ev_count": 1, "is_clear": true, "summary": "pa=0x10090000 | gem5_1", "segments": [], "events": [{"tick": 400932500, "comp": "gem5", "event": "RECV", "node": 1, "extra": "ClearResp|src=0", "msg_type": "ClearResp"}], "flow": []}]</script>
+<script>
+var CHAINS = JSON.parse(document.getElementById("chain-data").textContent);
+var T_MIN = 76312000;
+var T_MAX = 614267500;
+var SPAN = 537955500;
+var TARGET_NS = 415.0;
+var TARGET_PS = TARGET_NS ? TARGET_NS * 1000 : 0;
+
+var currentView = 'timeline';
+var selectedChain = null;
+var expandedChains = new Set();
+
+var SEG_COLORS = {
+  "gem5→ubio": "#3b82f6",
+  "ubio→nsim": "#f97316",
+  "nsim_link": "#7c3aed",
+  "nsim_sync": "#64748b",
+  "nsim→ubio": "#8b5cf6",
+  "nsim_fifo": "#71717a",
+  "ubio→gem5": "#22c55e",
+  "ubio_proc": "#eab308",
+  "gem5_proc": "#16a34a",
+  "other": "#94a3b8",
+};
+
+var TYPE_COLORS = {
+  "ReadReq": "#3b82f6",
+  "ReadReq(write=0)": "#3b82f6",
+  "ReadReq(write=1)": "#6366f1",
+  "UpgradeReq": "#f59e0b",
+  "WriteReq": "#ef4444",
+  "Writeback": "#22c55e",
+  "ClearReq": "#94a3b8",
+  "ClearResp": "#94a3b8",
+  "RecallReq": "#f97316",
+  "RecallResp": "#f97316",
+  "ReadResp": "#3b82f6",
+  "MetaRNFWriteReq": "#8b5cf6",
+};
+
+function ns(n) {
+  if (n < 10) return n.toFixed(1) + "ns";
+  if (n < 1000) return n.toFixed(0) + "ns";
+  return (n / 1000).toFixed(1) + "μs";
+}
+
+function psToNs(p) { return p * 1e-3; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function getFilteredChains() {
+  var fpa = document.getElementById("f-pa").value.toLowerCase();
+  var frid = document.getElementById("f-rid").value;
+  var ftype = document.getElementById("f-type").value;
+  var mh = parseInt(document.getElementById("f-hops").value) || 2;
+
+  return CHAINS.filter(function(ch) {
+    if (fpa && (ch.pa || "").toLowerCase().indexOf(fpa) < 0) return false;
+    if (frid && String(ch.reqId).indexOf(frid) !== 0) return false;
+    if (ftype && ch.primary_type !== ftype && ch.category !== ftype) return false;
+    // Count unique hops
+    var hops = new Set();
+    ch.events.forEach(function(e) { hops.add(e.comp + "_" + e.node); });
+    if (hops.size < mh) return false;
+    return true;
+  });
+}
+
+function applyFilters() {
+  var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 1, 50);
+  document.getElementById("zoom-val").textContent = zoom.toFixed(1) + "x";
+  renderSidebar();
+  renderContent();
+  updateStats();
+}
+
+function updateStats() {
+  var filtered = getFilteredChains();
+  var total = CHAINS.length;
+  var durs = filtered.map(function(c) { return c.dur_ns; }).sort(function(a,b){return a-b;});
+  var n = durs.length;
+  var p50 = n > 0 ? durs[Math.floor(n * 0.5)] : 0;
+  var p99 = n > 0 ? durs[Math.floor(n * 0.99)] : 0;
+  var mean = n > 0 ? durs.reduce(function(s,v){return s+v;}, 0) / n : 0;
+
+  document.getElementById("stats").innerHTML =
+    "Showing " + filtered.length + "/" + total + " chains | " +
+    "P50=" + ns(p50) + " P99=" + ns(p99) + " Mean=" + ns(mean) + " | " +
+    "Time: " + ns(psToNs(T_MIN)) + " – " + ns(psToNs(T_MAX));
+}
+
+function renderSidebar() {
+  var filtered = getFilteredChains();
+  var sidebar = document.getElementById("sidebar");
+  sidebar.innerHTML = "";
+
+  filtered.forEach(function(ch, i) {
+    var div = document.createElement("div");
+    div.className = "chain-item" + (selectedChain === ch.key ? " selected" : "");
+    div.setAttribute("data-key", ch.key);
+
+    var tc = TYPE_COLORS[ch.category] || "#94a3b8";
+    div.innerHTML =
+      '<span class="chain-type" style="background:' + tc + ';color:#fff">' +
+        (ch.is_clear ? "CLEAR" : ch.primary_type) + '</span>' +
+      '<span class="chain-rid">rid=' + ch.reqId + '</span> ' +
+      '<span class="chain-dur">' + ns(ch.dur_ns) + '</span>' +
+      (ch.crit_ns > 0 ? ' <span class="chain-crit">crit=' + ns(ch.crit_ns) + '</span>' : '') +
+      '<br><span class="chain-pa">' + (ch.pa || "?") + ' ev=' + ch.ev_count + '</span>';
+
+    div.onclick = function() {
+      selectedChain = ch.key;
+      renderSidebar();
+      renderContent();
+    };
+    sidebar.appendChild(div);
+  });
+}
+
+function renderContent() {
+  switch (currentView) {
+    case 'timeline': renderTimeline(); break;
+    case 'flow': renderFlow(); break;
+    case 'breakdown': renderBreakdown(); break;
+    case 'stats': renderStats(); break;
+  }
+}
+
+function renderTimeline() {
+  var filtered = getFilteredChains();
+  var zoom = clamp(parseFloat(document.getElementById("f-zoom").value) || 1, 1, 50);
+  var content = document.getElementById("content");
+  content.innerHTML = "";
+
+  var container = document.createElement("div");
+  container.className = "timeline-container";
+
+  // Time ruler
+  var ruler = document.createElement("div");
+  ruler.className = "timeline-ruler";
+  var baseW = Math.max(content.clientWidth - 40, 800);
+  var cw = baseW * zoom;
+  ruler.style.width = cw + "px";
+
+  var spanPs = T_MAX - T_MIN;
+  var targetMarks = Math.max(6, Math.round(10 * zoom));
+  var rawStep = spanPs / targetMarks;
+  var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  var residual = rawStep / mag;
+  var stepPs;
+  if (residual < 1.5) stepPs = 1 * mag;
+  else if (residual < 3.5) stepPs = 2 * mag;
+  else if (residual < 7.5) stepPs = 5 * mag;
+  else stepPs = 10 * mag;
+  stepPs = Math.max(stepPs, 1);
+
+  for (var tPs = T_MIN; tPs <= T_MAX + stepPs; tPs += stepPs) {
+    var px = (tPs - T_MIN) / spanPs * cw;
+    if (px > cw + 1) break;
+    var mark = document.createElement("div");
+    mark.className = "ruler-mark";
+    mark.style.left = px + "px";
+    ruler.appendChild(mark);
+    var lbl = document.createElement("div");
+    lbl.className = "ruler-label";
+    lbl.style.left = px + "px";
+    lbl.textContent = ns(psToNs(tPs));
+    ruler.appendChild(lbl);
+  }
+
+  if (TARGET_PS > 0) {
+    var tpx = TARGET_PS / spanPs * cw;
+    var tlbl = document.createElement("div");
+    tlbl.className = "ruler-label";
+    tlbl.style.left = (tpx + 4) + "px";
+    tlbl.style.top = "0px";
+    tlbl.style.color = "#ef4444";
+    tlbl.style.fontWeight = "600";
+    tlbl.textContent = "target=" + ns(TARGET_NS);
+    ruler.appendChild(tlbl);
+  }
+
+  container.appendChild(ruler);
+
+  // Swimlanes
+  filtered.forEach(function(ch) {
+    var row = document.createElement("div");
+    row.className = "swimlane" + (selectedChain === ch.key ? " selected" : "");
+
+    var label = document.createElement("div");
+    label.className = "swimlane-label";
+    var tc = TYPE_COLORS[ch.category] || "#94a3b8";
+    label.innerHTML =
+      '<span style="display:inline-block;padding:1px 4px;border-radius:3px;font-size:10px;font-weight:600;background:' +
+      tc + ';color:#fff">' + (ch.is_clear ? "CLEAR" : ch.primary_type) + '</span> ' +
+      '<span style="color:#60a5fa;font-weight:600">rid=' + ch.reqId + '</span> ' +
+      '<span style="color:#fbbf24;font-weight:600">' + ns(ch.dur_ns) + '</span>' +
+      (ch.crit_ns > 0 ? ' <span style="color:#a78bfa;font-size:10px">crit=' + ns(ch.crit_ns) + '</span>' : '') +
+      '<br><span style="color:#94a3b8;font-size:10px">' + (ch.pa || "?") + '</span>';
+    label.onclick = function() {
+      selectedChain = ch.key;
+      renderSidebar();
+      renderContent();
+    };
+    row.appendChild(label);
+
+    var canvas = document.createElement("div");
+    canvas.className = "swimlane-canvas";
+    canvas.style.width = cw + "px";
+
+    ch.segments.forEach(function(s) {
+      var lpx = (s.from_tick - T_MIN) / spanPs * cw;
+      var wpx = Math.max(s.dt_ps / spanPs * cw, 2);
+      if (wpx < 0.5) return;
+
+      var seg = document.createElement("div");
+      seg.className = "seg seg-" + s.type.replace("→", "-");
+      seg.style.left = lpx.toFixed(1) + "px";
+      seg.style.width = wpx.toFixed(1) + "px";
+
+      if (wpx > 40) {
+        seg.textContent = "+" + ns(s.dt_ns);
+        seg.style.fontSize = "9px";
+        seg.style.color = "#fff";
+        seg.style.fontWeight = "600";
+        seg.style.paddingLeft = "3px";
+        seg.style.lineHeight = "20px";
+        seg.style.overflow = "hidden";
+      }
+
+      seg.setAttribute("data-tip",
+        s.type + "|" + ns(s.dt_ns) + "|" + s.from_ev + " → " + s.to_ev +
+        "|from n" + s.from_node + " to n" + s.to_node);
+      seg.onmouseenter = showTooltip;
+      seg.onmouseleave = hideTooltip;
+      canvas.appendChild(seg);
+    });
+
+    row.appendChild(canvas);
+    container.appendChild(row);
+
+    // Expanded detail
+    if (expandedChains.has(ch.key)) {
+      var detail = document.createElement("div");
+      detail.className = "detail-panel";
+      var tbl = document.createElement("table");
+      var lastTick = null;
+      ch.events.forEach(function(ev) {
+        var tr = document.createElement("tr");
+        var dtStr = "";
+        if (lastTick !== null) {
+          dtStr = "+" + ns(psToNs(ev.tick - lastTick));
+        }
+        [ev.tick, ev.comp + ":" + ev.event, "n" + ev.node,
+         ev.msg_type, ev.extra || "", dtStr].forEach(function(v, ci) {
+          var td = tr.appendChild(document.createElement("td"));
+          td.textContent = v;
+          if (ci === 0) td.className = "tick";
+          if (ci === 5 && dtStr) td.className = "dt";
+        });
+        tbl.appendChild(tr);
+        lastTick = ev.tick;
+      });
+      detail.appendChild(tbl);
+      container.appendChild(detail);
+    }
+  });
+
+  content.appendChild(container);
+}
+
+function renderFlow() {
+  var filtered = getFilteredChains();
+  var content = document.getElementById("content");
+  content.innerHTML = "";
+
+  var container = document.createElement("div");
+  container.className = "flow-container";
+
+  var chainsToShow = selectedChain ?
+    filtered.filter(function(c) { return c.key === selectedChain; }) :
+    filtered.slice(0, 5); // Show first 5 if none selected
+
+  chainsToShow.forEach(function(ch) {
+    var diagram = document.createElement("div");
+    diagram.className = "flow-diagram";
+    diagram.style.marginBottom = "16px";
+
+    var title = document.createElement("div");
+    title.style.marginBottom = "12px";
+    title.innerHTML = '<span style="color:#60a5fa;font-weight:600">rid=' + ch.reqId + '</span> ' +
+      '<span style="color:#fbbf24">' + ns(ch.dur_ns) + '</span> ' +
+      '<span style="color:#94a3b8">' + (ch.pa || "?") + '</span>';
+    diagram.appendChild(title);
+
+    // Build unique node sequence
+    var nodeSeq = [];
+    var seen = new Set();
+    ch.flow.forEach(function(step) {
+      if (!seen.has(step.from)) {
+        nodeSeq.push(step.from);
+        seen.add(step.from);
+      }
+      if (!seen.has(step.to)) {
+        nodeSeq.push(step.to);
+        seen.add(step.to);
+      }
+    });
+
+    // Draw flow
+    var flowDiv = document.createElement("div");
+    flowDiv.style.display = "flex";
+    flowDiv.style.flexWrap = "wrap";
+    flowDiv.style.alignItems = "center";
+    flowDiv.style.gap = "4px";
+
+    nodeSeq.forEach(function(node, i) {
+      var nodeDiv = document.createElement("div");
+      nodeDiv.className = "flow-node";
+      var parts = node.split("_");
+      var comp = parts[0];
+      var nodeId = parts[1];
+      var color = comp === "gem5" ? "#3b82f6" : comp === "ubio" ? "#22c55e" : "#f97316";
+      nodeDiv.style.borderLeft = "3px solid " + color;
+      nodeDiv.textContent = node;
+      flowDiv.appendChild(nodeDiv);
+
+      if (i < nodeSeq.length - 1) {
+        var arrow = document.createElement("div");
+        arrow.className = "flow-arrow";
+        arrow.textContent = "→";
+        flowDiv.appendChild(arrow);
+      }
+    });
+
+    diagram.appendChild(flowDiv);
+
+    // Show message sequence
+    var msgDiv = document.createElement("div");
+    msgDiv.style.marginTop = "12px";
+    msgDiv.style.fontSize = "11px";
+    msgDiv.style.color = "#94a3b8";
+    ch.flow.forEach(function(step) {
+      var span = document.createElement("span");
+      span.style.marginRight = "12px";
+      span.innerHTML = step.from + ' <span style="color:#60a5fa">→</span> ' + step.to +
+        ' <span style="color:#fbbf24">(' + step.msg_type + ')</span>';
+      msgDiv.appendChild(span);
+    });
+    diagram.appendChild(msgDiv);
+
+    container.appendChild(diagram);
+  });
+
+  content.appendChild(container);
+}
+
+function renderBreakdown() {
+  var filtered = getFilteredChains();
+  var content = document.getElementById("content");
+  content.innerHTML = "";
+
+  var container = document.createElement("div");
+  container.className = "breakdown-container";
+
+  var chainsToShow = selectedChain ?
+    filtered.filter(function(c) { return c.key === selectedChain; }) :
+    filtered.slice(0, 10);
+
+  chainsToShow.forEach(function(ch) {
+    var div = document.createElement("div");
+    div.style.marginBottom = "16px";
+    div.style.background = "#1e293b";
+    div.style.borderRadius = "8px";
+    div.style.padding = "12px";
+
+    var title = document.createElement("div");
+    title.style.marginBottom = "8px";
+    title.innerHTML = '<span style="color:#60a5fa;font-weight:600">rid=' + ch.reqId + '</span> ' +
+      '<span style="color:#fbbf24">' + ns(ch.dur_ns) + '</span>';
+    div.appendChild(title);
+
+    // Breakdown bar
+    var bar = document.createElement("div");
+    bar.className = "breakdown-bar";
+    var totalDur = ch.dur_ps || 1;
+
+    ch.segments.forEach(function(s) {
+      var pct = (s.dt_ps / totalDur * 100).toFixed(1);
+      var seg = document.createElement("div");
+      seg.className = "breakdown-seg";
+      seg.style.width = pct + "%";
+      seg.style.background = SEG_COLORS[s.type] || "#94a3b8";
+      seg.setAttribute("data-tip", s.type + ": " + ns(s.dt_ns) + " (" + pct + "%)");
+      seg.onmouseenter = showTooltip;
+      seg.onmouseleave = hideTooltip;
+      bar.appendChild(seg);
+    });
+
+    div.appendChild(bar);
+
+    // Legend
+    var legend = document.createElement("div");
+    legend.className = "breakdown-legend";
+    var segTypes = {};
+    ch.segments.forEach(function(s) {
+      if (!segTypes[s.type]) segTypes[s.type] = 0;
+      segTypes[s.type] += s.dt_ns;
+    });
+    Object.keys(segTypes).forEach(function(type) {
+      var item = document.createElement("div");
+      item.className = "legend-item";
+      item.innerHTML = '<div class="legend-color" style="background:' + (SEG_COLORS[type] || "#94a3b8") + '"></div>' +
+        type + ': ' + ns(segTypes[type]);
+      legend.appendChild(item);
+    });
+    div.appendChild(legend);
+
+    container.appendChild(div);
+  });
+
+  content.appendChild(container);
+}
+
+function renderStats() {
+  var filtered = getFilteredChains();
+  var content = document.getElementById("content");
+  content.innerHTML = "";
+
+  var container = document.createElement("div");
+  container.className = "stats-container";
+
+  // Compute stats
+  var durs = filtered.map(function(c) { return c.dur_ns; }).sort(function(a,b){return a-b;});
+  var n = durs.length;
+  var p50 = n > 0 ? durs[Math.floor(n * 0.5)] : 0;
+  var p99 = n > 0 ? durs[Math.floor(n * 0.99)] : 0;
+  var mean = n > 0 ? durs.reduce(function(s,v){return s+v;}, 0) / n : 0;
+  var min = n > 0 ? durs[0] : 0;
+  var max = n > 0 ? durs[n-1] : 0;
+
+  // By type stats
+  var byType = {};
+  filtered.forEach(function(ch) {
+    var type = ch.primary_type;
+    if (!byType[type]) byType[type] = [];
+    byType[type].push(ch.dur_ns);
+  });
+
+  var grid = document.createElement("div");
+  grid.className = "stats-grid";
+
+  var statsData = [
+    {title: "Total Chains", value: n, unit: ""},
+    {title: "P50 Latency", value: ns(p50), unit: ""},
+    {title: "P99 Latency", value: ns(p99), unit: ""},
+    {title: "Mean Latency", value: ns(mean), unit: ""},
+    {title: "Min Latency", value: ns(min), unit: ""},
+    {title: "Max Latency", value: ns(max), unit: ""},
+  ];
+
+  statsData.forEach(function(s) {
+    var card = document.createElement("div");
+    card.className = "stats-card";
+    card.innerHTML = '<h3>' + s.title + '</h3><div class="value">' + s.value + '</div>';
+    grid.appendChild(card);
+  });
+
+  container.appendChild(grid);
+
+  // By type table
+  var typeTable = document.createElement("table");
+  typeTable.style.marginTop = "16px";
+  typeTable.style.width = "100%";
+  typeTable.style.borderCollapse = "collapse";
+  var header = typeTable.insertRow();
+  ["Type", "Count", "P50", "P99", "Mean"].forEach(function(h) {
+    var th = document.createElement("th");
+    th.textContent = h;
+    th.style.textAlign = "left";
+    th.style.padding = "4px 8px";
+    th.style.borderBottom = "1px solid #334155";
+    th.style.color = "#94a3b8";
+    header.appendChild(th);
+  });
+
+  Object.keys(byType).sort().forEach(function(type) {
+    var vals = byType[type].sort(function(a,b){return a-b;});
+    var n = vals.length;
+    var row = typeTable.insertRow();
+    [type, n, ns(vals[Math.floor(n*0.5)]), ns(vals[Math.floor(n*0.99)]),
+     ns(vals.reduce(function(s,v){return s+v;},0)/n)].forEach(function(v) {
+      var td = row.insertCell();
+      td.textContent = v;
+      td.style.padding = "2px 8px";
+    });
+  });
+
+  container.appendChild(typeTable);
+  content.appendChild(container);
+}
+
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.tab').forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-view') === view);
+  });
+  renderContent();
+}
+
+function toggleAll() {
+  var filtered = getFilteredChains();
+  var any = filtered.some(function(c) { return expandedChains.has(c.key); });
+  filtered.forEach(function(c) {
+    if (any) expandedChains.delete(c.key);
+    else expandedChains.add(c.key);
+  });
+  renderContent();
+}
+
+function exportCSV() {
+  var filtered = getFilteredChains();
+  var lines = ["reqId,pa,type,dur_ns,crit_ns,ev_count,is_clear"];
+  filtered.forEach(function(ch) {
+    lines.push([ch.reqId, ch.pa||"", ch.primary_type, ch.dur_ns, ch.crit_ns||0,
+                ch.ev_count, ch.is_clear].join(","));
+  });
+  var blob = new Blob([lines.join("\n")], {type:"text/csv"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "trace_chains.csv";
+  a.click();
+}
+
+function showTooltip(e) {
+  var tip = document.getElementById("tooltip");
+  tip.style.display = "block";
+  tip.style.left = (e.clientX + 12) + "px";
+  tip.style.top = (e.clientY - 10) + "px";
+  tip.innerHTML = this.getAttribute("data-tip").replace(/\|/g, "<br>");
+}
+
+function hideTooltip() {
+  document.getElementById("tooltip").style.display = "none";
+}
+
+// Initial render
+applyFilters();
+</script>
+</body>
+</html>

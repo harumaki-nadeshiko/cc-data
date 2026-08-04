@@ -424,6 +424,8 @@ class UBCCController
      * @param outRecallNeeded     Output (M6): set to true if recall is needed
      * @param outRecallOwnerNode  Output (M6): node ID of owner to recall (-1 if none)
      * @param outDataSource       Output (F3): data source for the grant
+     * @param outAuthEpoch        Output: GRANT_HANDSHAKE base epoch for Clear
+     * @param outGrantEpoch       Output: epoch owned by the granted cache line
      * @return                    Grant type (GlobalGrantShared/Exclusive/Modified)
      *                            or -1 cast to enum if BUSY
      */
@@ -436,7 +438,8 @@ class UBCCController
         bool *outRecallNeeded = nullptr,
         int *outRecallOwnerNode = nullptr,
         GrantDataSource *outDataSource = nullptr,
-        uint64_t *outAuthEpoch = nullptr);
+        uint64_t *outAuthEpoch = nullptr,
+        uint64_t *outGrantEpoch = nullptr);
 
     // ---- v4: Local Upgrade Management (§4.1.4) ----
     /**
@@ -753,6 +756,12 @@ class UBCCController
     bool debugSeedResidentForTest(uint64_t linePa, int mesi,
                                   uint64_t sharersMask, uint64_t epoch,
                                   bool residentDirty);
+    bool debugEnqueueResidentWaiterForTest(uint64_t linePa, int waitReason);
+    bool debugEnqueueResidentWaiterTupleForTest(
+        uint64_t linePa, ResidentOpKind opKind, int requesterNode,
+        int requesterSocket, uint64_t epoch, uint64_t reqId,
+        int waitReason);
+    bool debugClearResidentWaitersForTest(uint64_t linePa);
     bool debugForceResidentEvictForTest(uint64_t linePa);
 
     // ---- v4: Backstore Organization access ----
@@ -913,16 +922,28 @@ public:
         Queued,
         Busy,
     };
+    enum class ResidentWaiterEnqueueResult {
+        Enqueued,
+        Duplicate,
+        Full,
+    };
+    enum class ResidentEvictResult {
+        Removed,
+        Armed,
+        Blocked,
+    };
     ResidentAccessResult ensureResidentForAccess(
         uint64_t line_pa, const PendingRequester &pr, DirEntry &entry);
     ResidentAccessResult handleResidentMiss(
         uint64_t line_pa, const PendingRequester &pr, DirEntry &entry);
     void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
-    /** Returns true if the waiter was actually enqueued (not dedup'd/dropped). */
-    bool enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequester &pr);
+    ResidentWaiterEnqueueResult enqueueResidentWaiterIfNew(
+        uint64_t linePa, const PendingRequester &pr);
+    size_t retireCommittedResidentWaiters(const OutstandingRequest &ost);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);
-    bool evictOneVictim(uint64_t avoidPa);
+    void dumpStableCapacityBlockDiagnostics(Tick now) const;
+    ResidentEvictResult evictOneVictim(uint64_t avoidPa);
     void scheduleBackstoreWrite(uint64_t linePa);
     void scheduleBackstoreDelete(uint64_t linePa);
     void doAsyncWriteback();
@@ -988,6 +1009,7 @@ public:
     bool isExpiredRecall(const OutstandingRequest &ost) const;
     bool cleanupExpiredRecallIfNeeded(uint64_t linePa, bool replayWaiters);
     void cleanupExpiredRecalls();
+    void cleanupExpiredInvalidations();
 
     /**
      * Replay queued pending requesters after a Clear commit.
@@ -1037,13 +1059,23 @@ public:
     // Generic invariant warning counter
     uint64_t _invariantWarnCount;
 
+    // Stable-state liveness diagnostics. Aggregate state must remain unchanged
+    // for multiple heartbeat samples before the detailed dump fires.
+    size_t _diagLastResidentCount = 0;
+    size_t _diagLastOutstandingCount = 0;
+    size_t _diagLastResidentWaiterCount = 0;
+    size_t _diagLastPendingRequesterCount = 0;
+    unsigned _diagStableSamples = 0;
+    bool _diagStableDumped = false;
+
     // ---- v4 fanout helpers (home UBCC direct invalidation) ----
     bool fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
                                  uint64_t committedEpoch, uint64_t reqId,
                                  int requesterNode,
                                  UBCC_OuterReqType reqType, bool writeIntent,
                                  uint64_t *outEffectiveMask = nullptr);
-    bool evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim);
+    ResidentEvictResult evictOneVictimNaive(
+        uint64_t victimPa, const DirEntry &victim);
     void replayResidentWaitersForCapacity(uint64_t triggerPa);
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,

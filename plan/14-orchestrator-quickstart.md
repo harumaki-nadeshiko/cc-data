@@ -1,6 +1,6 @@
 # Orchestrator Quickstart
 
-本文件是 `coder-validator-orchestrator` 的精简启动入口。
+本文件是主 agent（primary agent，承担 orchestrator 角色）的精简启动入口。
 
 如果你是 orchestrator，本文件优先级最高；它告诉你现在该做什么、先读什么、在哪些条件下必须停下。
 

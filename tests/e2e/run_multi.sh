@@ -111,6 +111,89 @@ fault_rules_for_tc() {
         117) echo "tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1" ;;
         118) echo "tc118_drop:ClearReq:0:1:0x10018011800:drop::1;tc118_delay:ClearReq:0:1:0x10018011900:delay:100000:1" ;;
         119) echo "tc119_drop:ClearReq:0:1:0x10018011900:drop::1;tc119_dup:ClearReq:0:1:0x10018011940:dup::1;tc119_delay:ClearReq:0:1:0x10018011980:delay:100000:1" ;;
+        148)
+            local rules="" action idx global_idx pa delay
+            global_idx=0
+            for action in drop dup delay reorder; do
+                for idx in $(seq 0 7); do
+                    pa=$(printf '0x%x' $((0x10018014800 + global_idx * 64)))
+                    delay=""
+                    case "$action" in
+                        delay) delay=20000 ;;
+                        reorder) delay=100000 ;;
+                    esac
+                    [ -n "$rules" ] && rules="$rules;"
+                    rules="${rules}tc148_${action}_${idx}:ClearReq:0:1:${pa}:${action}:${delay}:1"
+                    global_idx=$((global_idx + 1))
+                done
+            done
+            echo "$rules"
+            ;;
+        149)
+            local rules="" idx pa
+            for idx in $(seq 0 7); do
+                pa=$(printf '0x%x' $((0x10018014900 + idx * 64)))
+                [ -n "$rules" ] && rules="$rules;"
+                rules="${rules}tc149_upgrade_drop_${idx}:UpgradeReq:0:1:${pa}:drop::1"
+            done
+            echo "$rules"
+            ;;
+        150|151|152)
+            local rules="" idx node pa action delay prefix
+            case "$1" in
+                150) action=dup; delay=""; prefix=invack_dup ;;
+                151) action=delay; delay=20000; prefix=invack_delay ;;
+                152) action=reorder; delay=100000; prefix=invack_reorder ;;
+            esac
+            for node in 1 2; do
+                for idx in $(seq 0 7); do
+                    pa=$(printf '0x%x' $((0x10018014900 + idx * 64)))
+                    [ -n "$rules" ] && rules="$rules;"
+                    rules="${rules}tc${1}_${prefix}_n${node}_${idx}:InvalidateAck:${node}:1:${pa}:${action}:${delay}:1"
+                done
+            done
+            echo "$rules"
+            ;;
+        153|154|155|156)
+            local rules="" idx pa action delay prefix
+            case "$1" in
+                153) action=dup; delay=""; prefix=recall_dup ;;
+                154) action=delay; delay=20000; prefix=recall_delay ;;
+                155) action=reorder; delay=100000; prefix=recall_reorder ;;
+                156) action=drop; delay=""; prefix=recall_drop ;;
+            esac
+            for idx in $(seq 0 15); do
+                pa=$(printf '0x%x' $((0x10018015300 + idx * 64)))
+                [ -n "$rules" ] && rules="$rules;"
+                rules="${rules}tc${1}_${prefix}_${idx}:RecallResp:0:1:${pa}:${action}:${delay}:1"
+            done
+            echo "$rules"
+            ;;
+        157)
+            local rules="" idx node pa
+            for node in 1 2; do
+                for idx in $(seq 0 7); do
+                    pa=$(printf '0x%x' $((0x10018014900 + idx * 64)))
+                    [ -n "$rules" ] && rules="$rules;"
+                    rules="${rules}tc157_invack_drop_n${node}_${idx}:InvalidateAck:${node}:1:${pa}:drop::1"
+                done
+            done
+            echo "$rules"
+            ;;
+        158|159)
+            local rules="" idx pa type prefix src dst
+            if [ "$1" = "158" ]; then
+                type=UpgradeResp; prefix=upgraderesp_drop; src=1; dst=0
+            else
+                type=UpgradeAckNotify; prefix=upgradeack_drop; src=1; dst=0
+            fi
+            for idx in $(seq 0 7); do
+                pa=$(printf '0x%x' $((0x10018014900 + idx * 64)))
+                [ -n "$rules" ] && rules="$rules;"
+                rules="${rules}tc${1}_${prefix}_${idx}:${type}:${src}:${dst}:${pa}:drop::1"
+            done
+            echo "$rules"
+            ;;
         *)  echo "" ;;
     esac
 }
@@ -160,8 +243,16 @@ ubio_extra_args_for_tc() {
             esac
             ;;
         142|143|144|145|146|147)
-            # Database workloads use a 512-entry, 1-way ResidentDir and stream
-            # 768 maintenance lines around a repeatedly used database hot set.
+            if [ "${PORTABLE_512K_DIR:-0}" = "1" ]; then
+                local portable_policy=spill portable_bloom=61440 portable_batch=0
+                case "${EP_PERF_PROFILE:-spill-noopt}" in
+                    naive|baseline) portable_policy=naive; portable_bloom=0 ;;
+                    optimized) portable_batch=1 ;;
+                esac
+                echo "--bloom-bytes=$portable_bloom --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=$portable_policy --batch-rs=$portable_batch ${UBCC_OPTS:-}"
+                return
+            fi
+            # Legacy tiny-directory stress profile.
             case "${EP_PERF_PROFILE:-spill-noopt}" in
                 naive|baseline) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
@@ -956,3 +1047,5 @@ done
 echo ""
 echo "=== Results: $PASS pass, $FAIL fail ==="
 echo "Logs: $LOG_BASE"
+
+[ "$FAIL" -eq 0 ]

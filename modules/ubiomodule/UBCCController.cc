@@ -1,5 +1,6 @@
 #include "UBCCController.hh"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -264,6 +265,7 @@ UBCCController::wakeup()
 {
     cleanupTombstones();
     cleanupExpiredRecalls();
+    cleanupExpiredInvalidations();
     const Tick now = curTick();
     if (now >= _lastStateLogTick + 100000000) {
         size_t tombstoneCount = 0;
@@ -282,8 +284,29 @@ UBCCController::wakeup()
                      now, _directory.count(), _outstandingReqs.size(),
                       tombstoneCount, residentWaiterCount, pendingRequesterCount,
                       _directory.capacity(),
-                      _overflowPolicy == ResidentOverflowPolicy::NaiveEvict
-                          ? "naive" : "spill");
+                       _overflowPolicy == ResidentOverflowPolicy::NaiveEvict
+                           ? "naive" : "spill");
+        const bool sameState =
+            _diagLastResidentCount == _directory.count() &&
+            _diagLastOutstandingCount == _outstandingReqs.size() &&
+            _diagLastResidentWaiterCount == residentWaiterCount &&
+            _diagLastPendingRequesterCount == pendingRequesterCount;
+        if (sameState) {
+            ++_diagStableSamples;
+        } else {
+            _diagLastResidentCount = _directory.count();
+            _diagLastOutstandingCount = _outstandingReqs.size();
+            _diagLastResidentWaiterCount = residentWaiterCount;
+            _diagLastPendingRequesterCount = pendingRequesterCount;
+            _diagStableSamples = 1;
+            _diagStableDumped = false;
+        }
+        if (!_diagStableDumped && _diagStableSamples >= 20 &&
+            _directory.count() == _directory.capacity() &&
+            residentWaiterCount != 0) {
+            dumpStableCapacityBlockDiagnostics(now);
+            _diagStableDumped = true;
+        }
         _lastStateLogTick = now;
     }
     if (_h64BloomAllMisses)
@@ -300,6 +323,131 @@ UBCCController::wakeup()
         _asyncWbCounter = 0;
         doAsyncWriteback();
     }
+}
+
+void
+UBCCController::dumpStableCapacityBlockDiagnostics(Tick now) const
+{
+    auto opTypeName = [](OpType type) {
+        switch (type) {
+          case OpType::RECALL: return "RECALL";
+          case OpType::INVALIDATE: return "INVALIDATE";
+          case OpType::NAIVE_EVICT_INVALIDATE: return "NAIVE_EVICT_INVALIDATE";
+          case OpType::GRANT_HANDSHAKE: return "GRANT_HANDSHAKE";
+          case OpType::UPGRADE_PENDING: return "UPGRADE_PENDING";
+        }
+        return "UNKNOWN";
+    };
+    auto stageName = [](OpStage stage) {
+        switch (stage) {
+          case OpStage::CREATED: return "CREATED";
+          case OpStage::WAITING_TARGET_RESP: return "WAITING_TARGET_RESP";
+          case OpStage::WAITING_ALL_ACKS: return "WAITING_ALL_ACKS";
+          case OpStage::WAITING_LOCAL_DONE: return "WAITING_LOCAL_DONE";
+          case OpStage::WAITING_CLEAR: return "WAITING_CLEAR";
+          case OpStage::DONE: return "DONE";
+          case OpStage::CANCELLED: return "CANCELLED";
+          case OpStage::TIMED_OUT: return "TIMED_OUT";
+          case OpStage::PERSISTENT_BUSY: return "PERSISTENT_BUSY";
+        }
+        return "UNKNOWN";
+    };
+
+    std::fprintf(stderr,
+        "[UBCC-STABLE-BLOCK-BEGIN] tick=%lu samples=%u dir=%zu/%zu "
+        "outstanding=%zu waiter_pas=%zu\n",
+        now, _diagStableSamples, _directory.count(), _directory.capacity(),
+        _outstandingReqs.size(), _residentWaiters.size());
+
+    for (const auto &kv : _outstandingReqs) {
+        const OutstandingRequest &ost = kv.second;
+        std::fprintf(stderr,
+            "[UBCC-STABLE-OUTSTANDING] pa=0x%lx op=%s stage=%s requester=%d "
+            "socket=%d target=%d targetMask=0x%lx reqId=%lu baseEpoch=%lu "
+            "reservedEpoch=%lu pendingAcks=%d createTick=%lu age=%lu "
+            "deadline=%lu retries=%u dataValid=%d replayArmed=%d\n",
+            kv.first, opTypeName(ost.opType), stageName(ost.stage),
+            ost.requesterNode, ost.requesterSocket, ost.targetNode,
+            ost.targetMask, ost.reqId, ost.baseEpoch, ost.reservedEpoch,
+            ost.pendingAckCount, ost.createTick,
+            now >= ost.createTick ? now - ost.createTick : 0,
+            ost.deadlineTick, static_cast<unsigned>(ost.recallRetries),
+            ost.dataValid ? 1 : 0, ost.replayArmed ? 1 : 0);
+    }
+
+    std::array<uint64_t, MAX_RESIDENT_WAITERS_TOTAL> setRepresentatives{};
+    size_t setCount = 0;
+    for (const auto &kv : _residentWaiters) {
+        if (kv.second.empty() ||
+            kv.second.front().waitReason != ResidentWaitReason::Capacity) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t i = 0; i < setCount; ++i) {
+            if (_directory.sameSet(kv.first, setRepresentatives[i])) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen && setCount < setRepresentatives.size()) {
+            setRepresentatives[setCount++] = kv.first;
+        }
+    }
+
+    for (size_t setIdx = 0; setIdx < setCount; ++setIdx) {
+        const uint64_t waiterPa = setRepresentatives[setIdx];
+        size_t setWaiters = 0;
+        for (const auto &kv : _residentWaiters) {
+            if (_directory.sameSet(kv.first, waiterPa)) {
+                setWaiters += kv.second.size();
+            }
+        }
+        std::fprintf(stderr,
+            "[UBCC-STABLE-SET] representative=0x%lx waiters=%zu free=%d\n",
+            waiterPa, setWaiters,
+            _directory.hasFreeSlotForPa(waiterPa) ? 1 : 0);
+
+        for (int set = 0; set < _directory.numSets(); ++set) {
+            for (int way = 0; way < _directory.numWays(); ++way) {
+                if (!_directory.getValid(set, way)) {
+                    continue;
+                }
+                const uint64_t pa = _directory.rebuildPA(set, way);
+                if (!_directory.sameSet(pa, waiterPa)) {
+                    continue;
+                }
+                DirEntry entry;
+                _directory.lookup(pa, entry);
+                auto pendingIt = _pendingRequesters.find(pa);
+                auto waiterIt = _residentWaiters.find(pa);
+                const bool outstanding = _outstandingReqs.count(pa) != 0;
+                const bool pending = pendingIt != _pendingRequesters.end() &&
+                    !pendingIt->second.empty();
+                const bool waiters = waiterIt != _residentWaiters.end() &&
+                    !waiterIt->second.empty();
+                const bool snapshot = _asyncWbSnapshots.count(pa) != 0;
+                const bool fill = _directory.fillPending(pa);
+                const bool wb = _directory.wbPending(pa);
+                const bool dirtyTombstone =
+                    _overflowPolicy == ResidentOverflowPolicy::Spill &&
+                    entry.state == MESIState::G_I && entry.residentDirty;
+                std::fprintf(stderr,
+                    "[UBCC-STABLE-WAY] representative=0x%lx set=%d way=%d "
+                    "pa=0x%lx state=%s sharers=0x%lx epoch=%lu dirty=%d "
+                    "pinned=%d reasons=outstanding:%d,pending:%d,waiters:%d,"
+                    "snapshot:%d,fill:%d,wb:%d,dirty_tombstone:%d\n",
+                    waiterPa, set, way, pa, mesiStateName(entry.state),
+                    entry.sharersMask, entry.epoch,
+                    entry.residentDirty ? 1 : 0,
+                    _directory.pinned(pa) ? 1 : 0,
+                    outstanding ? 1 : 0, pending ? 1 : 0, waiters ? 1 : 0,
+                    snapshot ? 1 : 0, fill ? 1 : 0, wb ? 1 : 0,
+                    dirtyTombstone ? 1 : 0);
+            }
+        }
+    }
+    std::fprintf(stderr, "[UBCC-STABLE-BLOCK-END] tick=%lu\n", now);
+    std::fflush(stderr);
 }
 
 // ---- isDsmAddr (pure computation, no SentinelHelper) ----
@@ -377,24 +525,23 @@ UBCCController::handleResidentMiss(
     if (!_directory.hasFreeSlotForPa(line_pa)) {
         PendingRequester pr2 = pr;  // copy caller's envelope
         pr2.waitReason = ResidentWaitReason::Capacity;
-        bool enqueued = enqueueResidentWaiterIfNew(line_pa, pr2);
-        bool evictProgress = false;
-        // Only attempt eviction if we actually have a new waiter;
-        // a dedup means the same operation is already waiting.
-        if (enqueued) {
-            evictProgress = evictOneVictim(line_pa);
-            if (evictProgress) {
-                replayResidentWaiters(line_pa);
-            }
+        const ResidentWaiterEnqueueResult enqueueResult =
+            enqueueResidentWaiterIfNew(line_pa, pr2);
+        // A duplicate means the operation is already retained, not that
+        // capacity progress can stop.  Likewise, a new request rejected by the
+        // bounded queue can still drive older waiters in this set.
+        const ResidentEvictResult evictResult = evictOneVictim(line_pa);
+        if (evictResult == ResidentEvictResult::Removed) {
+            replayResidentWaiters(line_pa);
         }
         auto wit = _residentWaiters.find(line_pa);
         size_t waiterDepth = (wit == _residentWaiters.end()) ? 0 : wit->second.size();
         if (_verboseLog) {
             fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
-                    "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu opKind=%d enqueued=%d\n",
-                    _nodeId, line_pa, evictProgress ? 1 : 0,
+                    "evictResult=%d count=%zu capacity=%zu waiterDepth=%zu opKind=%d enqueueResult=%d\n",
+                    _nodeId, line_pa, static_cast<int>(evictResult),
                     _directory.count(), _directory.capacity(), waiterDepth,
-                    static_cast<int>(pr.opKind), enqueued ? 1 : 0);
+                    static_cast<int>(pr.opKind), static_cast<int>(enqueueResult));
             fflush(stderr);
         }
         return ResidentAccessResult::Busy;
@@ -454,7 +601,7 @@ UBCCController::enqueueResidentWaiter(uint64_t linePa, const PendingRequester &p
     enqueueResidentWaiterIfNew(linePa, pr);
 }
 
-bool
+UBCCController::ResidentWaiterEnqueueResult
 UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequester &pr)
 {
     auto existing = _residentWaiters.find(linePa);
@@ -466,7 +613,7 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
                     _nodeId, linePa, total);
             fflush(stderr);
         }
-        return false;
+        return ResidentWaiterEnqueueResult::Full;
     }
     auto &q = _residentWaiters[linePa];
     if (q.size() >= MAX_PENDING_PER_PA) {
@@ -477,7 +624,7 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
                    pr.reqId, q.size());
             fflush(stderr);
         }
-        return false;
+        return ResidentWaiterEnqueueResult::Full;
     }
     // Dedup by (opKind, node, socket, reqId). For writeback/evict with reqId==0,
     // also compare opKind+node+epoch to prevent repeated enqueue of the same
@@ -492,7 +639,7 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
                            _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.reqId);
                     fflush(stderr);
                 }
-                return false;
+                return ResidentWaiterEnqueueResult::Duplicate;
             }
             if (pr.reqId == 0 && e.reqId == 0 && e.epoch == pr.epoch) {
                 if (_verboseLog) {
@@ -501,7 +648,7 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
                            _nodeId, linePa, static_cast<int>(pr.opKind), pr.node, pr.epoch);
                     fflush(stderr);
                 }
-                return false;
+                return ResidentWaiterEnqueueResult::Duplicate;
             }
         }
     }
@@ -511,7 +658,42 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
             _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
             pr.socket, pr.reqId, pr.epoch, q.size());
     fflush(stderr);
-    return true;
+    return ResidentWaiterEnqueueResult::Enqueued;
+}
+
+size_t
+UBCCController::retireCommittedResidentWaiters(const OutstandingRequest &ost)
+{
+    auto it = _residentWaiters.find(ost.linePa);
+    if (it == _residentWaiters.end()) {
+        return 0;
+    }
+
+    auto &q = it->second;
+    const size_t oldSize = q.size();
+    q.erase(std::remove_if(q.begin(), q.end(), [&](const PendingRequester &pr) {
+        if (pr.opKind != ResidentOpKind::Read ||
+            pr.node != ost.requesterNode ||
+            pr.socket != ost.requesterSocket ||
+            pr.reqId != ost.reqId) {
+            return false;
+        }
+        return ost.reqId != 0 || normalizeEpoch(pr.epoch) == ost.baseEpoch;
+    }), q.end());
+
+    const size_t retired = oldSize - q.size();
+    if (q.empty()) {
+        _residentWaiters.erase(it);
+    }
+    if (retired != 0) {
+        std::fprintf(stderr,
+                     "[RESIDENT-WAITER-RETIRE-COMMITTED] home=%d pa=0x%lx "
+                     "node=%d socket=%d reqId=%lu count=%zu\n",
+                     _nodeId, ost.linePa, ost.requesterNode,
+                     ost.requesterSocket, ost.reqId, retired);
+        std::fflush(stderr);
+    }
+    return retired;
 }
 
 void
@@ -526,6 +708,11 @@ UBCCController::refreshPinnedBit(uint64_t linePa)
     auto pit = _pendingRequesters.find(linePa);
     pin = pin || (pit != _pendingRequesters.end() && !pit->second.empty());
     auto rit = _residentWaiters.find(linePa);
+    // A capacity waiter normally targets a non-resident PA, where there is no
+    // entry to pin. If that PA becomes resident before the retained operation
+    // completes, however, the waiter owns real replay state (including a
+    // possible writeback payload) and must protect the entry from victim
+    // removal, which erases resident waiters for the victim PA.
     pin = pin || (rit != _residentWaiters.end() && !rit->second.empty());
     // An async metadata snapshot is in flight. Avoid racing a second eviction
     // or persistence operation for the same resident entry.
@@ -540,7 +727,7 @@ UBCCController::refreshPinnedBit(uint64_t linePa)
     _directory.setPinned(linePa, pin);
 }
 
-bool
+UBCCController::ResidentEvictResult
 UBCCController::evictOneVictim(uint64_t avoidPa)
 {
     uint64_t victimPa = 0;
@@ -551,7 +738,7 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
                     _nodeId, avoidPa, _directory.count(), _directory.capacity());
         }
         fflush(stderr);
-        return false;
+        return ResidentEvictResult::Blocked;
     }
 
     if (_verboseLog) {
@@ -576,7 +763,7 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
         _directory.forceRemove(victimPa);
         _residentWaiters.erase(victimPa);
         _pendingRequesters.erase(victimPa);
-        return true;
+        return ResidentEvictResult::Removed;
     }
 
     // Non-G_I or residentDirty=true: must persist metadata before removal.
@@ -594,7 +781,7 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
             _directory.forceRemove(victimPa);
             _residentWaiters.erase(victimPa);
             _pendingRequesters.erase(victimPa);
-            return true;
+            return ResidentEvictResult::Removed;
         }
         // Bloom missing — metadata may have been lost.  Fall
         // through to schedule a fresh backstore write to ensure durability.
@@ -623,14 +810,14 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
         std::fflush(stderr);
         scheduleBackstoreWrite(victimPa);
     }
-    return false;
+    return ResidentEvictResult::Armed;
 }
 
-bool
+UBCCController::ResidentEvictResult
 UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
 {
     if (isLineBusy(victimPa)) {
-        return false;
+        return ResidentEvictResult::Blocked;
     }
 
     uint64_t targetMask = victim.sharersMask;
@@ -663,7 +850,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         OutstandingRequest *recallOreq = createOutstanding(
             victimPa, OpType::RECALL, -1, owner, _socketId);
         if (!recallOreq) {
-            return false;
+            return ResidentEvictResult::Blocked;
         }
         recallOreq->reservedEpoch = normalizeEpoch(victim.epoch + 1);
         recallOreq->reqId = victim.epoch;
@@ -674,9 +861,20 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         recallOreq->intendedSharersMask = 0;
         recallOreq->intendedOwnerNode = -1;
         recallOreq->intendedDirty = false;
+        std::fprintf(stderr,
+                     "[UBCC-NAIVE-DIRTY-RECALL-CREATE] home=%d socket=%d "
+                     "pa=0x%lx owner=%d state=%s sharers=0x%lx "
+                     "residentDirty=%d reqId=%lu baseEpoch=%lu "
+                     "reservedEpoch=%lu stage=%d\n",
+                     _nodeId, _socketId, victimPa, owner,
+                     mesiStateName(victim.state), victim.sharersMask,
+                     victim.residentDirty ? 1 : 0, recallOreq->reqId,
+                     recallOreq->baseEpoch, recallOreq->reservedEpoch,
+                     static_cast<int>(recallOreq->stage));
+        std::fflush(stderr);
         if (!initiateRecall(victimPa, victim, *recallOreq)) {
             removeOutstanding(victimPa);
-            return false;
+            return ResidentEvictResult::Blocked;
         }
         std::fprintf(stderr,
                      "[UBCC-NAIVE-DIRTY-RECALL-HOLD] home=%d pa=0x%lx owner=%d "
@@ -684,7 +882,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
                      _nodeId, victimPa, owner, mesiStateName(victim.state),
                      victim.epoch);
         std::fflush(stderr);
-        return false;
+        return ResidentEvictResult::Armed;
     }
 
     if (targetMask == 0) {
@@ -692,7 +890,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         _residentWaiters.erase(victimPa);
         _pendingRequesters.erase(victimPa);
         _evictionPendingRemoval.erase(victimPa);
-        return true;
+        return ResidentEvictResult::Removed;
     }
 
     // Keep the victim resident until every invalidation acknowledges.  Removing
@@ -701,7 +899,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
     OutstandingRequest *evictOreq = createOutstanding(
         victimPa, OpType::NAIVE_EVICT_INVALIDATE, -1, -1, _socketId);
     if (!evictOreq) {
-        return false;
+        return ResidentEvictResult::Blocked;
     }
     _directory.setPinned(victimPa, true);
 
@@ -712,7 +910,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
                                  DirEntry::protoDirty(victim), &effectiveMask)) {
         removeOutstanding(victimPa);
         refreshPinnedBit(victimPa);
-        return false;
+        return ResidentEvictResult::Blocked;
     }
 
     if (effectiveMask == 0) {
@@ -721,7 +919,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         _residentWaiters.erase(victimPa);
         _pendingRequesters.erase(victimPa);
         _evictionPendingRemoval.erase(victimPa);
-        return true;
+        return ResidentEvictResult::Removed;
     }
 
     evictOreq->baseEpoch = victim.epoch;
@@ -731,7 +929,7 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
     evictOreq->totalMask = effectiveMask;
     evictOreq->pendingAckCount = __builtin_popcountll(effectiveMask);
     evictOreq->ackMask = 0;
-    return false;
+    return ResidentEvictResult::Armed;
 }
 
 void
@@ -791,6 +989,9 @@ UBCCController::doAsyncWriteback()
 
             uint64_t epoch = _directory.getEpoch(set, way);
             _asyncWbSnapshots[pa] = epoch;
+            // The snapshot owns this entry until its ack. Materialize the
+            // derived pin before issuing the asynchronous metadata write.
+            refreshPinnedBit(pa);
 
             scheduleBackstoreWrite(pa);
             count++;
@@ -827,6 +1028,11 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
                _nodeId, linePa, snapshotEpoch);
     } else {
+        // The completed snapshot no longer owns the entry. Keep the newer
+        // metadata dirty, but release the stale snapshot pin and wake capacity
+        // waiters in this set.
+        refreshPinnedBit(linePa);
+        replayResidentWaitersForCapacity(linePa);
         printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx snapshotEpoch=%lu currentEpoch=%lu "
                "— dirty kept (entry modified)\n",
                _nodeId, linePa, snapshotEpoch, entry.epoch);
@@ -1057,7 +1263,15 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         }
         } // switch
 
+        // A synchronous local Clear can retire the matching waiter and erase
+        // this PA's queue while the replayed operation is still on the stack.
+        // Reacquire the iterator before touching the queue again.
+        it = _residentWaiters.find(linePa);
         if (restore) {
+            if (it == _residentWaiters.end()) {
+                it = _residentWaiters.emplace(
+                    linePa, std::deque<PendingRequester>{}).first;
+            }
             it->second.push_front(pr);
         }
         if (stop) {
@@ -1074,6 +1288,11 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
 
     // A replay may have queued fresh work after the bounded pass began.  Keep
     // it for the next concrete capacity/state-change event.
+    it = _residentWaiters.find(linePa);
+    if (it == _residentWaiters.end()) {
+        refreshPinnedBit(linePa);
+        return;
+    }
     if (!it->second.empty()) {
         refreshPinnedBit(linePa);
         return;
@@ -1149,7 +1368,7 @@ UBCCController::processOuterRequest(
     Tick *outGrantVisibleTick, Tick *outSentinelVisibleTick,
     bool *outRecallNeeded, int *outRecallOwnerNode,
     GrantDataSource *outDataSource,
-    uint64_t *outAuthEpoch)
+    uint64_t *outAuthEpoch, uint64_t *outGrantEpoch)
 {
     baseEpoch = normalizeEpoch(baseEpoch);
 
@@ -1168,6 +1387,7 @@ UBCCController::processOuterRequest(
     if (outRecallOwnerNode) *outRecallOwnerNode = -1;
     if (outDataSource) *outDataSource = GrantDataSource::HomeMemory;
     if (outAuthEpoch) *outAuthEpoch = 0;
+    if (outGrantEpoch) *outGrantEpoch = 0;
 
     // Validate: only DSM addresses for this home node
     if (!isDsmAddr(line_pa)) {
@@ -1282,6 +1502,7 @@ UBCCController::processOuterRequest(
                     if (outRecallNeeded) *outRecallNeeded = false;
                     if (outRecallOwnerNode) *outRecallOwnerNode = -1;
                     if (outAuthEpoch) *outAuthEpoch = existing->baseEpoch;
+                    if (outGrantEpoch) *outGrantEpoch = existing->reservedEpoch;
                     return grantTypeFromIntended(existing->intendedState);
                 }
                 // TC98 fix: rate-limit high-frequency BUSY log
@@ -1370,6 +1591,8 @@ UBCCController::processOuterRequest(
         if (outGrantVisibleTick) *outGrantVisibleTick = now;
         if (outSentinelVisibleTick) *outSentinelVisibleTick = now;
         if (outDataSource) *outDataSource = GrantDataSource::HomeMemory; // F3: conservative
+        if (outAuthEpoch) *outAuthEpoch = baseEpoch;
+        if (outGrantEpoch) *outGrantEpoch = entry.epoch;
         return UBCC_OuterGrantType::GlobalGrantShared; // conservative
     }
 
@@ -1629,6 +1852,7 @@ UBCCController::processOuterRequest(
                     grantOreq->dataSource = GrantDataSource::RecallBuffer;
                     if (outDataSource) *outDataSource = GrantDataSource::RecallBuffer;
                     if (outAuthEpoch) *outAuthEpoch = grantOreq->baseEpoch;
+                    if (outGrantEpoch) *outGrantEpoch = grantOreq->reservedEpoch;
                     if (reqType == UBCC_OuterReqType::GlobalReadShared) {
                         grant = UBCC_OuterGrantType::GlobalGrantShared;
                         grantOreq->intendedState = MESIState::G_S;
@@ -1853,6 +2077,8 @@ UBCCController::processOuterRequest(
         *outGrantVisibleTick = grantVisibleTick;
     if (outSentinelVisibleTick)
         *outSentinelVisibleTick = sentinelVisibleTick;
+    if (oreq && outGrantEpoch)
+        *outGrantEpoch = oreq->reservedEpoch;
 
     // v4-latency: log OUTSTANDING state change
     if (oreq) {
@@ -2082,6 +2308,22 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         DirEntry::protoDirty(entry) && !dataReceived) {
         constexpr uint8_t kMaxRecallRetries = 3;
         if (ost->recallRetries >= kMaxRecallRetries) {
+            std::fprintf(stderr,
+                         "[UBCC-NAIVE-DIRTY-RECALL-EXHAUSTED] home=%d socket=%d "
+                         "pa=0x%lx responseOwner=%d target=%d requester=%d "
+                         "state=%s sharers=0x%lx residentDirty=%d "
+                         "responseEpoch=%lu entryEpoch=%lu reqId=%lu "
+                         "baseEpoch=%lu reservedEpoch=%lu stage=%d retries=%u "
+                         "dataReceived=%d\n",
+                         _nodeId, _socketId, line_pa, ownerNode,
+                         ost->targetNode, ost->requesterNode,
+                         mesiStateName(entry.state), entry.sharersMask,
+                         entry.residentDirty ? 1 : 0, responseEpoch,
+                         entry.epoch, ost->reqId, ost->baseEpoch,
+                         ost->reservedEpoch, static_cast<int>(ost->stage),
+                         static_cast<unsigned>(ost->recallRetries),
+                         dataReceived ? 1 : 0);
+            std::fflush(stderr);
             fatal("UBCC node_id=%d: dirty capacity recall exhausted retries "
                   "PA=0x%lx owner=%d reqId=%lu\n",
                   _nodeId, line_pa, ownerNode, ost->reqId);
@@ -2089,10 +2331,19 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         ++ost->recallRetries;
         ost->createTick = curTick();
         std::fprintf(stderr,
-                     "[UBCC-NAIVE-DIRTY-RECALL-NODATA] home=%d pa=0x%lx "
-                     "owner=%d attempt=%u/%u\n",
-                     _nodeId, line_pa, ownerNode, ost->recallRetries,
-                     kMaxRecallRetries);
+                     "[UBCC-NAIVE-DIRTY-RECALL-NODATA] home=%d socket=%d "
+                     "pa=0x%lx responseOwner=%d target=%d requester=%d "
+                     "state=%s sharers=0x%lx residentDirty=%d "
+                     "responseEpoch=%lu entryEpoch=%lu reqId=%lu "
+                     "baseEpoch=%lu reservedEpoch=%lu stage=%d "
+                     "attempt=%u/%u\n",
+                     _nodeId, _socketId, line_pa, ownerNode,
+                     ost->targetNode, ost->requesterNode,
+                     mesiStateName(entry.state), entry.sharersMask,
+                     entry.residentDirty ? 1 : 0, responseEpoch,
+                     entry.epoch, ost->reqId, ost->baseEpoch,
+                     ost->reservedEpoch, static_cast<int>(ost->stage),
+                     ost->recallRetries, kMaxRecallRetries);
         std::fflush(stderr);
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: retrying dirty no-data recall PA=0x%lx "
@@ -2550,8 +2801,15 @@ UBCCController::getUpgradePendingTargetMask(uint64_t line_pa) const
 {
     auto oit = _outstandingReqs.find(line_pa);
     if (oit != _outstandingReqs.end() &&
-        oit->second.opType == OpType::UPGRADE_PENDING)
+        oit->second.opType == OpType::UPGRADE_PENDING) {
+        // Once all acks have arrived, an idempotent UpgradeReq replay acts as
+        // the lost AckNotify replacement. Returning zero tells the requester
+        // that the deferred ack is now ready.
+        if (oit->second.stage == OpStage::WAITING_LOCAL_DONE &&
+            oit->second.accepted)
+            return 0;
         return oit->second.upgradeTargetMask;
+    }
     return 0;
 }
 
@@ -2638,7 +2896,77 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
+        OutstandingRequest *blocked = findOutstanding(line_pa);
+        if (blocked && blocked->opType == OpType::RECALL &&
+            blocked->reqType == UBCC_OuterReqType::GlobalInvalidate) {
+            std::fprintf(stderr,
+                         "[UBCC-NAIVE-DIRTY-RECALL-WB-RESIDENT-BLOCK] "
+                         "home=%d socket=%d pa=0x%lx requester=%d "
+                         "wbEpoch=%lu keepAsClean=%d hasData=%d "
+                         "residentResult=%d target=%d reqId=%lu "
+                         "baseEpoch=%lu reservedEpoch=%lu stage=%d\n",
+                         _nodeId, _socketId, line_pa, requesterNode,
+                         epochVal, keepAsClean ? 1 : 0, data ? 1 : 0,
+                         static_cast<int>(rr), blocked->targetNode,
+                         blocked->reqId, blocked->baseEpoch,
+                         blocked->reservedEpoch,
+                         static_cast<int>(blocked->stage));
+            std::fflush(stderr);
+        }
         return false;
+    }
+
+    // A dirty owner may begin its normal writeback just before a naive
+    // capacity recall reaches it. If the writeback carries the exact owner,
+    // epoch, and payload required by that recall, it is the authoritative
+    // recall completion. Rejecting it as BUSY leaves an already-invalidated
+    // owner able to answer subsequent recalls only with no data.
+    OutstandingRequest *active = findOutstanding(line_pa);
+    if (active && active->opType == OpType::RECALL &&
+        active->reqType == UBCC_OuterReqType::GlobalInvalidate) {
+        const bool stageMatch = active->stage == OpStage::WAITING_TARGET_RESP;
+        const bool ownerMatch = active->targetNode == requesterNode;
+        const bool epochMatch = normalizeEpoch(active->baseEpoch) == epochVal;
+        const bool payloadMatch = data != nullptr;
+        const bool dirtyRelease = !keepAsClean;
+        std::fprintf(stderr,
+                     "[UBCC-NAIVE-DIRTY-RECALL-WB-CHECK] home=%d socket=%d "
+                     "pa=0x%lx requester=%d target=%d state=%s "
+                     "sharers=0x%lx residentDirty=%d wbEpoch=%lu "
+                     "entryEpoch=%lu baseEpoch=%lu reservedEpoch=%lu "
+                     "reqId=%lu stage=%d keepAsClean=%d hasData=%d "
+                     "stageMatch=%d ownerMatch=%d epochMatch=%d "
+                     "payloadMatch=%d dirtyRelease=%d\n",
+                     _nodeId, _socketId, line_pa, requesterNode,
+                     active->targetNode, mesiStateName(entry.state),
+                     entry.sharersMask, entry.residentDirty ? 1 : 0,
+                     epochVal, entry.epoch, active->baseEpoch,
+                     active->reservedEpoch, active->reqId,
+                     static_cast<int>(active->stage), keepAsClean ? 1 : 0,
+                     data ? 1 : 0, stageMatch ? 1 : 0,
+                     ownerMatch ? 1 : 0, epochMatch ? 1 : 0,
+                     payloadMatch ? 1 : 0, dirtyRelease ? 1 : 0);
+        std::fflush(stderr);
+    }
+    if (active && active->opType == OpType::RECALL &&
+        active->reqType == UBCC_OuterReqType::GlobalInvalidate &&
+        active->stage == OpStage::WAITING_TARGET_RESP &&
+        active->targetNode == requesterNode &&
+        normalizeEpoch(active->baseEpoch) == epochVal &&
+        data && !keepAsClean) {
+        DataBlock payload(64);
+        payload.setData(data, 0, 64);
+        const bool accepted = processRecallResponse(
+            line_pa, requesterNode, true, epochVal, active->reqId, &payload);
+        if (accepted) {
+            ++_writebackCount;
+            std::fprintf(stderr,
+                         "[UBCC-NAIVE-DIRTY-RECALL-WB-MERGE] home=%d "
+                         "pa=0x%lx owner=%d epoch=%lu\n",
+                         _nodeId, line_pa, requesterNode, epochVal);
+            std::fflush(stderr);
+        }
+        return accepted;
     }
 
     // v4: Outstanding-aware BUSY check (§4.6.2)
@@ -3015,8 +3343,27 @@ UBCCController::processOuterUpgradeReq(
         }
     }
 
-    // Check existing outstanding — if any, reject
-    if (findOutstanding(line_pa)) {
+    // Exact retransmission of an accepted upgrade is idempotent. This covers
+    // both a duplicated initial request and the watchdog replay used when the
+    // asynchronous UpgradeAckNotify is lost. The response builder reports the
+    // outstanding's current target mask; once it reaches WAITING_LOCAL_DONE,
+    // getUpgradePendingTargetMask() returns zero to complete the requester.
+    OutstandingRequest *existing = findOutstanding(line_pa);
+    if (existing && existing->opType == OpType::UPGRADE_PENDING &&
+        existing->requesterNode == requesterNode &&
+        existing->requesterSocket == requesterSocket &&
+        existing->baseEpoch == epoch && existing->reqId == reqId) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id=%d: replaying exact UpgradeReq PA=0x%lx "
+                "requesterNode=%d requesterSocket=%d epoch=%lu reqId=%lu "
+                "stage=%d\n",
+                _nodeId, line_pa, requesterNode, requesterSocket, epoch, reqId,
+                static_cast<int>(existing->stage));
+        return true;
+    }
+
+    // Any non-matching outstanding still conflicts with this upgrade.
+    if (existing) {
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade rejected — "
                 "existing outstanding for PA=0x%lx\n",
@@ -3034,7 +3381,8 @@ UBCCController::processOuterUpgradeReq(
 
     // Create UPGRADE_PENDING outstanding
     OutstandingRequest *oreq = createOutstanding(
-        line_pa, OpType::UPGRADE_PENDING, requesterNode, -1);
+        line_pa, OpType::UPGRADE_PENDING, requesterNode, -1,
+        requesterSocket);
     if (!oreq) {
         framework::LogInfo("UBCC",
                 "UBCC node_id=%d: upgrade rejected — "
@@ -3416,6 +3764,7 @@ UBCCController::processClear(
             entry.sharersMask);
 
     // Retire GRANT_HANDSHAKE to tombstone(W) for duplicate Clear replay
+    retireCommittedResidentWaiters(*ost);
     retireToTombstone(*ost, true);
     removeOutstanding(line_pa);
     refreshPinnedBit(line_pa);
@@ -3807,6 +4156,64 @@ UBCCController::cleanupExpiredRecalls()
         cleanupExpiredRecallIfNeeded(linePa, true);
 }
 
+void
+UBCCController::cleanupExpiredInvalidations()
+{
+    constexpr uint8_t kMaxInvalidateRetries = 8;
+    const Tick now = curTick();
+    std::vector<uint64_t> expired;
+    for (const auto &kv : _outstandingReqs) {
+        const OutstandingRequest &ost = kv.second;
+        const bool invalidating = ost.stage == OpStage::WAITING_ALL_ACKS &&
+            (ost.opType == OpType::INVALIDATE ||
+             ost.opType == OpType::NAIVE_EVICT_INVALIDATE ||
+             ost.opType == OpType::UPGRADE_PENDING);
+        if (invalidating && now >= ost.createTick + _recallTimeout)
+            expired.push_back(kv.first);
+    }
+
+    for (uint64_t linePa : expired) {
+        OutstandingRequest *ost = findOutstanding(linePa);
+        if (!ost || ost->stage != OpStage::WAITING_ALL_ACKS)
+            continue;
+        const uint64_t totalMask = ost->opType == OpType::UPGRADE_PENDING
+            ? ost->upgradeTargetMask : ost->totalMask;
+        const uint64_t ackMask = ost->opType == OpType::UPGRADE_PENDING
+            ? ost->upgradeAckMask : ost->ackMask;
+        const uint64_t pendingMask = totalMask & ~ackMask;
+        if (pendingMask == 0)
+            continue;
+        if (ost->recallRetries >= kMaxInvalidateRetries) {
+            fatal("UBCC node_id=%d: invalidation timed out after retries "
+                  "PA=0x%lx reqId=%lu pendingMask=0x%lx\n",
+                  _nodeId, linePa, ost->reqId, pendingMask);
+        }
+
+        DirEntry entry;
+        if (!_directory.lookup(linePa, entry)) {
+            fatal("UBCC node_id=%d: invalidation lost directory entry PA=0x%lx\n",
+                  _nodeId, linePa);
+        }
+        ++ost->recallRetries;
+        ost->createTick = now;
+        uint64_t effectiveMask = pendingMask;
+        if (!fanoutInvalidateTargets(
+                linePa, pendingMask, entry.epoch, ost->reqId,
+                ost->requesterNode, ost->reqType, ost->writeIntent,
+                &effectiveMask)) {
+            fatal("UBCC node_id=%d: invalidation resend failed PA=0x%lx "
+                  "reqId=%lu\n", _nodeId, linePa, ost->reqId);
+        }
+        std::fprintf(stderr,
+                     "[UBCC-INVALIDATE-RETRY] home=%d pa=0x%lx reqId=%lu "
+                     "pendingMask=0x%lx attempt=%u/%u\n",
+                     _nodeId, linePa, ost->reqId, effectiveMask,
+                     static_cast<unsigned>(ost->recallRetries),
+                     static_cast<unsigned>(kMaxInvalidateRetries));
+        std::fflush(stderr);
+    }
+}
+
 bool
 UBCCController::snapshotResidentForBackstore(
     uint64_t linePa, BackstoreEntry &entry) const
@@ -4107,6 +4514,66 @@ UBCCController::debugSeedResidentForTest(
     _directory.touch(linePa);
     if (e.state != MESIState::G_I) {
         publishBloomLive(linePa);
+    }
+    refreshPinnedBit(linePa);
+    return true;
+}
+
+bool
+UBCCController::debugEnqueueResidentWaiterForTest(
+    uint64_t linePa, int waitReason)
+{
+    if (waitReason < static_cast<int>(ResidentWaitReason::Capacity) ||
+        waitReason > static_cast<int>(ResidentWaitReason::MetadataWriteback)) {
+        return false;
+    }
+    DirEntry entry;
+    if (!_directory.lookup(linePa, entry)) {
+        return false;
+    }
+    PendingRequester pr;
+    pr.node = 0;
+    pr.socket = 0;
+    pr.opKind = ResidentOpKind::Read;
+    pr.reqType = UBCC_OuterReqType::GlobalReadShared;
+    pr.reqId = entry.epoch + 1;
+    pr.epoch = entry.epoch;
+    pr.waitReason = static_cast<ResidentWaitReason>(waitReason);
+    const ResidentWaiterEnqueueResult result =
+        enqueueResidentWaiterIfNew(linePa, pr);
+    refreshPinnedBit(linePa);
+    return result == ResidentWaiterEnqueueResult::Enqueued;
+}
+
+bool
+UBCCController::debugEnqueueResidentWaiterTupleForTest(
+    uint64_t linePa, ResidentOpKind opKind, int requesterNode,
+    int requesterSocket, uint64_t epoch, uint64_t reqId, int waitReason)
+{
+    if (waitReason < static_cast<int>(ResidentWaitReason::Capacity) ||
+        waitReason > static_cast<int>(ResidentWaitReason::MetadataWriteback)) {
+        return false;
+    }
+    PendingRequester pr;
+    pr.node = requesterNode;
+    pr.socket = requesterSocket;
+    pr.opKind = opKind;
+    pr.reqType = UBCC_OuterReqType::GlobalReadUnique;
+    pr.writeIntent = true;
+    pr.epoch = normalizeEpoch(epoch);
+    pr.reqId = reqId;
+    pr.waitReason = static_cast<ResidentWaitReason>(waitReason);
+    const ResidentWaiterEnqueueResult result =
+        enqueueResidentWaiterIfNew(linePa, pr);
+    refreshPinnedBit(linePa);
+    return result == ResidentWaiterEnqueueResult::Enqueued;
+}
+
+bool
+UBCCController::debugClearResidentWaitersForTest(uint64_t linePa)
+{
+    if (_residentWaiters.erase(linePa) == 0) {
+        return false;
     }
     refreshPinnedBit(linePa);
     return true;
@@ -4490,6 +4957,7 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.recallNeeded = false;
     push.b.readResp.recallOwnerNode = -1;
     push.b.readResp.authEpoch = grantOst.baseEpoch;
+    push.b.readResp.grantEpoch = grantOst.reservedEpoch;
     push.b.readResp.committedEpoch = 0;
     push.b.readResp.pendingInvMask = 0;
 

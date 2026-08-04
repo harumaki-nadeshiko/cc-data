@@ -138,7 +138,8 @@ struct UBReadRespBody {
     Tick sentinelVisibleTick;
     bool recallNeeded;
     int recallOwnerNode;        // -1 if none
-    uint64_t authEpoch;
+    uint64_t authEpoch;         // GRANT_HANDSHAKE base epoch used by Clear
+    uint64_t grantEpoch;        // committed epoch the granted cache line owns
     uint64_t committedEpoch;    // current committed home epoch
     uint64_t pendingInvMask;    // sharers still awaiting invalidation
     uint8_t grantData[64];      // optional recall-buffer payload for grant
@@ -146,7 +147,7 @@ struct UBReadRespBody {
     UBReadRespBody()
         : grantType(-1), dataSource(0), pendingInvCount(-1),
           grantVisibleTick(0), sentinelVisibleTick(0),
-          recallNeeded(false), recallOwnerNode(-1), authEpoch(0),
+          recallNeeded(false), recallOwnerNode(-1), authEpoch(0), grantEpoch(0),
           committedEpoch(0), pendingInvMask(0)
     {
         memset(grantData, 0, sizeof(grantData));

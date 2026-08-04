@@ -7,6 +7,26 @@
 #define PORTABLE_PLANES (NUM_NODES * NUM_SOCKETS)
 #define PORTABLE_ALL_MASK ((1u << PORTABLE_PLANES) - 1u)
 
+#ifndef PORTABLE_BATCHES
+#define PORTABLE_BATCHES 32
+#endif
+
+#ifndef PORTABLE_PRESSURE_LINES
+#define PORTABLE_PRESSURE_LINES 768
+#endif
+
+#ifndef PORTABLE_TARGET_FOOTPRINT_LINES
+#define PORTABLE_TARGET_FOOTPRINT_LINES 0
+#endif
+
+#ifndef PORTABLE_NAIVE_CAPACITY_LINES
+#define PORTABLE_NAIVE_CAPACITY_LINES 65536
+#endif
+
+#ifndef PORTABLE_PRESSURE_LEVEL_PCT
+#define PORTABLE_PRESSURE_LEVEL_PCT 0
+#endif
+
 static inline int portable_socket(int cpu_index)
 {
     return (cpu_index % 4) / 2;
@@ -61,6 +81,50 @@ static inline uint32_t portable_pressure(uint32_t base, int plane, int line)
 static inline uint32_t portable_global_pressure(uint32_t base, int line)
 {
     return base + (uint32_t)line * 64u;
+}
+
+static inline int portable_pressure_begin(int batch)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES * (uint64_t)batch) /
+                 (uint64_t)PORTABLE_BATCHES);
+}
+
+static inline int portable_pressure_end(int batch)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)(batch + 1)) /
+                 (uint64_t)PORTABLE_BATCHES);
+}
+
+static inline void portable_emit_pressure_config(int plane, int hot_lines)
+{
+    char b[384]; int p = 0; const char *s;
+#define PORTABLE_APPEND_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+#define PORTABLE_APPEND_INT(value) \
+    do { p = fmt_int(b, p, (int)(value)); } while (0)
+    PORTABLE_APPEND_TEXT("[PORTABLE-PRESSURE] node=");
+    PORTABLE_APPEND_INT(plane);
+    PORTABLE_APPEND_TEXT(" planes=");
+    PORTABLE_APPEND_INT(PORTABLE_PLANES);
+    PORTABLE_APPEND_TEXT(" hot_lines=");
+    PORTABLE_APPEND_INT(hot_lines);
+    PORTABLE_APPEND_TEXT(" pressure_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_PRESSURE_LINES);
+    PORTABLE_APPEND_TEXT(" total_unique_lines=");
+    PORTABLE_APPEND_INT(hot_lines + PORTABLE_PRESSURE_LINES);
+    PORTABLE_APPEND_TEXT(" naive_capacity_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_NAIVE_CAPACITY_LINES);
+    PORTABLE_APPEND_TEXT(" target_footprint_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_TARGET_FOOTPRINT_LINES);
+    PORTABLE_APPEND_TEXT(" pressure_level_pct=");
+    PORTABLE_APPEND_INT(PORTABLE_PRESSURE_LEVEL_PCT);
+    PORTABLE_APPEND_TEXT(" batches=");
+    PORTABLE_APPEND_INT(PORTABLE_BATCHES);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_APPEND_INT
+#undef PORTABLE_APPEND_TEXT
 }
 
 static inline void portable_emit_results(int plane, const char *service_phase,

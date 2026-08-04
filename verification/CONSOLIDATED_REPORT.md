@@ -1,6 +1,6 @@
 # Consolidated Verification Report
 
-> Produced: 2026-06-22
+> Produced: 2026-06-22 | Current-implementation addendum: 2026-08-03
 > Method: Manual reasoning + formal TLA+ enumeration + gem5 E2E simulation + fault injection
 > Budget: $1.71 / $8.00
 
@@ -42,6 +42,8 @@ Each finding is validated by at least two of these methods when possible.
 | EP Intra-Node (dual) | `ep_intra_node_dual.tla` | `ep_intra_node_dual.cfg` | 52M | — | 8 INVARIANT | PASS |
 | Transport Faults (B1+B2, safety) | `ubcc_transport_faults.tla` | `ubcc_transport_faults.cfg` | 23,242,903 | 23 | 9 INVARIANT | PASS |
 | Transport Faults (B3, liveness) | `ubcc_transport_faults.tla` | `ubcc_transport_faults_liveness.cfg` (`TFFairSpec`) | 25,048 | 13 | 2 INV + 1 PROPERTY | PASS |
+| TC224 waiter retirement (focused) | `ubcc_tc224_waiter_retirement.tla` | `ubcc_tc224_waiter_retirement.cfg` | 274,593 | 6 | 5 INVARIANT | PASS |
+| EP-RNF snoop arbitration (focused) | `ep_rnf_snoop_arbitration.tla` | `ep_rnf_snoop_arbitration.cfg` | 328 | 7 | 5 INVARIANT | PASS |
 
 ### 2.1.1 Liveness verification & RECALL-orphan fix (NEW, 2026-07-08)
 
@@ -133,6 +135,22 @@ the liveness contrast in §2.1.1.
 - MetaRNF multi-flight: Increased I/O parallelism within the same per-PA serialization guarantee (invariant I4)
 
 All TLA+ models remain valid with 0 modifications required.
+
+### 2.3 Current-implementation focused closure (2026-08-03)
+
+Two production changes were newer than the original core models and are now
+covered by bounded focused models:
+
+- **TC224 committed waiter retirement**: exact Read tuple retirement, legacy
+  epoch matching, non-Read preservation, and replay safety after synchronous
+  queue erase. This closes the formal semantic gap for the final TC224 root
+  cause; full ResidentDir/H64 capacity behavior remains E2E/host-tested.
+- **EP-RNF STALE/IMMED arbitration**: active-recall priority, immediate
+  ReadShared+SnpOnce coexistence, immediate STALE for conflicting write-class
+  snoops, and preserving-snoop rejection outside recall cleanup.
+
+These are hand-written abstractions tied to named C++ functions. They do not
+replace the larger core, CHI, or full-system models.
 
 ---
 
@@ -241,13 +259,21 @@ upgrade of the TC47-49 sampled results below.
 
 ### 5.2 E2E fault injection (gem5)
 
-`UBRouter` has debug-only fault hooks that can drop, duplicate, or reorder messages. Controlled by `ruby_system.descendants()` traversal to find UBRouter instances in Python test harness.
+The current split implementation injects faults in `ubio_main.cc`. Rules can
+drop, duplicate, delay, or reorder a matched coherence message. Delay/reorder
+buffer the real message in `g_delayedQueue` and deliver it when `fireTick` is
+reached; this is no longer a pass-through pseudo-delay.
 
 | TC | Fault Type | Message | Result |
 |----|-----------|---------|--------|
 | TC47 | Drop + Dup | ClearReq | PASS (tombstone replay recovers) |
 | TC48 | Duplicate | InvalidateAck | PASS (ackMask idempotent, bit already set) |
 | TC49 | Reorder | InvalidateAck | PASS (ackMask independent of arrival order) |
+| TC110 | Drop | ClearReq | PASS in existing regression; verifier requires `[UBFAULT]` |
+| TC117 | Reorder | ClearReq | PASS with mandatory `[UBFAULT]` evidence (`logs/fault_smoke_20260803`) |
+| TC118 | Drop + Delay | ClearReq on two PAs | PASS with mandatory `[UBFAULT]` evidence (`logs/fault_smoke_20260803`) |
+| TC119 | Drop + Duplicate + Delay | ClearReq on three PAs | PASS with mandatory `[UBFAULT]` evidence (`logs/fault_smoke_20260803`) |
+| TC148 | 8 Drop + 8 Duplicate + 8 Delay + 8 Reorder | ClearReq on 32 PAs | PASS: 32/32 reads MATCH and all 32 rules fired exactly once (`logs/fault_all_20260803_strict`) |
 
 These three concrete scenarios are now **subsumed by the exhaustive formal model
 in 5.1** — the model proves the property for all such interleavings, and the E2E
@@ -297,10 +323,11 @@ runs confirm the real implementation matches on the sampled cases.
 ## 8. Future Work
 
 1. ~~**FV3-LEAK-001 fix**: Add RECALL timeout/cleanup to prevent permanent PA blocking~~ — **DONE** (implemented in `UBCCController.cc`, formally verified via liveness contrast, see §2.1.1)
-2. **FW-4 closure**: Instrument and actually inject faults at M1 for loss/reorder/dup, not just static analysis
-3. **TC60 implementation**: DRAM backstore writeback + BF reconstruction E2E test (designed in `docs/recovery/fv_fixes/bloom_filter_backstore_dram.md`)
-4. **256B page support**: Currently using 64B MetaLine; expand to 256B pages for ablation study
-5. **Schema C ablation comparison**: After 256B pages, compare Schema A vs Schema C performance
+2. ~~**Strict fault E2E refresh**~~ — **DONE**: TC117-119 are 3/3 PASS with mandatory `[UBFAULT]` evidence in `logs/fault_smoke_20260803`.
+3. ~~**High-density ClearReq qualification**~~ — **DONE**: TC148 provides 32 bounded deterministic hits across 32 PAs with per-rule count assertions. Cross-message Level-2 qualification remains future work and must follow each message's recovery contract.
+4. **TC60 implementation**: DRAM backstore writeback + BF reconstruction E2E test (designed in `docs/recovery/fv_fixes/bloom_filter_backstore_dram.md`)
+5. **256B page support**: Currently using 64B MetaLine; expand to 256B pages for ablation study
+6. **Schema C ablation comparison**: After 256B pages, compare Schema A vs Schema C performance
 
 ---
 
@@ -311,7 +338,7 @@ runs confirm the real implementation matches on the sampled cases.
 | `verification/wave0/` | FV-1,2,3,9,11 (static foundation) |
 | `verification/wave1/` | FV-6,8,10 (M2 + boundary) |
 | `verification/wave2/` | FV-4,5,7 (fault + liveness) |
-| `verification/tla/` | TLA+ models + TLC configs. Safety: `ubcc_config.cfg`, `ubcc_transport_faults.cfg` (extended B1+B2 fault model), `ep_intra_node*.cfg`. Liveness: `ubcc_liveness.cfg` (cleanup+C1 progress, PASS) + `ubcc_liveness_nocleanup.{tla,cfg}` (contrast, VIOLATED) + `ubcc_transport_faults_liveness.cfg` (B3, faults+progress, PASS). Coverage expansion: `ubcc_multi_pa.{tla,cfg}` (D1, multi-PA) + `ubcc_multi_socket.{tla,cfg}` (D2, cross-socket routing). |
+| `verification/tla/` | TLA+ models + TLC configs. Safety: core, transport, EP, multi-PA, multi-socket. Liveness: cleanup contrast and transport progress. Current focused closure: `ubcc_tc224_waiter_retirement.{tla,cfg}` and `ep_rnf_snoop_arbitration.{tla,cfg}`. |
 | `verification/fv_coverage_fidelity.md` | Coverage quantification (A1 action coverage 100%), scope boundary table (A2), model↔code fidelity mapping (A3). |
 | `docs/recovery/fv_fixes/` | BF/backstore design docs |
 | `tests/e2e/test_e2e.py` | TC1-54 E2E test driver |

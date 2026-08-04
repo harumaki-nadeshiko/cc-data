@@ -2,14 +2,14 @@
 
 ## 1. 目标
 
-本文件定义当 `coder-validator-orchestrator` 在执行阶段任务时，因为 API 限额、reviewer 调用失败或其他外部额度问题而无法继续推进时，如何安全停止、落盘当前进度，并在下一次执行时恢复。
+本文件定义当主 agent（primary agent，承担 orchestrator 角色）在执行阶段任务时，因为 API 限额、审核 agent 调用失败或其他外部额度问题而无法继续推进时，如何安全停止、落盘当前进度，并在下一次执行时恢复。
 
 ## 2. 何时必须创建检查点文档
 
 出现以下任一情况时，orchestrator 必须停止当前推进，并创建新的检查点文档:
-- `strict-task-completion-reviewer` 因 API 限额/额度失败，未能完成审核
-- `coder-validator-orchestrator` 自身因 API 限额/额度无法继续执行
-- implementer/reviewer 的结果已部分返回，但当前轮无法继续完成完整闭环
+- `high-intelligent-agent`（审核 agent）因 API 限额/额度失败，未能完成审核
+- 主 agent（orchestrator 角色）自身因 API 限额/额度无法继续执行
+- 实现/审核 agent 的结果已部分返回，但当前轮无法继续完成完整闭环
 
 说明:
 - 此时不得假设阶段通过

@@ -131,6 +131,18 @@ TESTCASES = {
     145: "e2e_tc145_faas_warm_invocation",
     146: "e2e_tc146_graph_frontier",
     147: "e2e_tc147_feature_store",
+    148: "e2e_tc148_fault_qualification",
+    149: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    150: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    151: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    152: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    153: "e2e_tc153_recallresp_fault_qualification",
+    154: "e2e_tc153_recallresp_fault_qualification",
+    155: "e2e_tc153_recallresp_fault_qualification",
+    156: "e2e_tc153_recallresp_fault_qualification",
+    157: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    158: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    159: "e2e_tc149_upgrade_invalidate_fault_qualification",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
     202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
@@ -162,6 +174,12 @@ _RE_READ_VAL = re.compile(
 )
 _RE_E2E_META = re.compile(r"\[E2E_META\]\s+node=(\d+)\s+test=(\S+)")
 _RE_TOPOLOGY = re.compile(r"\[TOPOLOGY\]\s+node=(\d+)\s+planes=(\d+)")
+_RE_PORTABLE_PRESSURE = re.compile(
+    r"\[PORTABLE-PRESSURE\]\s+node=(\d+)\s+planes=(\d+)\s+"
+    r"hot_lines=(\d+)\s+pressure_lines=(\d+)\s+"
+    r"total_unique_lines=(\d+)\s+naive_capacity_lines=(\d+)\s+"
+    r"target_footprint_lines=(\d+)\s+pressure_level_pct=(\d+)\s+"
+    r"batches=(\d+)")
 _RE_GUEST_TIMER = re.compile(
     r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+"
     r"counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+"
@@ -1050,6 +1068,18 @@ def _fault_evidence_seen(lines, tc_id):
     return False
 
 
+def _fault_rule_hit_counts(lines, prefix):
+    """Count fired UBFAULT records by rule, excluding rule-load messages."""
+    counts = {}
+    pattern = re.compile(r"\[UBFAULT\].*rule='([^']+)'.*action=(?:Drop|Duplicate|Delay|Reorder)")
+    for line in lines:
+        match = pattern.search(line)
+        if match and match.group(1).startswith(prefix):
+            name = match.group(1)
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def verify_tc47(reads, lines):
     """TC47: drop Clear, verify tombstone recovery.
     Node1 must read 0x47AA0011 despite a dropped ClearReq."""
@@ -1477,7 +1507,9 @@ def verify_tc117(reads, lines):
     if mismatches:
         return False, f"TC117 FAILED: {len(mismatches)} mismatches", mismatches
     fault_seen = _fault_evidence_seen(lines, 117)
-    return True, f"TC117 PASSED: reordered ClearReq handled (fault_evidence={fault_seen})", []
+    if not fault_seen:
+        return False, "TC117 FAILED: no [UBFAULT] reorder evidence in ubio logs", []
+    return True, "TC117 PASSED: reordered ClearReq handled with fault evidence", []
 
 
 def verify_tc120(reads, lines):
@@ -1755,6 +1787,31 @@ def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,
     if topology_planes != expected_set:
         return False, (f"TC{tc_id} FAILED: topology markers={topology_planes}, "
                        f"expected {expected_set}"), []
+    pressure = [_RE_PORTABLE_PRESSURE.search(line) for line in lines]
+    pressure = [match for match in pressure if match]
+    if len(pressure) != expected_planes:
+        return False, (f"TC{tc_id} FAILED: expected {expected_planes} portable "
+                       f"pressure records, got {len(pressure)}"), []
+    pressure_nodes = sorted(int(match.group(1)) for match in pressure)
+    if pressure_nodes != expected_set:
+        return False, (f"TC{tc_id} FAILED: pressure nodes={pressure_nodes}, "
+                       f"expected {expected_set}"), []
+    configs = {tuple(int(match.group(index)) for index in range(2, 10))
+               for match in pressure}
+    if len(configs) != 1:
+        return False, f"TC{tc_id} FAILED: inconsistent pressure configs", []
+    (config_planes, hot_lines, pressure_lines, total_unique,
+     naive_capacity, target_footprint, pressure_pct, config_batches) = configs.pop()
+    if config_planes != expected_planes or config_batches != samples:
+        return False, f"TC{tc_id} FAILED: invalid pressure topology/batches", []
+    if total_unique != hot_lines + pressure_lines or naive_capacity <= 0:
+        return False, f"TC{tc_id} FAILED: invalid pressure footprint", []
+    if target_footprint != 0 and total_unique != target_footprint:
+        return False, (f"TC{tc_id} FAILED: total_unique={total_unique}, "
+                       f"target={target_footprint}"), []
+    if pressure_pct != 0 and total_unique * 100 != naive_capacity * pressure_pct:
+        return False, (f"TC{tc_id} FAILED: footprint {total_unique}/{naive_capacity} "
+                       f"does not equal {pressure_pct}%"), []
     expected_reads = len(planes) * reads_per_plane
     if len(reads) != expected_reads:
         return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
@@ -2254,7 +2311,9 @@ def verify_tc118(reads, lines):
     if mismatches:
         return False, f"TC118 FAILED: {len(mismatches)} mismatches", mismatches
     fault_seen = _fault_evidence_seen(lines, 118)
-    return True, f"TC118 PASSED: combined faults converged (fault_evidence={fault_seen})", []
+    if not fault_seen:
+        return False, "TC118 FAILED: no [UBFAULT] mixed-fault evidence in ubio logs", []
+    return True, "TC118 PASSED: combined faults converged with fault evidence", []
 
 
 def verify_tc119(reads, lines):
@@ -2265,7 +2324,119 @@ def verify_tc119(reads, lines):
     if mismatches:
         return False, f"TC119 FAILED: {len(mismatches)} mismatches", mismatches
     fault_seen = _fault_evidence_seen(lines, 119)
-    return True, f"TC119 PASSED: triple fault converged (fault_evidence={fault_seen})", []
+    if not fault_seen:
+        return False, "TC119 FAILED: no [UBFAULT] triple-fault evidence in ubio logs", []
+    return True, "TC119 PASSED: triple fault converged with fault evidence", []
+
+
+def verify_tc148(reads, lines):
+    """TC148: 32-line, 32-hit bounded ClearReq fault qualification."""
+    if len(reads) < 32:
+        return False, f"TC148 FAILED: expected >=32 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC148 FAILED: {len(mismatches)} data mismatches", mismatches[:16]
+
+    hits = _fault_rule_hit_counts(lines, "tc148_")
+    expected_rules = {
+        f"tc148_{action}_{i}"
+        for action in ("drop", "dup", "delay", "reorder")
+        for i in range(8)
+    }
+    missing = sorted(expected_rules - set(hits))
+    wrong_count = sorted(name for name in expected_rules if hits.get(name, 0) != 1)
+    unexpected = sorted(name for name in hits if name not in expected_rules)
+    if missing or wrong_count or unexpected:
+        return False, ("TC148 FAILED: fault hit-count mismatch "
+                       f"missing={missing} wrong_count={wrong_count} "
+                       f"unexpected={unexpected} hits={hits}"), []
+
+    action_totals = {
+        action: sum(count for name, count in hits.items()
+                    if name.startswith(f"tc148_{action}_"))
+        for action in ("drop", "dup", "delay", "reorder")
+    }
+    if any(count != 8 for count in action_totals.values()):
+        return False, f"TC148 FAILED: action totals {action_totals}", []
+    return True, ("TC148 PASSED: 32/32 reads MATCH; 32/32 fault rules fired "
+                  f"exactly once; totals={action_totals}"), []
+
+
+def _verify_fault_rule_set(tc_id, reads, lines, expected_reads, expected_rules):
+    if len(reads) < expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected >={expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:16]
+    hits = _fault_rule_hit_counts(lines, f"tc{tc_id}_")
+    missing = sorted(expected_rules - set(hits))
+    wrong = sorted(name for name in expected_rules if hits.get(name, 0) != 1)
+    unexpected = sorted(set(hits) - expected_rules)
+    if missing or wrong or unexpected:
+        return False, (f"TC{tc_id} FAILED: fault counts missing={missing} "
+                       f"wrong={wrong} unexpected={unexpected} hits={hits}"), []
+    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, "
+                  f"fault_rules={len(expected_rules)} exactly once"), []
+
+
+def verify_tc149(reads, lines):
+    return _verify_fault_rule_set(
+        149, reads, lines, 32, {f"tc149_upgrade_drop_{i}" for i in range(8)})
+
+
+def verify_tc150(reads, lines):
+    return _verify_fault_rule_set(
+        150, reads, lines, 32,
+        {f"tc150_invack_dup_n{node}_{i}" for node in (1, 2) for i in range(8)})
+
+
+def verify_tc151(reads, lines):
+    return _verify_fault_rule_set(
+        151, reads, lines, 32,
+        {f"tc151_invack_delay_n{node}_{i}" for node in (1, 2) for i in range(8)})
+
+
+def verify_tc152(reads, lines):
+    return _verify_fault_rule_set(
+        152, reads, lines, 32,
+        {f"tc152_invack_reorder_n{node}_{i}" for node in (1, 2) for i in range(8)})
+
+
+def verify_tc153(reads, lines):
+    return _verify_fault_rule_set(
+        153, reads, lines, 16, {f"tc153_recall_dup_{i}" for i in range(16)})
+
+
+def verify_tc154(reads, lines):
+    return _verify_fault_rule_set(
+        154, reads, lines, 16, {f"tc154_recall_delay_{i}" for i in range(16)})
+
+
+def verify_tc155(reads, lines):
+    return _verify_fault_rule_set(
+        155, reads, lines, 16, {f"tc155_recall_reorder_{i}" for i in range(16)})
+
+
+def verify_tc156(reads, lines):
+    return _verify_fault_rule_set(
+        156, reads, lines, 16, {f"tc156_recall_drop_{i}" for i in range(16)})
+
+
+def verify_tc157(reads, lines):
+    return _verify_fault_rule_set(
+        157, reads, lines, 32,
+        {f"tc157_invack_drop_n{node}_{i}" for node in (1, 2) for i in range(8)})
+
+
+def verify_tc158(reads, lines):
+    return _verify_fault_rule_set(
+        158, reads, lines, 32, {f"tc158_upgraderesp_drop_{i}" for i in range(8)})
+
+
+def verify_tc159(reads, lines):
+    return _verify_fault_rule_set(
+        159, reads, lines, 32, {f"tc159_upgradeack_drop_{i}" for i in range(8)})
 
 
 def verify_tc80(reads, lines):
@@ -2615,6 +2786,18 @@ VERIFIERS = {
     145: verify_tc145,
     146: verify_tc146,
     147: verify_tc147,
+    148: verify_tc148,
+    149: verify_tc149,
+    150: verify_tc150,
+    151: verify_tc151,
+    152: verify_tc152,
+    153: verify_tc153,
+    154: verify_tc154,
+    155: verify_tc155,
+    156: verify_tc156,
+    157: verify_tc157,
+    158: verify_tc158,
+    159: verify_tc159,
     200: verify_tc200,
     201: verify_tc201,
     202: verify_tc202,
