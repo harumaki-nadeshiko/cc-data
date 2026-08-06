@@ -17,10 +17,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -75,11 +77,11 @@ isGem5Ingress(CoherenceMessageType t)
 
 // ── Debug fault injection (ubio-side, multi-process split) ──────────
 // Re-wires the fault injection that previously lived in gem5's UBIOModule
-// (removed during decoupling). Rules are passed via the UBIO_FAULT_RULES env
-// var, one or more rules separated by ';'. Each rule:
+// (removed during decoupling). Rules are passed via --fault-rules=, with one
+// or more rules separated by ';'. Each rule:
 //   name:type:src:dst:pa:action[:delayTicks[:matchCount]]
-// action ∈ {drop, dup, delay}. Matching messages emit a [UBFAULT] marker that
-// the split-mode verifier scans for as fault evidence.
+// action ∈ {drop, dup, delay, reorder}. Matching messages emit explicit
+// UBFAULT load, trigger, and (for buffered actions) delivery events.
 enum class UbioFaultAction { Drop, Duplicate, Delay, Reorder };
 
 struct UbioFaultRule {
@@ -95,8 +97,20 @@ struct UbioFaultRule {
     int firedCount = 0;
 };
 
-CoherenceMessageType
-parseMsgTypeName(const std::string &s)
+const char *
+faultActionName(UbioFaultAction action)
+{
+    switch (action) {
+      case UbioFaultAction::Drop:      return "Drop";
+      case UbioFaultAction::Duplicate: return "Duplicate";
+      case UbioFaultAction::Delay:     return "Delay";
+      case UbioFaultAction::Reorder:   return "Reorder";
+    }
+    return "Unknown";
+}
+
+bool
+parseMsgTypeName(const std::string &s, CoherenceMessageType &type)
 {
     static const std::map<std::string, CoherenceMessageType> m = {
         {"ReadReq", CoherenceMessageType::ReadReq},
@@ -116,9 +130,52 @@ parseMsgTypeName(const std::string &s)
         {"ClearReq", CoherenceMessageType::ClearReq},
         {"ClearResp", CoherenceMessageType::ClearResp},
         {"UpgradeAckNotify", CoherenceMessageType::UpgradeAckNotify},
+        {"QueryLineMetaReq", CoherenceMessageType::QueryLineMetaReq},
+        {"QueryLineMetaResp", CoherenceMessageType::QueryLineMetaResp},
+        {"HomeWritebackNotify", CoherenceMessageType::HomeWritebackNotify},
+        {"BarrierReached", CoherenceMessageType::BarrierReached},
+        {"BarrierRelease", CoherenceMessageType::BarrierRelease},
+        {"MetaRNFReadReq", CoherenceMessageType::MetaRNFReadReq},
+        {"MetaRNFReadResp", CoherenceMessageType::MetaRNFReadResp},
+        {"MetaRNFWriteReq", CoherenceMessageType::MetaRNFWriteReq},
+        {"MetaRNFWriteResp", CoherenceMessageType::MetaRNFWriteResp},
+        {"MetaRNFLineReadReq", CoherenceMessageType::MetaRNFLineReadReq},
+        {"MetaRNFLineReadResp", CoherenceMessageType::MetaRNFLineReadResp},
+        {"MetaRNFLineWriteReq", CoherenceMessageType::MetaRNFLineWriteReq},
+        {"MetaRNFLineWriteResp", CoherenceMessageType::MetaRNFLineWriteResp},
     };
     auto it = m.find(s);
-    return it != m.end() ? it->second : CoherenceMessageType::ReadReq;
+    if (it == m.end()) return false;
+    type = it->second;
+    return true;
+}
+
+bool
+parseIntField(const std::string &s, int &value)
+{
+    if (s.empty()) return false;
+    errno = 0;
+    char *end = nullptr;
+    long parsed = std::strtol(s.c_str(), &end, 10);
+    if (errno == ERANGE || end == s.c_str() || *end != '\0' ||
+        parsed < std::numeric_limits<int>::min() ||
+        parsed > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+bool
+parseUint64Field(const std::string &s, int base, uint64_t &value)
+{
+    if (s.empty() || s[0] == '-') return false;
+    errno = 0;
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(s.c_str(), &end, base);
+    if (errno == ERANGE || end == s.c_str() || *end != '\0') return false;
+    value = static_cast<uint64_t>(parsed);
+    return true;
 }
 
 std::vector<UbioFaultRule> g_faultRules;
@@ -129,11 +186,13 @@ struct DelayedMsg {
     CoherenceMessage coh;       // the buffered message
     bool fromNetwork;           // original ingress direction
     int faultCopies;            // copies to apply at delivery time
+    std::string ruleName;       // triggering rule, retained for delivery event
+    UbioFaultAction action;     // original buffered action
 };
 static std::deque<DelayedMsg> g_delayedQueue;
 
 void
-parseFaultRules(const std::string &all)
+parseFaultRules(const std::string &all, int localNode)
 {
     if (all.empty()) return;
     size_t start = 0;
@@ -152,35 +211,103 @@ parseFaultRules(const std::string &all)
         }
         parts.push_back(rule_str.substr(pos));
         if (parts.size() < 6) {
-            LogWarn("UBIO", "[UBFAULT] malformed rule '{}' — skipping",
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=too_few_fields — skipping",
                     rule_str);
             continue;
         }
         UbioFaultRule r;
         r.name = parts[0];
-        r.matchType = parseMsgTypeName(parts[1]);
         r.matchAnyType = (parts[1] == "*" || parts[1] == "any");
-        r.matchSrc = parts[2].empty() ? -1 : std::stoi(parts[2]);
-        r.matchDst = parts[3].empty() ? -1 : std::stoi(parts[3]);
-        r.matchPa = parts[4].empty() ? 0 : std::stoull(parts[4], nullptr, 0);
+        if (!r.matchAnyType && !parseMsgTypeName(parts[1], r.matchType)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=unknown_type type='{}' — skipping",
+                    rule_str, parts[1]);
+            continue;
+        }
+        if (!parts[2].empty() && !parseIntField(parts[2], r.matchSrc)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=invalid_src value='{}' — skipping",
+                    rule_str, parts[2]);
+            continue;
+        }
+        if (!parts[3].empty() && !parseIntField(parts[3], r.matchDst)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=invalid_dst value='{}' — skipping",
+                    rule_str, parts[3]);
+            continue;
+        }
+        if (!parts[4].empty() && !parseUint64Field(parts[4], 0, r.matchPa)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=invalid_pa value='{}' — skipping",
+                    rule_str, parts[4]);
+            continue;
+        }
         const std::string &a = parts[5];
         if (a == "drop" || a == "Drop") r.action = UbioFaultAction::Drop;
+        else if (a == "dup" || a == "Dup" || a == "duplicate" ||
+                 a == "Duplicate") r.action = UbioFaultAction::Duplicate;
         else if (a == "delay" || a == "Delay") {
             r.action = UbioFaultAction::Delay;
-            r.delayTicks = (parts.size() > 6 && !parts[6].empty())
-                           ? std::stoull(parts[6]) : 1000;
         } else if (a == "reorder" || a == "Reorder") {
             r.action = UbioFaultAction::Reorder;
-            r.delayTicks = (parts.size() > 6 && !parts[6].empty())
-                           ? std::stoull(parts[6]) : 1000;
-        } else r.action = UbioFaultAction::Duplicate;  // dup default
-        if (parts.size() > 7 && !parts[7].empty())
-            r.matchCount = std::stoi(parts[7]);
+        } else {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=unknown_action action='{}' — skipping",
+                    rule_str, a);
+            continue;
+        }
+        if (r.action == UbioFaultAction::Delay ||
+            r.action == UbioFaultAction::Reorder) {
+            r.delayTicks = 1000;
+            if (parts.size() > 6 && !parts[6].empty() &&
+                !parseUint64Field(parts[6], 10, r.delayTicks)) {
+                LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                        "error=invalid_delay value='{}' — skipping",
+                        rule_str, parts[6]);
+                continue;
+            }
+        } else if (parts.size() > 6 && !parts[6].empty()) {
+            uint64_t ignoredDelay = 0;
+            if (!parseUint64Field(parts[6], 10, ignoredDelay)) {
+                LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                        "error=invalid_delay value='{}' — skipping",
+                        rule_str, parts[6]);
+                continue;
+            }
+        }
+        if (parts.size() > 7 && !parts[7].empty() &&
+            !parseIntField(parts[7], r.matchCount)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=invalid_count value='{}' — skipping",
+                    rule_str, parts[7]);
+            continue;
+        }
+        if (r.matchCount < 0) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=invalid_count value='{}' — skipping",
+                    rule_str, parts[7]);
+            continue;
+        }
+        if (r.matchDst >= 0 && r.matchDst != localNode) continue;
         g_faultRules.push_back(r);
-        LogInfo("UBIO", "[UBFAULT] loaded rule '{}' type={} src={} dst={} "
-                "action={} count={}", r.name, parts[1], r.matchSrc, r.matchDst,
-                static_cast<int>(r.action), r.matchCount);
+        LogInfo("UBIO", "[UBFAULT-LOAD] rule='{}' name='{}' type={} src={} "
+                "dst={} action={} count={} pa=0x{:x} delayTicks={}",
+                r.name, r.name, parts[1], r.matchSrc, r.matchDst,
+                faultActionName(r.action), r.matchCount, r.matchPa,
+                r.delayTicks);
     }
+}
+
+void
+insertDelayed(DelayedMsg dm)
+{
+    auto pos = std::upper_bound(
+        g_delayedQueue.begin(), g_delayedQueue.end(), dm.fireTick,
+        [](uint64_t fireTick, const DelayedMsg &queued) {
+            return fireTick < queued.fireTick;
+        });
+    g_delayedQueue.insert(pos, std::move(dm));
 }
 
 // Returns number of times the message should be processed:
@@ -198,39 +325,46 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick,
         if (r.matchSrc >= 0 && r.matchSrc != (int)coh.h.srcNode) continue;
         if (r.matchDst >= 0 && r.matchDst != (int)coh.h.dstNode) continue;
         if (r.matchPa != 0 && r.matchPa != coh.h.homeLinePa) continue;
-        r.firedCount++;
         const char *tn = coherenceMsgTypeName(coh.h.type);
+        uint64_t fireTick = currentTick;
+        if ((r.action == UbioFaultAction::Delay ||
+             r.action == UbioFaultAction::Reorder) &&
+            r.delayTicks > std::numeric_limits<uint64_t>::max() - currentTick) {
+            LogWarn("UBIO", "[UBFAULT-TRIGGER] node={} rule='{}' action={} "
+                    "type={} src={} dst={} pa=0x{:x} reqId={} matchCount={} "
+                    "firedCount={} delayTicks={} currentTick={} "
+                    "error=fire_tick_overflow — injection skipped",
+                    nid, r.name, faultActionName(r.action), tn, coh.h.srcNode,
+                    coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId, r.matchCount,
+                    r.firedCount, r.delayTicks, currentTick);
+            continue;
+        }
+        if (r.action == UbioFaultAction::Delay ||
+            r.action == UbioFaultAction::Reorder) {
+            fireTick = currentTick + r.delayTicks;
+        }
+        r.firedCount++;
+        LogWarn("UBIO", "[UBFAULT-TRIGGER] node={} rule='{}' action={} "
+                "type={} src={} dst={} pa=0x{:x} reqId={} matchCount={} "
+                "firedCount={} delayTicks={} fireTick={} currentTick={}",
+                nid, r.name, faultActionName(r.action), tn, coh.h.srcNode,
+                coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId, r.matchCount,
+                r.firedCount, r.delayTicks, fireTick, currentTick);
         switch (r.action) {
           case UbioFaultAction::Drop:
-            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Drop "
-                    "type={} src={} dst={} pa=0x{:x} reqId={}",
-                    nid, r.name, tn, coh.h.srcNode, coh.h.dstNode,
-                    coh.h.homeLinePa, coh.h.reqId);
             copies = 0;
             break;
           case UbioFaultAction::Duplicate:
-            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Duplicate "
-                    "type={} src={} dst={} pa=0x{:x} reqId={}",
-                    nid, r.name, tn, coh.h.srcNode, coh.h.dstNode,
-                    coh.h.homeLinePa, coh.h.reqId);
             copies = 2;
             break;
           case UbioFaultAction::Delay:
             // 4.6: real delay — enqueue to delayed queue, drop original copy
-            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Delay "
-                    "ticks={} type={} src={} dst={} pa=0x{:x} reqId={}",
-                    nid, r.name, r.delayTicks, tn, coh.h.srcNode,
-                    coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
-            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
+            insertDelayed({fireTick, coh, fromNetwork, 1, r.name, r.action});
             copies = 0;
             break;
           case UbioFaultAction::Reorder:
             // 3.3: reorder — buffer and deliver after delayTicks
-            LogWarn("UBIO", "[UBFAULT] node={} rule='{}' action=Reorder "
-                    "ticks={} type={} src={} dst={} pa=0x{:x} reqId={}",
-                    nid, r.name, r.delayTicks, tn, coh.h.srcNode,
-                    coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId);
-            g_delayedQueue.push_back({currentTick + r.delayTicks, coh, fromNetwork, 1});
+            insertDelayed({fireTick, coh, fromNetwork, 1, r.name, r.action});
             copies = 0;
         }
     }
@@ -1746,10 +1880,13 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
         DelayedMsg dm = g_delayedQueue.front();
         g_delayedQueue.pop_front();
         const CoherenceMessage &coh = dm.coh;
-        LogWarn("UBIO", "[UBFAULT-DELIVER] node={} delivering delayed "
-                      "type={} reqId={} pa=0x{:x} fireTick={} currentTick={}",
-                     nid, coherenceMsgTypeName(coh.h.type), coh.h.reqId,
-                     coh.h.homeLinePa, dm.fireTick, tick);
+        LogWarn("UBIO", "[UBFAULT-DELIVER] node={} rule='{}' action={} "
+                       "type={} src={} dst={} pa=0x{:x} reqId={} "
+                       "fireTick={} currentTick={}",
+                     nid, dm.ruleName, faultActionName(dm.action),
+                     coherenceMsgTypeName(coh.h.type), coh.h.srcNode,
+                     coh.h.dstNode, coh.h.homeLinePa, coh.h.reqId,
+                     dm.fireTick, tick);
         // Re-inject: if it was from network, process as network message; else as gem5 message.
         // We push through the same handleUbccMessage path.
         for (int rep = 0; rep < dm.faultCopies; ++rep) {
@@ -1810,6 +1947,7 @@ main(int argc, char **argv)
 {
     std::string gem5Ep;
     std::string netEp;
+    std::vector<std::string> faultRuleArgs;
     int nid = 0;
     int sid = 0;
 
@@ -1819,8 +1957,7 @@ main(int argc, char **argv)
         if (!std::strncmp(argv[i], "--num-sockets=", 14)) g_numSockets = std::atoi(argv[i] + 14);
         if (!std::strncmp(argv[i], "--num-nodes=", 12)) g_numNodes = std::atoi(argv[i] + 12);
         if (!std::strncmp(argv[i], "--fault-rules=", 14)) {
-            const char *rules = argv[i] + 14;
-            parseFaultRules(rules);
+            faultRuleArgs.emplace_back(argv[i] + 14);
         }
         // ResidentDir config (argv override env/defaults, §7.3)
         if (!std::strncmp(argv[i], "--bloom-bytes=", 14))
@@ -1955,6 +2092,7 @@ main(int argc, char **argv)
         LogError("UBIO", "[ubio:{}] ERROR: need --node=", nid);
         return 1;
     }
+    for (const auto &rules : faultRuleArgs) parseFaultRules(rules, nid);
 
     // Socket-plane model: this ubio process is the home directory + router for
     // exactly one (node, socket) plane. num_sockets from --num-sockets arg.

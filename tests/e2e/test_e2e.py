@@ -1054,30 +1054,63 @@ def verify_tc46(reads, lines):
     return True, 'TC46 PASSED: 64-byte multi-beat recall integrity verified', []
 
 
-def _fault_evidence_seen(lines, tc_id):
-    """Detect fault-injection evidence from simout and/or gem5 stdout lines."""
-    tc_tag = f"TC{tc_id}"
-    low_tc_tag = f"tc{tc_id}_"
-    for l in lines:
-        if '[UBFAULT]' in l:
-            return True
-        if '[E2E-FAULT]' in l and tc_tag in l:
-            return True
-        if low_tc_tag in l and ('dup' in l or 'drop' in l or 'delay' in l):
-            return True
-    return False
+_FAULT_TRIGGER_RE = re.compile(
+    r"\[UBFAULT-TRIGGER\].*?rule='([^']+)'.*?action=(Drop|Duplicate|Delay|Reorder)\b")
+_FAULT_DELIVER_RE = re.compile(
+    r"\[UBFAULT-DELIVER\].*?rule='([^']+)'.*?action=(Drop|Duplicate|Delay|Reorder)\b")
 
 
-def _fault_rule_hit_counts(lines, prefix):
-    """Count fired UBFAULT records by rule, excluding rule-load messages."""
-    counts = {}
-    pattern = re.compile(r"\[UBFAULT\].*rule='([^']+)'.*action=(?:Drop|Duplicate|Delay|Reorder)")
+def _fault_events(lines, marker_re):
+    """Count an explicit UBFAULT event schema; LOAD records never count."""
+    events = {}
     for line in lines:
-        match = pattern.search(line)
-        if match and match.group(1).startswith(prefix):
-            name = match.group(1)
-            counts[name] = counts.get(name, 0) + 1
-    return counts
+        match = marker_re.search(line)
+        if not match:
+            continue
+        name, action = match.groups()
+        actions = events.setdefault(name, {})
+        actions[action] = actions.get(action, 0) + 1
+    return events
+
+
+def _fault_counts_for_prefix(events, prefix):
+    return {name: dict(actions) for name, actions in events.items()
+            if name.startswith(prefix)}
+
+
+def _verify_fault_events(tc_id, lines, expected_actions, delivery_rules=()):
+    """Verify exact trigger/action sets and buffered deliveries.
+
+    Drop has no delivery. Duplicate verifies the duplication decision because
+    existing logs do not separately identify both emitted copies.
+    """
+    prefix = f"tc{tc_id}_"
+    triggers = _fault_counts_for_prefix(
+        _fault_events(lines, _FAULT_TRIGGER_RE), prefix)
+    deliveries = _fault_counts_for_prefix(
+        _fault_events(lines, _FAULT_DELIVER_RE), prefix)
+    delivery_names = set(delivery_rules)
+    trigger_errors = {name: triggers.get(name, {})
+                      for name, action in expected_actions.items()
+                      if triggers.get(name, {}) != {action: 1}}
+    delivery_errors = {name: deliveries.get(name, {})
+                       for name in delivery_names
+                       if deliveries.get(name, {}) !=
+                       {expected_actions[name]: 1}}
+    unexpected_triggers = sorted(set(triggers) - set(expected_actions))
+    unexpected_deliveries = sorted(set(deliveries) - delivery_names)
+    trigger_total = sum(sum(actions.values()) for actions in triggers.values())
+    delivery_total = sum(sum(actions.values()) for actions in deliveries.values())
+    counts = (f"trigger_count={trigger_total}/{len(expected_actions)} "
+              f"delivery_count={delivery_total}/{len(delivery_names)}")
+    if (trigger_errors or delivery_errors or unexpected_triggers or
+            unexpected_deliveries):
+        return False, (f"TC{tc_id} FAILED: strict fault verification {counts}; "
+                       f"trigger_errors={trigger_errors} "
+                       f"unexpected_triggers={unexpected_triggers} "
+                       f"delivery_errors={delivery_errors} "
+                       f"unexpected_deliveries={unexpected_deliveries}")
+    return True, counts
 
 
 def verify_tc47(reads, lines):
@@ -1096,11 +1129,12 @@ def verify_tc47(reads, lines):
     for r in node2_reads:
         if int(r['actual'], 16) != target_val:
             return False, f"TC47 FAILED: Node2 read 0x{r['actual']}, expected 0x{target_val:X}", [r]
-    fault_seen = _fault_evidence_seen(lines, 47)
-    if not fault_seen:
-        return False, ('TC47 FAILED: workload completed but no fault evidence found '
-                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
-    return True, 'TC47 PASSED: dropped/duplicated Clear fault injected and final value converged', []
+    fault_ok, fault_msg = _verify_fault_events(
+        47, lines, {"tc47_drop_clear": "Drop"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, (f'TC47 PASSED: dropped ClearReq and final value converged; '
+                  f'{fault_msg}'), []
 
 
 def verify_tc48(reads, lines):
@@ -1115,15 +1149,16 @@ def verify_tc48(reads, lines):
             return False, f'TC48 FAILED: no READ_VAL from Node{n}', reads
         if node_reads[n][-1] != target_val:
             return False, f"TC48 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
-    fault_seen = _fault_evidence_seen(lines, 48)
-    if not fault_seen:
-        return False, ('TC48 FAILED: workload completed but no fault evidence found '
-                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
-    return True, 'TC48 PASSED: duplicate InvalidateAck handled idempotently', []
+    fault_ok, fault_msg = _verify_fault_events(
+        48, lines, {"tc48_dup_inv_ack": "Duplicate"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, (f'TC48 PASSED: duplicate InvalidateAck decision handled '
+                  f'idempotently; {fault_msg}'), []
 
 
 def verify_tc49(reads, lines):
-    """TC49: duplicate ack perturbation — converges anyway."""
+    """TC49: reordered InvalidateAck perturbation — converges anyway."""
     target_val = 0x49CC0033
     # All 3 nodes must read the final value
     node_reads = {}
@@ -1134,11 +1169,13 @@ def verify_tc49(reads, lines):
             return False, f'TC49 FAILED: no READ_VAL from Node{n}', reads
         if node_reads[n][-1] != target_val:
             return False, f"TC49 FAILED: Node{n} final read 0x{node_reads[n][-1]:X}, expected 0x{target_val:X}", reads
-    fault_seen = _fault_evidence_seen(lines, 49)
-    if not fault_seen:
-        return False, ('TC49 FAILED: workload completed but no fault evidence found '
-                       '([UBFAULT]/[E2E-FAULT]); check gem5 stdout capture'), []
-    return True, 'TC49 PASSED: duplicate InvalidateAck perturbation converged correctly', []
+    fault_ok, fault_msg = _verify_fault_events(
+        49, lines, {"tc49_reorder_inv_ack": "Reorder"},
+        {"tc49_reorder_inv_ack"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, (f'TC49 PASSED: reordered InvalidateAck delivered and converged; '
+                  f'{fault_msg}'), []
 
 
 def verify_tc50(reads, lines):
@@ -1368,10 +1405,12 @@ def verify_tc110(reads, lines):
     final_val = list(values)[0]
     if final_val not in legal:
         return False, f"TC110 FAILED: final value 0x{final_val:X} not in legal set", reads
-    fault_seen = _fault_evidence_seen(lines, 110)
-    if not fault_seen:
-        return False, "TC110 FAILED: no [UBFAULT] evidence in ubio logs", []
-    return True, f"TC110 PASSED: ClearReq dropped, all nodes converged to 0x{final_val:X}", []
+    fault_ok, fault_msg = _verify_fault_events(
+        110, lines, {"tc110_drop_clear": "Drop"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, (f"TC110 PASSED: ClearReq dropped, all nodes converged to "
+                  f"0x{final_val:X}; {fault_msg}"), []
 
 
 def verify_tc111(reads, lines):
@@ -1397,10 +1436,38 @@ def verify_tc111(reads, lines):
     for r in conv:
         if int(r["actual"], 16) != target:
             return False, f"TC111 FAILED: expected 0x{target:X}, got {r['actual']}", [r]
-    fault_seen = _fault_evidence_seen(lines, 111)
-    # Under EP_SILENT_UPGRADE=1, no fault should be seen (zero cross-node).
-    # Under EP_SILENT_UPGRADE=0, fault should be seen + retry self-heals.
-    return True, f"TC111 PASSED: converged to 0x{target:X} (fault_evidence={fault_seen})", []
+    upgrade_triggers = []
+    for line in lines:
+        match = _FAULT_TRIGGER_RE.search(line)
+        if match and re.search(r"\btype=UpgradeReq\b", line):
+            upgrade_triggers.append(match.groups())
+    if upgrade_triggers:
+        if upgrade_triggers != [("tc111_silent_upgrade_drop", "Drop")]:
+            return False, ("TC111 FAILED: UpgradeReq trigger_count="
+                           f"{len(upgrade_triggers)}/1 delivery_count=0/0; "
+                           f"observed={upgrade_triggers}"), []
+        fault_ok, fault_msg = _verify_fault_events(
+            111, lines, {"tc111_silent_upgrade_drop": "Drop"})
+        if not fault_ok:
+            return False, fault_msg, []
+        mode_msg = f"fault mode; {fault_msg}"
+    else:
+        # Bounded source markers: EPBackend emits kind=upgrade_silent and
+        # SILENT-WRITE-HIT; EPRNFController emits silent upgrade plus explicit
+        # zero-cross-node wording.
+        silent_markers = [line for line in lines
+                          if ("kind=upgrade_silent" in line or
+                              "SILENT-WRITE-HIT" in line or
+                              ("silent upgrade" in line.lower() and
+                               ("zero cross-node" in line.lower() or
+                                "0 cross-node" in line.lower())))]
+        if not silent_markers:
+            return False, ("TC111 FAILED: trigger_count=0/1 delivery_count=0/0; "
+                           "no explicit kind=upgrade_silent, SILENT-WRITE-HIT, "
+                           "or silent-upgrade zero-cross-node marker was captured"), []
+        mode_msg = (f"silent-upgrade mode; trigger_count=0/0 delivery_count=0/0 "
+                    f"silent_markers={len(silent_markers)}")
+    return True, f"TC111 PASSED: converged to 0x{target:X}; {mode_msg}", []
 
 
 def verify_tc112(reads, lines):
@@ -1506,10 +1573,12 @@ def verify_tc117(reads, lines):
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC117 FAILED: {len(mismatches)} mismatches", mismatches
-    fault_seen = _fault_evidence_seen(lines, 117)
-    if not fault_seen:
-        return False, "TC117 FAILED: no [UBFAULT] reorder evidence in ubio logs", []
-    return True, "TC117 PASSED: reordered ClearReq handled with fault evidence", []
+    fault_ok, fault_msg = _verify_fault_events(
+        117, lines, {"tc117_reorder_clear": "Reorder"},
+        {"tc117_reorder_clear"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, f"TC117 PASSED: reordered ClearReq delivered; {fault_msg}", []
 
 
 def verify_tc120(reads, lines):
@@ -2310,10 +2379,12 @@ def verify_tc118(reads, lines):
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC118 FAILED: {len(mismatches)} mismatches", mismatches
-    fault_seen = _fault_evidence_seen(lines, 118)
-    if not fault_seen:
-        return False, "TC118 FAILED: no [UBFAULT] mixed-fault evidence in ubio logs", []
-    return True, "TC118 PASSED: combined faults converged with fault evidence", []
+    fault_ok, fault_msg = _verify_fault_events(
+        118, lines, {"tc118_drop": "Drop", "tc118_delay": "Delay"},
+        {"tc118_delay"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, f"TC118 PASSED: combined faults converged; {fault_msg}", []
 
 
 def verify_tc119(reads, lines):
@@ -2323,10 +2394,12 @@ def verify_tc119(reads, lines):
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC119 FAILED: {len(mismatches)} mismatches", mismatches
-    fault_seen = _fault_evidence_seen(lines, 119)
-    if not fault_seen:
-        return False, "TC119 FAILED: no [UBFAULT] triple-fault evidence in ubio logs", []
-    return True, "TC119 PASSED: triple fault converged with fault evidence", []
+    fault_ok, fault_msg = _verify_fault_events(
+        119, lines, {"tc119_drop": "Drop", "tc119_dup": "Duplicate",
+                     "tc119_delay": "Delay"}, {"tc119_delay"})
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, f"TC119 PASSED: triple fault converged; {fault_msg}", []
 
 
 def verify_tc148(reads, lines):
@@ -2337,106 +2410,112 @@ def verify_tc148(reads, lines):
     if mismatches:
         return False, f"TC148 FAILED: {len(mismatches)} data mismatches", mismatches[:16]
 
-    hits = _fault_rule_hit_counts(lines, "tc148_")
-    expected_rules = {
-        f"tc148_{action}_{i}"
-        for action in ("drop", "dup", "delay", "reorder")
-        for i in range(8)
+    action_names = {"drop": "Drop", "dup": "Duplicate", "delay": "Delay",
+                    "reorder": "Reorder"}
+    expected_actions = {
+        f"tc148_{name}_{i}": action
+        for name, action in action_names.items() for i in range(8)
     }
-    missing = sorted(expected_rules - set(hits))
-    wrong_count = sorted(name for name in expected_rules if hits.get(name, 0) != 1)
-    unexpected = sorted(name for name in hits if name not in expected_rules)
-    if missing or wrong_count or unexpected:
-        return False, ("TC148 FAILED: fault hit-count mismatch "
-                       f"missing={missing} wrong_count={wrong_count} "
-                       f"unexpected={unexpected} hits={hits}"), []
-
-    action_totals = {
-        action: sum(count for name, count in hits.items()
-                    if name.startswith(f"tc148_{action}_"))
-        for action in ("drop", "dup", "delay", "reorder")
-    }
-    if any(count != 8 for count in action_totals.values()):
-        return False, f"TC148 FAILED: action totals {action_totals}", []
-    return True, ("TC148 PASSED: 32/32 reads MATCH; 32/32 fault rules fired "
-                  f"exactly once; totals={action_totals}"), []
+    delivery_rules = {name for name, action in expected_actions.items()
+                      if action in ("Delay", "Reorder")}
+    fault_ok, fault_msg = _verify_fault_events(
+        148, lines, expected_actions, delivery_rules)
+    if not fault_ok:
+        return False, fault_msg, []
+    action_totals = {action: 8 for action in action_names}
+    return True, ("TC148 PASSED: 32/32 reads MATCH; 32/32 triggers and 16/16 "
+                  f"deliveries exact; totals={action_totals}; {fault_msg}"), []
 
 
-def _verify_fault_rule_set(tc_id, reads, lines, expected_reads, expected_rules):
+def _verify_fault_rule_set(tc_id, reads, lines, expected_reads,
+                           expected_actions, delivery_rules=()):
     if len(reads) < expected_reads:
         return False, (f"TC{tc_id} FAILED: expected >={expected_reads} READ_VAL, "
                        f"got {len(reads)}"), reads
     mismatches = [r for r in reads if r["verdict"] != "MATCH"]
     if mismatches:
         return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:16]
-    hits = _fault_rule_hit_counts(lines, f"tc{tc_id}_")
-    missing = sorted(expected_rules - set(hits))
-    wrong = sorted(name for name in expected_rules if hits.get(name, 0) != 1)
-    unexpected = sorted(set(hits) - expected_rules)
-    if missing or wrong or unexpected:
-        return False, (f"TC{tc_id} FAILED: fault counts missing={missing} "
-                       f"wrong={wrong} unexpected={unexpected} hits={hits}"), []
-    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, "
-                  f"fault_rules={len(expected_rules)} exactly once"), []
+    fault_ok, fault_msg = _verify_fault_events(
+        tc_id, lines, expected_actions, delivery_rules)
+    if not fault_ok:
+        return False, fault_msg, []
+    return True, f"TC{tc_id} PASSED: reads={len(reads)}, {fault_msg}", []
 
 
 def verify_tc149(reads, lines):
     return _verify_fault_rule_set(
-        149, reads, lines, 32, {f"tc149_upgrade_drop_{i}" for i in range(8)})
+        149, reads, lines, 32,
+        {f"tc149_upgrade_drop_{i}": "Drop" for i in range(8)})
 
 
 def verify_tc150(reads, lines):
     return _verify_fault_rule_set(
         150, reads, lines, 32,
-        {f"tc150_invack_dup_n{node}_{i}" for node in (1, 2) for i in range(8)})
+        {f"tc150_invack_dup_n{node}_{i}": "Duplicate"
+         for node in (1, 2) for i in range(8)})
 
 
 def verify_tc151(reads, lines):
     return _verify_fault_rule_set(
         151, reads, lines, 32,
-        {f"tc151_invack_delay_n{node}_{i}" for node in (1, 2) for i in range(8)})
+        {f"tc151_invack_delay_n{node}_{i}": "Delay"
+         for node in (1, 2) for i in range(8)},
+        {f"tc151_invack_delay_n{node}_{i}"
+         for node in (1, 2) for i in range(8)})
 
 
 def verify_tc152(reads, lines):
     return _verify_fault_rule_set(
         152, reads, lines, 32,
-        {f"tc152_invack_reorder_n{node}_{i}" for node in (1, 2) for i in range(8)})
+        {f"tc152_invack_reorder_n{node}_{i}": "Reorder"
+         for node in (1, 2) for i in range(8)},
+        {f"tc152_invack_reorder_n{node}_{i}"
+         for node in (1, 2) for i in range(8)})
 
 
 def verify_tc153(reads, lines):
     return _verify_fault_rule_set(
-        153, reads, lines, 16, {f"tc153_recall_dup_{i}" for i in range(16)})
+        153, reads, lines, 16,
+        {f"tc153_recall_dup_{i}": "Duplicate" for i in range(16)})
 
 
 def verify_tc154(reads, lines):
     return _verify_fault_rule_set(
-        154, reads, lines, 16, {f"tc154_recall_delay_{i}" for i in range(16)})
+        154, reads, lines, 16,
+        {f"tc154_recall_delay_{i}": "Delay" for i in range(16)},
+        {f"tc154_recall_delay_{i}" for i in range(16)})
 
 
 def verify_tc155(reads, lines):
     return _verify_fault_rule_set(
-        155, reads, lines, 16, {f"tc155_recall_reorder_{i}" for i in range(16)})
+        155, reads, lines, 16,
+        {f"tc155_recall_reorder_{i}": "Reorder" for i in range(16)},
+        {f"tc155_recall_reorder_{i}" for i in range(16)})
 
 
 def verify_tc156(reads, lines):
     return _verify_fault_rule_set(
-        156, reads, lines, 16, {f"tc156_recall_drop_{i}" for i in range(16)})
+        156, reads, lines, 16,
+        {f"tc156_recall_drop_{i}": "Drop" for i in range(16)})
 
 
 def verify_tc157(reads, lines):
     return _verify_fault_rule_set(
         157, reads, lines, 32,
-        {f"tc157_invack_drop_n{node}_{i}" for node in (1, 2) for i in range(8)})
+        {f"tc157_invack_drop_n{node}_{i}": "Drop"
+         for node in (1, 2) for i in range(8)})
 
 
 def verify_tc158(reads, lines):
     return _verify_fault_rule_set(
-        158, reads, lines, 32, {f"tc158_upgraderesp_drop_{i}" for i in range(8)})
+        158, reads, lines, 32,
+        {f"tc158_upgraderesp_drop_{i}": "Drop" for i in range(8)})
 
 
 def verify_tc159(reads, lines):
     return _verify_fault_rule_set(
-        159, reads, lines, 32, {f"tc159_upgradeack_drop_{i}" for i in range(8)})
+        159, reads, lines, 32,
+        {f"tc159_upgradeack_drop_{i}": "Drop" for i in range(8)})
 
 
 def verify_tc80(reads, lines):
@@ -3443,9 +3522,9 @@ def gem5_config_main():
 
     # ── Debug Fault Injection Config (TC47-49) ────────────────────
     _fault_tc_configs = {
-        47: ["tc47_dup_clear:ClearReq:1:0:0:dup::1"],
+        47: ["tc47_drop_clear:ClearReq:1:0:0:drop::1"],
         48: ["tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1"],
-        49: ["tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1"],
+        49: ["tc49_reorder_inv_ack:InvalidateAck:1:0:0:reorder:100000:1"],
     }
     _fault_cfg_line = None
     # UBIOModule fault injection was removed when UBIOModule was decoupled from

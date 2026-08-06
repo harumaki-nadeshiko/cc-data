@@ -33,7 +33,7 @@ def main():
     p.add_argument("--simout", nargs="+", default=[],
                    help="per-node simout files to aggregate")
     p.add_argument("--fault-log", nargs="*", default=[],
-                   help="ubio stderr logs to scan for [UBFAULT] evidence")
+                   help="raw ubio stdout/stderr logs containing UBFAULT events")
     args = p.parse_args()
 
     raw_lines = []
@@ -49,7 +49,8 @@ def main():
         if os.path.exists(path):
             with open(path, errors="replace") as f:
                 for line in f:
-                    if ("[UBFAULT]" in line or
+                    if ("[UBFAULT-TRIGGER]" in line or
+                        "[UBFAULT-DELIVER]" in line or
                         "[ResidentDirStats]" in line or
                         "[UBCC-STATS]" in line or
                         "[UBCC-NAIVE-EVICT]" in line or

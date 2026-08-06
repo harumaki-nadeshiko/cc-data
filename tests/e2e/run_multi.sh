@@ -103,9 +103,9 @@ NMOD=$((NUM_NODES * NUM_SOCKETS))
 # ── Per-TC fault-injection rules (ubio --fault-rules=...) ────────────
 fault_rules_for_tc() {
     case "$1" in
-        47) echo "tc47_dup_clear:ClearReq:1:0:0:dup::1" ;;
+        47) echo "tc47_drop_clear:ClearReq:1:0:0:drop::1" ;;
         48) echo "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1" ;;
-        49) echo "tc49_dup_inv_ack:InvalidateAck:1:0:0:dup::1" ;;
+        49) echo "tc49_reorder_inv_ack:InvalidateAck:1:0:0:reorder:100000:1" ;;
         110) echo "tc110_drop_clear:ClearReq:1:1:0:drop::1" ;;
         111) echo "tc111_silent_upgrade_drop:UpgradeReq:1:1:0:drop::1" ;;
         117) echo "tc117_reorder_clear:ClearReq:0:1:0:reorder:100000:1" ;;
@@ -429,7 +429,7 @@ _aggregate_protocol_tick() {
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
             for stream in stdout.log stderr.log; do
-                log="$LOG_BASE/ubio_n${nid}_s${sid}/$stream"
+                log="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/$stream"
                 [ -f "$log" ] || continue
                 tick=$(perl -e '
                     $f = shift;
@@ -784,7 +784,7 @@ run_tc() {
             else
                 cmd="$(expand_cmd "ubio_${nid}" "$frargs" "$uextra")"
             fi
-            local logdir="$LOG_BASE/ubio_n${nid}_s${sid}"
+            local logdir="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}"
             mkdir -p "$logdir"
             ( set +e; eval "$cmd" 2>"$logdir/stderr.log" >"$logdir/stdout.log"; status=$?; \
               printf '%s\n' "$status" >"$child_status_dir/ubio_n${nid}_s${sid}.exit"; exit "$status" ) &
@@ -841,7 +841,7 @@ run_tc() {
                 for sid in $(seq 0 $((NUM_SOCKETS-1))); do
                     local protocol_stream protocol_log
                     for protocol_stream in stdout.log stderr.log; do
-                        protocol_log="$LOG_BASE/ubio_n${nid}_s${sid}/$protocol_stream"
+                        protocol_log="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/$protocol_stream"
                         if [ -f "$protocol_log" ]; then
                             current_size=$((current_size + $(stat -c %s "$protocol_log")))
                         fi
@@ -992,10 +992,33 @@ run_tc() {
     local faultlogs=()
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
-            faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stderr.log")
-            faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stdout.log")
+            faultlogs+=("$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/stderr.log")
+            faultlogs+=("$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/stdout.log")
         done
     done
+    # Strict UBFAULT events are consumed directly from the raw UBIO logs.
+    # Keep a separate auxiliary input only for TC111's gem5 silent-upgrade
+    # markers, which do not originate in an UBIO log.
+    if [ "$tc" -eq 111 ]; then
+        local fault_evidence="$LOG_BASE/fault_evidence_tc${tc}.log"
+        : >"$fault_evidence"
+        for nid in $(seq 0 $((NUM_NODES-1))); do
+            for marker_log in \
+                "$LOG_BASE/gem5_tc${tc}_node${nid}/stdout.log" \
+                "$LOG_BASE/gem5_tc${tc}_node${nid}/gem5_debug.log"; do
+                if [ -f "$marker_log" ]; then
+                    while IFS= read -r marker_line; do
+                        case "$marker_line" in
+                            *'kind=upgrade_silent'*|*'SILENT-WRITE-HIT'*|*'silent upgrade'*'zero cross-node'*|*'silent upgrade'*'0 cross-node'*)
+                                printf '%s\n' "$marker_line" >>"$fault_evidence"
+                                ;;
+                        esac
+                    done <"$marker_log"
+                fi
+            done
+        done
+        faultlogs+=("$fault_evidence")
+    fi
     local vlog="$LOG_BASE/verify_tc${tc}.log"
     python3 "$ROOT_DIR/tests/e2e/verify.py" --tc=$tc \
         --simout "${simouts[@]}" --fault-log "${faultlogs[@]}" 2>&1 | tee "$vlog"
