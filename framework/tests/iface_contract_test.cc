@@ -51,6 +51,42 @@ std::string CaptureInfoLog()
                      : std::string();
 }
 
+bool CheckWarnMirrorsBothStreams()
+{
+    int stdoutPipe[2];
+    int stderrPipe[2];
+    if (pipe(stdoutPipe) != 0 || pipe(stderrPipe) != 0)
+        return false;
+    std::fflush(stdout);
+    std::fflush(stderr);
+    const int savedStdout = dup(STDOUT_FILENO);
+    const int savedStderr = dup(STDERR_FILENO);
+    dup2(stdoutPipe[1], STDOUT_FILENO);
+    dup2(stderrPipe[1], STDERR_FILENO);
+    close(stdoutPipe[1]);
+    close(stderrPipe[1]);
+    LogWarn("contract", "mirrored warning {}", 9);
+    std::fflush(stdout);
+    std::fflush(stderr);
+    dup2(savedStdout, STDOUT_FILENO);
+    dup2(savedStderr, STDERR_FILENO);
+    close(savedStdout);
+    close(savedStderr);
+    char stdoutBuffer[128]{};
+    char stderrBuffer[128]{};
+    const ssize_t stdoutCount = read(stdoutPipe[0], stdoutBuffer,
+                                     sizeof(stdoutBuffer));
+    const ssize_t stderrCount = read(stderrPipe[0], stderrBuffer,
+                                     sizeof(stderrBuffer));
+    close(stdoutPipe[0]);
+    close(stderrPipe[0]);
+    const std::string expected = "mirrored warning 9\n";
+    return stdoutCount == static_cast<ssize_t>(expected.size()) &&
+           stderrCount == static_cast<ssize_t>(expected.size()) &&
+           std::string(stdoutBuffer, stdoutCount) == expected &&
+           std::string(stderrBuffer, stderrCount) == expected;
+}
+
 bool CheckLogAssertIfContract()
 {
     int descriptors[2];
@@ -161,6 +197,8 @@ int main()
           "TerminateInfo stable 12-byte wire layout");
     Check(CaptureInfoLog() == "-7 ff {} str 0x1234\n",
           "format parser and exactly-one newline");
+    Check(CheckWarnMirrorsBothStreams(),
+          "LogWarn mirrors identical output to stdout and stderr");
     Check(CheckLogAssertIfContract(),
           "LogAssertIf accepts true and logs then aborts on false");
     // Keep every fork-based death test ahead of parent-side ZMQ creation.

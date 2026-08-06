@@ -680,6 +680,14 @@ run_tc() {
         return 1
     fi
     sleep 1
+    if ! kill -0 "$NSIM_PID" 2>/dev/null; then
+        local nsim_status="unknown"
+        [ -f "$child_status_dir/networksim.exit" ] && \
+            nsim_status=$(tr -d '[:space:]' <"$child_status_dir/networksim.exit")
+        echo "[launch] networksim exited during startup (status=$nsim_status)"
+        _kill_infra
+        return 1
+    fi
 
     # 4. Start N gem5 nodes, wait until each binds its ports (STEP5 marker)
     GEM5_PIDS=""; local gem5_arr=()
@@ -793,6 +801,22 @@ run_tc() {
     done
     local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
     echo "[launch] $n_ubio ubio (${NUM_NODES}x${NUM_SOCKETS}) + $NUM_NODES gem5 running"
+    sleep 1
+    local ubio_index=0 ubio_pid ubio_nid ubio_sid ubio_exit
+    for ubio_pid in $UBIO_PIDS; do
+        ubio_nid=$((ubio_index / NUM_SOCKETS))
+        ubio_sid=$((ubio_index % NUM_SOCKETS))
+        ubio_exit="$child_status_dir/ubio_n${ubio_nid}_s${ubio_sid}.exit"
+        if ! kill -0 "$ubio_pid" 2>/dev/null; then
+            local ubio_status="unknown"
+            [ -f "$ubio_exit" ] && \
+                ubio_status=$(tr -d '[:space:]' <"$ubio_exit")
+            echo "[launch] ubio node=$ubio_nid socket=$ubio_sid exited during startup (status=$ubio_status)"
+            _kill_infra
+            return 1
+        fi
+        ubio_index=$((ubio_index + 1))
+    done
     _start_memory_monitor "$tc"
 
     # 6b. Supervisor: opt-in long-run watchdog (EP_SUPERVISOR=1)
@@ -992,7 +1016,6 @@ run_tc() {
     local faultlogs=()
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
-            faultlogs+=("$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/stderr.log")
             faultlogs+=("$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/stdout.log")
         done
     done
@@ -1038,7 +1061,8 @@ run_tc() {
 
 # ── Main ─────────────────────────────────────────────────────────────
 [ -x "$GEM5_BIN" ] || { echo "FATAL: $GEM5_BIN not built"; exit 2; }
-[ -x "$UBIO_BIN" ] || [ -x "$NSIM_BIN" ] || { echo "FATAL: native binaries not built"; exit 2; }
+[ -x "$UBIO_BIN" ] || { echo "FATAL: $UBIO_BIN not built"; exit 2; }
+[ -x "$NSIM_BIN" ] || { echo "FATAL: $NSIM_BIN not built"; exit 2; }
 
 echo "=== Multi-Process E2E Runner (decoupled, topo=$TOPO_KIND) ==="
 echo "Config:  $JSON"

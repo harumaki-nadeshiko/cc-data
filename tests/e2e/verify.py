@@ -33,7 +33,7 @@ def main():
     p.add_argument("--simout", nargs="+", default=[],
                    help="per-node simout files to aggregate")
     p.add_argument("--fault-log", nargs="*", default=[],
-                   help="raw ubio stdout/stderr logs containing UBFAULT events")
+                   help="ubio stdout logs containing mirrored UBFAULT events")
     args = p.parse_args()
 
     raw_lines = []
@@ -45,7 +45,7 @@ def main():
                 raw_lines.extend(line.rstrip("\n") for line in f)
     expected = len(args.simout)
 
-    for path in args.fault_log:
+    for path in dict.fromkeys(args.fault_log):
         if os.path.exists(path):
             with open(path, errors="replace") as f:
                 for line in f:
@@ -64,10 +64,10 @@ def main():
                         "DIRECT-FWD" in line or
                         "RESIDENT-WAITER" in line or
                         "RESIDENT-BACKSTORE-KNOWN" in line or
-                         "RESIDENT-SPILL-START" in line or
-                         "RESIDENT-SPILL-DONE" in line or
-                         "UBCC-SPILL-DIRTY-PERSIST" in line or
-                         "RESIDENT-FILL-ISSUED" in line or
+                        "RESIDENT-SPILL-START" in line or
+                        "RESIDENT-SPILL-DONE" in line or
+                        "UBCC-SPILL-DIRTY-PERSIST" in line or
+                        "RESIDENT-FILL-ISSUED" in line or
                         "RESIDENT-FILL-DONE" in line or
                         "RESIDENT-MISS" in line or
                         "RESIDENT-REPLAY" in line or
@@ -80,9 +80,9 @@ def main():
                         "WB-DATA-PERSIST" in line or
                         "BACKSTORE-WRITE" in line or
                         "BACKSTORE-READ" in line or
-                         "EvictReq" in line or
-                         "UBCC-SHARED-RELEASE" in line or
-                         "RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line):
+                        "EvictReq" in line or
+                        "UBCC-SHARED-RELEASE" in line or
+                        "RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line):
                         raw_lines.append(line.rstrip("\n"))
 
     print(f"[verify] TC{args.tc}: aggregated {found}/{expected} simout files, "

@@ -108,12 +108,19 @@ void LogFormatted(LogLevel level, const char* module, std::string_view format,
     while (!output.empty() &&
            (output.back() == '\n' || output.back() == '\r'))
         output.pop_back();
-    FILE* stream = (level == LogLevel::Debug || level == LogLevel::Info)
-                       ? stdout
-                       : stderr;
-    std::fwrite(output.data(), 1, output.size(), stream);
-    std::fputc('\n', stream);
-    std::fflush(stream);
+    const auto write = [&output](FILE* stream) {
+        std::fwrite(output.data(), 1, output.size(), stream);
+        std::fputc('\n', stream);
+        std::fflush(stream);
+    };
+    if (level == LogLevel::Debug || level == LogLevel::Info) {
+        write(stdout);
+    } else {
+        // Match the production backend contract: warnings, errors, and
+        // assertions are visible in both the normal transcript and stderr.
+        write(stdout);
+        write(stderr);
+    }
 }
 
 } // namespace detail

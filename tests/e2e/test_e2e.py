@@ -1061,7 +1061,7 @@ _FAULT_DELIVER_RE = re.compile(
 
 
 def _fault_events(lines, marker_re):
-    """Count an explicit UBFAULT event schema; LOAD records never count."""
+    """Count explicit UBFAULT events; the runner supplies stdout only."""
     events = {}
     for line in lines:
         match = marker_re.search(line)
