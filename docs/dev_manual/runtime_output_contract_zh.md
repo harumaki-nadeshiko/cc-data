@@ -78,7 +78,9 @@ db_wal_service / db_wal_end_to_end / db_wal_batch_32ops
 
 | Marker/prefix | 主要用途 |
 |---|---|
-| `[UBFAULT]` | fault injection 已实际命中 |
+| `[UBFAULT-LOAD]` | fault rule 配置加载和 malformed 诊断 |
+| `[UBFAULT-TRIGGER]` | fault injection 已实际命中；逐 rule/action 精确计数 |
+| `[UBFAULT-DELIVER]` | Delay/Reorder buffered message 实际 release/delivery |
 | `[UBCC-NAIVE-EVICT]`、`[UBCC-NAIVE-EVICT-DONE]` | naive overflow/recall 证据 |
 | `[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]` | dirty recall authoritative payload |
 | `[RESIDENT-SPILL-START]`、`[RESIDENT-SPILL-DONE]` | spill 生命周期 |

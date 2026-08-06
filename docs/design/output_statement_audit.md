@@ -119,9 +119,9 @@ producer-consumer 映射作为稳定审阅结果。
 - gem5 端口就绪文本 `STEP5 ... Port enabled`。
 - `[GUEST-TIMER]` 和 `[PERF-LATENCY]`。
 - portable workload 的 `[E2E_META]`、`[TOPOLOGY]`、`[PORTABLE-PRESSURE]`。
-- fault 的实际 `[UBFAULT] ... rule='...' action=...` 命中记录。
-- Delay/Reorder 的 `[UBFAULT-DELIVER]` 应作为 qualification 证据保留；当前 verifier
-  尚未导入该 marker，这是测试覆盖缺口而不是删除依据。
+- fault 的实际 `[UBFAULT-TRIGGER] ... rule='...' action=...` 命中记录。
+- Delay/Reorder 的 `[UBFAULT-DELIVER]` 已由当前 verifier 导入并按 rule 精确计数，
+  是 qualification 的硬证据，不能关闭或改格式。
 - `[UBCC-STATS]`、`[ResidentDirStats]` 和 `[TRACE-PERF-SUMMARY]`。
 - 各 testcase verifier 明确检查的专用 marker。
 - child PID、exit status、matrix TSV、progress JSON 和 supervisor status。
@@ -438,7 +438,7 @@ STEP5 ... Port enabled
 
 ## 8. Fault 测试必须保留的输出
 
-### 8.1 `[UBFAULT]` rule load
+### 8.1 `[UBFAULT-LOAD]` rule load
 
 位置：`modules/ubiomodule/ubio_main.cc`。
 
@@ -446,12 +446,12 @@ STEP5 ... Port enabled
 
 注意：仅有 loaded marker 不足以判定 fault 发生。
 
-### 8.2 `[UBFAULT]` fired record
+### 8.2 `[UBFAULT-TRIGGER]` fired record
 
 TC148-TC159 的 verifier 使用如下模式计数：
 
 ```text
-[UBFAULT] ... rule='<rule-id>' ... action=Drop|Duplicate|Delay|Reorder
+[UBFAULT-TRIGGER] ... rule='<rule-id>' ... action=Drop|Duplicate|Delay|Reorder
 ```
 
 必须保留字段：
@@ -475,10 +475,11 @@ Delay/Reorder 需要同时证明：
 2. 消息最终实际 release/deliver。
 
 因此 `[UBFAULT-DELIVER]` 是 qualification 必要证据，不能只保留初始 action marker。
-但当前 `verify.py` 的 UBIO 日志白名单只导入包含完整子串 `[UBFAULT]` 的行，
-`[UBFAULT-DELIVER]` 不满足该条件；仓库内也没有其他自动消费者。当前依赖等级是
-`NONE`，目标依赖等级应为 `HARD`。在接入 verifier 前，现有自动测试不能证明
-Delay/Reorder 的消息最终被实际投递。
+当前 `verify.py` 已显式导入 `[UBFAULT-TRIGGER]` 和 `[UBFAULT-DELIVER]`；
+`test_e2e.py::_verify_fault_events()` 会检查期望 rule、action、trigger count、delivery
+count 和 unexpected event。TC148 要求 32/32 triggers 及 16/16 Delay/Reorder
+deliveries，TC151/152/154/155 也传入各自 delivery rule 集。因此当前依赖等级为
+`HARD/STRUCTURED`。
 
 ### 8.4 Recovery 证据
 
@@ -701,7 +702,7 @@ Delay/Reorder 的消息最终被实际投递。
 
 | 输出族 | 分类 | 性能模式 |
 |---|---|---|
-| `[UBFAULT]`、`[UBFAULT-DELIVER]` | FAULT_EVIDENCE | 无 fault rule 时自然无输出 |
+| `[UBFAULT-LOAD]`、`[UBFAULT-TRIGGER]`、`[UBFAULT-DELIVER]` | FAULT_EVIDENCE | 无 fault rule 时自然无输出 |
 | `[TRACE-PERF]` | PERF_TRACE | off 或 bounded sample |
 | H64 PDES debug | DEBUG | 默认关闭 |
 | legacy backstore per-op | DEBUG | 默认关闭 |
@@ -911,7 +912,6 @@ marker 或在中间插入额外 stdout 都可能破坏全局 tick timeline，依
 | 高 | `run_ha_formal_150_matrix.py` | deadline 后 `SKIP` 未计入失败，仍可退出 0 | 不完整矩阵被报告完成；SKIP/MISSING 必须非成功 |
 | 高 | `q2_regression.sh` | `|| true` 后读取 pipeline status | 可能把失败记录为 `EXIT=0`；在覆盖前保存 rc |
 | 高 | `run_multi.sh` 及多个 matrix runner | 以 verifier 日志最后一行精确匹配 PASS | 后续多一行即误判；同时检查 rc 和结构化 result artifact |
-| 高 | fault verifier ingestion | `[UBFAULT-DELIVER]` 未导入 | Delay/Reorder delivery 无自动证据；加入白名单和精确检查 |
 | 中 | `run_multi.sh` watchdog | 以 guest/protocol 日志字节增长当 progress | 关闭 debug 后可能误杀；改用固定低频 heartbeat |
 | 中 | `test_marker_compliance.py` | consumed marker 清单少于实际 `verify.py` 消费集合；`--strict` 未把 warning 纳入 exit | governance 可漏报；从消费者生成 source of truth 并修 strict |
 | 中 | `build_framework.sh`、`unpin_p0_containers.sh` | stderr 丢弃并 `|| true` | 失败静默；至少记录首次失败和最终状态 |
@@ -919,7 +919,6 @@ marker 或在中间插入额外 stdout 都可能破坏全局 tick timeline，依
 | 中 | `TracePerfPolicy.hh` | atomic counter 配合未加锁 `std::map` component 插入 | 多线程首次记录可能有数据竞争；预注册或加锁 |
 | 中 | `framework::LogInfo` | 无 gate/rate limit，且调用方常自带换行 | 热路径高开销和双空行；统一 logger contract |
 | 中 | `appendTmpLog()` | 每条 open/write/close，失败静默 | 性能扰动和证据丢失；默认关闭并集中管理 |
-| 中 | TC47-49、TC117-119 早期 fault helper | 任意 `[UBFAULT]`，包括 loaded/malformed，均可算 evidence | fault 未 fired 也可能通过；统一使用 action record regex |
 | 中 | TC9 | 依赖精确 gem5 page-fault 英文文本 | 上游文案变化即失败；增加结构化 expected-fault marker |
 | 低 | `EPSNF-WB-FATAL` 文本 | 名称含 FATAL 但未必真正终止 | 改名 ERROR/TERMINAL 或执行确定性 fatal |
 
@@ -935,7 +934,7 @@ marker 或在中间插入额外 stdout 都可能破坏全局 tick timeline，依
 | HA JSONL | guest stdout/artifact | HARD/STRUCTURED |
 | `STEP5 Port enabled` | gem5 stdout | HARD，进程握手 |
 | `>>> TC<N> PASSED|FAILED <<<` | verifier stdout/log | HARD，且当前必须为最后一行 |
-| fired `[UBFAULT]` | UBIO stderr | HARD/STRUCTURED，TC148-TC159 精确计数 |
+| fired `[UBFAULT-TRIGGER]` | UBIO stderr | HARD/STRUCTURED，TC47-TC159 fault case 精确计数 |
 | spill/fill/upgrade/writeback evidence | UBCC stdout/stderr | HARD，仅对应 qualification TC |
 | `[RUNNER-MANIFEST]` | runner stderr | HARD；缺失会静默跳过 naive 检查 |
 | `[UBCC-STATS]`、`[ResidentDirStats]` | UBIO stderr | STRUCTURED/STAT |
@@ -986,7 +985,7 @@ result 文件。迁移期间不能只修改 producer。
 保留：
 
 - correctness oracle。
-- `[UBFAULT]` loaded/fired。
+- `[UBFAULT-LOAD]` 和 `[UBFAULT-TRIGGER]`。
 - `[UBFAULT-DELIVER]`。
 - 每 rule 精确 hit count 所需字段。
 - error/fatal。
@@ -1095,7 +1094,7 @@ CC_EP_DEBUG_MAX=<N>
 
 - 在 verifier sentinel 后追加输出。
 - 删除 `STEP5 Port enabled` 而不修改 runner。
-- 将 `[UBFAULT]` fired record 只改成总计。
+- 将 `[UBFAULT-TRIGGER]` fired record 只改成总计。
 - 删除 `[READ_VAL]` 或改变其字段格式。
 - 关闭所有 `tick=` 输出而不提供新的 heartbeat。
 - 在性能矩阵启用无界 full trace。
