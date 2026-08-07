@@ -2942,8 +2942,16 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         return false;
     }
 
+    // A recalled owner can issue its dirty release after the recall commits
+    // G_M -> G_S and advances the directory epoch. Accept that stale tuple
+    // only while the old owner remains a current sharer.
+    const uint64_t requesterBit = requesterNode >= 0 && requesterNode < 64
+        ? (1ULL << requesterNode) : 0;
+    const bool delayedSharedRelease = entry.state == MESIState::G_S &&
+        requesterBit && (entry.sharersMask & requesterBit) && !keepAsClean;
+
     // ---- M7: Stale epoch check ----
-    if (!checkEpochForLine(line_pa, epochVal)) {
+    if (!delayedSharedRelease && !checkEpochForLine(line_pa, epochVal)) {
         framework::LogWarn("UBCC",
                 "UBCC node_id={}: processWriteback PA=0x{:x} "
                 "STALE epoch: msg={} directory={} — REJECTED",
@@ -2960,8 +2968,6 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
     // only that requester's shared copy. Clearing the whole mask here loses
     // live sharers and makes their next Upgrade permanently fail.
     if (entry.state == MESIState::G_S) {
-        const uint64_t requesterBit = requesterNode >= 0 && requesterNode < 64
-            ? (1ULL << requesterNode) : 0;
         if (!requesterBit || !(entry.sharersMask & requesterBit) || keepAsClean) {
             framework::LogWarn("UBCC",
                     "UBCC node_id={}: shared release rejected PA=0x{:x} "
