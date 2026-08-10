@@ -1821,15 +1821,24 @@ def verify_tc141(reads, lines):
                           for line in lines)]
     if missing:
         return False, f"TC141 FAILED: missing phases {missing}", []
-    required_markers = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE",
-                        "UBCC-SHARED-RELEASE")
-    missing = [marker for marker in required_markers
-               if not any(marker in line for line in lines)]
-    if missing:
-        return False, f"TC141 FAILED: missing protocol evidence {missing}", []
+    is_naive = any(
+        ("[UBIO-POLICY]" in line and "effective=naive" in line) or
+        ("[RUNNER-MANIFEST]" in line and "policy=naive" in line) or
+        ("[UBCC-STATE]" in line and "policy=naive" in line)
+        for line in lines)
+    if is_naive:
+        if not any("UBCC-NAIVE-EVICT" in line for line in lines):
+            return False, "TC141 FAILED: missing naive eviction evidence", []
+    else:
+        required_markers = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE",
+                            "UBCC-SHARED-RELEASE")
+        missing = [marker for marker in required_markers
+                   if not any(marker in line for line in lines)]
+        if missing:
+            return False, f"TC141 FAILED: missing protocol evidence {missing}", []
     if any("RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line for line in lines):
         return False, "TC141 FAILED: upgrade lost valid sharer status", []
-    return True, "TC141 PASSED: spill shared-to-writer recovery completed", []
+    return True, "TC141 PASSED: shared-to-writer recovery completed", []
 
 
 def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,

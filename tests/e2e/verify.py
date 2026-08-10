@@ -53,6 +53,7 @@ def main():
                         "[UBFAULT-DELIVER]" in line or
                         "[ResidentDirStats]" in line or
                         "[UBCC-STATS]" in line or
+                        "[UBCC-STATE]" in line or
                         "[UBCC-NAIVE-EVICT]" in line or
                         "[UBCC-NAIVE-EVICT-DONE]" in line or
                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]" in line or
