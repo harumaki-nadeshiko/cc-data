@@ -41,6 +41,7 @@ PY
 )
 
 TWO_SOCKET=(32 33 34 35 39 81)
+TWO_NODE_ONE_SOCKET=(210 211 212 213 214 215 216 217 218 219 220 221 222 223 224 225 226 227)
 EIGHT_NODE_ONE_SOCKET=(82 90 91 92 93 94 133)
 EIGHT_NODE_TWO_SOCKET=(95 96 97 98 99 100 101 134)
 
@@ -56,6 +57,7 @@ contains_tc() {
 ONE_SOCKET=()
 for tc in "${ALL_TCS[@]}"; do
     if contains_tc "$tc" "${TWO_SOCKET[@]}" || \
+       contains_tc "$tc" "${TWO_NODE_ONE_SOCKET[@]}" || \
        contains_tc "$tc" "${EIGHT_NODE_ONE_SOCKET[@]}" || \
        contains_tc "$tc" "${EIGHT_NODE_TWO_SOCKET[@]}"; then
         continue
@@ -82,6 +84,7 @@ printf 'TCs: %s\n' "${ALL_TCS[*]}" | tee -a "$LOG_DIR/summary.log"
 
 run_batch "1s" "--1s" "${ONE_SOCKET[@]}"
 run_batch "2s" "--2s" "${TWO_SOCKET[@]}"
+run_batch "2n1s" "--2n1s" "${TWO_NODE_ONE_SOCKET[@]}"
 run_batch "8n1s" "--8n1s" "${EIGHT_NODE_ONE_SOCKET[@]}"
 run_batch "8n2s" "--8n2s" "${EIGHT_NODE_TWO_SOCKET[@]}"
 
