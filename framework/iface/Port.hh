@@ -48,7 +48,6 @@ const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
 bool EmitSync(Port* port, std::uint64_t currentTimestamp);
 std::uint64_t SafeTimestamp(const Port* port,
                             std::uint64_t currentTimestamp);
-std::uint64_t ReceiveTimestamp(const Port* port);
 std::uint64_t SyncInterval(const Port* port);
 
 } // namespace framework

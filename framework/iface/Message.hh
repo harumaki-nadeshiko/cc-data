@@ -17,23 +17,9 @@ enum class MessageType : std::uint32_t {
     Payload = 2,
 };
 
-// Stable payload carried by explicit termination notifications.  Keep this
-// layout fixed: existing peers use the 12-byte reason/exitCode/sender wire
-// representation.  A header-only Terminate message remains valid.
-struct TerminateInfo {
-    std::uint32_t reason = 0;
-    std::uint32_t exitCode = 0;
-    std::uint32_t sender = 0;
-};
-
-static_assert(sizeof(TerminateInfo) == 12,
-              "TerminateInfo wire layout must remain 12 bytes");
-
 std::uint64_t GetMessageTimestamp(const Message* message);
-void SetMessageTimestamp(Message* message, std::uint64_t timestamp);
 
 MessageType GetMessageType(const Message* message);
-void SetMessageType(Message* message, MessageType type);
 
 std::uint32_t GetMessageSourceId(const Message* message);
 void SetMessageSourceId(Message* message, std::uint32_t sourceId);

@@ -190,11 +190,6 @@ const Message* WaitReceive(Port* port, std::uint64_t time,
 
 int main()
 {
-    Check(sizeof(TerminateInfo) == 12 &&
-              offsetof(TerminateInfo, reason) == 0 &&
-              offsetof(TerminateInfo, exitCode) == 4 &&
-              offsetof(TerminateInfo, sender) == 8,
-          "TerminateInfo stable 12-byte wire layout");
     Check(CaptureInfoLog() == "-7 ff {} str 0x1234\n",
           "format parser and exactly-one newline");
     Check(CheckWarnMirrorsBothStreams(),
@@ -237,7 +232,6 @@ int main()
         return 1;
     }
     const unsigned char payload[] = {1, 2, 3, 4};
-    SetMessageType(source, MessageType::Payload);
     SetMessageSourceId(source, 11);
     SetMessageTargetId(source, 22);
     SetMessageRequestId(source, 33);
@@ -264,8 +258,6 @@ int main()
     const Message* borrowed = WaitReceive(ubio, 109, status);
     Check(borrowed == nullptr && status == ReceiveStatus::PendingFuture,
            "future receive status");
-    Check(ReceiveTimestamp(ubio) == 110,
-          "ReceiveTimestamp exposes pending future timestamp");
     Check(SafeTimestamp(ubio, 109) == 110,
           "SafeTimestamp accounts for pending future timestamp");
     borrowed = ReceiveMessage(ubio, 110, &status);
@@ -298,14 +290,19 @@ int main()
     sync = WaitReceive(ubio, 1000, status);
     Check(sync == nullptr && status == ReceiveStatus::Empty,
           "throttled EmitSync emits no duplicate");
-    Check(EmitSync(gem5, 210), "EmitSync resumes at link-latency boundary");
-    sync = WaitReceive(ubio, 219, status);
+    Check(EmitSync(gem5, 210),
+          "EmitSync remains throttled before sync-interval boundary");
+    sync = WaitReceive(ubio, 1000, status);
+    Check(sync == nullptr && status == ReceiveStatus::Empty,
+          "EmitSync cadence is independent of link latency");
+    Check(EmitSync(gem5, 220), "EmitSync resumes at sync-interval boundary");
+    sync = WaitReceive(ubio, 229, status);
     Check(sync == nullptr && status == ReceiveStatus::PendingFuture &&
-              ReceiveTimestamp(ubio) == 220,
-          "future sync contributes pending receive timestamp");
-    Check(SafeTimestamp(ubio, 219) == 220,
+              SafeTimestamp(ubio, 229) == 230,
+          "future sync remains backend-private pending state");
+    Check(SafeTimestamp(ubio, 229) == 230,
           "SafeTimestamp observes a pending future sync");
-    sync = ReceiveMessage(ubio, 220, &status);
+    sync = ReceiveMessage(ubio, 230, &status);
     Check(sync && GetMessageType(sync) == MessageType::ControlSync,
           "pending sync becomes visible at its timestamp");
     const std::uint64_t lastNonOverflowingSync =
@@ -318,18 +315,14 @@ int main()
                   std::numeric_limits<std::uint64_t>::max(),
           "EmitSync boundary timestamp does not overflow");
 
-    Message* terminate = AllocateSendMessage(gem5, 1000);
-    Check(terminate != nullptr, "allocate explicit terminate message");
-    if (terminate) {
-        SetMessageType(terminate, MessageType::Terminate);
-        Check(SendMessage(gem5, terminate), "send explicit terminate message");
-        const Message* notice = WaitReceive(ubio, 0, status);
-        Check(notice && status == ReceiveStatus::Message &&
-                  GetMessageType(notice) == MessageType::Terminate,
-              "terminate notification is immediately visible");
-    }
-    // TerminatePort intentionally sends only a non-blocking, best-effort notice.
+    // TerminatePort owns the parameterless transport termination message.
     TerminatePort(gem5);
+    const Message* terminate = WaitReceive(
+        ubio, std::numeric_limits<std::uint64_t>::max(), status);
+    Check(terminate && status == ReceiveStatus::Message &&
+              GetMessageType(terminate) == MessageType::Terminate &&
+              GetMessagePayloadSize(terminate) == 0,
+          "TerminatePort sends a parameterless transport notification");
     DestroyPort(gem5);
     TerminatePort(ubio);
     DestroyPort(ubio);

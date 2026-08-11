@@ -106,7 +106,6 @@ int main(int argc, char **argv) {
                             if (mask & (1u << ni)) {
                                 Message *buf = AllocateSendMessage(ports[ni], tick);
                                 if (buf) {
-                                    SetMessageType(buf, MessageType::Payload);
                                     SetMessageSourceId(buf, 0);
                                     SetMessageTargetId(buf, ni);
                                     CoherenceMessage rmsg;

@@ -82,7 +82,6 @@ public:
     void loadTopology(const std::string& path);
     void buildPorts();
     void buildRoutes();
-    void notifyPeerExit(int exitedMod);
     void step();
     void run(int maxSteps = -1);
 
@@ -143,43 +142,6 @@ void NetworkSim::buildPorts() {
     _ports.swap(ports);
 }
 
-void NetworkSim::notifyPeerExit(int exitedMod)
-{
-    for (auto& kv : _ports) {
-        const int targetMod = kv.first;
-        if (targetMod == exitedMod || _donePorts.count(targetMod))
-            continue;
-        Message *notice = AllocateSendMessage(kv.second, _tick);
-        if (!notice) {
-            LogError("NetworkSim",
-                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=allocate",
-                     exitedMod, targetMod);
-            continue;
-        }
-        SetMessageType(notice, MessageType::Terminate);
-        SetMessageSourceId(notice, exitedMod);
-        SetMessageTargetId(notice, targetMod);
-        TerminateInfo payload{};
-        payload.reason = 2; // peer_lost: source plane completed normally.
-        payload.exitCode = 0;
-        payload.sender = static_cast<uint32_t>(exitedMod);
-        if (sizeof(payload) > GetMaxPayloadSize()) {
-            ReleaseMessage(notice);
-            LogError("NetworkSim",
-                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=payload_size",
-                     exitedMod, targetMod);
-            continue;
-        }
-        SetMessagePayload(notice, &payload, sizeof(payload));
-        if (!SendMessage(kv.second, notice)) {
-            // SendMessage consumes notice even on failure; it cannot be retried.
-            LogError("NetworkSim",
-                     "[NSIM-PEER-EXIT-FAIL] src={} dst={} reason=send",
-                     exitedMod, targetMod);
-        }
-    }
-}
-
 void NetworkSim::loadTopology(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) { LogError("NetworkSim", "[NetworkSim] bad topo {}", path.c_str()); return; }
@@ -230,7 +192,6 @@ void NetworkSim::step() {
                 break;
             if (GetMessageType(m) == MessageType::Terminate) {
                 _donePorts.insert(mod);
-                notifyPeerExit(mod);
                 break;
             }
             if (GetMessageType(m) == MessageType::ControlSync) continue;
@@ -281,7 +242,7 @@ void NetworkSim::step() {
         PendingFwd pf = _fifo.front(); _fifo.pop_front();
         totalFwdAttempted++;
         auto it = _ports.find(pf.dst_mod);
-        if (it != _ports.end()) {
+        if (it != _ports.end() && !_donePorts.count(pf.dst_mod)) {
             const uint64_t requestId = GetMessageRequestId(pf.msg);
             const bool sent = SendMessage(it->second, pf.msg);
             // SendMessage consumes pf.msg even on failure; never reuse it.
@@ -299,7 +260,7 @@ void NetworkSim::step() {
         } else {
             ReleaseMessage(pf.msg);
             static int miss_ct = 0;
-            if (++miss_ct <= 3)
+            if (it == _ports.end() && ++miss_ct <= 3)
                 LogWarn("NetworkSim", "[NSIM-MISS] tick={} dst={}:{} (no port)",
                         _tick, pf.dst_mod, 0);
         }
@@ -317,7 +278,8 @@ void NetworkSim::step() {
 
 void NetworkSim::run(int maxSteps) {
     int s = 0;
-    while (!g_shutdownRequested && _donePorts.size() < _ports.size() &&
+    while (!g_shutdownRequested &&
+           (_donePorts.size() < _ports.size() || !_fifo.empty()) &&
            (maxSteps < 0 || s < maxSteps)) {
         step();
         s++;
@@ -328,6 +290,8 @@ void NetworkSim::run(int maxSteps) {
             uint64_t b = SafeTimestamp(kv.second, _tick);
             if (b < minTs) minTs = b;
         }
+        if (minTs == UINT64_MAX && !_fifo.empty())
+            minTs = _fifo.front().readyTick;
         if (minTs > _tick) {
             _tick = minTs;
         } else {

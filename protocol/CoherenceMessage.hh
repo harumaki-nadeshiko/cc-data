@@ -77,6 +77,7 @@ enum class CoherenceMessageType : uint16_t {
     MetaRNFLineReadResp,     // gem5 → ubio, response with 64B data + typed status
     MetaRNFLineWriteReq,     // ubio → gem5, write a single 64B metadata line
     MetaRNFLineWriteResp,    // gem5 → ubio, write ack with typed status
+    PeerExit,                // protocol-level peer membership notification
 };
 
 // ---- Message Flags ----
@@ -358,6 +359,7 @@ coherenceMsgTypeName(CoherenceMessageType t)
         case CoherenceMessageType::MetaRNFLineReadResp: return "MetaRNFLineReadResp";
         case CoherenceMessageType::MetaRNFLineWriteReq: return "MetaRNFLineWriteReq";
         case CoherenceMessageType::MetaRNFLineWriteResp:return "MetaRNFLineWriteResp";
+        case CoherenceMessageType::PeerExit:            return "PeerExit";
         default:                           return "Unknown";
     }
 }

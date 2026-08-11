@@ -142,6 +142,11 @@ struct Port {
 
 namespace {
 
+std::uint64_t ReceiveTimestampInternal(const Port* port)
+{
+    return port->pending ? port->pendingTimestamp : port->lastReceiveTimestamp;
+}
+
 void ClosePort(Port* port)
 {
     if (!port)
@@ -275,7 +280,7 @@ void TerminatePort(Port* port)
         Message terminate;
         terminate.header.type = static_cast<std::uint32_t>(MessageType::Terminate);
         terminate.header.sourceId = port->gid;
-        (void)SendWire(port, terminate, zmq::send_flags::dontwait);
+        (void)SendWire(port, terminate, zmq::send_flags::none);
     }
     ClosePort(port);
 }
@@ -309,6 +314,9 @@ bool SendMessage(Port* port, Message* message)
 {
     LogAssertIf(port != nullptr, "framework", "Port must not be null");
     LogAssertIf(message != nullptr, "framework", "Message must not be null");
+    LogAssertIf(message->header.type ==
+                    static_cast<std::uint32_t>(MessageType::Payload),
+                "framework", "SendMessage only accepts Payload messages");
     const bool result = SendWire(port, *message, zmq::send_flags::none);
     delete message;
     return result;
@@ -370,9 +378,7 @@ const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
                         wire.size() - kWireHeaderSize);
         }
         port->lastReceiveTimestamp = incoming.header.timestamp;
-        if (incoming.header.timestamp > currentTimestamp &&
-            incoming.header.type !=
-                static_cast<std::uint32_t>(MessageType::Terminate)) {
+        if (incoming.header.timestamp > currentTimestamp) {
             port->pending = true;
             port->pendingTimestamp = incoming.header.timestamp;
             port->pendingMessage = incoming;
@@ -402,14 +408,14 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
         LogAssertIf(currentTimestamp >= port->lastSyncTimestamp, "framework",
                     "sync timestamp {} precedes last sync timestamp {}",
                     currentTimestamp, port->lastSyncTimestamp);
-        if (currentTimestamp - port->lastSyncTimestamp < port->linkLatency)
+        if (currentTimestamp - port->lastSyncTimestamp < port->syncInterval)
             return true;
     }
     Message sync;
     sync.header.timestamp = currentTimestamp + port->linkLatency;
     sync.header.sourceId = port->gid;
     sync.header.type = static_cast<std::uint32_t>(MessageType::ControlSync);
-    if (!SendWire(port, sync, zmq::send_flags::dontwait))
+    if (!SendWire(port, sync, zmq::send_flags::none))
         return false;
     port->lastSyncTimestamp = currentTimestamp;
     return true;
@@ -418,7 +424,7 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
 std::uint64_t SafeTimestamp(const Port* port, std::uint64_t currentTimestamp)
 {
     LogAssertIf(port != nullptr, "framework", "Port must not be null");
-    const std::uint64_t received = ReceiveTimestamp(port);
+    const std::uint64_t received = ReceiveTimestampInternal(port);
     const std::uint64_t base = port->lastSyncTimestamp > 0
                                    ? port->lastSyncTimestamp
                                    : currentTimestamp;
@@ -427,12 +433,6 @@ std::uint64_t SafeTimestamp(const Port* port, std::uint64_t currentTimestamp)
         ? std::numeric_limits<std::uint64_t>::max()
         : base + port->syncInterval;
     return std::min(received, bound);
-}
-
-std::uint64_t ReceiveTimestamp(const Port* port)
-{
-    LogAssertIf(port != nullptr, "framework", "Port must not be null");
-    return port->pending ? port->pendingTimestamp : port->lastReceiveTimestamp;
 }
 
 std::uint64_t SyncInterval(const Port* port)
@@ -447,28 +447,12 @@ std::uint64_t GetMessageTimestamp(const Message* message)
     return message->header.timestamp;
 }
 
-void SetMessageTimestamp(Message* message, std::uint64_t timestamp)
-{
-    CheckMutableMessage(message);
-    message->header.timestamp = timestamp;
-}
-
 MessageType GetMessageType(const Message* message)
 {
     CheckMessage(message);
     LogAssertIf(message->header.type <= static_cast<std::uint32_t>(MessageType::Payload),
                 "framework", "invalid message type {}", message->header.type);
     return static_cast<MessageType>(message->header.type);
-}
-
-void SetMessageType(Message* message, MessageType type)
-{
-    CheckMutableMessage(message);
-    LogAssertIf(static_cast<std::uint32_t>(type) <=
-                    static_cast<std::uint32_t>(MessageType::Payload),
-                "framework", "invalid message type {}",
-                static_cast<std::uint32_t>(type));
-    message->header.type = static_cast<std::uint32_t>(type);
 }
 
 std::uint32_t GetMessageSourceId(const Message* message)

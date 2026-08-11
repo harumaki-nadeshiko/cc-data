@@ -430,7 +430,6 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         }
         return false;
     }
-    SetMessageType(buf, MessageType::Payload);
     SetMessageTargetId(buf, dstModule);
     SetMessageRequestId(buf, msg.h.reqId);
     if (sizeof(msg) > GetMaxPayloadSize()) {
@@ -2284,7 +2283,6 @@ main(int argc, char **argv)
             Message *rel = AllocateSendMessage(deliveryPort, tick);
             panic_if(!rel, "barrier release allocation failed mask=0x{:x} plane={}",
                      bk.first, targetPlane);
-            SetMessageType(rel, MessageType::Payload);
             SetMessageTargetId(rel, gidOf(targetNode, targetSocket));
             CoherenceMessage rmsg;
             rmsg.h.type = CoherenceMessageType::BarrierRelease;
@@ -2329,50 +2327,34 @@ main(int argc, char **argv)
             if (GetMessageType(m) == MessageType::Terminate) {
                 LogInfo("UBIO", "[ubio:{}] recv TERMINATE ts={} from_net={}",
                              nid, GetMessageTimestamp(m), fromNetwork);
-                const TerminateInfo *term =
-                    GetMessagePayloadSize(m) == sizeof(TerminateInfo)
-                        ? static_cast<const TerminateInfo *>(
-                              GetMessagePayloadData(m))
-                        : nullptr;
-                if (fromNetwork && term && term->reason == 2) {
-                    const int peerPlane = static_cast<int>(term->sender);
-                    const int peerNode = peerPlane / g_numSockets;
-                    const int peerSocket = peerPlane % g_numSockets;
-                    ubcc.markPeerPlaneExited(peerNode, peerSocket);
-                    m = ReceiveMessage(port, tick, &st);
-                    continue;
-                }
                 if (!fromNetwork) {
-                    // TERMINATE from local gem5: mark gem5 done and forward
-                    // to networksim so other nodes can exclude this peer from
-                    // PDES safeTs (TC90/TC98 deadlock fix).
+                    // Transport termination is parameterless. Publish peer
+                    // membership as protocol payloads before closing netPort.
                     ubcc.directory().dumpStatsJson();
                     LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
                     if (netPort) {
-                        Message *fwd = AllocateSendMessage(netPort, tick);
-                        panic_if(!fwd,
-                                 "TERMINATE allocation failed node={} socket={}",
-                                 nid, sid);
-                        CopyMessage(fwd, m);
-                        SetMessageTargetId(fwd, 0);
-                        panic_if(!SendMessage(netPort, fwd),
-                                 "TERMINATE forwarding failed node={} socket={}",
-                                 nid, sid);
-                        LogInfo("UBIO", "[ubio:{}] TERMINATE forwarded to networksim", nid);
+                        CoherenceMessage exit;
+                        exit.h.type = CoherenceMessageType::PeerExit;
+                        exit.h.srcNode = nid;
+                        exit.h.srcSocket = sid;
+                        for (int peerNode = 0; peerNode < g_numNodes; ++peerNode) {
+                            for (int peerSocket = 0; peerSocket < g_numSockets;
+                                 ++peerSocket) {
+                                if (peerNode == nid && peerSocket == sid)
+                                    continue;
+                                exit.h.dstNode = peerNode;
+                                exit.h.dstSocket = peerSocket;
+                                panic_if(!sendCoh(netPort, tick,
+                                    gidOf(peerNode, peerSocket), exit, true),
+                                    "PeerExit send failed from={}:{} to={}:{}",
+                                    nid, sid, peerNode, peerSocket);
+                            }
+                        }
+                        TerminatePort(netPort);
                     }
                     *doneFlag = true;
-                    // networksim terminates after receiving one marker from
-                    // every UBIO; it does not send a marker back. Once the
-                    // local marker is enqueued this UBIO has no remaining
-                    // producer, so do not wait forever for a nonexistent ack.
                     netDone = true;
                 } else {
-                    // NetworkSim emits its terminal marker only after every
-                    // local UBIO has terminated.  It is therefore the peer
-                    // shutdown acknowledgement, not merely another node's
-                    // guest completion.  Without this, gem5Done becomes true
-                    // but netDone never does and each UBIO leaks after a clean
-                    // test completion.
                     *doneFlag = true;
                 }
                 if (*doneFlag) break;
@@ -2398,6 +2380,14 @@ main(int argc, char **argv)
             if (!coh) {
                 LogWarn("UBIO", "[ubio:{}] bad payload size={} req_id={}",
                              nid, GetMessagePayloadSize(m), GetMessageRequestId(m));
+                m = ReceiveMessage(port, tick, &st);
+                continue;
+            }
+
+            if (coh->h.type == CoherenceMessageType::PeerExit) {
+                ubcc.markPeerPlaneExited(coh->h.srcNode, coh->h.srcSocket);
+                LogInfo("UBIO", "[PEER-EXIT] local={}:{} peer={}:{}",
+                        nid, sid, coh->h.srcNode, coh->h.srcSocket);
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
