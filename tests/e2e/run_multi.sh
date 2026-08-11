@@ -78,6 +78,8 @@ export EP_TRACE_PERF_MAX="${EP_TRACE_PERF_MAX:-2000}"
 export EP_TRACE_PERF_EVERY="${EP_TRACE_PERF_EVERY:-0}"
 export EP_PORT_HWM="${EP_PORT_HWM:-8192}"
 export EP_NSIM_MAX_PENDING="${EP_NSIM_MAX_PENDING:-65536}"
+export EP_CPU_MODEL="${EP_CPU_MODEL:-timing}"
+export EP_SEQUENCER_MAX_OUTSTANDING="${EP_SEQUENCER_MAX_OUTSTANDING:-0}"
 
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
@@ -742,6 +744,10 @@ run_tc() {
         fi
         # Phase 0: propagate metadata DRAM capacity to gem5 config
         cmd="$cmd --ubcc_metadata_size=${UBCC_METADATA_SIZE}"
+        cmd="$cmd --cpu-model=${EP_CPU_MODEL}"
+        if [ "$EP_SEQUENCER_MAX_OUTSTANDING" -gt 0 ] 2>/dev/null; then
+            cmd="$cmd --sequencer-max-outstanding=${EP_SEQUENCER_MAX_OUTSTANDING}"
+        fi
         echo "[launch] gem5 node=$nid (outdir=$node_od)"
         ( set +e; eval "$cmd" 2>"$gdir/stderr.log" >"$gdir/stdout.log"; status=$?; \
           printf '%s\n' "$status" >"$child_status_dir/gem5_node${nid}.exit"; exit "$status" ) &
@@ -753,10 +759,14 @@ run_tc() {
     # Wait for STEP5 Port enabled (NUM_SOCKETS of them per node)
     echo "[launch] waiting for NUM_NODES=$NUM_NODES gem5 to bind (sockets=$NUM_SOCKETS)..."
     for nid in $(seq 0 $((NUM_NODES-1))); do
-        local gout="$LOG_BASE/gem5_tc${tc}_node${nid}/stdout.log"
+        local glog_dir="$LOG_BASE/gem5_tc${tc}_node${nid}"
         local bound=0
         for tries in $(seq 1 300); do    # up to 300s wait (8-node init takes time)
-            if [ "$(grep -c 'STEP5.*Port enabled' "$gout" 2>/dev/null)" -ge "$NUM_SOCKETS" ]; then
+            local bind_count
+            bind_count=$(grep -h 'STEP5.*Port enabled' \
+                "$glog_dir/stdout.log" "$glog_dir/stderr.log" 2>/dev/null | \
+                wc -l)
+            if [ "$bind_count" -ge "$NUM_SOCKETS" ]; then
                 bound=1; break
             fi
             if ! kill -0 ${gem5_arr[$nid]} 2>/dev/null; then

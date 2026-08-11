@@ -165,6 +165,10 @@ TESTCASES = {
     225: "e2e_ha_cgroup_2n1s",        # C135-HA preserved sharer revisit
     226: "e2e_ha_cgroup_2n1s",        # C138-HA dirty owner handoff
     227: "e2e_ha_cgroup_2n1s",        # C139-HA mixed batch throughput
+    300: "e2e_tc300_o3_remote_publication",
+    301: "e2e_tc301_o3_dirty_handoff",
+    302: "e2e_tc302_o3_multiline_mlp",
+    303: "e2e_tc303_o3_invalidation_race",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -2811,6 +2815,17 @@ def verify_tc217(reads, lines):
     return True, ("TC217 PASSED: HA10 validation, 8 batch samples, and "
                   "128 useful operations completed"), []
 
+
+def verify_o3_exact_reads(tc_id, reads, expected_count):
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches
+    if len(reads) != expected_count:
+        return False, (f"TC{tc_id} FAILED: expected {expected_count} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    return True, (f"TC{tc_id} PASSED: {expected_count} architecturally "
+                  "synchronized reads matched"), []
+
 VERIFIERS = {
     1: verify_tc1, 2: verify_tc2, 3: verify_tc3, 4: verify_tc4,
     5: verify_tc5, 6: verify_tc6, 7: verify_tc7, 8: verify_tc8,
@@ -2908,6 +2923,10 @@ VERIFIERS = {
     225: verify_tc225,
     226: verify_tc226,
     227: verify_tc227,
+    300: lambda reads, lines: verify_o3_exact_reads(300, reads, 2),
+    301: lambda reads, lines: verify_o3_exact_reads(301, reads, 2),
+    302: lambda reads, lines: verify_o3_exact_reads(302, reads, 32),
+    303: lambda reads, lines: verify_o3_exact_reads(303, reads, 16),
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -3061,6 +3080,11 @@ def gem5_config_main():
     _parser.add_argument("--node-id", type=int, default=-1)
     _parser.add_argument("--num-nodes", type=int, default=0)
     _parser.add_argument("--num-sockets", type=int, default=0)
+    _parser.add_argument("--cpu-model", choices=("timing", "o3"),
+                         default="timing")
+    _parser.add_argument("--sequencer-max-outstanding", type=int, default=0,
+                         help="Override Ruby Sequencer outstanding limit; "
+                              "0 keeps the model default")
     # Phase 0.3: EP controller params (mapped to env for SimObject; argv planned)
     _parser.add_argument("--silent-upgrade", type=int, default=-1,
                          help="EP: silent upgrade (0=off, 1=on, -1=env/defaults)")
@@ -3146,7 +3170,8 @@ def gem5_config_main():
     from m5.objects import (
         ArmSystem, SystemCounter, GenericTimer, ArmPPI, NULL,
         SrcClockDomain, VoltageDomain, RubySystem,
-        TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, ArmEmuLinux,
+        ArmTimingSimpleCPU, ArmO3CPU, Process, SEWorkload, Root, AddrRange,
+        ArmEmuLinux,
     )
 
     gem5_root = os.path.dirname(os.path.dirname(os.path.dirname(GEM5_BIN)))
@@ -3171,10 +3196,20 @@ def gem5_config_main():
     else:
         BUILD_NODES = [_local_node]
     TOTAL_CPUS = len(BUILD_NODES) * CPUS_PER_NODE
+    local_external_ranges = []
+    for node_id in BUILD_NODES:
+        node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
+                              _cfg_num_sockets)
+        local_external_ranges.extend(node_cfg.all_local_private_ranges())
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    system = ArmSystem(mem_mode="timing", cache_line_size=64)
+    # Set the coherent external range in the constructor. The v25.1 proxy
+    # workaround below may materialize the C++ System before later Python
+    # assignments; O3 fetch consults the constructor-captured range.
+    system = ArmSystem(
+        mem_mode="timing", cache_line_size=64,
+        external_memory_ranges=local_external_ranges)
     root.system = system
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
@@ -3198,8 +3233,9 @@ def gem5_config_main():
     # ruby_system = RubySystem()  # REMOVED
 
     cpus = []
+    cpu_class = ArmO3CPU if _args.cpu_model == "o3" else ArmTimingSimpleCPU
     for i in range(TOTAL_CPUS):
-        cpu = TimingSimpleCPU(cpu_id=i)
+        cpu = cpu_class(cpu_id=i)
         cpu.clk_domain = SrcClockDomain(
             clock="2GHz",
             voltage_domain=system.clk_domain.voltage_domain)
@@ -3289,7 +3325,8 @@ def gem5_config_main():
     options.access_backing_store = True
     options.enable_dram_powerdown = False
     options.protocol = "CHI"
-    options.cpu_type = "TimingSimpleCPU"
+    options.cpu_type = "ArmO3CPU" if _args.cpu_model == "o3" \
+        else "ArmTimingSimpleCPU"
     options.simple_physical_channels = []
     options.vcs_per_vnet = 1
     options.mesh_rows = 1
@@ -3353,6 +3390,13 @@ def gem5_config_main():
           flush=True)
 
     cpu_sequencers = ruby_system._cpu_ports
+
+    if _args.sequencer_max_outstanding > 0:
+        for seq in cpu_sequencers:
+            seq.max_outstanding_requests = _args.sequencer_max_outstanding
+    print(f"[E2E-CPU] model={_args.cpu_model} "
+          f"sequencer_max_outstanding="
+          f"{_args.sequencer_max_outstanding or 'default'}", flush=True)
 
     for i, seq in enumerate(cpu_sequencers):
         seq.connectCpuPorts(cpus[i])

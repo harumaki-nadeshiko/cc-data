@@ -125,6 +125,14 @@ static inline void _sync_wait1(unsigned int node_mask)
 #define _sync_wait_dispatch(_1, _2, NAME, ...) NAME
 #define sync_wait(...) _sync_wait_dispatch(__VA_ARGS__, _sync_wait2, _sync_wait1)(__VA_ARGS__)
 
+/* O3 correctness barrier: drain architecturally visible memory operations
+ * before entering the simulator-only cross-node rendezvous. */
+static inline void arch_sync_wait(unsigned int node_mask)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    _syscall3(SYS_SYNC_WAIT, (long)node_mask, (long)1, 0);
+}
+
 /* ── Integer formatting (no libc dependency) ───────────────────────── */
 
 static inline int fmt_int(char *buf, int p, int val)
