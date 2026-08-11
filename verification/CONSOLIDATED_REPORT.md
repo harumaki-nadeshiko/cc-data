@@ -1,6 +1,6 @@
 # Consolidated Verification Report
 
-> Produced: 2026-06-22 | Current-implementation addendum: 2026-08-03
+> Produced: 2026-06-22 | Current-implementation addenda: 2026-08-03, 2026-08-10 O3
 > Method: Manual reasoning + formal TLA+ enumeration + gem5 E2E simulation + fault injection
 > Budget: $1.71 / $8.00
 
@@ -13,8 +13,8 @@ All verification follows a four-method cross-validation approach:
 | Method | Scope | Artifacts |
 |--------|-------|-----------|
 | **Manual reasoning** | State machines, invariants, lifecycle paths | `verification/wave*/fv*.md` |
-| **Formal TLA+ enumeration** | Protocol core, EP intra-node, transport faults | `verification/tla/` (5 models) |
-| **E2E simulation** | Full-system gem5 with real CHI protocol | `tests/e2e/test_e2e.py` (TC1-54) |
+| **Formal TLA+ enumeration** | Protocol core, EP intra-node/O3 refinement, transport faults | `verification/tla/` |
+| **E2E simulation** | Full-system gem5 with real CHI protocol | `tests/e2e/test_e2e.py` (including O3 TC300-303) |
 | **Fault injection** | UBRouter drop/dup/reorder hooks | TC47-49 |
 
 Each finding is validated by at least two of these methods when possible.
@@ -38,12 +38,17 @@ Each finding is validated by at least two of these methods when possible.
 | UBCC Multi-PA (D1, cross-address isolation) | `ubcc_multi_pa.tla` | `ubcc_multi_pa.cfg` (2 PAs, 3 nodes) | 45,760 | 13 | 4 INVARIANT | PASS |
 | UBCC Multi-Socket (D2, cross-socket routing) | `ubcc_multi_socket.tla` | `ubcc_multi_socket.cfg` (4 planes, home=0) | 58,561 | 13 | 4 INVARIANT | PASS |
 | EP Intra-Node (basic) | `ep_intra_node.tla` | `ep_intra_node.cfg` | 97 | — | 4 INVARIANT | PASS |
-| EP Intra-Node (single) | `ep_intra_node_single.tla` | `ep_intra_node_single.cfg` | 74M | — | 6 INVARIANT | PASS |
+| EP Intra-Node single (closed safety, max config) | `ep_intra_node_single.tla` | `ep_intra_node_single.cfg` (8 CPUs, 3 txns, bounded channels) | 203,174 | 22 | strengthened safety + terminal-state consistency | PASS |
+| EP Intra-Node single (closed liveness) | `ep_intra_node_single.tla` | `ep_intra_node_single_liveness.cfg` | 542 | 15 | 5 PROPERTY + strengthened safety | PASS |
+| EP Intra-Node single (bounded-drop safety/liveness) | `ep_intra_node_single.tla` | `ep_intra_node_single_watchdog.cfg` / `ep_intra_node_single_fault_liveness.cfg` | 1,436 | 18 | request/CompUC single-drop recovery | PASS |
+| EP Intra-Node single (max liveness) | `ep_intra_node_single.tla` | `ep_intra_node_single_max_liveness.cfg` (3 CPUs, 3 txns) | 10,184 | 22 | mixed-sharer safety + 5 PROPERTY | PASS |
 | EP Intra-Node (dual) | `ep_intra_node_dual.tla` | `ep_intra_node_dual.cfg` | 52M | — | 8 INVARIANT | PASS |
 | Transport Faults (B1+B2, safety) | `ubcc_transport_faults.tla` | `ubcc_transport_faults.cfg` | 23,242,903 | 23 | 9 INVARIANT | PASS |
 | Transport Faults (B3, liveness) | `ubcc_transport_faults.tla` | `ubcc_transport_faults_liveness.cfg` (`TFFairSpec`) | 25,048 | 13 | 2 INV + 1 PROPERTY | PASS |
 | TC224 waiter retirement (focused) | `ubcc_tc224_waiter_retirement.tla` | `ubcc_tc224_waiter_retirement.cfg` | 274,593 | 6 | 5 INVARIANT | PASS |
 | EP-RNF snoop arbitration (focused) | `ep_rnf_snoop_arbitration.tla` | `ep_rnf_snoop_arbitration.cfg` | 328 | 7 | 5 INVARIANT | PASS |
+| EP/O3 completion + backpressure (focused safety) | `ep_o3_completion_backpressure.tla` | `ep_o3_completion_backpressure.cfg` | 4,564 | 23 | 7 INVARIANT | PASS |
+| EP/O3 completion + backpressure (focused liveness) | `ep_o3_completion_backpressure.tla` | `ep_o3_completion_backpressure_liveness.cfg` | 4,564 | 23 | 7 INV + 1 PROPERTY | PASS |
 
 ### 2.1.1 Liveness verification & RECALL-orphan fix (NEW, 2026-07-08)
 
@@ -152,6 +157,35 @@ covered by bounded focused models:
 These are hand-written abstractions tied to named C++ functions. They do not
 replace the larger core, CHI, or full-system models.
 
+### 2.4 ArmO3CPU refinement closure (2026-08-10)
+
+Changing the requester CPU to `ArmO3CPU` does not alter the Home/directory
+transition relation proved by the core, multi-PA, multi-socket, waiter, and
+transport models. It does invalidate any refinement assumption that only one CPU
+operation exists, responses arrive in a fixed order, output is never blocked, or
+callback may precede actual protocol completion.
+
+`ep_o3_completion_backpressure.tla` checks that boundary for two lines and two
+beats: Data and `Comp_UC` may arrive in either order; no-data completion is
+explicit; `CompAck` must be injected before callback; and rsp/dat pending state is
+retained across temporary backpressure. Safety and liveness both PASS with
+17,505 generated / 4,564 distinct / depth 23. Liveness assumes blocked outputs
+eventually unblock. This is not a full Arm pipeline, Ruby/CHI, or ARM ISA memory
+model proof; details and hashes are in
+`formal_reliability_o3_addendum_20260810_zh.md`.
+
+An adjacent `ep_intra_node_single_vsmall.cfg` refresh initially exposed an
+unbounded model: unlimited retry queue growth reached 1.078B generated / 720.4M
+distinct states at depth 28, with 360.2M still queued, then exhausted disk. The
+model was repaired in stages: correct FIFO tail, fresh-transaction accounting,
+action-level channel capacities, retry coalescing, bounded drops, complete
+`TypeOK`, reachable RNF completion, distinct post-snoop grant state, correct RU
+payload commit, explicit zero-safe grant validity, dirty-to-shared backing-data
+handoff, stable-load data assertions, pending-request preservation, and terminal-
+state consistency. The final suite fully converges: 34 to 203,174 distinct states
+depending on config; normal, bounded-drop, and mixed-sharer safety/liveness all
+PASS. See `ep_intra_node_single_closure_20260810_zh.md`.
+
 ---
 
 ## 3. Static Verification Results
@@ -190,7 +224,9 @@ replace the larger core, CHI, or full-system models.
 
 ### 4.1 Coverage
 
-54 test cases covering: local/remote DSM, recall, invalidate, upgrade, writeback, evict, Clear replay, tombstone, epoch wrap, fault injection, NUMA, complex workloads.
+The current driver covers local/remote DSM, recall, invalidate, upgrade,
+writeback, evict, Clear replay, tombstone, epoch wrap, fault injection, NUMA,
+complex workloads, and dedicated O3 architectural/refinement cases.
 
 ### 4.2 Execution Status (post-BF/backstore changes)
 
@@ -204,6 +240,15 @@ TC50-54   : ALL PASS    (complex scenarios: ring, ledger, mapreduce, contention,
 ```
 
 **21/21 TCs verified PASS.** Remaining TCs (TC11-22, TC24-27, TC29-46 not part of fault-injection group) were not re-run in this round but no protocol-path changes were made that would affect them.
+
+### 4.2.1 ArmO3CPU qualification (2026-08-10)
+
+With `ArmO3CPU` and Ruby Sequencer `sequencer_max_outstanding=16`, the applicable
+existing regression set is **146/146 PASS** across 3N1S (107), 3N2S (6), 8N1S
+(7), 8N2S (8), and 2N1S (18). Dedicated TC300-303 are **4/4 PASS**, covering
+release/acquire publication, dirty/no-data ownership handoff, 32-line MLP data
+isolation, and shared-line invalidation visibility. Summary:
+`logs/v5o3_original_o3_full_20260810/summary.log`.
 
 ### 4.3 BF/Backstore Change Impact on Tests
 
@@ -295,6 +340,7 @@ runs confirm the real implementation matches on the sampled cases.
 | **R4** | `sendClear()` return value ignored | Low | FV4-G2 | Propagate failure to trigger retry |
 | **R5** | SnpUniqueFwd silent fallback instead of fatal | Low | FV6 | Add `fatal()` for consistency |
 | **R6** | No bounded retry budget | Low | FV4-G3 | Add per-requester retry counter with cap |
+| **R7** | O3 callback before Data/Comp/Ack completion or output loss under backpressure | ~~Medium~~ **CLOSED in focused scope** | O3 refinement review | Reliable pending output + strict callback gate implemented; focused TLA safety/liveness PASS and O3 E2E 146/146 + TC300-303 4/4. Full ARM ISA and production-scale queue proof remain out of scope. |
 
 ---
 
@@ -338,7 +384,8 @@ runs confirm the real implementation matches on the sampled cases.
 | `verification/wave0/` | FV-1,2,3,9,11 (static foundation) |
 | `verification/wave1/` | FV-6,8,10 (M2 + boundary) |
 | `verification/wave2/` | FV-4,5,7 (fault + liveness) |
-| `verification/tla/` | TLA+ models + TLC configs. Safety: core, transport, EP, multi-PA, multi-socket. Liveness: cleanup contrast and transport progress. Current focused closure: `ubcc_tc224_waiter_retirement.{tla,cfg}` and `ep_rnf_snoop_arbitration.{tla,cfg}`. |
+| `verification/tla/` | TLA+ models + TLC configs. Safety: core, transport, EP, multi-PA, multi-socket. Liveness: cleanup contrast and transport progress. Current focused closure includes TC224 waiter retirement, EP-RNF snoop arbitration, and EP/O3 completion/backpressure. |
 | `verification/fv_coverage_fidelity.md` | Coverage quantification (A1 action coverage 100%), scope boundary table (A2), model↔code fidelity mapping (A3). |
 | `docs/recovery/fv_fixes/` | BF/backstore design docs |
-| `tests/e2e/test_e2e.py` | TC1-54 E2E test driver |
+| `tests/e2e/test_e2e.py` | E2E driver including O3 TC300-303 |
+| `verification/formal_reliability_o3_addendum_20260810_zh.md` | O3 proof impact, TLC results/hashes, executable evidence, and scope limits |

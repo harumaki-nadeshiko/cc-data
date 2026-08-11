@@ -1,12 +1,12 @@
 # 形式化验证 — 一页纸汇报版
 
-> UBCC 缓存一致性协议 · TLA+ 形式化验证 · 2026-08-03 当前实现同步版
+> UBCC 缓存一致性协议 · TLA+ 形式化验证 · 2026-08-10 O3 refinement 同步版
 
 ---
 
 ## 一句话结论
 
-**在 3 节点 / 多地址 / 多 socket 的模型内,对 UBCC 协议核心做了穷举式形式化验证,安全性与关键活性均零反例;并用形式化方法抓到并证明修复了一个真实的 Medium 级死锁 bug（RECALL orphan）。**
+**在 3 节点 / 多地址 / 多 socket 的模型内，对 UBCC 协议核心做了穷举式形式化验证，安全性与关键活性均零反例；O3 引入的 completion/backpressure refinement obligation 也在独立 bounded model 中 safety/liveness PASS，并用形式化方法抓到并证明修复了一个真实的 Medium 级死锁 bug（RECALL orphan）。**
 
 ---
 
@@ -19,6 +19,8 @@
 | 故障穷举状态数 | **2324 万** distinct states,零反例 |
 | 形式化闭环的真实 bug | RECALL orphan；TC224 stale committed waiter 二次 grant |
 | 验证的性质 | 安全 9 条 + 活性 4 条 |
+| O3 refinement focused model | 4,564 distinct，depth 23，safety/liveness PASS |
+| O3 executable evidence | 原有 146/146 PASS；TC300-303 4/4 PASS |
 
 ---
 
@@ -55,6 +57,11 @@
 （274,593 states），EP-RNF STALE/IMMED 仲裁模型 PASS（328 states）。它们验证
 精确修复语义，但不替代完整 ResidentDir/H64 或 CHI 系统验证。
 
+2026-08-10 又增加 EP/O3 completion/backpressure focused closure：两条 line 可同时
+由 O3 issue，ReadUnique Data 与 `Comp_UC` 可任意顺序到达，no-data completion 显式，
+`CompAck` 实际注入后才 callback，rsp/dat temporary backpressure 下 pending output 不丢失。
+该模型 4,564 distinct states、safety/liveness PASS。
+
 ---
 
 ## 覆盖率怎么量化的（回应"含金量"质疑）
@@ -81,7 +88,7 @@
 1. **模型是人工建的,不是从代码自动生成**——业界皆如此,不存在能自动建模 gem5 的工具。我们用"模型↔代码函数映射表"保证对应关系可审计,不声称"模型=代码"。
 2. **验证的是小规模配置**——大规模靠仿真补,这是模型检验的理论边界(状态爆炸),不是偷懒。
 3. **已知待办**：轨迹校验(让代码导出状态序列反向校验模型)是最强的一致性手段,时间所限未做。
-4. **HA 边界**：甲方 HA 假设为 lossless 网络，OoO 属处理器内存序问题；CC transport fault 证明不能直接当作 HA 对比优势，ARM acquire/release/barrier 模型仍待补。
+4. **O3/HA 边界**：O3 refinement focused proof 和 ArmO3CPU E2E 已补，但完整 ARM ISA memory model 仍未证明；CC transport fault/O3 correctness 不能直接当作 HA 时延对比优势，目标 3 仍为 `UNPROVEN`。
 
 ---
 
@@ -92,3 +99,4 @@
 | `CONSOLIDATED_REPORT.md` | 完整验证报告(§2 形式化 / §5 故障 / 风险登记) |
 | `fv_coverage_fidelity.md` | 覆盖率量化 + 参数边界表 + 模型-代码映射 |
 | `verification/tla/` | 所有 TLA+ 模型 + TLC 配置(可一键复现) |
+| `formal_reliability_o3_addendum_20260810_zh.md` | O3 影响判定、TLC 原始数字/hash、E2E 证据与未证明边界 |

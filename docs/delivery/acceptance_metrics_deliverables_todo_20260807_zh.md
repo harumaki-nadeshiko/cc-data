@@ -56,7 +56,7 @@
 | 可靠性与 fault | `PARTIAL` | TC117-TC159 bounded fault 证据较强；完整 Q1-Q7 release qualification 尚未全部落地 |
 | 目标 1：512 KiB 容量与成本 | `PARTIAL` | 历史结果达标，但最新协议代码复跑和 E5 provenance 未闭环 |
 | 目标 2：时延降低 | `PARTIAL` | 历史结果达标，但 `>=500 ns` 口径、多轮统计和冻结基线未闭环 |
-| 目标 3：相对甲方 HA | `UNPROVEN` | HA 关键参数、完成语义、理论 DAG 和 ARM 内存序边界尚未关闭 |
+| 目标 3：相对甲方 HA | `UNPROVEN` | 外部研究、条件 DAG、来源矩阵和 litmus 规格已归档；甲方私有参数、共同完成语义、paired 数据和 ARM/RISC-V 实跑尚未关闭，且存在合法 direct-authority 风险分支 |
 | 3N/8N 拓扑 | `PARTIAL` | 1S、2S、8N1S、8N2S 实现存在；当前代码完整矩阵和 8N direct 状态需统一冻结 |
 | 16N Switch | `TODO` | 没有真正 `num_nodes=16` 的 Switch qualification，8N2S/16 planes 不能替代 |
 | 形式化验证 | `PASS/PARTIAL` | 指定小模型内零反例；代码轨迹反校验、ARM memory model 和生产 timeout 数值未覆盖 |
@@ -174,22 +174,34 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 
 #### 当前状态
 
-当前正式结论应为 `UNPROVEN`：
+外部研究整合后的正式结论为 `UNPROVEN（存在实质性 RISK）`：
 
 - 当前 `clear-ack` profile 真实存在并等待 ClearResp accepted。
 - 拟议 `lossless-oneway` 尚未实现，不能作为当前代码结果。
 - 2 节点下现有 C4 Direct-Forward 的三角色路径不可达，不能作为主要胜因。
 - 甲方 HA 多个高敏感参数仍为 unknown。
 - ARM acquire/release/barrier/OoO 验证未完成。
+- 公开资料确认 direct data 不自动等于 authority，无显式 Ack 不等于无 completion。
+- 合法 direct-data+authority HA 分支可具有更短 K=3 visible path，对 OurCC 构成风险。
+- central-return 分支常见同 K=4；同 K 仍需证明 `P_OurCC<P_HA`。
+
+已完成并归档：
+
+- 外部研究主报告、一页结论、15 题甲方确认单。
+- Arm CHI/Arm ARM、CCIX/CXL、目录论文、RISC-V、formal/statistics 来源矩阵。
+- Remote Read、Shared-to-Writer、Ownership Handoff 条件 DAG 和 placement 账本。
+- ARM/RISC-V 五类 litmus 规格，当前明确为未运行。
 
 #### 最终 PASS 条件
 
-1. H01 参数账本中所有高敏感项已确认，或双方接受明确的 unknown 区间。
+1. HU-01 至 HU-12 高敏感项已确认，或双方接受明确的 unknown 区间。
 2. 至少对 Remote Read、Shared-to-Writer、Ownership Handoff 建立完整 DAG。
 3. 按共同安全完成点计算上下界和 break-even。
 4. 使用相同 target/guest-visible root counter 的可复现 workload。
 5. ARM/RISC-V 弱内存序与 transport reorder 的证明域明确分离。
-6. 最终结论达到 `STRICT PASS`；若仅 `CONDITIONAL PASS`，需合同方书面接受。
+6. 使用 paired samples，并预注册最大轮数、inconclusive 和 95% 单侧 CI 规则。
+7. 主指标 `delta=T_mean_HA-T_mean_OurCC` 的置信下界严格大于 0。
+8. 最终结论达到 `STRICT PASS`；若仅 `CONDITIONAL PASS`，需合同方书面接受。
 
 ## 5. 工程验收指标
 
@@ -288,6 +300,9 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 | Multi-socket | plane/socket route 不破坏 home transition |
 | TC224 focused | 精确 waiter retirement/replay invariant |
 | EP-RNF focused | STALE/IMMED 仲裁 invariant |
+| TC157 focused | partial Ack、pending-mask-only redrive、duplicate Ack 幂等和 bounded recovery；当前 model-scope PASS |
+| TC159 focused | bounded Notify-drop recovery 与 strengthened exact tuple model-scope PASS；当前 C++ mismatch/budget gap 有预期反例 |
+| Retry exhaustion focused | proposed `EXHAUSTED` terminal contract 的 recover/permanent cfg model-scope PASS；生产代码未实现 |
 | Coverage | 正式 protocol actions 100% 被触发，分母定义明确 |
 
 最终形式化交付还必须包含：
@@ -550,7 +565,7 @@ manifest/
 
 ## 8. 整体 TODO List
 
-## 8.1 P0：发布阻塞项
+### 8.1 P0：发布阻塞项
 
 ### P0-1 冻结唯一验收基线与状态总表
 
@@ -599,7 +614,12 @@ manifest/
 
 ### P0-5 完成目标 3 HA 参数账本和理论模型
 
-**工作：**关闭 HU-01 至 HU-12 或正式保留 unknown 区间；建立 DAG、上下界、敏感性和 break-even。
+**当前状态：`PARTIAL`。** 外部公开研究、HU 账本、三类操作 DAG、来源矩阵、break-even、
+15 题确认单和合同文字已经归档；甲方私有答案、共同 workload/placement、P 上下界和 paired
+数据仍缺失。
+
+**工作：**关闭 HU-01 至 HU-12 或正式保留 unknown 区间；由双方签字冻结 DAG、完成点、
+operation weights、placement 和 break-even 输入。
 
 **完成定义：**获得 `STRICT PASS`、被书面接受的 `CONDITIONAL PASS`，或诚实保留 `UNPROVEN`。
 
@@ -640,7 +660,7 @@ manifest/
 
 **完成定义：**三份交付件、状态总表和 manifest 无互相矛盾的状态。
 
-## 8.2 P1：资格闭环
+### 8.2 P1：资格闭环
 
 ### P1-1 完整 fault qualification Q1-Q7
 
@@ -650,12 +670,17 @@ manifest/
 
 ### P1-2 补齐 TC157/TC159 focused formal models
 
+**当前状态：`PARTIAL`。** 模型、cfg、durable raw logs 和 C++ fidelity mapping 已完成；
+TC157 model-scope 完成。TC159 主路径和 strengthened 语义完成，但当前 C++ 仍存在
+mismatched Done/Notify 与预算耗尽 re-poll 缺口，因此不能按生产语义关闭。
+
 **工作：**
 
 - TC157 partial Ack pending-mask re-drive model。
 - TC159 stable tuple、same-reqId exact replay、WAITING_LOCAL_DONE model。
 
-**完成定义：**零反例，C++ symbol fidelity mapping 完整。
+**完成定义：**目标语义零反例，C++ symbol fidelity mapping 完整；任何 current-code
+expected violation 必须修复或进入正式限制表。
 
 ### P1-3 冻结 3N2S/8N2S 当前代码矩阵
 
@@ -694,11 +719,15 @@ manifest/
 
 ### P1-8 保存 formal 原始结果
 
+**当前状态：`PARTIAL`。** 本轮 focused 模型原始 TLC 输出已迁入
+`verification/results/`，runner 默认保存 command、workers、timeout 和 rc；既有其他正式模型
+仍需按同一格式迁移和补 hash/manifest。
+
 **工作：**TLC 输出从 `/tmp` 迁移到项目 artifact，记录 Java/TLC/hash/workers/timeout。
 
 **完成定义：**每个正式模型可独立重放并核对状态数和性质。
 
-## 8.3 P2：工程强化
+### 8.3 P2：工程强化
 
 ### P2-1 模型与代码轨迹反校验
 
@@ -740,7 +769,7 @@ manifest/
 
 实现或明确延期 TC60、256B page、Schema A/C 消融和 BF FPR 性能统计。
 
-## 8.4 P3：清理与一致性
+### 8.4 P3：清理与一致性
 
 ### P3-1 关闭已解决 issue
 
@@ -783,7 +812,7 @@ manifest/
 9. 生成最终 E5 evidence manifest。
 10. 刷新三份交付件、状态总表和最终评审材料。
 
-## 9.1 文档产出分工
+### 9.1 文档产出分工
 
 ### 可基于当前仓库独立完成
 
@@ -799,9 +828,10 @@ manifest/
 - authoritative/legacy runner 与工具索引。
 - 三份交付件的当前实现章节和证据索引。
 
-### 需要外部文献或甲方信息
+### 外部研究已完成、仍需甲方信息
 
-以下内容先提供初稿、大纲和已有事实，再交给 ChatGPT Work 继续检索分析：
+公开资料检索和条件化分析已经完成并归档。以下项目的公开机制边界已建立，但甲方私有值
+仍只能由甲方确认：
 
 - 甲方 HA write policy、completion、authority 和 dirty-owner 机制。
 - 两节点 VI/2-bit directory 的业界能力边界。
@@ -810,9 +840,19 @@ manifest/
 - 16-node coherent switch 的公开架构和评估方法。
 - OurCC 与 HA 的理论时延文献支撑和 break-even 比较。
 
-初步交接文档为：
+研究原件为：
 
-`docs/research/customer_ha_coherence_research_handoff_20260807_zh.md`
+- `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- `docs/research/target3_onepage_summary_20260806_zh.md`
+- `docs/research/customer_ha_questions_20260806_zh.md`
+- `docs/research/ha_coherence_source_matrix_20260806.tsv`
+- `docs/research/ha_ourcc_operation_dags_20260806.md`
+- `docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md`
+
+原始任务书和交接初稿继续保留为 provenance：
+
+- `docs/research/chatgpt_work_research_prompt_20260807_zh.md`
+- `docs/research/customer_ha_coherence_research_handoff_20260807_zh.md`
 
 ### 需要计算验证
 
@@ -826,7 +866,8 @@ manifest/
 - 目标 1/2 多轮性能复跑。
 - 3N2S/8N2S 和 16N qualification。
 
-任何新增形式化、可靠性或可行性计算最多使用 4 logical cores。执行计划见：
+资源规则已于 2026-08-10 更新：当前无并行任务时，新增 TLC 默认使用 16 workers、
+状态空间较大时最多 28；历史运行仍保留其实际 worker provenance。执行计划见：
 
 `verification/formal_reliability_followup_plan_20260807_zh.md`
 
@@ -839,7 +880,7 @@ manifest/
 | 目标 1A | capacity ratio >=1.5 | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 1B | extra latency <50 cycles | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 2 | applicable mean reduction >=10% | 待 `>=500ns` 多轮重算 | PARTIAL | E4 historical | 待补 |
-| 目标 3 | OurCC < HA theoretical mean | 未证明 | UNPROVEN | E0-E1 | HA 参数/DAG待补 |
+| 目标 3 | OurCC < HA theoretical mean | 外部条件模型完成；私参/实测未闭环 | UNPROVEN | external research + E0-E1 | 甲方 Q1-Q15、paired E5、litmus 实跑待补 |
 | 8N direct | 冻结矩阵 PASS | 待统一 | PARTIAL | E3/E4 | 待补 manifest |
 | 16N Switch | 真正 16 nodes PASS或waiver | 未实现 | TODO | E0 | 待决策 |
 | Correctness | mandatory 100% PASS | 待冻结全回归 | PARTIAL | E3/E4 | 待补 |

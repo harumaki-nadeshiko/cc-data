@@ -1,6 +1,6 @@
 # CC-EP 交付件 3：性能验证报告与接口调用说明书
 
-版本 1.0 — 2026-07-16
+版本 1.1 — 2026-08-07（同步合同口径与 HA 外部研究）
 
 ---
 
@@ -10,7 +10,8 @@
 
 - 仿真器：gem5.opt (ARM CHI) + ubio (自定义目录控制器) + networksim (节点间消息路由)
 - 编译与运行环境：Docker `ubcc-dev:ubuntu20.04`
-- 全量测试：71/71 testcase PASS（0 crash），含 TC98 ROUNDS=16（跨节点热点竞争）
+- 历史回归快照：71/71 testcase PASS（0 crash），含 TC98 ROUNDS=16；不能替代当前冻结代码的
+  146-TC 完整回归总表。
 - 延迟分析工具：`trace2chain.py` (TRACE-PERF → 事务链 JSON) + `chain2html.py` (HTML 可视化) + `latency_compare.py` (baseline vs optimized 对照)
 
 ### 2. 验收指标
@@ -26,7 +27,9 @@
 | bloom=60KB (当前) | 57,344 | 432KB | 60KB | 60 | 1.25% |
 | bloom=30KB (对照) | 65,536 | 480KB | 30KB | 58 | 9.61% |
 
-纯 SRAM 基线（512KB 全作 Dir，无 Bloom）= ~69,000 条目。当前方案 SRAM 可存 ~57,344 条目，但通过 DRAM 卸载等效追踪容量远超基线。Bloom Filter 将等效覆盖从 ~4.3MB（纯 Dir）扩展到数十 MB（取决于 DRAM 规模和访问模式）。
+纯 SRAM 基线（512KB 全作 Dir，无 Bloom）的历史估算约 69,000 条目。分层卸载具有扩大
+distinct tracking 的设计潜力，但正式目标 1 仍需按 `Resident union Backstore` 去重、冻结代码
+复跑和 E5 provenance；Bloom positive 不能计为 exact tracked cacheline。
 
 **验收口径**：以`naive + no latency optimization`作为基线。等效追踪数是每个Home中ResidentDir与已持久化Backstore元数据的去重并集；Backstore索引与ResidentDir存在重叠，禁止直接相加。Spill必须达到纯naive ResidentDir容量的150%，同时与`spill + no latency optimization`对照的压力后catalog复用load平均端到端时延增量不超过50 cycles（2GHz下25ns）。
 
@@ -36,9 +39,12 @@
 
 **Baseline**：`naive + no latency optimization`，即`--dir-overflow-policy=naive --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0`。
 
-**Optimized**：`spill + latency optimization`，即`--dir-overflow-policy=spill --silent-upgrade=1 --ubcc-batch-rs=1`。TC131以EPBackend记录的Outer事务协议端到端时间作为共同边界：从首次外部请求发出，到Clear被home确认。比较同一容量压力工作负载中的`naive + no latency optimization`与`spill + latency optimization`的平均时延；没有触发静默升级的场景仍是有效的真实工作负载样本。
+**Optimized**：`spill + latency optimization`，即`--dir-overflow-policy=spill --silent-upgrade=1 --ubcc-batch-rs=1`。
+EPBackend 的 Outer issue 到 Clear accepted 只作为内部拆链诊断；正式目标 2 必须使用
+guest/target-visible root counter。比较同一容量压力工作负载中的
+`naive + no latency optimization` 与 `spill + latency optimization`，并保留未触发优化和退化样本。
 
-降幅：(810 − 78) / 810 ≈ **90.4%** >> 10%
+历史路径模型示例 `(810-78)/810约90.4%` 不是当前正式验收结果，不能据此判 PASS。
 
 **注**：当前 TC29 workload（local_upgrade_from_exclusive）不使用 SnpCleanInvalid 路径（它通过 UpgradeReq 升级），因此 Baseline vs Optimized 在该 workload 上实测降幅为 0%。静默升级的生效场景为 **HN-F 通过 SnpCleanInvalid snoop EP-RNF 的独占持有者升级路径**（TC8、TC16、TC97 等跨节点写竞争场景可触发）。该路径下的降幅已通过代码级路径分析验证，需补充专用 workload 实测。
 
@@ -48,9 +54,24 @@
 
 最终完成必须满足：node0也收到第五个barrier release并以0退出；所有8个gem5、8个UBIO和networksim均产生`exit=0`状态文件；验证器确认`catalog_seed`、`catalog_share`、`full_scan`、`catalog_reuse`、`exclusive_upgrade`五个阶段及至少8个数据读回。若node1/node2已退出而node0长期停留在第五个barrier，则为barrier release或传输故障，必须判为失败，不能通过放宽supervisor或超时伪造完成。
 
-#### 指标 3：CC 同步 ≤ HA 理论时延 + 结构优势
+#### 指标 3：OurCC 跨节点 CC 同步平均时延 `<` 甲方 HA 理论平均时延
 
-见交付件 2 §3。
+当前状态为 `UNPROVEN（存在实质性 RISK）`，不是 `<= + 结构优势` PASS。后者只有双方书面
+修改合同后才是合法新命题。
+
+正式比较必须区分 `T_visible/T_commit/T_next/T_root_current`、`K_logical/K_crossnode/P`，
+并覆盖 central-return、direct-data-only、direct-data+authority、Home-memory latest 等合法
+HA 分支。同 K 不满足严格 `<`；必须用共同 target/root counter 的 paired samples 证明
+`delta=T_mean_HA-T_mean_OurCC` 的预注册 95% 单侧置信下界大于 0。
+
+完整研究和关闭路径见：
+
+- `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- `docs/research/target3_onepage_summary_20260806_zh.md`
+- `docs/research/customer_ha_questions_20260806_zh.md`
+- `docs/research/ha_coherence_source_matrix_20260806.tsv`
+- `docs/research/ha_ourcc_operation_dags_20260806.md`
+- `docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md`
 
 面向客户两节点单路HA实机的对比不直接复用8节点TC131总均值。统一的`2n1s` workload、平台适配层、计时边界、场景矩阵和结果格式见`h64_rebuild_data_path_and_2n1s_ha_workload_plan.md`。客户对比至少覆盖local reuse、remote cold/hot read、ownership ping-pong、shared-to-writer invalidation、capacity revisit、dirty-owner lifecycle、producer-consumer、同步竞争和混合干扰；同一workload core分别运行于HA native、CC naive和CC optimized。CC专有Outer/Recall/MetaRNF日志只用于路径归因，不作为跨平台唯一计时边界。
 

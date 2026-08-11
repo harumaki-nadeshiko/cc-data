@@ -1,8 +1,26 @@
-# 甲方 HA 与跨节点一致性调研交接初稿
+# 甲方 HA 与跨节点一致性调研交接记录
 
 > 日期：2026-08-07
-> 用途：交给 ChatGPT Work 或其他具备网络检索能力的研究工具继续补充外部文献
-> 当前内容来源：仅 CC-EP 仓库内实现、测试和交付文档；外部事实尚未检索核验
+> 原用途：交给 ChatGPT Work 或其他具备网络检索能力的研究工具补充外部文献
+> 当前状态：外部研究已于 2026-08-06 完成并在 2026-08-07 回填；本文保留为任务 provenance
+
+## 0. 完成状态
+
+调研任务已完成，当前总体判定为 `UNPROVEN（存在实质性 RISK）`。公开资料已经界定
+authority、completion、2-bit metadata、memory ordering、lossless transport 和 16N switch 的
+合法机制边界，但没有提供甲方私有 HU-01 至 HU-12 值。
+
+最终研究产物：
+
+- `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- `docs/research/target3_onepage_summary_20260806_zh.md`
+- `docs/research/customer_ha_questions_20260806_zh.md`
+- `docs/research/ha_coherence_source_matrix_20260806.tsv`
+- `docs/research/ha_ourcc_operation_dags_20260806.md`
+- `docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md`
+
+研究结果已回填到目标 3 主文档、交付件 2、交付件 3、协议概览和验收状态总表。尚未完成
+的是甲方参数确认、paired E5 measurement 和 litmus 实跑，而不是公开文献调研。
 
 ## 1. 调研目标
 
@@ -31,7 +49,8 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 ### 2.1 OurCC 当前实现
 
 - 全局目录在 UBCC/native UBIO 中，不占 HN-F TBE。
-- requester 从 Home 获得 grant 后，本地安装，再发送 ClearReq。
+- requester 协议代理从 Home 获得并接受 Grant 后发送 ClearReq；当前没有 HN/L2 明确
+  install Ack，最终 CompData 在 ClearResp accepted 后才返回本地 HN/L2。
 - 当前 `clear-ack` profile 等待 ClearResp accepted。
 - Home 的 Clear commit 包含 epoch/reqId/requester 精确匹配、目录状态提交、waiter
   retirement、tombstone、outstanding 删除和 pending replay。
@@ -277,3 +296,6 @@ ChatGPT Work 最终可按以下结构扩写：
 - `docs/design/cc_ep_deliverable2_verification_reliability_ha.md`
 - `docs/design/cc_ep_protocol_overview.md`
 - `docs/delivery/acceptance_metrics_deliverables_todo_20260807_zh.md`
+
+上述回填已于 2026-08-07 完成。目标 3 仍保持 `UNPROVEN`，因为研究完成不等于甲方私有
+参数和合同实测证据完成。

@@ -1,6 +1,6 @@
 # CC-EP 阶段验收交付方案
 
-版本 0.3（分阶段执行方案）— 2026-07-16
+版本 0.4（分阶段执行方案）— 2026-08-07
 
 ---
 
@@ -30,10 +30,11 @@
 | **1.2** | **ResidentDir 空间 microbench**：`tools/resident_dir_bench.cc`，给定 config → 打印 capacity / dir_bytes / FPR@n | ★★ | ~60 | §7.3 | 输出 CSV："SRAM 预算,capacity,FPR@1K,FPR@10K"；指标 1 的"提升 X%"由 CSV 计算 |
 | **1.3** | **`latency_compare.py`**：输入 baseline/optimized 两 run 的 chain JSON → 对照表（场景 | P50/P99 | 降幅%） | ★★ | ~80 | §7.4 | 输出对照 CSV；指标 2 的降幅%在此产出一句结论 |
 | **1.4** | **事务类型分组（trace2chain）**：chain 分类器（ReadShared / ReadUnique / Upgrade / Recall） | ★★ | ~40 | §7.4 | 汇总表按场景分组（跨节点读缺失 / 独占写升级 / 多 sharer 读） |
-| **1.5** | **静默升级 TC29 对照实验**：跑两次 + `latency_compare.py` | ★ | 0（复用） | §7.5 | **指标 2 实测数据**：降幅 ≥90% vs baseline |
+| **1.5** | **静默升级专用对照实验**：使用可触发 SnpCleanInvalid/R_E 路径的 workload | ★ | 待定 | §7.5 | 生成 guest-visible paired 数据；TC29 实测 0% 不作为该路径证据 |
 | **1.6** | **复用 workload 延迟采集**：TC80/100/101 各跑一次 + 延迟采集 | ★ | 0（复用） | §7.5 | **指标 1/3 性能数据**：三种场景的实测延迟基线 |
 
-**Phase 1 验收总则**：指标 2 的核心数据——静默升级 on/off 对照有实测延迟降幅 ≥90%（≥10% 即达标）。
+**Phase 1 验收总则**：历史路径模型显示较大潜在收益，但当前目标 2 仍为 `PARTIAL`；必须按
+`>=500 ns` eligibility、guest-visible counter、三 profile 和 paired 多轮结果判定是否达到 10%。
 
 ---
 
@@ -45,7 +46,7 @@
 | **2.2** | **交付件 2：形式化+可靠性+HA 对比** 汇整 §5.1/§5.3/§5.4/§5.5 + §7.1-7.2 | ★★★ | ~300 | §3.2 | 含 TLA+ 刷新证据 / 故障 drop 实验结果 / HA 三论据 |
 | **2.3** | **交付件 3：性能报告 + 接口说明书** | ★★ | ~250 | §3.3 | 指标 1/2/3 数据 + UBCC/EP-RNF/EP-SNF/UBAdapter 接口说明 |
 | **2.4** | **形式化 fanout 刷新**：`ubcc_protocol_core.tla` 对 fix1/fix2 更新 + 重跑 safety | ★★ | ~30 | §7.1 | TLC 16/16 action 覆盖不退化；depth≥23 states 不超时 |
-| **2.5** | **fidelity 映射表更新**：`fv_coverage_fidelity.md` A3.1 对齐行号 + A3.3 追加 snoop 仲裁未覆盖 | ★ | ~15 | §7.1 | A3.1 所有 C++ anchor 可 `rg -n` 验证到准确行号 |
+| **2.5** | **fidelity 映射表更新**：`verification/fv_coverage_fidelity.md` A3.1 对齐行号 + A3.3 追加 snoop 仲裁未覆盖 | ★ | ~15 | §7.1 | A3.1 所有 C++ anchor 可 `rg -n` 验证到准确行号 |
 
 **Phase 2 验收总则**：三份交付件完整可提交评审；TLA+ 模型与当前 C++ 代码语义一致（fanout effectiveMask / upgrade-barrier）。
 
@@ -63,7 +64,9 @@
 | **3.6** | **TBE 干扰 workload**：基于 TC35 改造，混合本地密集 + 跨节点目录并发 | ★★ | ~80 | §7.5 | P99 延迟在 UBCC vs HA-C（模拟）下有可量化差距 |
 | **3.7** | **文档标注 RAS 限制**：交付件 2 标 `ras_fault_injection_plan.md` 未落地 | ★ | ~5 | §7.2 | 标注段落出现在最终交付件中 |
 
-**Phase 3 验收总则**：drop/reorder 故障注入有 E2E TC 覆盖且通过；关键路径分离展示可产出一句"CC-EP 关键路径时延 ≤ HA-C 理论最小"的证据。
+**Phase 3 验收总则**：drop/reorder 故障注入有 E2E TC 覆盖且通过；关键路径分离展示只作为
+OurCC 内部诊断。目标 3 必须按原始严格 `<`、共同完成点和甲方确认分支独立验收，不能再以
+“CC-EP 关键路径时延 ≤ HA-C 理论最小”替代。
 
 ---
 
@@ -145,7 +148,8 @@ CC-EP 是基于 ARM CHI 的跨节点 Cache Coherence 方案。核心思想：
 | node7 Finish_CleanUnique assert | CPU requestor 的 is_stale 只对 EP-RNF 设，CPU 路径不设 | 补 `if (!is_stale) is_stale := true` |
 | barrier floorLocalExpected 回归 | `floorLocalExpected=_numSockets` 误伤 2s workload（每节点 1 primary） | 删 floor，改为 workload 显式双参 `sync_wait(mask, NUM_SOCKETS)` |
 
-全部验证：71/71 testcase PASS（0 crash），含 TC98 ROUNDS=16 全量通过。
+历史验证快照：71/71 testcase PASS（0 crash），含 TC98 ROUNDS=16。当前验收仍需冻结代码的
+146-TC 完整回归，不能把该历史集合称为当前“全量”。
 
 ---
 
@@ -161,13 +165,14 @@ CC-EP 是基于 ARM CHI 的跨节点 Cache Coherence 方案。核心思想：
 
 当前 CC-EP 方案类似于 HA-C，但**将全局目录从 HN-F 移出到 UBCC（ubio 进程中）**，消除 HN-F 内目录与计算竞争的干扰，并通过 Bloom Filter 降低目录 SRAM 占用。
 
-### 2.2 相对 HA 的优势（讨论中）
+### 2.2 相对 HA 的结构性特点（历史讨论已校正）
 
-- **时延**：UBCC 与节点内 gem5 同进程，home 侧查找免 IPC。HA-C 的 home 在 HN-F 内也不用 IPC——其实两者时延相同（跨节点部分都是 1 跳网络 RTT ≈1.1µs，节点内 CHI 操作 ≈78ns 可以忽略）。**时延上 UBCC 和 HA-C 无明显差异。**
-- **SRAM 效率**：UBCC 使用 Bloom Filter + ResidentDir 减少不必要的目录条目，HA-C 的目录直接占用 HN-F 的 TBE/目录 SRAM——容量上 UBCC 有 Bloom 带来的等效追踪范围提升。
+- **时延**：不能由“同进程/免 IPC”推出双方时延相同。必须冻结 HA authority、completion、
+  placement、service 和 operation weights，并区分 `K_logical/K_crossnode/P`。
+- **SRAM 效率**：Bloom+ResidentDir+backstore 具有分层追踪潜力；目标 1 的当前 PASS 仍需冻结复跑。
 - **职责分离**：UBCC 把全局 CC 逻辑从 gem5 CHI 状态机分离到独立进程，方便独立调试/升级/故障隔离。
 
-**当前状态**：HA 时延对比已定案——重定义为"等时延 + 结构性优势"（见 §5.1）。
+**当前状态**：目标 3 为 `UNPROVEN（存在实质性 RISK）`；结构性特点不能替代严格 `<`。
 
 ---
 
@@ -176,26 +181,26 @@ CC-EP 是基于 ARM CHI 的跨节点 Cache Coherence 方案。核心思想：
 ### 3.1 交付件 1：协议理论分析 + 方案对比
 
 - 顶层协议总纲文档（串联 EP-RNF/UBCC/CHI 接口设计 + 个方案对比矩阵）
-- 待写：`docs/design/cc_ep_protocol_overview.md`
+- 已有并已刷新：`docs/design/cc_ep_protocol_overview.md`
 
 ### 3.2 交付件 2：形式化验证 + 可靠性模型 + HA 时延对比
 
 | 子项 | 状态 | 待做 |
 |------|------|------|
-| **形式化验证**（UBCC core） | 已有完整 TLA+ 套件（`verification/tla/`，9 模型，safety+liveness PASS），但模型止于 07-11，落后于代码 07-14/07-15 更新 | 刷新 core fanout 语义 + fidelity 映射表（见 §7.1） |
+| **形式化验证**（UBCC core） | 多个抽象/focused 模型在各自 model scope 内 PASS；不能称完整生产协议证明 | 以 formal results、manifest 和 fidelity 表持续同步 |
 | **形式化验证**（EP-RNF 3×3 snoop 矩阵） | 已有初版（`docs/design/eprnf_snoop_conflict_arbitration_plan.md` §9） | 新增 snoop 冲突仲裁 action，或标注 E2E 覆盖、形式化留待下阶段（§7.1） |
-| **可靠性模型** | 丢包/乱序/重传——TLA+ `ubcc_transport_faults.tla` 已枚举；运行时 drop/dup 已实现，reorder 未实现 | 写文档 + 补 drop 类 E2E TC（§7.2） |
+| **可靠性模型** | 当前已有 bounded Drop/Duplicate/Delay/Reorder qualification；完整 Q1-Q7 尚未关闭 | 补 repeated/composed/burst/topology/exhaustion（§7.2 旧快照仅作 provenance） |
 | **节点故障** | 无实现，无计划在本阶段补设计 | 文档中标注"已知限制" |
-| **HA 时延对比** | **已定案（见 §5.1，重定义为等时延+结构优势）** | 按 §5.1 论据 + §7.5 workload 出对比数据 |
+| **HA 时延对比** | `UNPROVEN（存在实质性 RISK）`；旧“等时延+结构优势”不是原合同 | 按外部研究、甲方 Q1-Q15、共同 DAG 和 paired workload 关闭 |
 
 ### 3.3 交付件 3：仿真代码 + 性能验证
 
-- 仿真代码：已完成（71/71 PASS）
-- 接口调用说明书：待写
+- 仿真代码：核心实现存在；71/71 仅为历史回归快照，当前 146-TC 冻结回归未闭环
+- 接口调用说明书：已有初稿，仍需按冻结接口刷新
 - 验证报告：
-  - **指标 1**（SRAM 容量）：Bloom Filter 等效追踪容量 vs 纯 SRAM 基线（含 MetaRNF DRAM 卸载）→ 待计算（测定方法见 §7.3）
-  - **指标 2**（CC 同步时延降低 10%）：**已定案 baseline = 静默升级（见 §5.2）**，用 TC29 开关对照（§7.5）
-  - **指标 3**（CC 同步 ≤ HA 理论时延 + 结构优势）：**已定案（见 §5.1）**
+  - **指标 1**（SRAM 容量）：历史结果达标；当前代码复跑和 E5 provenance 待完成
+  - **指标 2**（CC 同步时延降低 10%）：baseline/optimized profile 已定义；当前多轮 guest-visible 复验待完成
+  - **指标 3**（OurCC 跨节点 CC 同步平均时延 `<` 甲方 HA 理论平均）：`UNPROVEN`，见 §5.1 更新
 
 ### 3.4 16 节点
 
@@ -207,51 +212,52 @@ CC-EP 是基于 ARM CHI 的跨节点 Cache Coherence 方案。核心思想：
 
 | 指标 | 内容 | 当前状态 | Baseline | 优化后 | 达标 |
 |------|------|------|------|------|------|
-| **指标 1** | 512KB SRAM 下 Cacheline 追踪数提升 ≥50% | 需算 Bloom 等效覆盖（测定法 §7.3） | 纯 SRAM（无 DRAM 卸载），满则 evict 全局副本 ≈69K 行 | Bloom + ResidentDir + DRAM 卸载 → 等效追踪 >> 69K | 待计算 |
-| **指标 2** | CC 同步时延降低 ≥10%（CC 时延 ≥500ns 场景） | **已定案** | 静默升级关闭：R_E 写升级发跨节点 OuterUpgradeReq ≈810ns | 静默升级开启：R_E 本地升级 ≈78ns（零跨节点） | ≈90% ✅（待实测复核） |
-| **指标 3** | CC 同步 ≤ HA 理论时延 + 结构优势 | **已定案** | HA-C（目录在 HN-F，占 TBE） | UBCC（目录外置）等跳数 + 本地干扰更低 + C4/Batch-RS | 待实测（§5.1 三论据） |
+| **指标 1** | 512 KiB 下 Cacheline 追踪数提升 ≥50% | `PARTIAL` | naive distinct capacity | spill distinct `Resident union Backstore` | 历史达标；待冻结复跑 |
+| **指标 2** | CC 同步时延降低 ≥10%（naive guest-visible mean `>=500 ns`） | `PARTIAL` | naive+noopt | spill+latency optimization | 历史 54.32%；待 paired 多轮重算 |
+| **指标 3** | OurCC 跨节点 CC 同步平均时延 `<` 甲方 HA 理论平均 | `UNPROVEN` | 甲方合法 HA profile，参数未冻结 | OurCC current clear-ack；proposed profile 不计入当前结果 | 待甲方参数、paired E5 和 litmus gate |
 
 ---
 
-## 5. 开放问题的解决方案（已定案）
+## 5. 开放问题的当前处理
 
-> 本节原为"待专家确认的两个开放问题"。经代码调研后，已收敛为可通过方案评审的定案，
-> 并补充了三个支撑性讨论（§5.3 Clear/ClearAck 设计动机、§5.4 关键路径优化分类、
-> §5.5 目录压缩机制对比）。工程落地方案见 §7。
+> 本节保留早期方案分析作为历史 provenance。2026-08-07 外部研究表明，目标 3 不能由内部
+> 文档重定义为 `<= + 结构性优势`。当前权威结论、甲方问题和 DAG 见
+> `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`。
 
-### 5.1 指标 3（HA 时延对比）：重定义为"等时延 + 结构性优势"
+### 5.1 指标 3（HA 时延对比）：恢复原始严格 `<`
 
-**核心判断（诚实定位）**：不试图论证"UBCC 跨节点比 HA-C 更快"——因为跨节点跳数结构相同，
-硬凑 winner 会被评审识破。改为一个可辩护的复合命题。
+**当前判断：`UNPROVEN（存在实质性 RISK）`。** 原始合同是严格 `<`；旧复合命题只能在双方
+书面改约后使用，不能作为当前 PASS。
 
-#### 5.1.1 为什么跨节点时延无法拉开差距（定量依据）
+#### 5.1.1 旧等跳数论据的限制
 
 关键路径分解（`docs/measure/tc98_optimization_analysis.md:143-179`，`scripts/gen_topo.py:39`）：
 
-- 跨节点读/写缺失关键路径 = **4 个跨节点单跳**（req→home、home→owner recall、owner→home resp、
-  home→req grant）× 405ns ≈ **1620ns，占总时延 52%**，是绝对主导项。
+- central-return 的逻辑链可有 4 段，但两节点中通常只有 2 次实际跨节点 traversal；不能把逻辑
+  箭头直接当物理单跳。
 - UBCC 目录在 ubio 进程、HA-C 目录在 HN-F 内——**两者都本地进程内、免 IPC**，量级 ~78ns，
-  相对 405ns/跳可忽略。
-- CC-EP（HA-C 类）与标准 HA-C 都是"分布式目录 + PA hash → home"，**跨节点跳数逐跳相等**。
+  该历史内部值不能代替甲方 `P_dir+P_commit+P_queue`。
+- 合法 HA 还可能有 Home-memory K=2 或 direct-data+authority K=3 分支，因此不存在无条件
+  “逐跳相等”的结论。
 
-#### 5.1.2 指标 3（修订版定义）
+#### 5.1.2 当前合同定义
 
-> **指标 3（修订）**：在相同跨节点网络参数下，CC-EP 的跨节点 CC 同步时延 **≤ HA-C 理论最小时延**
-> （即等跳数、无协议退化），且在两个 HA-C 结构性劣势维度上严格更优：
-> **(i) 本地 TBE/SRAM 干扰**、**(ii) 已实现的通信削减优化（C4 Direct-Forward / Batch-RS）**。
-> 指标 3 的定量支撑由这两个结构性差异承担，而非跨节点跳数。
+> **指标 3：** OurCC 跨节点 CC 同步平均时延 `<` 甲方 HA 实现的理论平均时延。
 
-#### 5.1.3 三个可定量的论据
+必须比较共同 `T_visible/T_commit/T_next` 和 root API，分开 `K_logical/K_crossnode/P`。同 K
+只证明同阶，不满足严格 `<`。
+
+#### 5.1.3 结构性论据的限定用途
 
 | 论据 | 内容 | 可测性 |
 |------|------|------|
-| **论据 1（等时延）** | 逐跳关键路径对照表：CC-EP 与 HA-C 跨节点 4 单跳逐跳相等；本地部分 CC-EP ≤ HA-C（UBCC 目录查找不与 HN-F 计算管道争流水级） | 用 §7.4 log 工具分段测定 |
-| **论据 2（TBE/SRAM 干扰，CC-EP 严格更优）** | HA-C 全局目录寄生 HN-F 内，占用 HN-F 的 TBE 表项，与本地 CPU 请求争用同一 TBE 池 → 高负载下本地请求排队/重试；UBCC 独立进程，零占用 HN-F TBE | 混合 workload（本地密集 + 跨节点目录并发）对比本地请求 P99（§7.5） |
-| **论据 3（通信削减，CC-EP 已具备）** | C4 Direct-Forward（`EPBackend.cc:1109`）、Batch-RS（`UBCCController.cc:2839`）在标准 HA-C（目录在 HN-F）中需侵入 CHI 状态机才能实现；对应 workload 下 CC-EP 有可测降幅（Batch-RS 对 read contention 10-18x，`tc98_optimization_analysis.md:302`） | TC100/TC101 复用（§7.5） |
+| **资源隔离** | UBCC 不占 HN-F TBE | 独立 qualification；不能证明甲方 HA 必然寄生同一 TBE |
+| **可审计提交** | epoch/reqId/Clear/tombstone | safety/replay 证据；不能替代时延 `<` |
+| **C4/Batch-RS** | 适用 workload 的 data route/通信削减 | C4 两节点三角色路径不可达，且不是完整 authority |
 
-**达标论证**：指标 3 = "CC-EP 时延 ≤ HA-C 理论最小（论据1）∧ 本地干扰更低（论据2 可测）∧
-通信更省（论据3 可测）"，配合指标 1 的 SRAM 效率数据，构成"不牺牲时延、还省 SRAM、还减干扰"
-的完整命题。**不再声称"跨节点更快"这个无法成立的强命题。**
+关闭标准：甲方回答 Q1-Q15，双方冻结 HA profile、operation weights、placement 和完成点；
+paired samples 的 `delta=T_mean_HA-T_mean_OurCC` 预注册 95% 单侧置信下界严格大于 0，且
+correctness/memory-order gates 通过。
 
 ### 5.2 指标 2（Latency Baseline）：主方案 = 静默升级（Silent Upgrade）
 
@@ -284,11 +290,11 @@ E→M 是静默升级（Exclusive 态本地写直接转 Modified，无需上总�
 |---|---|---|
 | R_E holder 本地写升级 | 无条件发 `OuterUpgradeReq` → home → `OuterUpgradeAck` = **1 跨节点 RTT** | requester 侧检测 `R_E` 书签 → 本地静默升级 R_E→R_M，EP-RNF 直接 `SnpResp_I`，**0 跨节点消息** |
 | 跨节点消息数 | 2（Req + Ack） | 0 |
-| 时延 | ≈ 1 RTT ≈ 810ns（2×405）+ PDES sync，**≥500ns 成立** | ≈ 本地 CHI 管道 ~78ns |
+| 时延 | 历史路径模型约 1 RTT+PDES sync | 历史本地 CHI 路径模型约 78ns |
 
-**达标性**：(810 − 78) / 810 ≈ **90% 降幅** >> 10% ✅。即便只算最保守单跳 405ns，
-(405−78)/405 ≈ 80% 也远超 10%。发生场景（独占持有者转写）普遍且高频（read-modify-write、
-锁获取后写、私有数据写）。
+**历史理论潜力**：上述模型给出约 80%-90% 的路径级潜在降幅，但不是正式目标 2 PASS。
+TC29 实测未触发该 SnpCleanInvalid path，降幅为 0%；必须使用专用 workload 和共同
+guest-visible counter 复验，且不能预设该操作在合同 workload 中“普遍且高频”。
 
 #### 5.2.4 正确性（评审必问）
 
@@ -359,11 +365,13 @@ Clear 丢了 → 一直 pending → 重试直到 accepted，因此对丢包鲁�
 
 #### 5.3.4 结论：Eager Commit 不作为指标 2/关键路径优化的正式方案
 
-Eager Commit（消除 Clear leg，省 1 RTT 约 26-39%，`tc98_optimization_analysis.md:186`）虽诱人，
+Eager Commit（消除 Clear leg，历史估算省 1 RTT 约 26-39%，
+`docs/measure/tc98_optimization_analysis.md:186`）虽诱人，
 但**破坏上述①②③**，且 `_outstandingReqs` 每 PA 仅 1 条（`createOutstanding:3049`），
 一条 `WAITING_CLEAR` 阻塞该 PA 全部操作并钉住 ResidentDir 条目（`refreshPinnedBit:2346`），
-**无超时回收**（`deadlineTick` 设了从不读，是死代码）。`push_grant_design.md §8.4` 明确背书
-"commit 仍只在 Clear 发生，已被故障建模"；`tc98_optimization_analysis.md:116` 也标注 Eager Commit
+**无超时回收**（`deadlineTick` 设了从不读，是死代码）。
+`docs/design/push_grant_design.md §8.4` 明确背书“commit 仍只在 Clear 发生，已被故障建模”；
+`docs/measure/tc98_optimization_analysis.md:116` 也标注 Eager Commit
 只在 reliable-transport 假设下安全。**因此 Eager Commit 与交付件 2 的可靠性模型（丢包/乱序/重传）
 直接冲突，最多作为"reliable-transport 编译期开关的未来探索"一笔带过，不作为正式对照。**
 
@@ -372,11 +380,13 @@ Eager Commit（消除 Clear leg，省 1 RTT 约 26-39%，`tc98_optimization_anal
 **区分**：单请求总时延含排队/retry（受串行化、资源竞争影响），压它对吞吐帮助有限；
 **关键路径**（一次跨节点事务不可避免的串行依赖链）才决定同步原语延迟。压缩关键路径 = 减少链上串行跳数。
 
-关键路径 = 4 个跨节点单跳串行依赖（`tc98_optimization_analysis.md:143-168`）。减跳方向：
+central-return 可抽象为 4 个 `K_logical` 段，但在两节点下通常不是 4 次 `K_crossnode`
+traversal。以下是历史优化方向，正式结论按
+`docs/research/ha_ourcc_operation_dags_20260806.md` 的 placement-aware DAG：
 
 | 方向 | 减掉哪一跳 | 关键路径影响 | 正确性代价 |
 |------|------|------|------|
-| **C4 Direct-Forward（已实现）** | owner 数据不经 home 中转，直发 requester | 数据路径并行化，requester 拿数据早 ~1 跳 | 无（元数据仍经 home，`EPBackend.cc:1109`） |
+| **C4 Direct-Forward（已实现）** | owner data 可不经 Home 中转 | 只优化 data branch，不自动缩短 authority completion | 需 R/O/H 三节点；两节点 N/A；元数据/Grant 仍经 Home |
 | **静默升级（§5.2 主方案）** | R_E holder 写升级整条链归零 | 独占写升级从 2 跳 → 0 跳 | 无（本地可判定、零跨节点） |
 | **Forward/Owned 态（MESIF/MOESI）** | 后续 reader 由持有者直供，跳过 home recall | 读命中远程共享/独占省 home→owner→home 两跳 | 中：需目录引入 Forward/Owner 指定语义 |
 | **推测授权（speculative grant）** | home 在 recall 完成前先发 grant，失效并行 | 省 leg3 等待 | 高：需回滚，正确性复杂 |
@@ -419,8 +429,8 @@ epoch(24) + tag。持久化压缩条目（`BackstoreTypes.hh:186`）sharers 压�
 - **Q2**：SRAM baseline 逻辑——纯 SRAM（无 DRAM 卸载），满则 evict 全全局副本 ✓
 - **Q3**：节点故障只做文档分析，不补设计 ✓
 - **附加 Q2**：504µs 不算 baseline ✓
-- **Q4**：16 节点本次不考虑 ✓
-- **指标 3（§5.1）**：重定义为"等时延 + 结构性优势"，不声称跨节点更快 ✓
+- **Q4**：真正 16 节点需实现或取得书面 waiver；8N2S/16 planes 不能替代。
+- **指标 3（§5.1）**：恢复原始严格 `<`；当前 `UNPROVEN（存在实质性 RISK）`。
 - **指标 2（§5.2）**：主方案 = 静默升级（Silent Upgrade）；retry 参数级调整降级为工程调优 ✓
 - **Eager Commit（§5.3）**：与可靠性模型冲突，不作为正式方案 ✓
 
@@ -452,9 +462,9 @@ epoch(24) + tag。持久化压缩条目（`BackstoreTypes.hh:186`）sharers 压�
    冲突分类。需按 `docs/design/eprnf_snoop_conflict_arbitration_plan.md §9` 的矩阵新增 action
    （STALE/IMMED 分类），或在文档中显式标注"3×3 矩阵由 E2E（TC 全量）覆盖，形式化留待下阶段"。
 3. **指数退避** — 纯时序参数，**不影响 safety，仅影响 liveness 的 fairness 假设**。模型用抽象
-   `RecallTimeout=2`（`fv_coverage_fidelity.md:147` 已披露 model 值≠code 值），退避改动落在这个
+   `RecallTimeout=2`（`verification/fv_coverage_fidelity.md:147` 已披露 model 值不等于 code 值），退避改动落在这个
    已披露的抽象里，无需改 safety 模型；liveness 只需确认 WF 假设仍成立。
-4. **fidelity 映射表刷新** — 更新 `fv_coverage_fidelity.md` A3.1 表，把 fix1/fix2 的 C++ anchor
+4. **fidelity 映射表刷新** — 更新 `verification/fv_coverage_fidelity.md` A3.1 表，把 fix1/fix2 的 C++ anchor
    对齐到最新行号，A3.3 追加"snoop 仲裁未建模"作为已披露 fidelity risk。
 
 **结论**：**必做 = 刷新 core 模型的 fanout 语义（1）+ 更新 fidelity 映射表（4）**；
@@ -462,11 +472,15 @@ epoch(24) + tag。持久化压缩条目（`BackstoreTypes.hh:186`）sharers 压�
 建议由 protocol-analyzer/state-analyzer agent 跑一次 `tlc2.TLC -coverage` 回归，确认 15/15 action
 覆盖不退化。
 
-### 7.2 故障注入测试：如何完善？
+### 7.2 故障注入测试：历史差距与当前剩余项
 
-**现状**（`modules/ubiomodule/ubio_main.cc:69-208`）：真实运行时注入只有 ubio ZMQ 层一处，
-支持 **drop / duplicate 完整实现**；**delay 是伪实现**（只打证据不真延迟）；**无 reorder、无概率丢包**。
-E2E 覆盖仅 TC47/48/49，**全部是 duplicate**。`framework/Port.hh` 与 UBAdapter 无任何故障 hook。
+> 以下表是早期实现差距快照，不代表 2026-08-07 当前状态。当前已经有 bounded
+> Drop/Duplicate/Delay/Reorder 和 TC117-TC159 qualification；权威状态见
+> `docs/delivery/acceptance_metrics_deliverables_todo_20260807_zh.md`。当前剩余工作是完整 Q1-Q7，
+> 尤其 repeated/composed/burst/topology/exhaustion 和统一 no-fault regression。
+
+**历史现状快照**（`modules/ubiomodule/ubio_main.cc:69-208`）：当时运行时注入只有 ubio ZMQ
+层一处，drop/duplicate 已实现，delay/reorder 和 E2E 覆盖尚未完整。
 
 **差距 vs 交付件 2 可靠性模型（丢包/乱序/重传）**：
 

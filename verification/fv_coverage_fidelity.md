@@ -65,23 +65,23 @@ honestly, exactly what has been *exhaustively* covered and what has NOT.
 
 | Dimension | UBCC core (`ubcc_config`) | EP single | EP dual | Transport faults |
 |-----------|---------------------------|-----------|---------|------------------|
-| Nodes / CPUs | 3 nodes | 2 CPUs (1 node) | 2 CPUs × 2 sockets | 3 nodes |
+| Nodes / CPUs | 3 nodes | 8 CPUs max config (1 node); 2 CPUs focused configs | 2 CPUs × 2 sockets | 3 nodes |
 | Physical addresses (PA) | **1** | 1 | 1 | 1 |
 | Epoch bound | `MaxEpoch=4` | — | — | `MaxEpoch=4` |
 | Tombstone window | 10 | — | — | 10 |
 | Request ids | `0..2` | — | — | `0..2` |
 | Data versions | (abstracted) | `MaxDataVersion=1` | — | (abstracted) |
-| Distinct states | 20,980,755 | 74M | 52M | 66,766 |
-| Search depth | 23 | — | — | — |
-| Properties | 4 safety + 2 liveness | 6 safety | 8 safety | 6 safety |
+| Distinct states | 20,980,755 | 203,174 max safety; 542 normal liveness; 1,436 bounded-fault; 10,184 max liveness | 52M | 66,766 |
+| Search depth | 23 | 22 max safety/max liveness; 18 fault | — | — |
+| Properties | 4 safety + 2 liveness | strengthened safety + 5 liveness; single request/CompUC drop | 8 safety | 6 safety |
 
 ### NOT covered (explicit boundaries — future work / simulation territory)
 
 | Uncovered dimension | Why it matters | How addressed instead |
 |---------------------|----------------|-----------------------|
-| **Multiple PAs / cross-address interleaving** | Directory-slot contention across lines, Bloom-filter collisions | Planned formal (Stage D1); currently only E2E |
+| **Arbitrary multiple PAs / cross-address interleaving** | Directory-slot contention across many lines, Bloom-filter collisions | Stage D1 covers 2 PAs; O3 focused model covers 2 lines; larger sets remain E2E |
 | **≥4 nodes** | Larger sharer sets | small-scope hypothesis: 3 nodes exposes design races; E2E TC50-54 at scale |
-| **≥3 sockets & cross-socket message routing** | Multi-socket coherence routing (1-hop vs 2-hop latency) | Planned formal (Stage D2); currently E2E |
+| **≥3 sockets & arbitrary cross-socket routing scale** | Multi-socket coherence routing (1-hop vs 2-hop latency) | Stage D2 covers 4 routing planes; larger scale remains E2E |
 | **Bloom filter / backstore / MetaRNF** | Performance/infra layer | Abstracted by design (see A3); resident-dir is authoritative — argued in CONSOLIDATED_REPORT §7.2 |
 | **Real time / latency / ZMQ timing** | Timeout tuning, message ordering under delay | Not a formal target — E2E simulation (`docs/measure/`) |
 | **EP-RNF snoop conflict arbitration (STALE/IMMED matrix)** | Per-cacheline conflict between ReadShared/ReadUnique/CleanUnique and SnpCleanInvalid/SnpUnique/SnpOnce | **DONE (focused model)**: `ep_rnf_snoop_arbitration.tla` exhaustively checks active-recall priority, immediate ReadShared+SnpOnce data response, immediate STALE responses for conflicting write-class snoops, and rejection of preserving snoops. PASS: 328 distinct states, depth 7 (2026-08-03). |
@@ -97,7 +97,8 @@ honestly, exactly what has been *exhaustively* covered and what has NOT.
 > defects overwhelmingly manifest in small configurations. Evidence: the
 > Medium-severity RECALL-orphan bug (FV3-LEAK-001) was caught and its fix proven
 > in exactly this 3-node model. Production-scale behaviour is covered by E2E
-> simulation (TC1-54)."
+> simulation, including the ArmO3CPU 146/146 regression and TC300-303 focused
+> architectural cases."
 
 ---
 
@@ -138,6 +139,8 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
 |-------|--------------|---------------|--------------------|
 | `ubcc_tc224_waiter_retirement.tla` | Clear commit removes only the committed stale Read waiter; legacy `reqId=0` also matches base epoch; nonmatching and Writeback/Upgrade/Evict waiters survive; replay tolerates queue erase | `UBCCController.cc`: `retireCommittedResidentWaiters`, `processClear`, `replayResidentWaiters` | no committed Read waiter remains; non-Read preservation; queue-presence consistency; replay safe after erase |
 | `ep_rnf_snoop_arbitration.tla` | Active recall has priority; no-inflight snoops are immediate; ReadShared+SnpOnce coexists; conflicting write-class snoops receive immediate STALE; SnpShared/Fwd is rejected outside recall cleanup | `EPRNFController.cc`: `recvSnoopMsg`, `finishChiTxn` | matrix correctness; no stale snoop queue; read/read coexistence; preserving-snoop rejection |
+| `ep_o3_completion_backpressure.tla` | Two O3-issued lines enter an EP-RNF global proxy; ReadUnique waits for complete Data or explicit no-data, `Comp_UC`, and injected `CompAck`; rsp/dat output retries preserve pending state | `EPRNFController.cc`: ReadUnique bookkeeping/output retry; `EPSNFController.cc` and `MetaRNFController.cc`: reliable response/data output | strict callback ordering; Ack after Data+Comp; data-beat conservation; no cross-line completion; fair temporary-backpressure progress |
+| `ep_intra_node_single.tla` closed suite | Bounded CPU operations, action-level queue capacity, request retry coalescing, RNF CompUC/CompAck/callback, bounded request/CompUC drop, payload/writeback and grant lifetime | EP/HNF/SNF/backend abstract boundary; exact closure mapping and limitations in `ep_intra_node_single_closure_20260810_zh.md` | TypeOK; finite queue semantics; data/dirty consistency; callback ordering; CPU termination; watchdog progress; bounded-drop recovery |
 
 ### A3.3 What is deliberately abstracted away (and why it's sound)
 
@@ -148,6 +151,8 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
 | MetaRNF multi-flight | Per-PA serialization preserved by scoreboard; different PAs parallel (I4) |
 | Real time / ZMQ / latency | Protocol correctness is timing-independent; timing handled by E2E |
 | Data payload bytes | Modelled as version/owner, not raw bytes; integrity checked in E2E (FV-7 memcpy chain) |
+| ArmO3CPU pipeline/LSQ internals | The focused model starts at the CPU/Ruby/EP request boundary; TC300-303 check architectural outcomes on real `ArmO3CPU` |
+| Permanent rsp/dat blockage | O3 liveness assumes temporary backpressure eventually clears; permanent blockage is a platform failure outside this property |
 
 ### A3.4 Fidelity risks (known, disclosed)
 
@@ -165,6 +170,15 @@ Model actions in `ubcc_protocol_core.tla` map to `modules/ubiomodule/UBCCControl
    the TC224 model abstracts away ResidentDir victim selection and H64 timing;
    the EP arbitration model abstracts CHI payload/TBE behavior. Their purpose is
    to close the exact semantic drift identified in the current C++ anchors.
+5. **O3 proof boundary**: `ep_o3_completion_backpressure.tla` exhaustively checks
+   2 lines and 2 beats, not arbitrary outstanding depth, the full Arm pipeline,
+   complete Ruby/CHI, or the ARMv8 axiomatic memory model. O3 E2E 146/146 plus
+   TC300-303 4/4 are executable evidence, not an ISA-level proof.
+6. **EP single closure boundary**: the repaired model is finite by transition
+   semantics, not a TLC state constraint, but the proof remains parameter-bounded:
+   max config is 8 CPUs/3 fresh transactions with `ReqQ=3`, other channels=2;
+   fault configs allow one request drop and one `Comp_UC` drop. Permanent loss,
+   arbitrary depths, and the full production transport are not proved.
 
 ---
 

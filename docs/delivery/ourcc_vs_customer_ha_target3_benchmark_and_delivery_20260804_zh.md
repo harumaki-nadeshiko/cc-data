@@ -1,7 +1,8 @@
 # OurCC 与甲方 HA 跨节点缓存一致性理论时延对标及目标 3 交付方案
 
-> 版本：1.0
-> 日期：2026-08-04
+> 版本：1.1
+> 初版日期：2026-08-04
+> 外部研究整合：2026-08-07，公开资料检索截止 2026-08-06
 > 范围：仅覆盖合同目标 3，不改变目标 1、目标 2 的比较对象与验收口径。
 > 目标 3 原文：`跨节点CC同步平均时延 < HA实现跨节点CC的理论平均时延`。
 > 文档属性：理论对标、假设管理、验收关闭与可选协议优化方案。除明确标注为“已实现”的能力外，
@@ -17,7 +18,7 @@
 requester completion 和物理拓扑尚未全部关闭前，不能无条件证明目标 3 的严格小于关系。
 当前最稳健的判定是：
 
-> **目标 3 当前为 UNPROVEN，但已具备明确、可执行、可审计的条件关闭路径。**
+> **目标 3 当前为 `UNPROVEN（存在实质性 RISK）`，但已具备明确、可执行、可审计的条件关闭路径。**
 
 关键原因如下：
 
@@ -47,7 +48,31 @@ requester completion 和物理拓扑尚未全部关闭前，不能无条件证�
 6. 只向甲方询问抽象完成语义，不要求其披露私有微架构。未答复项保持 `[未知]`，由结论区间承担。
 7. 最终平均值只使用双方一致的 target/guest-visible root counter；OurCC Outer trace 只用于拆链诊断。
 
-### 0.3 可以和不可以声称的内容
+### 0.3 外部研究整合结论
+
+2026-08-06 外部研究使用 Arm CHI/Arm ARM、CCIX、CXL 公开资料、经典目录论文、
+RISC-V RVWMO、TLA+ coherence verification 和 NIST/SciPy 统计资料，对本文的内部条件模型
+进行了核验。结论没有把甲方私有 HA 映射到任何公开厂商实现，关键结果如下：
+
+1. 公开协议共同要求 per-line serialization authority；direct data 不自动携带 authority。
+2. 无显式 Ack 只在存在可验证 ordering/completion 时构成合法 fast path，dependency 不能删除。
+3. 两节点 2-bit presence 可表达副本存在性，但不能单独表达 dirty/latest owner 和 transient。
+4. Arm/RISC-V ISA completion 不能由内部 fabric response 自动替代，必须有 endpoint mapping。
+5. 合法 direct-data+authority HA 分支可使 `T_visible` 达到 K=3，是对 OurCC 不利的实质风险。
+6. central-return 分支常见同 K=4；同 K 必须证明 `P_OurCC<P_HA`，不能自动 PASS。
+7. strict `<` 的最短关闭路径是甲方回答 15 个抽象问题并冻结 paired workload/CI，而不是
+   继续扩展假想 HA 数值。
+
+外部研究权威附件：
+
+- `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- `docs/research/target3_onepage_summary_20260806_zh.md`
+- `docs/research/customer_ha_questions_20260806_zh.md`
+- `docs/research/ha_coherence_source_matrix_20260806.tsv`
+- `docs/research/ha_ourcc_operation_dags_20260806.md`
+- `docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md`
+
+### 0.4 可以和不可以声称的内容
 
 | 主张 | 当前是否可用 | 说明 |
 |---|:---:|---|
@@ -167,6 +192,18 @@ T_{next}
 定义：同一 Cacheline 的下一冲突事务可继续执行，且不会绕过上一事务的安全闭环。
 
 一般有 `T_next >= T_commit`，但具体实现也可能在 metadata commit 后继续保留 install guard。
+
+#### 2.3.4 当前 OurCC root completion
+
+记为 `T_root_current`：当前 requester 等待 `ClearResp accepted`，随后 EP-SNF 才向本地 HN/L2
+完成 root path。它是当前实现可测的正式 root completion，但不应与更早、按共同安全语义定义的
+`T_visible` 混为同一点。
+
+外部研究 DAG 中：
+
+- `T_visible` 只在 latest data + authority + agreed requester install 条件满足时成立；
+- `T_commit/T_next` 仍由 Home commit/release 决定；
+- `T_root_current` 是 current clear-ack 的额外前台等待点。
 
 ### 2.4 不得混用的测量口径
 
@@ -472,6 +509,12 @@ ClearCommit、UpgradeCommit 等抽象状态机；`ClearCommit` 位于约 `:393-4
 
 以下 `K` 为通用 logical critical-path 近似。正式计算必须根据 HU-09 再映射到物理跨节点 traversals。
 
+> **口径更新：** 本节原有 `K_visible` 表是在初版中按“当前 requester root 等待 ClearResp”记账，
+> 实质更接近 `K_root_current`。外部研究已经把早期 data+authority 可见点记为 `T_visible`，把
+> current ClearResp 等待单列为 `T_root_current`。新评审应优先使用
+> `docs/research/ha_ourcc_operation_dags_20260806.md`；本节旧 K 表保留用于说明当前 root 路径，
+> 不得与新 `T_visible` 表直接混算。
+
 ### 6.1 Remote Read
 
 #### 6.1.1 `R_h`：Home/memory 已有 latest data
@@ -495,7 +538,7 @@ Requester EP <--ClearResp-- Home
 Requester HN/L2 <--local CompData-- EP
 ```
 
-- `K_visible ~= 4`
+- `K_root_current ~= 4`；Grant/data 到 EP 的早期 `T_visible` 候选需另行冻结 install/authority 边界
 - `K_commit ~= 3`
 - `K_next ~= 3`
 
@@ -546,7 +589,7 @@ Home --ClearResp--> Requester
 EP --local CompData--> HN/L2
 ```
 
-- `K_visible ~= 6`
+- `K_root_current ~= 6`；Grant/data 到 EP 的 `T_visible` 候选约 K=4，但不是当前 HN/L2 root completion
 - `K_commit ~= 5`
 - `K_next ~= 5`
 
@@ -597,7 +640,7 @@ Home --ClearResp--> Requester
 EP --local CompData/permission--> HN/L2
 ```
 
-- `K_visible ~= 6`
+- `K_root_current ~= 6`；Grant 到 EP 的 `T_visible` 候选约 K=4，current root 仍等待 ClearResp
 - `K_commit ~= 5`
 - `K_next ~= 5`
 
@@ -656,7 +699,7 @@ EP --> local HN/L2 [CompData/permission]
 - 旧 owner 不可继续使用：RecallResp 前的 local CHI completion；
 - tentative Grant：第 4 logical leg；
 - commit/next：第 5 leg；
-- current requester-visible：约第 6 leg。
+- current `T_root_current`：约第 6 leg；不得标为统一 `T_visible`。
 
 OurCC lossless-oneway：
 
@@ -689,26 +732,27 @@ OurCC lossless-oneway：
 
 ## 7. K 值和结论矩阵
 
-### 7.1 Requester-visible logical K
+### 7.1 Logical K 到各 profile 的前台完成点
 
-| 操作 | HA central | HA true direct authority | OurCC current | OurCC lossless-oneway | OurCC eager no-clear |
+| 操作 | HA central `K_visible` | HA direct `K_visible` | OurCC current `K_root_current` | OurCC one-way `K_visible` | OurCC eager `K_visible` |
 |---|---:|---:|---:|---:|---:|
 | Home-latest Remote Read | 2 | 2 | 4 | 2 | 2 |
 | Dirty-owner Remote Read | 4 | 3（条件） | 6 | 4 | 4 |
 | Remote Invalidate Writer Acquire | 4 | 3（条件） | 6 | 4 | 4 |
 | Ownership Handoff | 4 | 3（条件） | 6 | 4 | 4 |
 
-注：该表是 logical DAG 的归一化示意，不代表 2 节点下每个 leg 都跨物理节点。
+注：OurCC current 列是等待 ClearResp 的 `K_root_current`，不能与其他列的 `K_visible`
+直接当成同完成点比较。该表是 logical DAG 归一化示意，也不代表 2 节点下每个 leg 都跨物理节点。
 
 ### 7.2 Profile 三完成点
 
-| Profile | `T_visible` | `T_commit` | `T_next` |
-|---|---|---|---|
-| HA central blocking | 通常等于或晚于 commit | peer completion 后 | commit/lock release 后 |
-| HA install-visible/background commit | requester install 时 | 稍晚 | 通常 commit 后 |
-| OurCC current | ClearResp accepted 后，随后 local CompData | ClearReq 到 Home | Clear commit 后 |
-| OurCC lossless-oneway | local install 后，不等 ClearResp | one-way Clear 到 Home | commit 后 |
-| OurCC eager no-clear | Grant install 后 | Grant 前/同时 | 需额外 guard，否则不安全 |
+| Profile | `T_visible` | `T_commit` | `T_next` | requester root |
+|---|---|---|---|---|
+| HA central blocking | 通常等于或晚于 commit | peer completion 后 | commit/lock release 后 | 依 HU-06/HU-11 |
+| HA install-visible/background commit | requester install 时 | 稍晚 | 通常 commit 后 | 可与 visible 同点，须甲方确认 |
+| OurCC current | Grant/data 到 EP 后的候选点；HN/L2 install 未确认 | ClearReq 到 Home | Clear commit 后 | ClearResp accepted 后返回 local CompData |
+| OurCC lossless-oneway | 真实 local install 后，不等 ClearResp | one-way Clear 到 Home | commit 后 | 未实现 |
+| OurCC eager no-clear | Grant install 后 | Grant 前/同时 | 需额外 guard，否则不安全 | 理论探索 |
 
 ### 7.3 目标 3 结论矩阵
 
@@ -723,7 +767,21 @@ OurCC lossless-oneway：
 | HA eager commit 无 guard | 不比较 | 不比较 | 非合法安全下界 |
 | HA WB 且必须 conservative probe | 取决于 probe | OurCC 显式 owner 可能占优 | 可形成条件严格优势 |
 
-### 7.4 平均时延关闭公式
+### 7.4 外部研究后的合法分支矩阵
+
+| HA 分支 | 对 OurCC 的影响 | 当前等级 |
+|---|---|---|
+| Home-memory latest，Grant 前/同时 commit | HA 可大量使用 K=2；OurCC commit/root 仍有 Clear | `UNPROVEN/RISK` |
+| central-return + explicit completed Ack + root 等 commit | 常见 visible K=4 vs K=4；P 和权重决胜 | `UNPROVEN`；可达 `CONDITIONAL PASS` |
+| direct-data-only + Home Grant | data 可早到，authority path 通常仍 K=4 | `UNPROVEN` |
+| direct-data+authority + commit 并行 | HA visible 可 K=3 | `RISK/FAIL` 条件分支 |
+| implicit completion 无 ordering guarantee | 不满足共同安全域 | `NOT APPLICABLE` |
+| write-through、memory 常 latest | 提高 HA home fast-path 权重 | 对 OurCC `RISK` |
+| write-back、无 exact owner、必须 probe | 增加 HA service/dependency | OurCC 可 `CONDITIONAL PASS` |
+
+整体仍为 `UNPROVEN（存在实质性 RISK）`，不是双方实测 FAIL，也不是条件 PASS。
+
+### 7.5 平均时延关闭公式
 
 对双方同一操作权重：
 
@@ -969,7 +1027,8 @@ break_even_p
 
 ### 10.4 HA 最小问题集
 
-只需甲方回答以下抽象问题，即可关闭大部分结论区间：
+外部研究已将最小问题扩展并按敏感度排序为 15 题，完整可填表版本见
+`docs/research/customer_ha_questions_20260806_zh.md`。Q1-Q5 是最短决策集：
 
 1. HA 是 write-through、write-back 还是 hybrid？
 2. peer 是否能直接向 requester 返回数据？
@@ -982,6 +1041,9 @@ break_even_p
 9. HA/IODie 与两个节点的物理位置和 fabric 边界是什么？
 10. completed store 是否包含 fence/DSB 或等价完成语义？
 
+其余问题覆盖 route profile、2-bit 码字/transient、contention/retry、non-FIFO identity 和
+共同 workload weights。Q1-Q5 未关闭时整体保持 `UNPROVEN`。
+
 ### 10.5 目标关闭门槛
 
 目标 3 只能在以下条件满足后关闭：
@@ -991,11 +1053,13 @@ break_even_p
 3. operation mix 和平均值分母冻结；
 4. logical/physical K 分开计算；
 5. 双方使用相同 target-visible root counter；
-6. 至少 3 个独立 run，推荐 5 个；
-7. 给出 mean、P50、P95、P99、max 和变异系数；
-8. strict `<` 有公式和数据闭环，而非“同阶”替代；
-9. proposed profile 若进入正式结果，必须先完成实现和验证；
-10. 所有限制和不适用分支进入最终报告。
+6. baseline/HA 与 OurCC 使用同输入/seed 的 paired runs；
+7. 至少 3 个独立 run 仅作 smoke minimum，按预注册 CI half-width/pass margin 增加样本；
+8. 给出 mean、P50、P95、P99、max、CV 和 paired delta；
+9. 主判据为 `delta=T_mean_HA-T_mean_OurCC` 的预注册 95% 单侧置信下界严格大于 0；
+10. strict `<` 有公式和数据闭环，而非“同阶”替代；
+11. proposed profile 若进入正式结果，必须先完成实现和验证；
+12. 所有限制和不适用分支进入最终报告。
 
 ---
 
@@ -1100,6 +1164,10 @@ authority forward；或从甲方确认其 direct response 实际只是 data-only
 | 核心 reserve-then-commit 模型 | `verification/tla/ubcc_protocol_core.tla:123-424` | E2 |
 | transport fault 模型 | `verification/tla/ubcc_transport_faults.tla` | E2 |
 | Invalidate barrier 静态核查 | `verification/wave1/fv8_invalidate_barrier_report.md` | E1/E2 |
+| 外部目标 3 主报告 | `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md` | external research |
+| 外部来源矩阵 | `docs/research/ha_coherence_source_matrix_20260806.tsv` | external source ledger |
+| HA/OurCC DAG 账本 | `docs/research/ha_ourcc_operation_dags_20260806.md` | E0/E1 conditional model |
+| ARM/RISC-V litmus 规格 | `docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md` | specification, unrun |
 
 行号随代码演进可能漂移，最终交付前应由脚本重新生成 symbol-based evidence manifest。
 
@@ -1182,7 +1250,7 @@ authority forward；或从甲方确认其 direct response 实际只是 data-only
 
 | 名词 | 中文解释与关键概念 | 与目标 3 的关系 | 代码/文档位置 |
 |---|---|---|---|
-| Root Operation | workload 中一次 load、completed store 或约定 batch | 正式统计样本单位 | `ha_comparison_request_chains...md` |
+| Root Operation | workload 中一次 load、completed store 或约定 batch | 正式统计样本单位 | `docs/delivery/ha_comparison_request_chains_20260731_zh.md` |
 | Root Issue/Complete | root operation 的开始/完成事件 | 正式计时边界 | 同上 `:21-31` |
 | Requester-visible Completion | requester 安全获得数据/权限的时刻 | 推荐目标 3 主终点 | 本文 2.3.1 |
 | Home/Global Commit | metadata 正式提交的时刻 | 附报完成点 | 本文 2.3.2 |
@@ -1203,7 +1271,7 @@ authority forward；或从甲方确认其 direct response 实际只是 data-only
 | CV | Coefficient of Variation，变异系数 | 判断多轮结果稳定性 | 本文 9.6 |
 | Guest-visible / Target-visible | 目标系统可见计时器测得的完成时间 | 跨实现正式比较数据 | delivery 性能文档 |
 | Outer Diagnostic | OurCC outer protocol 内部计时 | 只能拆链，不能替代 root latency | `summarize_2n1s_protocol.py` |
-| PDES | Parallel Discrete Event Simulation，并行离散事件仿真 | 影响 wall-clock/仿真对齐，不是硬件协议时延 | `tc98_optimization_analysis.md` |
+| PDES | Parallel Discrete Event Simulation，并行离散事件仿真 | 影响 wall-clock/仿真对齐，不是硬件协议时延 | `docs/measure/tc98_optimization_analysis.md` |
 
 ### 14.4 写策略、可靠性和内存序
 

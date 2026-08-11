@@ -1,6 +1,6 @@
 # CC-EP 跨节点 Cache Coherence 协议：体系结构与方案对比
 
-版本 1.0 — 2026-07-16
+版本 1.1 — 2026-08-07（同步当前实现与 HA 外部研究）
 
 ---
 
@@ -84,8 +84,14 @@ Node-A CPU read miss
   → 若远程有脏副本: A.UBCC → RemoteNode.EPBackend (recall)
     → RemoteNode.EP-RNF → RemoteNode.HN-F → snoop local caches → read data
     → RemoteNode.EPBackend → A.UBCC (RecallResp + data)
-  → A.UBCC grant → A.UBIO → A.EP-SNF → A.HN-F → A.CPU (ReadResp)
+  → A.UBCC grant → A.UBIO → A.EPBackend 接受 Grant
+  → A.EPBackend → A.UBCC ClearReq
+  → A.UBCC commit/retire/release → A.EPBackend ClearResp accepted
+  → A.EP-SNF → A.HN-F → A.CPU (final CompData/ReadResp)
 ```
+
+当前 Clear 不是 HN/L2 明确 install Ack；它确认 requester 协议代理已接受 Grant，并触发
+Home commit。当前 root path 在 ClearResp accepted 后才向 HN/L2 返回最终数据。
 
 ### 3.2 跨节点写升级（CleanUnique → OuterUpgradeReq）
 
@@ -116,24 +122,43 @@ RemoteNode write → UBCC RECALL to Node-A (当前 owner)
 
 ## 4. 方案对比（UBCC vs HA）
 
+> 本节只描述架构设计空间。`HA-A/B/C` 是内部分类，不是甲方实现事实；公开厂商协议也仅
+> 用于说明合法机制，不得直接映射为甲方 HA。
+
 ### 4.1 HA 方案分类
 
 | 方案 | 目录位置 | 跨节点 snoop | 与 UBCC 的核心差异 |
 |------|------|------|------|
 | **HA-A** | 每节点 HN-F 自管，无全局目录 | fanout 到所有远程节点（8 节点=7 个 fanout） | UBCC 有全局目录精确 fanout，减少不必要消息 |
 | **HA-B** | 集中 home node 的 HN-F | 多一跳（请求→集中 home→fanout） | UBCC 免集中跳 |
-| **HA-C** | 分布式目录（PA hash→home HN-F） | 与 UBCC 同构（1 跳） | UBCC 目录外置于 ubio 进程，不占 HN-F TBE/SRAM |
+| **HA-C** | 分布式目录（PA hash→home HN-F） | 逻辑角色可与 UBCC 类似，物理 traversal 依 placement | UBCC 目录外置，不占 HN-F TBE；时延仍需比较 P/queue |
 
 ### 4.2 时延对比
 
-跨节点关键路径 = 4 个单跳串行（req→home, home→owner recall, owner→home resp, home→req grant）。
-UBCC 与 HA-C 的跨节点跳数完全相同（都是 1 跳），本地目录查找 UBCC（ubio 进程内）与 HA-C（HN-F 内）
-也都是本地操作。因此**时延无显著差异**。
+Remote-owner central-return 的逻辑关键链可写为
+`requester->home->owner->home->requester`，即 `K_logical=4`。但合同只有 2 节点，三个
+逻辑角色至少两个共址，因此通常不是四次物理跨节点 traversal。还必须分别计算
+`K_crossnode` 和 `P_dir/P_peer/P_data/P_install/P_commit/P_queue`。
+
+合法 HA 还可能采用：
+
+- Home-memory latest 的 K=2 fast path；
+- direct-data-only，数据旁路但 authority 仍经 Home；
+- direct-data+authority，满足 token/version/completion 条件时 visible K 可为 3。
+
+因此不能无条件声称 UBCC 与 HA-C “跳数完全相同”或“时延无显著差异”。当前目标 3 为
+`UNPROVEN（存在实质性 RISK）`。
 
 UBCC 的优势在于：
-1. **SRAM 效率**：Bloom Filter + ResidentDir 分层追踪，等效覆盖面 > 纯全量 Dir（指标 1）
+1. **SRAM 效率潜力**：Bloom Filter + ResidentDir + backstore 分层追踪；历史结果达到目标 1，
+   但当前冻结代码复跑和 E5 provenance 尚未闭环。
 2. **TBE 隔离**：目录不在 HN-F 内，不占用 CPU 请求的 TBE 资源（指标 3 论据2）
-3. **已有通信优化**：C4 Direct-Forward（recall 数据直发）、Batch-RS（多 reader 一次 grant）
+3. **已有通信优化**：C4 Direct-Forward 可优化 3+ 节点 data route，但不携带完整 Grant
+   authority，且两节点三角色路径不可达；Batch-RS 只用于适用 workload 的通信削减。
+
+这些优势必须映射到共同 `T_visible/T_commit/T_next/T_root_current` 和 `K/P/w` 后，才能进入
+合同严格 `<` 的比较。详细外部研究见
+`docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`。
 
 ---
 

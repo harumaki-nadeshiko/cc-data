@@ -800,7 +800,7 @@ while (!allPortsDone) {
 | 参数 | 默认值 | 含义 |
 |---|---|---|
 | `MAX_PENDING_PER_PA` | 32 | 每 PA 最大排队请求者 |
-| `_tombstoneWindowW` | 100,000 ticks | 墓碑窗口 |
+| `_tombstoneWindowW` | 10,000,000 ticks | Batch-RS Grant 到 requester Clear 的 transient 去重窗口 |
 | `_recallTimeout` | 1,000,000 ticks | Recall orphan 清理超时 |
 | `_epochBits` | 64 | Epoch 宽度 |
 | ResidentDir capacity | 57,344 条目 | 8192 sets × 7 ways |

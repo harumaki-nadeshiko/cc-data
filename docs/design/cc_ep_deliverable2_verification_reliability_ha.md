@@ -1,6 +1,6 @@
 # CC-EP 交付件 2：形式化验证、可靠性模型、HA 时延对比
 
-版本 1.1 — 2026-08-03（同步当前实现）
+版本 1.3 — 2026-08-10（增加 ArmO3CPU refinement proof 与 executable evidence）
 
 ---
 
@@ -12,17 +12,31 @@
 
 | 模型 | 覆盖范围 | Safety | Liveness |
 |------|------|:---:|:---:|
-| `ubcc_protocol_core.tla` | UBCC 目录核心：request/grant/clear/recall/invalidate 全状态机 | ✅ PASS | ✅ PASS |
+| `ubcc_protocol_core.tla` | UBCC 目录核心抽象：request/grant/clear/recall/invalidate 关键状态转移 | ✅ PASS | ✅ PASS |
 | `ubcc_transport_faults.tla` | 消息层故障：drop/dup/reorder 枚举 | ✅ PASS | — |
 | `ep_intra_node_*.tla` | EP-RNF single-flight、cleanunique 路径 | ✅ PASS | ✅ PASS |
 | `ubcc_multi_pa.tla` / `ubcc_multi_socket.tla` | 跨 PA 隔离和跨 socket 路由 | ✅ PASS | — |
 | `ubcc_tc224_waiter_retirement.tla` | TC224 Clear commit 精确退役 stale Read waiter | ✅ PASS：274,593 states | — |
 | `ep_rnf_snoop_arbitration.tla` | 当前 EP-RNF STALE/IMMED 3×3 仲裁 | ✅ PASS：328 states | — |
+| `ubcc_tc157_partial_ack_redrive.tla` | partial Ack、pending-only redrive、stable tuple audit | ✅ PASS：171 distinct | ✅ PASS：171 distinct |
+| `ubcc_tc159_upgrade_replay.tla` | Notify-drop replay 控制流；标签级 exact/mismatch 抽象 | ✅ PASS：99 distinct | 条件 PASS：41 distinct |
+| `ubcc_tc159_tuple_guards.tla` | Notify/Done 逐字段 guard，含 early Done cache/commit | ✅ PASS：896 distinct | — |
+| `ubcc_retry_exhaustion.tla` | proposed EXHAUSTED terminal contract 自洽性 | ✅ PASS：recover/permanent | ✅ PASS |
+| `ep_o3_completion_backpressure.tla` | O3 两 line pending、ReadUnique strict completion、no-data、可靠 output/backpressure | ✅ PASS：4,564 distinct | ✅ PASS：4,564 distinct |
 
 **当前 fidelity 边界**（详见 `verification/fv_coverage_fidelity.md`）：
 - TC224 focused 模型覆盖 exact waiter retirement，不包含真实 ResidentDir/H64 容量与时序；后者由 focused host regression 和 full-scale TC224 E2E 覆盖。
 - EP-RNF focused 模型覆盖仲裁决策，不包含 CHI payload、TBE 和完整 HN-F 状态机。
 - RECALL orphan 模型使用抽象 `RecallTimeout=2`；生产实现使用实际 tick 参数。模型证明机制形状，不证明 timeout 数值调优。
+- TC159 replay liveness 只覆盖 `UpgradeAckNotify` Drop，并依赖 Home ready 后保留 replay budget；不覆盖 UpgradeReq/UpgradeResp Drop。
+- tuple-guard strengthened PASS 是拟议严格 guard 的可行性；当前 C++ 的 mismatched Notify/Done 和 early Done 路径已有 expected counterexample。
+- retry-exhaustion PASS 证明 proposed terminal state machine 自洽，不表示当前 C++ 已实现 `EXPECTED_RETRY_EXHAUSTION`。
+- O3 focused PASS 只覆盖 CPU/Ruby/EP refinement boundary 的两 line、两 beat bounded model；不包含 ArmO3 pipeline、完整 Ruby TBE/CHI 或 ARM ISA memory model。
+
+本轮 focused 结果、原始日志、hash 和模型边界见
+`verification/formal_reliability_results_20260807_zh.md` 与
+`verification/results/formal_run_manifest_20260807.tsv`；O3 addendum 见
+`verification/formal_reliability_o3_addendum_20260810_zh.md`。
 
 ### 1.2 Fidelity 映射（C++↔TLA+）
 
@@ -34,6 +48,9 @@
 | `RetireCommittedWaiter` | `retireCommittedResidentWaiters` | `UBCCController.cc:663-695` | 精确匹配 Read `(PA,node,socket,reqId)`；legacy reqId=0 再匹配 base epoch；保留非匹配和非 Read waiter |
 | `ReplayAfterErase` | `replayResidentWaiters` | `UBCCController.cc:1052-1292` | 同步 Clear 可删除 queue；replay 在后续访问前重新查找 iterator |
 | `SnoopArbitrate` | `recvSnoopMsg` | `EPRNFController.cc:382-489` | active recall 优先；ReadShared+SnpOnce immediate data；冲突写类 immediate STALE |
+| `ReceiveData` / `ReceiveCompUC` | EPRNF ReadUnique completion bookkeeping | `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.cc` | Data 和 `Comp_UC` 可任意顺序；no-data completion 显式结束 data phase |
+| `SendCompAck` / `CompleteCallback` | pending response retry 与 callback gate | `gem5/src/mem/ruby/protocol/chi/ep/EPRNFController.cc` | `CompAck` 实际注入 output 后才 callback；反压时保留 pending state |
+| `SendGrantBeat` | EP-SNF/MetaRNF reliable data output | `gem5/src/mem/ruby/protocol/chi/ep/` | output 满时保留 beat 并重试，不提前推进 transaction |
 
 ---
 
@@ -80,29 +97,90 @@ TC224 8,192/65,536 full-scale PASS 补充，不能把 focused 模型扩大表述
 
 ### 2.4 甲方 HA 可靠性假设边界
 
-甲方已知 HA 工作域是 2 节点、VI、网络不考虑丢包，乱序主要来自处理器 OoO。
+甲方已知 HA 工作域是 2 节点、VI、网络不考虑丢包，但网络不保证 FIFO；不同地址还可因
+处理器 OoO/弱内存序乱序完成。网络 non-FIFO 与 CPU OoO 可分层抽象，但二者在
+CPU/Ruby/EP refinement boundary 必须联合验证 completion、并发和 output backpressure。
 这与 CC-EP 的 transport drop/dup/reorder 鲁棒性模型不是同一个比较域：
 
 - CC transport fault 模型是我方扩展能力，不用于论证甲方 HA 在合同工作域内更差；
 - HA 理论分析默认 lossless transport，不能加入虚构的丢包重试成本；
-- CPU OoO 需要按 acquire/release、barrier 和可观察内存序分析，不能等同于网络消息任意乱序；
-- 当前 TLA+ 套件尚未建立完整 ARM memory-model/OoO litmus 模型，这是交付件 2 的明确后续项。
+- 网络 non-FIFO 需要 stable transaction identity、same-line serialization 和 stale/duplicate handling；
+- CPU OoO 需要按 acquire/release、barrier 和可观察内存序分析，不能等同于网络消息重排；
+- `ep_o3_completion_backpressure.tla` 已对两 line pending、Data/`Comp_UC` 任意顺序、strict callback 和 temporary backpressure 做 bounded proof；
+- ArmO3CPU、Sequencer outstanding=16 的原有 146 TC 为 146/146 PASS，TC300-303 为 4/4 PASS；
+- 当前仍未建立完整 ARM memory-model/OoO litmus 形式模型，不能把 focused proof 或 E2E outcome 表述为完整 ISA proof。
 
 ---
 
 ## 3. HA 时延对比
 
-### 3.1 指标 3（修订定义）
+### 3.1 合同指标 3
 
-> **指标 3（修订）**：CC-EP 的跨节点 CC 同步时延 **≤ HA-C 理论最小时延**（等跳数、无协议退化），且在两个结构性维度上严格更优：(i) 本地 TBE/SRAM 干扰更低，(ii) 已实现的通信削减优化（C4 Direct-Forward / Batch-RS）。
+> **原始门槛：** OurCC 跨节点 CC 同步平均时延 `<` 甲方 HA 实现的理论平均时延。
 
-### 3.2 三个论据
+`<= + 结构性优势` 只能作为双方书面合同变更，不能由本交付件自行替换严格 `<`。
 
-| 论据 | 内容 | 支撑 |
+### 3.2 外部研究后的当前判定
+
+**当前结论：`UNPROVEN（存在实质性 RISK）`。**
+
+外部规范和论文支持以下边界：
+
+- directory/Home 必须提供 per-line serialization authority；
+- direct data 不自动等于 direct permission/authority；
+- 无显式 Ack 仍需要可验证的 completion/ordering；
+- 2-bit presence 不能单独表达 dirty/latest owner 和 transient；
+- Arm/RISC-V ISA completion 不能由内部 fabric response 自动替代。
+
+这些资料不能确定甲方私有 write policy、authority、commit、placement、service 或 workload
+weights。合法 direct-data+authority HA 分支可具有 K=3 的 visible path，对 OurCC 构成
+`RISK/FAIL` 条件分支；central-return 分支常同 K=4，同 K 仍必须证明 `P_OurCC<P_HA`。
+
+### 3.3 统一比较模型
+
+必须分别报告：
+
+- `T_visible`：latest data + authority + agreed requester install。
+- `T_commit`：HA/Home metadata 原子 commit。
+- `T_next`：下一同址冲突可安全开始。
+- `T_root_current`：OurCC current 等到 ClearResp accepted 的 root completion。
+
+```text
+T_s(o,x) = K_logical_s(o,x) * tau + P_s(o,x)
+T_s(o,x) = K_crossnode_s(o,x) * tau + P'_s(o,x)
+P = P_dir + P_peer + P_data + P_install + P_commit + P_queue
+```
+
+OurCC 严格快于 HA 当且仅当：
+
+```text
+(K_HA - K_OurCC) * tau > P_OurCC - P_HA
+```
+
+同 K 只能证明同阶，不能满足原始严格 `<`。
+
+### 3.4 结构性优势的正确用途
+
+| 优势 | 可以支持 | 不能替代 |
 |------|------|------|
-| **论据 1（等时延）** | 跨节点关键路径 = 4 个单跳（req→home, home→owner recall, owner→home resp, home→req grant），CC-EP 与 HA-C 逐跳相等。本地部分 UBCC 目录查找与 HN-F 同级（无额外 IPC） | `tc98_optimization_analysis.md:143-179` |
-| **论据 2（TBE 隔离）** | HA-C 目录寄生 HN-F，与 CPU 请求争用同一 TBE 池；UBCC 独立进程，零占用 HN-F TBE | 混合负载实验设计见 `cc_ep_deliverables_plan.md` §7.5 |
-| **论据 3（通信削减）** | C4 Direct-Forward 省 owner→home→requester 单跳；Batch-RS 对 read contention 场景 10-18x 减少 recall 次数 | `tc98_optimization_analysis.md:302` |
+| UBCC 不占 HN-F TBE | 独立资源/干扰 qualification | 严格时延 `<` |
+| 显式 epoch/reqId/Clear/tombstone | 可审计 safety/replay | HA 必然更慢 |
+| C4 direct data | 3+ 节点 data-route 优化 | 2 节点完整 authority 优势 |
+| Batch-RS | 指定 workload 的通信削减 | 所有 HA 分支的理论平均 |
+| fault robustness | 独立 reliability qualification | lossless HA baseline 的重试成本 |
+
+### 3.5 外部研究附件和关闭路径
+
+- 主报告：`docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- 一页结论：`docs/research/target3_onepage_summary_20260806_zh.md`
+- 甲方 15 题：`docs/research/customer_ha_questions_20260806_zh.md`
+- 来源矩阵：`docs/research/ha_coherence_source_matrix_20260806.tsv`
+- DAG：`docs/research/ha_ourcc_operation_dags_20260806.md`
+- Litmus：`docs/research/arm_riscv_coherence_litmus_plan_20260806_zh.md`
+
+Q1-Q5 未关闭时整体保持 `UNPROVEN`。最终 strict PASS 需要共同 root counter、冻结 weights/
+placement/profile、paired multi-run，并要求 `delta=T_mean_HA-T_mean_OurCC` 的预注册 95%
+单侧置信下界严格大于 0。
 
 ---
 
