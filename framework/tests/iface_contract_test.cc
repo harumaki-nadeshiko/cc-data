@@ -217,6 +217,18 @@ int main()
         return 1;
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
+    Check(EmitSync(gem5, 0), "emit initial tick-zero sync");
+    ReceiveStatus status = ReceiveStatus::Empty;
+    const Message* tickZeroSync = WaitReceive(ubio, 10, status);
+    Check(tickZeroSync && status == ReceiveStatus::Message &&
+              GetMessageType(tickZeroSync) == MessageType::ControlSync &&
+              GetMessageTimestamp(tickZeroSync) == 10,
+          "tick-zero sync is delivered once");
+    Check(EmitSync(gem5, 0), "duplicate tick-zero EmitSync is throttled");
+    tickZeroSync = WaitReceive(ubio, 1000, status);
+    Check(tickZeroSync == nullptr && status == ReceiveStatus::Empty,
+          "tick-zero EmitSync emits no duplicate");
+
     Message* source = AllocateSendMessage(gem5, 100);
     Message* destination = AllocateSendMessage(gem5, 900);
     Check(source && destination, "allocate opaque messages");
@@ -254,7 +266,6 @@ int main()
 
     // source timestamp is 110, so it must remain pending at 109.
     Check(SendMessage(gem5, source), "send consumes source");
-    ReceiveStatus status = ReceiveStatus::Empty;
     const Message* borrowed = WaitReceive(ubio, 109, status);
     Check(borrowed == nullptr && status == ReceiveStatus::PendingFuture,
            "future receive status");

@@ -129,6 +129,7 @@ struct Port {
     std::uint64_t syncInterval = 2500;
     std::uint64_t linkLatency = 2500;
     std::uint64_t lastSyncTimestamp = 0;
+    bool hasEmittedSync = false;
     std::uint64_t lastReceiveTimestamp = 0;
     bool open = false;
     bool pending = false;
@@ -404,7 +405,7 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
                     std::numeric_limits<std::uint64_t>::max() - port->linkLatency,
                 "framework", "sync timestamp {} plus latency {} overflows",
                 currentTimestamp, port->linkLatency);
-    if (port->lastSyncTimestamp > 0) {
+    if (port->hasEmittedSync) {
         LogAssertIf(currentTimestamp >= port->lastSyncTimestamp, "framework",
                     "sync timestamp {} precedes last sync timestamp {}",
                     currentTimestamp, port->lastSyncTimestamp);
@@ -418,6 +419,7 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
     if (!SendWire(port, sync, zmq::send_flags::none))
         return false;
     port->lastSyncTimestamp = currentTimestamp;
+    port->hasEmittedSync = true;
     return true;
 }
 
@@ -425,7 +427,7 @@ std::uint64_t SafeTimestamp(const Port* port, std::uint64_t currentTimestamp)
 {
     LogAssertIf(port != nullptr, "framework", "Port must not be null");
     const std::uint64_t received = ReceiveTimestampInternal(port);
-    const std::uint64_t base = port->lastSyncTimestamp > 0
+    const std::uint64_t base = port->hasEmittedSync
                                    ? port->lastSyncTimestamp
                                    : currentTimestamp;
     const std::uint64_t bound = base >
