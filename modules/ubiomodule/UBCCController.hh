@@ -871,8 +871,8 @@ public:
     void finishH64BloomRebuild(bool ok);
     Tick _lastStateLogTick = 0;
 
-    // ---- v4: Tombstone window (configurable, default 100000 ticks) ----
-    Tick _tombstoneWindowW = 100000;
+    // ---- v4: Tombstone window (configurable, default 10000000 ticks) ----
+    Tick _tombstoneWindowW = 10000000;
 
     // ---- v4: Recall orphan timeout (configurable) ----
     // Split-process 2S recall round trips can legitimately approach 10M
