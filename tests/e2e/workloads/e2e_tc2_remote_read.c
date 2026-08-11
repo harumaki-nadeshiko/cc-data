@@ -15,9 +15,10 @@ int main(int argc, char **argv)
 
     if (primary) emit_e2e_meta(node_id, "TC2");
     if (node_id > 1) { if (primary) emit_phase_done(node_id, "idle"); _exit_program(0); return 0; }
+    if (!primary) { _exit_program(0); return 0; }
     int fail = 0;
 
-    if (node_id == 0 && primary) {
+    if (node_id == 0) {
         uint32_t val = 0x11223344;
         emit_before_wr(node_id, 1, val);
         dsm_store(1, 0, val);
@@ -28,7 +29,7 @@ int main(int argc, char **argv)
 
     sync_wait(0b011, 1);
 
-    if (node_id == 1 && primary) {
+    if (node_id == 1) {
         uint32_t expected = 0x11223344;
         emit_before_rd(node_id, 1);
         uint32_t got = dsm_load(1, 0);
@@ -38,7 +39,7 @@ int main(int argc, char **argv)
     }
 
     sync_wait(0b011, 1);
-    if (primary) emit_phase_done(node_id, fail ? "fail" : "done");
+    emit_phase_done(node_id, fail ? "fail" : "done");
     _exit_program(fail ? 1 : 0);
     return 0;
 }

@@ -73,12 +73,16 @@ run_batch() {
         return
     fi
     printf '=== %s: %s ===\n' "$name" "${tcs[*]}" | tee "$LOG_DIR/${name}.log"
-    TIMEOUT_SEC="${FULL_REGRESSION_TIMEOUT_SEC:-900}" \
-        TIMEOUT_SEC_TC98="${FULL_REGRESSION_TIMEOUT_SEC_TC98:-1800}" \
-        TIMEOUT_SEC_TC128="${FULL_REGRESSION_TIMEOUT_SEC_TC128:-1800}" \
-        bash "$RUNNER" "$topo" "${tcs[@]}" 2>&1 | tee -a "$LOG_DIR/${name}.log"
+    if ! TIMEOUT_SEC="${FULL_REGRESSION_TIMEOUT_SEC:-900}" \
+         TIMEOUT_SEC_TC98="${FULL_REGRESSION_TIMEOUT_SEC_TC98:-1800}" \
+         TIMEOUT_SEC_TC128="${FULL_REGRESSION_TIMEOUT_SEC_TC128:-1800}" \
+         bash "$RUNNER" "$topo" "${tcs[@]}" 2>&1 | \
+         tee -a "$LOG_DIR/${name}.log"; then
+        BATCH_FAILURES+=("$name")
+    fi
 }
 
+BATCH_FAILURES=()
 printf 'Started: %s\n' "$(date --iso-8601=seconds)" | tee "$LOG_DIR/summary.log"
 printf 'TCs: %s\n' "${ALL_TCS[*]}" | tee -a "$LOG_DIR/summary.log"
 
@@ -89,3 +93,7 @@ run_batch "8n1s" "--8n1s" "${EIGHT_NODE_ONE_SOCKET[@]}"
 run_batch "8n2s" "--8n2s" "${EIGHT_NODE_TWO_SOCKET[@]}"
 
 printf 'Finished: %s\n' "$(date --iso-8601=seconds)" | tee -a "$LOG_DIR/summary.log"
+if [ "${#BATCH_FAILURES[@]}" -ne 0 ]; then
+    printf 'Failed batches: %s\n' "${BATCH_FAILURES[*]}" | tee -a "$LOG_DIR/summary.log"
+    exit 1
+fi
