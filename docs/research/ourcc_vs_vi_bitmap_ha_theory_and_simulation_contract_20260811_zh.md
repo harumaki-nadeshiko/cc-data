@@ -1,7 +1,8 @@
 # OurCC 与 VI+Sharer-Bitmap HA 理论对比及仿真合同
 
 **日期：** 2026-08-11  
-**状态：** 理论模型冻结稿；2026-08-12 补充 Scheme B 严格 break-even；仿真结果尚未填写
+**状态：** 理论模型冻结稿；2026-08-13 修正 Scheme A/B、Tag 和 metadata locality；仿真结果尚未填写
+**目标 3 当前合同状态：** `UNPROVEN`；仅明确标注的 sensitivity 参数点为 PASS
 **目标：** 在不计传输故障、不计瞬态 TxnToken 面积、暂不考虑 direct transfer 的条件下，比较 OurCC 与甲方 HA 的 requester-visible、Home release 和目录扩展性能。
 
 ---
@@ -20,9 +21,8 @@
 
 > **K6：甲方“每次写都触发 invalidation/HA transaction”使其无法复用本地写权限。OurCC 的 E/M repeated write 是最稳定的理论优势。**
 
-> **K7：目标 3 的指定比较对象是 `MESI + metadata offload + lossless one-way Clear` 对
-> `VI + limited address space + write-back + write-invalidate HA`。地址空间对齐时采用 Scheme B，
-> 不是 current sync ClearResp，也不是各自缩小 coherent range 的 Scheme A。**
+> **K7：目标 3 必须分别评审 Scheme A 和 Scheme B。Scheme A 缩小双方共同地址空间并同步压缩
+> OurCC Tag；Scheme B 保留 128 MiB、每行固定 2-bit coarse state，broadcast 是正常协议路径。**
 
 ---
 
@@ -43,12 +43,19 @@
 
 ### 1.2 甲方 HA 模型
 
-持久 metadata 最小口径：
+持久 metadata 分为两个 ScaleScheme：
 
 ```text
-remote sharer bitmap = N - 1 bits
-local VI state       = 1 bit
-total                = N bits / represented Cacheline
+Scheme A:
+    remote sharer bitmap = N - 1 bits
+    local VI state       = 1 bit
+    total                = N bits / represented Cacheline
+    coherent range       = 256/N MiB
+
+Scheme B:
+    coarse metadata      = 2 bits / represented Cacheline
+    coherent range       = 128 MiB for N=2/4/8
+    every in-scope coherence transaction = broadcast/probe for N=2/4/8
 ```
 
 行为：
@@ -268,16 +275,20 @@ checkpoint/restore 不进入本阶段主模型。
 ### 4.1 必需不变量
 
 ```text
-holder count = 0:
-    Home data latest
+Scheme A exact N-bit metadata:
+    holder count = 0:
+        Home data latest
+    holder count > 1:
+        all holders clean
+        Home data latest
+    unique-write ownership:
+        exact bitmap only retains requester
+        requester may hold latest dirty data
 
-holder count > 1:
-    all holders clean
-    Home data latest
-
-unique-write ownership:
-    bitmap only retains requester
-    requester may hold latest dirty data
+Scheme B coarse 2-bit metadata:
+    persistent state does not identify an exact holder set for N>2
+    read uses broadcast probe to locate any potential latest data
+    write uses broadcast invalidation and waits required completion
 ```
 
 由于没有 dirty bit，`one holder` 既可能来自 clean singleton read，也可能来自 unique write。若没有其他状态，HA 必须保守地把 sole holder 当作 potential latest owner，并在其他 requester read 时联系它。
@@ -294,19 +305,33 @@ unique-write ownership:
 
 ### 4.2 Write 路径
 
-每次 write：
+Scheme A 每次 write：
 
 ```text
 Requester -> HA: AcquireUnique
 HA locks line
-HA invalidates all bitmap holders except requester
+HA invalidates all exact bitmap holders except requester
 HA waits all required InvAck
 HA -> Requester: permission Resp
 Requester -> HA: receipt Ack
 HA releases lock
 ```
 
-即使 requester 已是唯一 holder，题设仍要求每次 write 经过 HA transaction；此时 target mask 可为空，但 requester-Home round trip 仍存在。
+Scheme B 每次 write：
+
+```text
+Requester -> HA: AcquireUnique
+HA locks line
+HA broadcasts invalidation/probe to all possible remote nodes
+HA waits all required completion
+HA -> Requester: permission Resp
+Requester -> HA: receipt Ack
+HA releases lock
+```
+
+即使 requester 已是唯一实际 holder，题设仍要求每次 write 经过 HA transaction。Scheme A 的 exact
+bitmap允许 target mask为空，但 requester-Home round trip仍存在；Scheme B 始终执行 normal
+broadcast/invalidation transaction。
 
 ---
 
@@ -332,10 +357,68 @@ HA releases lock
 P_read     = 896 - 2*410 = 76 ns
 P_inv      = 890 - 2*410 = 70 ns
 P_handoff ~= 88 ns
-P_offload_avg = (49 + 90)/2 = 69.5 ns
 ```
 
-### 5.1 Address-sliced Home
+`49 ns` 和 `90 ns` 是历史报告中的 MetaRNF L3 warm / DRAM cold 路径值；仓库未归档对应 raw
+samples。旧版 `69.5 ns=(49+90)/2` 只是 50/50 warm-cold 假设，不是测得的平均值，本版不再把它
+作为固定合同参数。
+
+对 micro-scenario `j`，使用：
+
+```text
+q_on,j = 实际触发 MetaRNF demand onload 的概率
+h_j    = 已触发 onload 时的 HN-F L3 hit probability
+Q_j    = MetaRNF/L3/DRAM queueing 项
+
+L_on,j = 49*h_j + 90*(1-h_j) + Q_j
+P_meta,j = q_on,j * L_on,j + Wcrit_j
+```
+
+`Wcrit_j` 是 demand-visible metadata victim writeback项。历史报告把 writeback描述为 fire-and-forget，
+所以 sensitivity 表取 `Wcrit_j=0`；正式评审必须验证该写回确实不阻塞 requester-visible path，并把其
+queue interference计入 `Q_j`，否则需填入非零 `Wcrit_j`。
+
+三个可直接展示的数值边界为：
+
+| metadata path | `q_on` | `h` | demand penalty |
+|---|---:|---:|---:|
+| ResidentDir hit / Bloom authoritative negative | 0 | N/A | 0 ns |
+| forced warm onload | 1 | 1 | 49 ns + `Q` |
+| forced cold onload | 1 | 0 | 90 ns + `Q` |
+
+地址空间缩小和 Tag 缩短会提高 ResidentDir coverage，并通常缩小 metadata working set、提高 `h`；
+但 `q_on` 和 `h` 仍取决于具体 working set、reuse distance、set conflict 和 Bloom 结果，不能只由容量比
+直接推出。
+
+### 5.1 HN-F L3 对 metadata working set 的容量缓解
+
+历史报告中的 HN-F L3 为 256 KiB；H64 backstore 每个 64B bucket含 5 个 12B slots。因此在忽略
+冲突和其他数据占用的理想上限下：
+
+```text
+L3 metadata buckets = 256 KiB / 64 B = 4096
+L3 metadata entries = 4096 * 5 = 20,480
+```
+
+若整个 coherent range都形成活跃 metadata，L3 的静态覆盖比例为：
+
+| Scheme | N=2 | N=4 | N=8 |
+|---|---:|---:|---:|
+| A：128/64/32 MiB | 0.98% | 1.95% | 3.91% |
+| B：固定 128 MiB | 0.98% | 0.98% | 0.98% |
+
+该表只说明 Scheme A 缩小地址空间后，给定 L3 可以覆盖更大的 metadata 地址比例；它仍不是 `h_L3`
+实测值。更准确的场景模型是：
+
+```text
+h_j ~= P(metadata reuse distance < effective L3 metadata capacity | onload)
+```
+
+对于 repeat-one-bucket 或 metadata working set低于 256 KiB 的场景，warm-up 后 `h_j` 可接近 1；
+对于 streaming 或 working set远大于 256 KiB 的场景，`h_j` 可接近 0。正式评审应输出 MetaRNF/HN-F
+hit/miss counter和 working-set-size 曲线。
+
+### 5.2 Address-sliced Home
 
 ```text
 q_N = P(Home != Requester) = 1 - 1/N
@@ -370,274 +453,268 @@ K1(N) = 4 - 4/N
 
 ---
 
-## 6. ScaleScheme A：压缩 represented address space
+## 6. ScaleScheme A：缩小共同地址空间，增加每行位宽
 
-### 6.1 目标地址空间
+### 6.1 定义
 
-本阶段每 Home 原始目标空间：
-
-```text
-M_target(N) = 128 MiB / (N/2) = 256/N MiB
-```
-
-| N | 每 Home 目标空间 |
-|---:|---:|
-| 2 | 128 MiB |
-| 4 | 64 MiB |
-| 8 | 32 MiB |
-
-### 6.2 固定面积容量模型
-
-OurCC resident directory 使用带 tag/replacement 的 set-associative 容量模型。设：
-
-- SRAM `A` bits；
-- associativity `W`；
-- sets `S=2^s`；
-- line size 64 B；
-- compressed tag `t ~= ceil(log2 W)`；
-- fixed per-entry metadata `f(N)`；
-- PLRU `p(W)=2^ceil(log2 W)-1`。
-
-约束：
+Scheme A 在固定 512 KiB HA SRAM 下，把共同 coherent address space 缩小，使每个 cacheline 可以保留
+完整 `N bit` 节点状态：
 
 ```text
-A_used = S * [ W*(f(N)+t) + p(W) ] <= A
-capacity = W*S
-represented bytes = capacity*64
+HA bits/line = local VI 1 bit + remote presence (N-1) bits = N bits
+M_A(N) = (512 KiB * 8 / N) * 64 B = 256/N MiB
 ```
 
-甲方 HA 与该模型不同。冻结方案是已知 base/range 的 flat packed bitmap，不保存 per-line tag、valid
-或 replacement metadata，因此其 exact capacity 直接为：
-
-```text
-capacity_HA = floor((512 KiB * 8) / N) lines
-represented_HA = capacity_HA * 64 B
-```
-
-OurCC current stable Epoch：
-
-```text
-f_Our_E(N) = valid1 + MESI2 + dirty1 + ctrl3 + sharersN + epoch24
-           = N + 31
-```
-
-OurCC no-stable-Epoch：
-
-```text
-f_Our_N(N) = N + 7
-```
-
-对 HA 使用完整 512 KiB；OurCC 保留 Bloom/group-index 后 exact directory 预算约 448 KiB。这是当前结构口径，不是说 HA 的 transient table 免费，只是本阶段明确不计。
-
-### 6.3 理论 exact capacity
-
-| N | HA N-bit | OurCC EPOCH | OurCC NO_STABLE_EPOCH |
+| N | 共同地址空间 | cachelines | HA bits/line |
 |---:|---:|---:|---:|
-| 2 | 2,097,152 lines / 128 MiB | 98,304 / 6 MiB | 262,144 / 16 MiB |
-| 4 | 1,048,576 lines / 64 MiB | 90,112 / 5.5 MiB | 262,144 / 16 MiB |
-| 8 | 524,288 lines / 32 MiB | 81,920 / 5 MiB | 196,608 / 12 MiB |
+| 2 | 128 MiB | 2,097,152 | 2 |
+| 4 | 64 MiB | 1,048,576 | 4 |
+| 8 | 32 MiB | 524,288 | 8 |
 
-相对目标空间：
+OurCC 必须暴露同一个缩小后的地址空间，并同步减少 tag width，不能继续按默认 40-bit PA 计算。
 
-| N | HA exact coverage | Our EPOCH resident coverage | Our NO_EPOCH resident coverage |
-|---:|---:|---:|---:|
-| 2 | 100.0% | 4.69% | 12.5% |
-| 4 | 100.0% | 8.59% | 25.0% |
-| 8 | 100.0% | 15.63% | 37.5% |
+### 6.2 OurCC Tag 和容量模型
 
-Scheme A 严格含义是各方案只暴露自身 resident exact capacity。由于目标 3 要求双方 coherent address
-space 对齐，正式比较使用 Scheme B；HA 的 512 KiB flat bitmap 已完整覆盖 `128/64/32 MiB` 目标范围，
-OurCC 超出 resident exact capacity 的地址走 metadata offload。
-
-### 6.4 Exact requester-visible latency
-
-每格为：
+共同地址空间的 cacheline-address bits：
 
 ```text
-HA / OurCC one-way / Delta(Our-HA)
+L_A(N) = log2(M_A(N)/64 B) = 22 - log2(N)
+tag_bits = L_A(N) - set_bits
 ```
 
-| 场景 | N=2 | N=4 | N=8 |
+这与实现一致：`ResidentDir.cc` 使用 `tag_bits = cl_addr_bits - set_bits`。旧版
+`tag ~= ceil(log2 ways)` 不适用于“ResidentDir + metadata offload”模型，已废弃。
+
+OurCC 目录预算采用当前结构的 448 KiB：512 KiB 减 60 KiB Bloom 和 4 KiB GroupIndex。对 `W` ways、
+`S=2^s` sets：
+
+```text
+entry_bits = 7 + N + epoch_bits + (L_A(N)-s)
+plru_bits  = 2^ceil(log2(W)) - 1
+A_used     = 2^s * (W*entry_bits + plru_bits) <= 448 KiB * 8
+capacity   = W * 2^s
+```
+
+按实现搜索范围 `W=2..32` 重算：
+
+| N | Profile | layout | tag bits | entry bits | capacity | resident bytes | coverage |
+|---:|---|---|---:|---:|---:|---:|---:|
+| 2 | EPOCH24 | `5 x 2^14` | 7 | 40 | 81,920 | 5.0 MiB | 3.906% |
+| 4 | EPOCH24 | `5 x 2^14` | 6 | 41 | 81,920 | 5.0 MiB | 7.813% |
+| 8 | EPOCH24 | `9 x 2^13` | 6 | 45 | 73,728 | 4.5 MiB | 14.063% |
+| 2 | NO_STABLE_EPOCH | `2 x 2^17` | 4 | 13 | 262,144 | 16 MiB | 12.5% |
+| 4 | NO_STABLE_EPOCH | `3 x 2^16` | 4 | 15 | 196,608 | 12 MiB | 18.75% |
+| 8 | NO_STABLE_EPOCH | `5 x 2^15` | 4 | 19 | 163,840 | 10 MiB | 31.25% |
+
+这些是理论压缩配置，不是当前默认 `pa_bits=40` binary 的输出。
+
+### 6.3 Scheme A micro-scenario 数值
+
+下表先展示双方 exact/resident-hit 的 requester-visible 基础值。OurCC 若触发 metadata onload，再按
+该场景加 `P_meta,j`，而不是统一加 69.5 ns。
+
+每格为 `HA / OurCC exact / Delta exact(Our-HA)`：
+
+| Scenario | N=2 | N=4 | N=8 |
 |---|---:|---:|---:|
-| 本地 L1 读命中 | `1.5 / 1.5 / 0` | `1.5 / 1.5 / 0` | `1.5 / 1.5 / 0` |
-| Home latest-data read | `510 / 510 / 0` | `715 / 715 / 0` | `817.5 / 817.5 / 0` |
-| 多个 clean holder，Home latest | `510 / 510 / 0` | `715 / 715 / 0` | `817.5 / 817.5 / 0` |
-| sole potential clean holder read | `896 / 510 / -386` | `1306 / 715 / -591` | `1511 / 817.5 / -693.5` |
+| Home latest clean read | `510 / 510 / 0` | `715 / 715 / 0` | `817.5 / 817.5 / 0` |
+| sole clean holder read | `896 / 510 / -386` | `1306 / 715 / -591` | `1511 / 817.5 / -693.5` |
 | sole dirty/latest holder read | `896 / 896 / 0` | `1306 / 1306 / 0` | `1511 / 1511 / 0` |
-| 无 sharer首次写 | `510 / 510 / 0` | `715 / 715 / 0` | `817.5 / 817.5 / 0` |
+| cold/no-sharer write | `510 / 510 / 0` | `715 / 715 / 0` | `817.5 / 817.5 / 0` |
 | single-sharer write | `890 / 890 / 0` | `1300 / 1300 / 0` | `1505 / 1505 / 0` |
 | multi-sharer write | `890 / 890 / 0` | `1505 / 1505 / 0` | `1607.5 / 1607.5 / 0` |
-| 同一 writer repeated write | `425 / 1.5 / -423.5` | `630 / 1.5 / -628.5` | `732.5 / 1.5 / -731` |
+| repeated same-writer write | `425 / 1.5 / -423.5` | `630 / 1.5 / -628.5` | `732.5 / 1.5 / -731` |
 | dirty ownership handoff | `908 / 908 / 0` | `1318 / 1318 / 0` | `1523 / 1523 / 0` |
 
-### 6.5 不冻结最终权重的加权公式
+任一 OurCC scenario 的最终值为：
 
 ```text
-T_mean = sum_i(weight_i * T_i)
-sum_i(weight_i) = 1
+T_OurCC,A,j = T_exact,j + P_meta,A,j
+P_meta,A,j  = q_on,A,j * [49*h_A,j + 90*(1-h_A,j) + Q_A,j] + Wcrit_A,j
 ```
 
-本阶段不冻结合同权重。以下三组仅作 sensitivity，不是最终目标 3 权重：
-
-| Mix | 特征 |
-|---|---|
-| 基准示例 | local 38%，repeated write 10%，其余分散 |
-| 读共享示例 | clean/shared/remote read 权重较高 |
-| 写复用示例 | repeated write 25% |
-
-| Mix | N | HA | OurCC one-way | Delta | Our 改善 |
-|---|---:|---:|---:|---:|---:|
-| 基准示例 | 2 | 412.3 ns | 350.7 ns | -61.6 ns | 14.9% |
-| 基准示例 | 4 | 605.0 ns | 512.6 ns | -92.4 ns | 15.3% |
-| 基准示例 | 8 | 691.1 ns | 583.3 ns | -107.8 ns | 15.6% |
-| 读共享示例 | 2 | 471.3 ns | 424.2 ns | -47.1 ns | 10.0% |
-| 读共享示例 | 4 | 686.6 ns | 614.9 ns | -71.7 ns | 10.4% |
-| 读共享示例 | 8 | 783.9 ns | 700.0 ns | -84.0 ns | 10.7% |
-| 写复用示例 | 2 | 476.8 ns | 359.4 ns | -117.5 ns | 24.6% |
-| 写复用示例 | 4 | 712.6 ns | 537.7 ns | -174.9 ns | 24.5% |
-| 写复用示例 | 8 | 810.0 ns | 606.4 ns | -203.6 ns | 25.1% |
-
-真正的结论应以场景向量和权重变量给出，而不是把上述任一示例宣称为合同平均。
+Scheme A 的缩小地址空间和 Tag 压缩会提高 ResidentDir coverage，并可提高 metadata L3 locality；正式
+评审必须为每个 scenario 报告 `q_on,A,j`、`h_A,j`、warm/cold 样本，而不是把 coverage 当作请求概率。
 
 ---
 
-## 7. ScaleScheme B：对齐目标空间，HA flat exact / OurCC offload
+## 7. ScaleScheme B：固定 128 MiB，2-bit coarse state 正常 Broadcast
 
-### 7.1 HA
+### 7.1 定义
 
-```text
-目标 coherent address space -> exact flat bitmap
-```
-
-在 N=2/4/8 下，512 KiB 的严格 N-bit flat bitmap分别覆盖 128/64/32 MiB，等于第 6.1 节目标
-地址空间。因此正式 Scheme B 表中 HA 不发生容量 overflow，也不需要 broadcast fallback。
-
-若未来目标地址空间继续扩大到 bitmap 范围外，HA 才使用 ideal parallel broadcast；该扩展不进入本版
-地址空间对齐结果。
-
-### 7.2 OurCC
+Scheme B 对所有 N 保留相同 128 MiB coherent address space，每行仍只有 2 bit：
 
 ```text
-ResidentDir hit -> exact path
-ResidentDir miss -> metadata offload
+address space = 128 MiB = 2,097,152 cachelines
+HA bits/line  = 2
+HA SRAM       = 2,097,152 * 2 bits = 512 KiB
 ```
 
-采用：
+对 N>2，这 2 bit 只能表达 local-valid 与 coarse remote-present/summary，不能定位具体远端 holder。
+因此 broadcast/probe 是正常 coherence 路径，不是地址 overflow fallback。
+
+按本次修正后的 Scheme B 合同，2-bit coarse state不提供可跳过 broadcast 的精确 negative；所有被计入
+目标 3 的 coherence transaction都执行 normal broadcast/probe。
+
+### 7.2 OurCC 固定 128 MiB Tag 和容量
+
+Scheme B 对所有 N 使用：
 
 ```text
-warm offload 49 ns
-cold offload 90 ns
-50/50 average 69.5 ns
+L_B = log2(128 MiB / 64 B) = 21
+tag_bits = 21 - set_bits
 ```
 
-### 7.3 按目标地址空间的平均场景结果
+| N | Profile | layout | tag bits | entry bits | capacity | coverage of 128 MiB |
+|---:|---|---|---:|---:|---:|---:|
+| 2 | EPOCH24 | `5 x 2^14` | 7 | 40 | 81,920 | 3.906% |
+| 4 | EPOCH24 | `5 x 2^14` | 7 | 42 | 81,920 | 3.906% |
+| 8 | EPOCH24 | `9 x 2^13` | 8 | 47 | 73,728 | 3.516% |
+| 2 | NO_STABLE_EPOCH | `2 x 2^17` | 4 | 13 | 262,144 | 12.5% |
+| 4 | NO_STABLE_EPOCH | `3 x 2^16` | 5 | 16 | 196,608 | 9.375% |
+| 8 | NO_STABLE_EPOCH | `5 x 2^15` | 6 | 21 | 163,840 | 7.813% |
 
-下表按第 6.1 节各 N 的 `128/64/32 MiB` 目标空间计算。HA exact coverage 为 100%；OurCC EPOCH
-resident coverage 分别为 4.6875%、8.59375% 和 15.625%，其余地址增加平均 69.5 ns metadata
-offload latency。
+### 7.3 HA Broadcast DAG
 
-每格：
+Read/probe：
 
 ```text
-HA exact bitmap / Our EPOCH offload / Delta
+Requester -> Home
+Home -> all possible remote nodes: Broadcast Probe
+all nodes -> Home: ProbeResp / optional latest Data
+Home -> Requester: Data/Resp
+Requester -> Home: Ack
 ```
 
-| 场景 | N=2 | N=4 | N=8 |
+Write-invalidate：
+
+```text
+Requester -> Home
+Home -> all possible remote nodes: Broadcast Invalidate
+all nodes -> Home: required InvAck
+Home -> Requester: permission Resp
+Requester -> Home: Ack
+```
+
+在 fanout 全并行、不计 injection/aggregation/queue 的 HA 乐观下界中：
+
+```text
+T_BcastRead(N)  ~= K_m(N)*tau + 76 ns
+T_BcastWrite(N) ~= K_m(N)*tau + 70 ns
+K_m(2/4/8)      = 2.0 / 3.5 / 3.75
+```
+
+| N | Broadcast read/probe | Broadcast write-invalidate |
+|---:|---:|---:|
+| 2 | 896 ns | 890 ns |
+| 4 | 1511 ns | 1505 ns |
+| 8 | 1613.5 ns | 1607.5 ns |
+
+### 7.4 Scheme B micro-scenario 数值
+
+下表使用 EPOCH24 OurCC exact/resident-hit 值。OurCC metadata miss仍需另加 `P_meta,B,j`。
+
+每格为 `HA coarse-broadcast / OurCC exact / Delta exact(Our-HA)`：
+
+| Scenario | N=2 | N=4 | N=8 |
 |---|---:|---:|---:|
-| Home latest read | `510 / 576.2 / +66.2` | `715 / 778.5 / +63.5` | `817.5 / 876.1 / +58.6` |
-| sole clean/potential holder read | `896 / 576.2 / -319.8` | `1306 / 778.5 / -527.5` | `1511 / 876.1 / -634.9` |
-| dirty/latest holder read | `896 / 962.2 / +66.2` | `1306 / 1369.5 / +63.5` | `1511 / 1569.6 / +58.6` |
-| cold/no-sharer write | `510 / 576.2 / +66.2` | `715 / 778.5 / +63.5` | `817.5 / 876.1 / +58.6` |
-| single-sharer write | `890 / 956.2 / +66.2` | `1300 / 1363.5 / +63.5` | `1505 / 1563.6 / +58.6` |
-| multi-sharer write | `890 / 956.2 / +66.2` | `1505 / 1568.5 / +63.5` | `1607.5 / 1666.1 / +58.6` |
-| dirty ownership handoff | `908 / 974.2 / +66.2` | `1318 / 1381.5 / +63.5` | `1523 / 1581.6 / +58.6` |
-| repeated same-writer write | `425 / 1.5 / -423.5` | `630 / 1.5 / -628.5` | `732.5 / 1.5 / -731.0` |
+| Home latest clean read，需要 probe | `896 / 510 / -386` | `1511 / 715 / -796` | `1613.5 / 817.5 / -796` |
+| sole clean holder read | `896 / 510 / -386` | `1511 / 715 / -796` | `1613.5 / 817.5 / -796` |
+| dirty/latest holder read | `896 / 896 / 0` | `1511 / 1306 / -205` | `1613.5 / 1511 / -102.5` |
+| cold/no-sharer write，需要 broadcast | `890 / 510 / -380` | `1505 / 715 / -790` | `1607.5 / 817.5 / -790` |
+| single-sharer write | `890 / 890 / 0` | `1505 / 1300 / -205` | `1607.5 / 1505 / -102.5` |
+| multi-sharer write | `890 / 890 / 0` | `1505 / 1505 / 0` | `1607.5 / 1607.5 / 0` |
+| repeated same-writer write | `890 / 1.5 / -888.5` | `1505 / 1.5 / -1503.5` | `1607.5 / 1.5 / -1606` |
+| dirty ownership handoff | `908 / 908 / 0` | `1523 / 1318 / -205` | `1625.5 / 1523 / -102.5` |
 
-注：sole-holder read 使用冻结 HA 模型的“无 dirty/latest 等价持久状态”条件。HA 必须把 sole holder
-视为 potential latest 并联系它，而 MESI 可识别 clean singleton 并使用 Home latest data。若甲方存在
-未披露的 clean proof、Home-data-valid 或 owner-mode 状态，该行必须重算为普通 `+offload penalty`。
-
-### 7.4 权重敏感性
-
-Scheme B 不冻结最终权重。修正后的趋势为：
-
-1. HA flat bitmap在对齐目标空间内全部 exact，不承担容量 broadcast latency。
-2. OurCC resident miss使多数首次事务平均慢约 58.6-66.2 ns。
-3. OurCC 的严格优势集中在 sole-clean ambiguity 和 repeated E/M write permission reuse。
-4. 若 workload 没有这两类操作，OurCC 可能不满足严格 `<`。
-5. 若未来目标空间超出 HA flat bitmap范围，才需要另行加入 HA broadcast latency并重新计算。
-
-### 7.5 Scheme B 的合同严格判定公式
-
-目标 3 的指定理论比较为：
+OurCC 最终值：
 
 ```text
-OurCC:
-    MESI directory
-    + metadata resident miss offload
-    + 与 HA 相同的目标 coherent address space
-    + lossless one-way Clear/Ack，不等待同步 ClearResp
-
-HA:
-    VI + (N-1)-bit remote presence bitmap
-    + limited exact address range
-    + write-back
-    + write-invalidate
-    + 每次 write 均经过 Home transaction
-    + 512 KiB flat bitmap覆盖本版完整目标空间
+T_OurCC,B,j = T_exact,j + P_meta,B,j
+P_meta,B,j  = q_on,B,j * [49*h_B,j + 90*(1-h_B,j) + Q_B,j] + Wcrit_B,j
 ```
 
-双方采用相同外部拓扑和相同 fabric 参数；未单独配置的本地处理差按近似 0。表 7.3 中已经明确
-计入的 metadata offload latency不属于“未知项”，不能再清零。本版目标空间内 HA 不发生 overflow，
-因此正式系数不含 broadcast latency。
+Scheme B 固定 128 MiB，因此 Tag 不随 N 缩短；metadata working set 通常也大于 Scheme A，`q_on,B,j`
+和 cold fraction预期更高，但仍必须由 micro-scenario counter 或冻结假设给出。
 
-定义以下非负场景权重，总和不超过 1；其余未列场景在当前表中 `Delta=0`：
+### 7.5 Micro-scenario 加权评审方法
 
-| 权重 | 场景 |
+最终评审不应先把所有路径压成一个抽象 `w_p`。应逐项提供：
+
+| 字段 | 含义 |
 |---|---|
-| `w_s` | sole clean/potential holder read |
-| `w_r` | repeated same-writer write |
-| `w_p` | 其他需要 OurCC metadata lookup/offload 的首次事务总权重：Home latest、dirty holder、cold write、single/multi-sharer write、dirty handoff |
+| `scenario` | 第 7.5.1 节冻结的唯一 scenario ID |
+| `scheme` | A 或 B |
+| `N` | 2、4、8 |
+| `T_HA` | 对应 HA exact/broadcast requester-visible latency |
+| `T_Our_exact` | OurCC resident-hit latency |
+| `q_on` | 该 scenario 的 metadata demand onload率 |
+| `h_L3` | onload 条件下 HN-F L3 hit率 |
+| `P_meta` | `q_on*[49*h+90*(1-h)+Q] + Wcrit` |
+| `Wcrit` | demand-visible metadata victim writeback；若为 0 必须给出异步证明 |
+| `T_Our` | `T_Our_exact + P_meta` |
+| `Delta` | `T_Our - T_HA` |
+| `weight` | 评审冻结的 scenario 权重 |
 
-使用 `Delta = T_OurCC - T_HA`，合同通过条件为 `Delta_mean < 0`。由表 7.3 直接得到：
-
-```text
-N=2:
-Delta_mean = 66.2422*w_p
-             - 319.7578*w_s
-             - 423.5*w_r
-
-STRICT PASS iff:
-319.7578*w_s + 423.5*w_r > 66.2422*w_p
-```
-
-```text
-N=4:
-Delta_mean = 63.5273*w_p
-             - 527.4727*w_s
-             - 628.5*w_r
-
-STRICT PASS iff:
-527.4727*w_s + 628.5*w_r > 63.5273*w_p
-```
+平均值：
 
 ```text
-N=8:
-Delta_mean = 58.6406*w_p
-             - 634.8594*w_s
-             - 731.0*w_r
+T_mean_HA  = sum_j(weight_j * T_HA,j)
+T_mean_Our = sum_j(weight_j * T_Our,j)
+Delta_mean = sum_j(weight_j * Delta_j)
 
-STRICT PASS iff:
-634.8594*w_s + 731.0*w_r > 58.6406*w_p
+STRICT PASS iff Delta_mean < 0
 ```
 
-上述系数单位均为 ns。等号成立时为 `TIE`，不满足严格 `<`；左侧小于右侧时为 `FAIL`。
+每个 scenario 至少展示 resident-hit、forced warm onload 和 forced cold onload 三个数；若提供加权单值，
+必须同时提供 `q_on`、`h_L3`、`Q` 和权重来源。
 
-因此当前理论结果不是“所有场景均快”，也不是“尚未分析”，而是：
+#### 7.5.1 唯一 Micro-Scenario 清单
 
-> **Scheme B 的场景向量和严格 break-even 已完成，结论为 `CONDITIONAL PASS`。合同只要书面冻结
-> 满足上述不等式的 operation weights，即可不运行 workload 直接判定理论 `STRICT PASS`；若不冻结
-> weights，则只能保留条件结论。workload/trace 只是确定 weights 的可选来源。**
+| ID | 场景 | 说明 |
+|---|---|---|
+| `R_HOME` | Home latest clean read | 包括 no-holder 和 multi-clean holder；Home data latest |
+| `R_SOLE_CLEAN` | sole clean holder read | Scheme A exact holder但无 dirty bit；OurCC MESI知道 Home latest |
+| `R_SOLE_DIRTY` | sole dirty/latest holder read | 需要取得 potential latest data |
+| `W_COLD` | cold/no-sharer first write | HA 仍执行题设要求的 write transaction |
+| `W_SINGLE` | single-sharer writer acquire | 一个实际远端 sharer |
+| `W_MULTI` | multi-sharer writer acquire | 多个远端 sharer，fanout并行下界 |
+| `W_REPEAT` | repeated same-writer write | OurCC E/M local reuse；HA 每次写仍事务化 |
+| `W_HANDOFF` | dirty ownership handoff | 旧 owner释放 latest data和权限 |
+
+### 7.6 等权 sensitivity 示例
+
+仅用于展示评审格式，取第 7.5.1 节八个 scenario 各 `1/8`。OurCC 的 forced-warm/forced-cold列假设
+除 `W_REPEAT` 外，其余七项全部发生 onload，且 `Q_j=0`、`Wcrit_j=0`。因此它是零排队、零关键
+metadata writeback的路径 envelope，不是实际 miss rate，也不是合同平均。
+
+Scheme A：
+
+| N | HA mean | Our resident-hit mean | Delta | Our forced-warm mean | Delta | Our forced-cold mean | Delta |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 740.6 | 639.4 | -101.2 | 682.3 | -58.3 | 718.2 | -22.4 |
+| 4 | 1099.4 | 946.9 | -152.4 | 989.8 | -109.6 | 1025.7 | -73.7 |
+| 8 | 1253.1 | 1075.1 | -178.1 | 1117.9 | -135.2 | 1153.8 | -99.3 |
+
+Scheme B，所有列均使用 normal-broadcast 分支：
+
+| N | HA mean | Our resident-hit mean | Delta | Our forced-warm mean | Delta | Our forced-cold mean | Delta |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 894.5 | 639.4 | -255.1 | 682.3 | -212.2 | 718.2 | -176.3 |
+| 4 | 1509.5 | 946.9 | -562.6 | 989.8 | -519.7 | 1025.7 | -483.8 |
+| 8 | 1612.0 | 1075.1 | -536.9 | 1117.9 | -494.1 | 1153.8 | -458.2 |
+
+若实际权重、`q_on/h_L3` 不同，必须逐场景替换后重算。上述等权结果不能直接签署为合同平均。
+
+在该等权 envelope 中，Scheme A 的最小 PASS 余量出现在 N=2 forced-cold：`22.4375 ns/op`。
+七个 onload项等权时，若它们具有相同额外 queue/writeback项 `X`，则 break-even 为：
+
+```text
+22.4375 - (7/8)*X > 0
+=> X < 25.64 ns per onload
+```
+
+该上界只适用于此明确 sensitivity 点，不可外推到其他权重。
 
 ---
 
@@ -697,28 +774,36 @@ directory_profile = compressed_epoch | compressed_no_stable_epoch
 
 ```text
 protocol = VI_BITMAP_HA
-bitmap_bits = N
 write_policy = writeback
 write_requires_home_invalidation = true
 same_address_ordering = customer_external_contract
 home_release_after_requester_ack = true
 dirty_bit = false
-overflow = shrink_range | broadcast
 direct_transfer = false
+
+scale_scheme = a
+stable_bits_per_line = N
+coherent_range_mib = 256/N
+routing = exact_bitmap
+
+scale_scheme = b
+stable_bits_per_line = 2
+coherent_range_mib = 128
+routing = normal_broadcast_for_coarse_state
 ```
 
 ### 10.3 统一 scenario
 
-1. Home latest clean read。
-2. sole holder read。
-3. multi-clean holder read。
-4. no-sharer write。
-5. single-sharer write。
-6. multi-sharer write。
-7. repeated same-writer write。
-8. dirty ownership handoff。
+1. `R_HOME`：Home latest clean read，包括 multi-clean Home-latest。
+2. `R_SOLE_CLEAN`：sole clean holder read。
+3. `R_SOLE_DIRTY`：sole dirty/latest holder read。
+4. `W_COLD`：cold/no-sharer first write。
+5. `W_SINGLE`：single-sharer writer acquire。
+6. `W_MULTI`：multi-sharer writer acquire。
+7. `W_REPEAT`：repeated same-writer write。
+8. `W_HANDOFF`：dirty ownership handoff。
 9. O3 invalidation/speculation qualification。
-10. capacity exact-hit、offload 和 broadcast fallback。
+10. Scheme A compressed-range exact path、Scheme B normal broadcast、OurCC offload/onload。
 
 ### 10.4 统一计时点
 
@@ -741,19 +826,22 @@ requester_root_complete
 - HA receipt-Ack 与 OurCC one-way Clear 在 Home release 路径上同构。
 - 当前 OurCC 代码尚未把 Clear 绑定到 local install；理论可用 OrderedInstallGuard，仿真必须实现或断言。
 - 在强 ordered/lossless、单 outstanding、无 crash 模型中，可删除 stable Epoch，不考虑 TxnToken。
-- HA N-bit flat bitmap用 512 KiB 正好覆盖本版 `128/64/32 MiB` 目标空间；OurCC 依靠 metadata
-  offload覆盖相同地址空间，而不是依靠更小的 resident entry。
-- Exact range 内，首次冲突路径大多相等；OurCC 的核心优势是 repeated E/M write，以及 HA 无 dirty/latest 状态时的 sole-holder ambiguity。
-- 地址空间对齐的 Scheme B 中，HA 在目标范围内不触发 broadcast；OurCC 的 offload penalty 与
-  sole-clean/repeated-write 优势通过第 7.5 节 break-even统一判定。
-- 最终平均必须使用 scenario vector 和冻结权重判定。权重可由合同直接给出理论分布或允许区域；
-  workload/trace 只是在合同未直接给权重时的可选校准来源。
+- Scheme A 通过把共同地址空间压缩为 `128/64/32 MiB`，使 HA 使用 N-bit exact metadata；OurCC
+  同时按共同范围缩短 Tag，并保留 metadata offload。
+- Scheme B 对所有 N 保留 128 MiB，但每行只有 2-bit coarse metadata；N>2 的 broadcast/probe 是
+  normal coherence path，不是 overflow fallback。
+- OurCC 的核心优势是 exact sharer/owner semantics、sole-clean 判定和 repeated E/M write；代价是
+  ResidentDir miss后的 metadata onload。
+- 49/90 ns 是 warm/cold path values；69.5 ns 只是旧 50/50 假设，已从固定模型删除。
+- 最终评审必须逐 micro-scenario 报告双方数值、Delta、`q_on/h_L3/Q` 和权重，再进行加权平均。
 
 ---
 
 ## 12. 已闭合信息与未闭合确认项
 
-> **C1：HA sole-holder clean/dirty 区分。** 没有 dirty bit时，HA 是否总是联系 sole holder，还是存在其他 Home-data-valid/owner-mode 状态？
+> **C1：Scheme A sole-holder clean/dirty 区分。** 没有 dirty bit时，HA 是否总是联系 exact sole
+> holder，还是存在其他 Home-data-valid/owner-mode 状态？Scheme B 已冻结为 coarse broadcast，不依赖
+> sole-holder 精确识别。
 
 > **C2（未闭合）：** 客户外部 HA ordering source/可审计证据仍不可获得。当前比较只能条件化地假设其在 requester Ack 前排队后续同地址请求；在获得源码、形式接口或可复现实验证据前，不得把该 ordering 能力标为已验证。Requester 侧仍需确认 Resp received 到实体 install 完成的窄窗口是否有 transient install-pending context。
 
