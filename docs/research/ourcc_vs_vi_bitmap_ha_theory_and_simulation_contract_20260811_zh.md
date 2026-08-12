@@ -341,15 +341,15 @@ broadcast/invalidation transaction。
 |---|---:|---|
 | CPU cycle | 0.5 ns | `scripts/solve_latency_params.py` |
 | L1 tag+data | 1.5 ns | 同上 |
-| Local L3 target | 15 ns | 同上 |
+| Core to local L3 hit | 15 ns | 目标 CPU 配置 |
 | Local DRAM | 100 ns | 同上 |
 | NUMA DRAM | 110 ns | 同上 |
 | 单向跨节点 `tau` | 约 410 ns | trace/report |
 | Remote ReadShared | 896 ns | `reports/metrics_latency_report.md` |
 | Upgrade | 890 ns | 同上 |
 | ReadUnique current | 1728 ns | 同上 |
-| Metadata offload warm | 49 ns | 同上 |
-| Metadata offload cold | 90 ns | 同上 |
+| Historical MetaRNF warm path | 49 ns | 旧报告端到端路径值，不作为新模型参数 |
+| Historical MetaRNF cold path | 90 ns | 旧报告端到端路径值，不作为新模型参数 |
 
 本地协议 residual：
 
@@ -359,9 +359,21 @@ P_inv      = 890 - 2*410 = 70 ns
 P_handoff ~= 88 ns
 ```
 
-`49 ns` 和 `90 ns` 是历史报告中的 MetaRNF L3 warm / DRAM cold 路径值；仓库未归档对应 raw
-samples。旧版 `69.5 ns=(49+90)/2` 只是 50/50 warm-cold 假设，不是测得的平均值，本版不再把它
-作为固定合同参数。
+`49 ns` 和 `90 ns` 是旧版 MetaRNF 端到端报告值，不是 L3 array hit和 DRAM本体延迟；仓库也未
+归档对应 raw samples。当前代码使用 `ReadOnce` 路径，而旧报告描述的是可分配 `ReadShared` 路径，
+因此两值存在版本漂移，不能继续作为冻结参数。
+
+按本次硬件假设：CPU 有 64 个 1 MiB L3 slices，总计 64 MiB；忽略 slice内部接线，Core访问任意
+L3 slice为 15 ns。理论 metadata onload使用：
+
+```text
+L_meta_L3  = 15 ns
+L_meta_DRAM = 100 ns
+```
+
+这里的 100 ns定义为从 metadata access发起到 DRAM数据返回的完整 Core-visible cold endpoint，已包含
+L3 lookup/miss detection，不再额外叠加 15 ns。若后续平台把 100 ns定义成 miss后的纯 DRAM service，
+则 cold endpoint必须改为 115 ns并重算全部 sensitivity。
 
 对 micro-scenario `j`，使用：
 
@@ -370,8 +382,8 @@ q_on,j = 实际触发 MetaRNF demand onload 的概率
 h_j    = 已触发 onload 时的 HN-F L3 hit probability
 Q_j    = MetaRNF/L3/DRAM queueing 项
 
-L_on,j = 49*h_j + 90*(1-h_j) + Q_j
-P_meta,j = q_on,j * L_on,j + Wcrit_j
+L_on,j = 15*h_j + 100*(1-h_j) + Q_j
+P_onload,j = q_on,j * L_on,j + Wcrit_j
 ```
 
 `Wcrit_j` 是 demand-visible metadata victim writeback项。历史报告把 writeback描述为 fire-and-forget，
@@ -383,42 +395,121 @@ queue interference计入 `Q_j`，否则需填入非零 `Wcrit_j`。
 | metadata path | `q_on` | `h` | demand penalty |
 |---|---:|---:|---:|
 | ResidentDir hit / Bloom authoritative negative | 0 | N/A | 0 ns |
-| forced warm onload | 1 | 1 | 49 ns + `Q` |
-| forced cold onload | 1 | 0 | 90 ns + `Q` |
+| forced L3-warm onload | 1 | 1 | 15 ns + `Q` |
+| forced DRAM-cold onload | 1 | 0 | 100 ns + `Q` |
 
 地址空间缩小和 Tag 缩短会提高 ResidentDir coverage，并通常缩小 metadata working set、提高 `h`；
 但 `q_on` 和 `h` 仍取决于具体 working set、reuse distance、set conflict 和 Bloom 结果，不能只由容量比
 直接推出。
 
-### 5.1 HN-F L3 对 metadata working set 的容量缓解
+### 5.1 64 MiB L3 的 Metadata 分配变量
 
-历史报告中的 HN-F L3 为 256 KiB；H64 backstore 每个 64B bucket含 5 个 12B slots。因此在忽略
-冲突和其他数据占用的理想上限下：
+定义：
 
 ```text
-L3 metadata buckets = 256 KiB / 64 B = 4096
-L3 metadata entries = 4096 * 5 = 20,480
+C_L3_total = 64 MiB
+C_meta     = metadata允许使用的 L3 容量
+C_data     = 64 MiB - C_meta
+0 <= C_meta <= 64 MiB
 ```
 
-若整个 coherent range都形成活跃 metadata，L3 的静态覆盖比例为：
+物理变量允许到 64 MiB。评审主扫描只需到 32 MiB，因为 H64 每个 64B bucket含 5 个 12B slots；
+按 80% hash load factor，当前最大完整 metadata footprint为：
+
+```text
+F_meta = cachelines / (5 * 0.8) * 64 B
+```
 
 | Scheme | N=2 | N=4 | N=8 |
 |---|---:|---:|---:|
-| A：128/64/32 MiB | 0.98% | 1.95% | 3.91% |
-| B：固定 128 MiB | 0.98% | 0.98% | 0.98% |
+| A metadata footprint `F_A(N)` | 32 MiB | 16 MiB | 8 MiB |
+| B metadata footprint `F_B(N)` | 32 MiB | 32 MiB | 32 MiB |
 
-该表只说明 Scheme A 缩小地址空间后，给定 L3 可以覆盖更大的 metadata 地址比例；它仍不是 `h_L3`
-实测值。更准确的场景模型是：
+在无 conflict额外需求的容量参考模型中，`C_meta>F_meta` 不再提高 metadata capacity hit率，只会继续
+减少普通数据可使用的 L3；若实测 replacement/conflict显示 32 MiB后仍有收益，再扩展扫描到 64 MiB。
+
+正式 `h_j(C_meta)` 仍应由 metadata reuse distance或 counter得到。为提供可复算的容量敏感性，定义
+一个均匀工作集参考模型：
 
 ```text
-h_j ~= P(metadata reuse distance < effective L3 metadata capacity | onload)
+h_uniform(C_meta, F_meta) = min(1, C_meta/F_meta)
+L_on_uniform(C_meta) = 100 - 85*h_uniform(C_meta,F_meta) + Q
 ```
 
-对于 repeat-one-bucket 或 metadata working set低于 256 KiB 的场景，warm-up 后 `h_j` 可接近 1；
-对于 streaming 或 working set远大于 256 KiB 的场景，`h_j` 可接近 0。正式评审应输出 MetaRNF/HN-F
-hit/miss counter和 working-set-size 曲线。
+该线性模型不是 cache replacement定律，只用于参数扫描。真实场景边界仍为：
 
-### 5.2 Address-sliced Home
+- repeat-one-bucket：warm-up 后 `h` 接近 1，即使 `C_meta` 很小；
+- metadata working set `<=C_meta`：warm-up 后 `h` 接近 1；
+- streaming 或 reuse distance `>C_meta`：`h` 接近 0。
+
+### 5.2 普通数据 L3 机会成本
+
+metadata占用 L3 不能视为免费。令 `A_data,j` 为每个 root operation处于关键路径的普通 data access数，
+`m_data,j(C_data)` 为普通数据可用 L3为 `C_data` 时的 miss probability。单关键访问、无 MLP/O3 overlap、
+新增 miss只落到本地 DRAM的参考估算为：
+
+```text
+P_steal_est,j(C_meta)
+  = A_data,j * [m_data,j(64-C_meta) - m_data,j(64)] * (100-15)
+  = A_data,j * Delta_m_data,j(C_meta) * 85 ns
+```
+
+该式不是 coherence workload的一般等式。正式判定使用 paired requester-visible latency：
+
+```text
+P_steal_measured,j(C_meta)
+  = T_data_path,j(C_data=64-C_meta | metadata replay fixed)
+    - T_data_path,j(C_data=64 MiB | same metadata replay)
+```
+
+shadow-cache miss curve只用于 `P_steal_est`。正式 `P_steal_measured` 必须保持 metadata请求流和
+metadata latency固定并做 paired replay；operation mix、seed和 placement必须一致。若 paired差已经
+包含 metadata/data queue interference，不得再在 `Q_j` 中重复计数。
+
+完整 OurCC 附加项：
+
+```text
+P_add,j(C_meta)
+  = q_on,j * [100 - 85*h_j(C_meta) + Q_j]
+    + Wcrit_j
+    + P_steal,j(C_meta)
+```
+
+参考/sensitivity中，`P_steal` 必须明确写成 `0` 或 `P_steal_est`；正式合同判定中，
+`P_steal := P_steal_measured`。
+
+选择 `C_meta` 的原则不是越大越好，而是最小化：
+
+```text
+metadata onload penalty + normal-data opportunity cost
+```
+
+在 `C_meta<F_meta` 的均匀参考模型中，每增加 1 MiB metadata L3 的边际收益为：
+
+```text
+85 * q_on_mean / F_meta   ns/op/MiB
+```
+
+只有当普通数据机会成本的边际增长小于该值时，继续增加 `C_meta` 才有净收益。
+
+在第 7.6 节八场景等权、七项 onload参考中，`q_on_mean=7/8`，边际 metadata收益为：
+
+| Scheme | N=2 | N=4 | N=8 |
+|---|---:|---:|---:|
+| A | 2.324 ns/op/MiB，至 32 MiB | 4.648 ns/op/MiB，至 16 MiB | 9.297 ns/op/MiB，至 8 MiB |
+| B | 2.324 ns/op/MiB，至 32 MiB | 2.324 ns/op/MiB，至 32 MiB | 2.324 ns/op/MiB，至 32 MiB |
+
+因此优化问题为：
+
+```text
+C_meta* = argmin_C Delta_mean(C)
+subject to 0 <= C <= 64 MiB
+           normal_data_slowdown(C) <= agreed_limit
+```
+
+离散评审中选择满足严格负 Delta和普通数据退化限制的最小扫描点；不预设 8 MiB或 32 MiB。
+
+### 5.3 Address-sliced Home
 
 ```text
 q_N = P(Home != Requester) = 1 - 1/N
@@ -511,7 +602,7 @@ capacity   = W * 2^s
 ### 6.3 Scheme A micro-scenario 数值
 
 下表先展示双方 exact/resident-hit 的 requester-visible 基础值。OurCC 若触发 metadata onload，再按
-该场景加 `P_meta,j`，而不是统一加 69.5 ns。
+该场景加 `P_onload,j`，而不是统一加 69.5 ns。
 
 每格为 `HA / OurCC exact / Delta exact(Our-HA)`：
 
@@ -529,8 +620,9 @@ capacity   = W * 2^s
 任一 OurCC scenario 的最终值为：
 
 ```text
-T_OurCC,A,j = T_exact,j + P_meta,A,j
-P_meta,A,j  = q_on,A,j * [49*h_A,j + 90*(1-h_A,j) + Q_A,j] + Wcrit_A,j
+T_OurCC,A,j  = T_exact,j + P_add,A,j
+P_onload,A,j = q_on,A,j * [15*h_A,j + 100*(1-h_A,j) + Q_A,j] + Wcrit_A,j
+P_add,A,j    = P_onload,A,j + P_steal,A,j(C_meta)
 ```
 
 Scheme A 的缩小地址空间和 Tag 压缩会提高 ResidentDir coverage，并可提高 metadata L3 locality；正式
@@ -610,9 +702,13 @@ K_m(2/4/8)      = 2.0 / 3.5 / 3.75
 | 4 | 1511 ns | 1505 ns |
 | 8 | 1613.5 ns | 1607.5 ns |
 
+正式理论比较保留这一对 HA有利的乐观下界。实测 broadcast injection、Ack aggregation和 queueing
+只作为补充披露，不用更慢实测替换该下界来制造 OurCC PASS。
+
 ### 7.4 Scheme B micro-scenario 数值
 
-下表使用 EPOCH24 OurCC exact/resident-hit 值。OurCC metadata miss仍需另加 `P_meta,B,j`。
+下表使用 EPOCH24 OurCC exact/resident-hit 值。OurCC metadata miss仍需另加 `P_onload,B,j`，并计入
+普通数据机会成本 `P_steal,B,j`。
 
 每格为 `HA coarse-broadcast / OurCC exact / Delta exact(Our-HA)`：
 
@@ -630,8 +726,9 @@ K_m(2/4/8)      = 2.0 / 3.5 / 3.75
 OurCC 最终值：
 
 ```text
-T_OurCC,B,j = T_exact,j + P_meta,B,j
-P_meta,B,j  = q_on,B,j * [49*h_B,j + 90*(1-h_B,j) + Q_B,j] + Wcrit_B,j
+T_OurCC,B,j  = T_exact,j + P_add,B,j
+P_onload,B,j = q_on,B,j * [15*h_B,j + 100*(1-h_B,j) + Q_B,j] + Wcrit_B,j
+P_add,B,j    = P_onload,B,j + P_steal,B,j(C_meta)
 ```
 
 Scheme B 固定 128 MiB，因此 Tag 不随 N 缩短；metadata working set 通常也大于 Scheme A，`q_on,B,j`
@@ -650,9 +747,12 @@ Scheme B 固定 128 MiB，因此 Tag 不随 N 缩短；metadata working set 通�
 | `T_Our_exact` | OurCC resident-hit latency |
 | `q_on` | 该 scenario 的 metadata demand onload率 |
 | `h_L3` | onload 条件下 HN-F L3 hit率 |
-| `P_meta` | `q_on*[49*h+90*(1-h)+Q] + Wcrit` |
+| `C_meta` | metadata允许使用的 L3 容量；`C_data=64-C_meta` |
+| `P_onload` | `q_on*[15*h+100*(1-h)+Q] + Wcrit` |
 | `Wcrit` | demand-visible metadata victim writeback；若为 0 必须给出异步证明 |
-| `T_Our` | `T_Our_exact + P_meta` |
+| `P_steal` | metadata挤占普通数据 L3造成的 paired latency增加 |
+| `P_add` | `P_onload + P_steal(C_meta)` |
+| `T_Our` | `T_Our_exact + P_add` |
 | `Delta` | `T_Our - T_HA` |
 | `weight` | 评审冻结的 scenario 权重 |
 
@@ -666,8 +766,8 @@ Delta_mean = sum_j(weight_j * Delta_j)
 STRICT PASS iff Delta_mean < 0
 ```
 
-每个 scenario 至少展示 resident-hit、forced warm onload 和 forced cold onload 三个数；若提供加权单值，
-必须同时提供 `q_on`、`h_L3`、`Q` 和权重来源。
+每个 scenario 至少展示 resident-hit、15 ns L3-warm onload 和 100 ns DRAM-cold onload 三个边界；
+正式加权单值必须同时提供 `C_meta/q_on/h_L3/Q/Wcrit/P_steal` 和权重来源。
 
 #### 7.5.1 唯一 Micro-Scenario 清单
 
@@ -682,39 +782,54 @@ STRICT PASS iff Delta_mean < 0
 | `W_REPEAT` | repeated same-writer write | OurCC E/M local reuse；HA 每次写仍事务化 |
 | `W_HANDOFF` | dirty ownership handoff | 旧 owner释放 latest data和权限 |
 
-### 7.6 等权 sensitivity 示例
+#### 7.5.2 待定参数的关闭方法
 
-仅用于展示评审格式，取第 7.5.1 节八个 scenario 各 `1/8`。OurCC 的 forced-warm/forced-cold列假设
-除 `W_REPEAT` 外，其余七项全部发生 onload，且 `Q_j=0`、`Wcrit_j=0`。因此它是零排队、零关键
-metadata writeback的路径 envelope，不是实际 miss rate，也不是合同平均。
+| 参数 | 定义/测量方法 |
+|---|---|
+| `C_meta` | 扫描 0/4/8/16/32 MiB；选择加入 `P_steal` 后 `Delta_mean` 最小且普通数据退化满足限制的点 |
+| `q_on,j` | `MetaRNF demand read count / root operation count`，按 scenario分别统计 |
+| `h_L3,j` | `MetaRNF HN-F L3 hit count / MetaRNF demand access count` |
+| `Q_j` | `observed onload latency - [15*h_j + 100*(1-h_j)]`，报告 mean/P50/P95/P99 |
+| `Wcrit_j` | 有/无 metadata victim writeback 的 paired requester-visible latency差值 |
+| `P_steal,j` | 同 workload在 64 MiB data-only 与 `64-C_meta` 普通数据容量下的 paired requester-visible latency差值 |
+| `w_j` | 同时报八 scenario等权和合同/trace权重；最终签署使用后者 |
 
-Scheme A：
+metadata locality诊断至少覆盖 repeat-one-bucket、working set `<=C_meta`、working set `>C_meta`
+streaming。每个点记录 L3 aggregate容量、metadata reservation、普通 data reservation、warmup、seed、
+hit/miss和 latency分布。
 
-| N | HA mean | Our resident-hit mean | Delta | Our forced-warm mean | Delta | Our forced-cold mean | Delta |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 2 | 740.6 | 639.4 | -101.2 | 682.3 | -58.3 | 718.2 | -22.4 |
-| 4 | 1099.4 | 946.9 | -152.4 | 989.8 | -109.6 | 1025.7 | -73.7 |
-| 8 | 1253.1 | 1075.1 | -178.1 | 1117.9 | -135.2 | 1153.8 | -99.3 |
+### 7.6 `C_meta` 等权 sensitivity 扫描
 
-Scheme B，所有列均使用 normal-broadcast 分支：
+仅用于展示评审格式，取第 7.5.1 节八个 scenario 各 `1/8`。除 `W_REPEAT` 外，其余七项全部发生
+onload；采用均匀 footprint参考 `h=min(1,C_meta/F_meta)`，并取 `Q=0`、`Wcrit=0`、`P_steal=0`。
+因此该表是无普通数据机会成本的 metadata-only sensitivity，不是合同平均。
 
-| N | HA mean | Our resident-hit mean | Delta | Our forced-warm mean | Delta | Our forced-cold mean | Delta |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 2 | 894.5 | 639.4 | -255.1 | 682.3 | -212.2 | 718.2 | -176.3 |
-| 4 | 1509.5 | 946.9 | -562.6 | 989.8 | -519.7 | 1025.7 | -483.8 |
-| 8 | 1612.0 | 1075.1 | -536.9 | 1117.9 | -494.1 | 1153.8 | -458.2 |
+表中为 `Delta_mean = OurCC - HA`，单位 ns/op：
 
-若实际权重、`q_on/h_L3` 不同，必须逐场景替换后重算。上述等权结果不能直接签署为合同平均。
+| Scheme | N | `C_meta=0` | 4 MiB | 8 MiB | 16 MiB | 32 MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 2 | -13.7 | -23.0 | -32.3 | -50.9 | -88.1 |
+| A | 4 | -64.9 | -83.5 | -102.1 | -139.3 | -139.3 |
+| A | 8 | -90.6 | -127.8 | -164.9 | -164.9 | -164.9 |
+| B | 2 | -167.6 | -176.9 | -186.2 | -204.8 | -241.9 |
+| B | 4 | -475.1 | -484.4 | -493.7 | -512.3 | -549.4 |
+| B | 8 | -449.4 | -458.7 | -468.0 | -486.6 | -523.8 |
 
-在该等权 envelope 中，Scheme A 的最小 PASS 余量出现在 N=2 forced-cold：`22.4375 ns/op`。
-七个 onload项等权时，若它们具有相同额外 queue/writeback项 `X`，则 break-even 为：
+`C_meta=8 MiB` 可作为低占用参考点：只占总 L3 的 12.5%，保留 56 MiB 给普通数据；在均匀参考
+模型下，Scheme A metadata footprint覆盖为 N=2/4/8 的 25%/50%/100%，Scheme B 为 25%。但正式
+结论不固定 8 MiB，必须加入 `P_steal(C_meta)` 后从扫描点中选择净收益最优值。
 
-```text
-22.4375 - (7/8)*X > 0
-=> X < 25.64 ns per onload
-```
+在该明确等权参考中，即使 `C_meta=0` 且七个 onload全部走 100 ns DRAM，Scheme A/B N=2/4/8
+仍为负 Delta。L3 metadata allocation用于扩大余量，不是为了把结果从 FAIL 调成 PASS。
 
-该上界只适用于此明确 sensitivity 点，不可外推到其他权重。
+若评审将 100 ns解释为 L3 miss后的纯 DRAM service，则保守 cold endpoint为 115 ns。最脆弱的
+Scheme A N=2等权点变为：
+
+| `C_meta` | 0 MiB | 4 MiB | 8 MiB | 16 MiB | 32 MiB |
+|---|---:|---:|---:|---:|---:|
+| `Delta_mean`, 115 ns cold | -0.6 | -11.5 | -22.4 | -44.3 | -88.1 |
+
+该压力测试仍为负 Delta，但 `C_meta=0` 只剩 0.6 ns/op余量，说明少量 metadata L3可提高鲁棒性。
 
 ---
 
@@ -828,12 +943,14 @@ requester_root_complete
 - 在强 ordered/lossless、单 outstanding、无 crash 模型中，可删除 stable Epoch，不考虑 TxnToken。
 - Scheme A 通过把共同地址空间压缩为 `128/64/32 MiB`，使 HA 使用 N-bit exact metadata；OurCC
   同时按共同范围缩短 Tag，并保留 metadata offload。
-- Scheme B 对所有 N 保留 128 MiB，但每行只有 2-bit coarse metadata；N>2 的 broadcast/probe 是
-  normal coherence path，不是 overflow fallback。
+- Scheme B 对所有 N 保留 128 MiB，但每行只有 2-bit coarse metadata；N=2/4/8 每次纳入目标 3 的
+  transaction都走 normal broadcast/probe，不是 overflow fallback。
 - OurCC 的核心优势是 exact sharer/owner semantics、sole-clean 判定和 repeated E/M write；代价是
   ResidentDir miss后的 metadata onload。
-- 49/90 ns 是 warm/cold path values；69.5 ns 只是旧 50/50 假设，已从固定模型删除。
-- 最终评审必须逐 micro-scenario 报告双方数值、Delta、`q_on/h_L3/Q` 和权重，再进行加权平均。
+- 新模型使用 64 MiB aggregate L3、15 ns L3 hit、100 ns metadata DRAM；旧 49/90/69.5 ns不作为参数。
+- `C_meta` 是 0..64 MiB物理变量；当前容量主扫描为 0..32 MiB，并与普通数据 L3机会成本共同优化。
+- 最终评审必须逐 micro-scenario 报告双方数值、Delta、`C_meta/q_on/h_L3/Q/Wcrit/P_steal`
+  和权重，再进行加权平均。
 
 ---
 

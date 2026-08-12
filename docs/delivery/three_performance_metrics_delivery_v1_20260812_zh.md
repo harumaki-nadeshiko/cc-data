@@ -22,7 +22,7 @@
 > Clear”对“VI + limited metadata + write-back + write-invalidate HA”。Scheme A 通过缩小共同
 > coherent address space换取 N-bit exact metadata；Scheme B 保留 128 MiB、固定 2-bit coarse state，
 > 每次 coherence transaction都需要 broadcast。两套方案均已形成 micro-scenario 数值和加权模板；
-> 最终权重及 OurCC `q_on/h_L3/Q/Wcrit` 尚未签署，因此合同状态为 UNPROVEN；文档只对明确列出的
+> 最终权重及 OurCC `C_meta/q_on/h_L3/Q/Wcrit/P_steal` 尚未签署，因此合同状态为 UNPROVEN；文档只对明确列出的
 > 零排队 sensitivity 点给出 PASS，不把示例外推为合同结论。
 
 ## 2. 正式 Source
@@ -66,6 +66,8 @@ extra                  = 6.03 ns
 extra_cycles           = 6.03 ns * 2 GHz
                        = 12.06 cycles
 ```
+
+`6.03 ns` 由未舍入原始均值计算；表中 `162.72/168.76 ns` 仅显示到两位小数，不能用展示值反推精确差值。
 
 目标 1B 数值低于 50 cycles 门槛。
 
@@ -187,7 +189,8 @@ Scheme A exact/resident-hit 的主要结论：首次 Home-latest、dirty-owner�
 每个 scenario 另加：
 
 ```text
-P_meta,A,j = q_on,A,j * [49*h_A,j + 90*(1-h_A,j) + Q_A,j] + Wcrit_A,j
+P_onload,A,j = q_on,A,j * [15*h_A,j + 100*(1-h_A,j) + Q_A,j] + Wcrit_A,j
+P_add,A,j    = P_onload,A,j + P_steal,A,j(C_meta)
 ```
 
 代表 micro-scenario 的 `Delta exact = OurCC - HA`：
@@ -228,30 +231,66 @@ transaction都使用 normal broadcast/probe，不是 overflow fallback。HA 乐�
 Scheme B 不设置可跳过 broadcast 的 2-bit fast path。OurCC metadata onload项为：
 
 ```text
-P_meta,B,j = q_on,B,j * [49*h_B,j + 90*(1-h_B,j) + Q_B,j] + Wcrit_B,j
+P_onload,B,j = q_on,B,j * [15*h_B,j + 100*(1-h_B,j) + Q_B,j] + Wcrit_B,j
+P_add,B,j    = P_onload,B,j + P_steal,B,j(C_meta)
 ```
 
 ## 9. Offload/L3 口径
 
-- 49 ns：历史报告中的 HN-F L3 warm MetaRNF path value。
-- 90 ns：历史报告中的 L3 miss到 metadata DRAM cold path value。
-- 69.5 ns：旧 50/50 假设，不是测量平均，已废弃。
-- 历史 10% cold miss和 9 ns 加权成本也是模型假设，不是通用 workload counter。
-- 地址空间缩小和 Tag 压缩会提高 resident coverage，也可能提高 metadata L3 hit率，但后者必须由
-  metadata working set/reuse测量或冻结，不能从容量比直接推出。
+目标 CPU 有 64 个 1 MiB L3 slices，总计 64 MiB；忽略 slice内部接线，Core访问 L3 为 15 ns。
+metadata DRAM cold endpoint按 100 ns，定义为已包含 L3 miss detection的完整 Core-visible access；不再
+额外加 15 ns。若 100 ns只是 miss后的纯 DRAM service，则必须改用 115 ns重算。旧报告的 49/90 ns
+是历史 MetaRNF端到端路径值，不是新模型参数。
 
-HN-F L3 为 256 KiB，H64 每个 64B bucket含 5 个 slots，理想最多容纳约 20,480 个 metadata entries。
-若完整地址空间均形成 metadata，L3 静态覆盖比例约为：
+定义：
+
+```text
+C_meta = metadata可使用的 L3 容量，0..64 MiB
+C_data = 64 MiB - C_meta
+```
+
+当前容量主扫描到 32 MiB，因为这是最大完整 metadata footprint；若实测 conflict/replacement在
+32 MiB后仍有收益，再扩展到 64 MiB。
+
+H64 每个 64B bucket含 5 slots。按 80% load factor，完整 metadata footprint：
 
 | Scheme | N=2 | N=4 | N=8 |
 |---|---:|---:|---:|
-| A：128/64/32 MiB | 0.98% | 1.95% | 3.91% |
-| B：固定 128 MiB | 0.98% | 0.98% | 0.98% |
+| A | 32 MiB | 16 MiB | 8 MiB |
+| B | 32 MiB | 32 MiB | 32 MiB |
 
-该比例不是 `h_L3`。repeat-one-bucket、低于 256 KiB metadata working set和 streaming应分别给出
-HN-F hit/miss及 warm/cold latency。
+均匀 footprint参考：
 
-每个评审 scenario 至少给出 resident-hit、forced warm onload、forced cold onload三个数。
+```text
+h_uniform = min(1, C_meta/F_meta)
+L_on      = 100 - 85*h_uniform + Q
+```
+
+真实 `h_L3` 仍由 metadata reuse distance决定；repeat-one-bucket可接近 1，streaming可接近 0。
+
+metadata还会挤占普通数据 L3：
+
+```text
+P_steal_est,j(C_meta)
+  = A_data,j * [m_data,j(64-C_meta)-m_data,j(64)] * 85 ns
+```
+
+该式仅是单关键访问、无 overlap、local-DRAM miss参考；普通 data地址流 shadow-cache也只用于
+`P_steal_est`。正式判定必须在 metadata请求流和 metadata latency固定时，比较 `64 MiB` 与
+`64-C_meta` 普通数据容量的 paired data-path latency；已包含的 queue interference不得在 `Q` 中
+重复计数。
+
+选择 `C_meta` 必须最小化 metadata onload和普通数据机会成本之和。`8 MiB` 只是低占用参考点，
+不是合同固定配置。
+
+八场景等权、七项 onload参考中的边际 metadata收益：
+
+| Scheme | N=2 | N=4 | N=8 |
+|---|---:|---:|---:|
+| A | 2.324 ns/op/MiB，至 32 MiB | 4.648 ns/op/MiB，至 16 MiB | 9.297 ns/op/MiB，至 8 MiB |
+| B | 2.324 ns/op/MiB，至 32 MiB | 2.324 ns/op/MiB，至 32 MiB | 2.324 ns/op/MiB，至 32 MiB |
+
+若普通数据机会成本的边际增长超过对应值，就不应继续增加 `C_meta`。
 
 ## 10. Micro-Scenario 加权评审
 
@@ -261,8 +300,8 @@ HN-F hit/miss及 warm/cold latency。
 scheme, N, scenario_id,
 T_HA,
 T_Our_exact,
-q_on, h_L3, Q,
-Wcrit, P_meta,
+C_meta, q_on, h_L3, Q,
+Wcrit, P_onload, P_steal, P_add,
 T_Our,
 Delta,
 weight
@@ -277,23 +316,39 @@ STRICT PASS iff Delta_mean < 0
 ```
 
 冻结 scenario ID 为 `R_HOME/R_SOLE_CLEAN/R_SOLE_DIRTY/W_COLD/W_SINGLE/W_MULTI/W_REPEAT/W_HANDOFF`。
-冻结稿已提供八 scenario 等权 sensitivity 示例。该示例取 `Q=0`、`Wcrit=0`，只展示格式和数值
-envelope，不是最终合同权重。
+冻结稿提供 `C_meta=0/4/8/16/32 MiB` 扫描。取八 scenario 等权，除 repeated write外七项都 onload，
+并取 `Q=Wcrit=P_steal=0`。表中为 `Delta_mean=OurCC-HA`：
 
-| Scheme | N | HA mean | Our resident-hit | Delta | Our forced-warm | Delta | Our forced-cold | Delta |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| A | 2 | 740.6 | 639.4 | -101.2 | 682.3 | -58.3 | 718.2 | -22.4 |
-| A | 4 | 1099.4 | 946.9 | -152.4 | 989.8 | -109.6 | 1025.7 | -73.7 |
-| A | 8 | 1253.1 | 1075.1 | -178.1 | 1117.9 | -135.2 | 1153.8 | -99.3 |
-| B | 2 | 894.5 | 639.4 | -255.1 | 682.3 | -212.2 | 718.2 | -176.3 |
-| B | 4 | 1509.5 | 946.9 | -562.6 | 989.8 | -519.7 | 1025.7 | -483.8 |
-| B | 8 | 1612.0 | 1075.1 | -536.9 | 1117.9 | -494.1 | 1153.8 | -458.2 |
+| Scheme | N | 0 MiB | 4 MiB | 8 MiB | 16 MiB | 32 MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 2 | -13.7 | -23.0 | -32.3 | -50.9 | -88.1 |
+| A | 4 | -64.9 | -83.5 | -102.1 | -139.3 | -139.3 |
+| A | 8 | -90.6 | -127.8 | -164.9 | -164.9 | -164.9 |
+| B | 2 | -167.6 | -176.9 | -186.2 | -204.8 | -241.9 |
+| B | 4 | -475.1 | -484.4 | -493.7 | -512.3 | -549.4 |
+| B | 8 | -449.4 | -458.7 | -468.0 | -486.6 | -523.8 |
 
-forced-warm/forced-cold 假设除 repeated write 外，其余七项都发生 onload，仅用于展示路径 envelope。
-最终评审必须用实际或冻结的 `q_on/h_L3/Q/Wcrit` 和 scenario weights替换。
+`8 MiB` 只占总 L3 的 12.5%，保留 56 MiB普通数据容量；可作为评审锚点。最终评审必须加入
+`P_steal` 并使用实际或冻结的 `C_meta/q_on/h_L3/Q/Wcrit/P_steal` 和 scenario weights。
 
-Scheme A N=2 forced-cold 等权点的 PASS 余量最小，为 22.44 ns/op。若七个 onload项具有相同额外
-`Q+Wcrit=X`，则该 sensitivity 点要求 `X<25.64 ns/onload`；这不是其他权重的通用边界。
+最脆弱的 Scheme A N=2等权点，可承受的最终加权 `Q/Wcrit/P_steal` 综合成本上限分别为：
+
+| `C_meta` | 0 MiB | 4 MiB | 8 MiB | 16 MiB | 32 MiB |
+|---|---:|---:|---:|---:|---:|
+| break-even extra budget | 13.7 ns/op | 23.0 ns/op | 32.3 ns/op | 50.9 ns/op | 88.1 ns/op |
+
+预算约束为：
+
+```text
+sum_j w_j * [q_on,j*Q_j + Wcrit_j + P_steal,j] < -Delta_sensitivity
+```
+
+表中预算是折算到每个 root operation的加权附加成本，不是每次 onload的 raw `Q` 上限。这使评审可
+按普通数据退化限制，选择满足 break-even 的最小 `C_meta`，而不是预设 32 MiB。
+
+若把 100 ns解释为 miss后的纯 DRAM service，cold endpoint改为 115 ns；最脆弱的 Scheme A N=2
+在 `C_meta=0/4/8/16/32 MiB` 下 Delta为 `-0.6/-11.5/-22.4/-44.3/-88.1 ns/op`。该保守压力测试仍
+PASS，但 0 MiB几乎没有额外成本余量。
 
 ## 11. 目标 3 判定
 
@@ -303,8 +358,8 @@ Scheme A N=2 forced-cold 等权点的 PASS 余量最小，为 22.44 ns/op。若�
 | Scheme A Tag/容量模型 | 已完成 |
 | Scheme A/B micro-scenario 数值 | 已完成基础值与 warm/cold envelope |
 | 具体加权平均 | 已给方法和 sensitivity；合同权重未签署 |
-| `q_on/h_L3/Q/Wcrit` | 尚需按 scenario 冻结或测量 |
-| 明确等权、Q=0、Wcrit=0 sensitivity | Scheme A/B N=2/4/8 均 PASS |
+| `C_meta/q_on/h_L3/Q/Wcrit/P_steal` | 尚需按 scenario 冻结或测量 |
+| 明确等权、Q=Wcrit=P_steal=0 扫描 | Scheme A/B N=2/4/8、C_meta=0..32 MiB 均 PASS |
 | 当前合同状态 | `UNPROVEN` |
 
 当前不能写成无条件 PASS，因为最终权重和 metadata locality 参数尚未签署。也不能写成“尚未分析”：
@@ -316,7 +371,7 @@ Scheme A N=2 forced-cold 等权点的 PASS 余量最小，为 22.44 ns/op。若�
 1. 双方签署 Scheme A/B 定义和共同安全完成点。
 2. 确认 Scheme B 2-bit coarse metadata和每次 transaction normal broadcast语义。
 3. 确认 HA 不含未披露的 dirty/latest 等价持久状态。
-4. 为每个 micro-scenario 冻结或测量 `q_on/h_L3/Q/Wcrit`。
+4. 为每个 micro-scenario 冻结或测量 `C_meta/q_on/h_L3/Q/Wcrit/P_steal`。
 5. 合同冻结 scenario weights，逐行计算数值和 Delta。
 6. 对 Scheme A/B 分别计算加权平均并证明 `Delta_mean < 0`。
 7. 由双方或独立评审者复核公式、量纲和不等式方向。
@@ -327,7 +382,8 @@ Scheme A N=2 forced-cold 等权点的 PASS 余量最小，为 22.44 ns/op。若�
 - 不把 lossless one-way Clear 写成当前已有性能实测结果。
 - 不把 Scheme B broadcast写成 overflow fallback。
 - 不让 Scheme A 只缩 HA 地址空间而不同时缩 OurCC Tag。
-- 不把 69.5 ns写成测量平均或固定 offload成本。
+- 不把旧 49/90/69.5 ns写成新硬件的 L3/DRAM参数。
+- 不把 metadata使用的 L3容量视为没有普通数据机会成本的免费资源。
 - 不把 HA10 workload 名称写成甲方 HA 实现。
 - 不把示例 mix 写成合同权重。
 - 不把 `TIE` 或同 K 写成满足严格 `<`。
@@ -342,7 +398,7 @@ Scheme A N=2 forced-cold 等权点的 PASS 余量最小，为 22.44 ns/op。若�
 | 目标 2 历史适用集合达到门槛 | 可确认 |
 | 目标 2 最终冻结 PASS | 暂不确认，等待统一筛选和多轮重算 |
 | 目标 3 Scheme A/B 和 micro-scenario 基础表 | 可确认 |
-| 目标 3 metadata warm/cold envelope | 可确认 |
+| 目标 3 64 MiB L3和 C_meta扫描模型 | 可确认 |
 | 目标 3 无条件 STRICT PASS | 暂不确认 |
-| 目标 3 sensitivity 结果 | 明确等权、零排队 envelope 为 PASS |
-| 目标 3 合同结论 | `UNPROVEN`；待权重和 `q_on/h_L3/Q/Wcrit` 签署 |
+| 目标 3 sensitivity 结果 | 明确等权、零排队/零机会成本扫描为 PASS |
+| 目标 3 合同结论 | `UNPROVEN`；待权重和 `C_meta/q_on/h_L3/Q/Wcrit/P_steal` 签署 |

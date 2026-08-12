@@ -186,9 +186,12 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
   sole-holder ambiguity。
 - Scheme B 固定 128 MiB 和 2-bit coarse state；broadcast 是正常路径，不是 overflow fallback。
 - OurCC 在 Scheme A 中必须按缩小范围减少 Tag；旧 `tag ~= log2(ways)` 和默认 40-bit PA 口径不适用。
-- 49/90 ns 是历史 warm/cold path values；69.5 ns 是旧 50/50 假设，不是测量平均。
+- 旧 49/90 ns 是历史 MetaRNF端到端路径值；新硬件模型使用 64 MiB aggregate L3、15 ns L3 hit和
+  100 ns metadata DRAM。
+- metadata L3容量建模为物理变量 `C_meta=0..64 MiB`，`C_data=64-C_meta`；容量主扫描到 32 MiB，
+  并必须计入普通数据机会成本。
 - 两套 Scheme 的 micro-scenario 基础数值、warm/cold envelope 和加权公式已经形成。
-- 八 scenario 等权、除 repeated write 外 forced warm/cold、`Q=0/Wcrit=0` 的明确 sensitivity 点均 PASS。
+- 八 scenario 等权、均匀 footprint、`Q=Wcrit=P_steal=0` 的 `C_meta=0/4/8/16/32 MiB` 扫描均 PASS。
 - workload、trace 或实测只是在合同未直接给权重时用于确定 `w` 的可选来源。
 
 已完成并归档：
@@ -204,7 +207,8 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 1. 双方书面确认 Scheme A/B 和共同安全完成点。
 2. 确认 Scheme B 2-bit coarse metadata和每次 transaction normal broadcast语义。
 3. 确认 HA 不含超出声明模型的 clean/dirty/latest 等价持久状态。
-4. 为每个 micro-scenario 冻结或测量 ResidentDir hit、`q_on`、MetaRNF `h_L3`、queue 和 critical writeback项。
+4. 为每个 micro-scenario 冻结或测量 `C_meta`、ResidentDir hit、`q_on`、MetaRNF `h_L3`、queue、
+   critical writeback和普通数据 L3机会成本。
 5. 合同直接冻结 scenario weights，或冻结一个允许的 weight 区域。
 6. 对 Scheme A/B 分别计算 `T_mean_HA/T_mean_OurCC/Delta_mean`。
 7. ARM/RISC-V 弱内存序与 transport reorder 的证明域明确分离。
@@ -624,7 +628,7 @@ manifest/
 
 ### P0-5 完成目标 3 HA 参数账本和理论模型
 
-**当前状态：`PARTIAL`。** 外部公开研究、HU 账本、三类操作 DAG、来源矩阵、break-even、
+**工作项完成度：`PARTIAL`；目标 3 合同判定：`UNPROVEN`。** 外部公开研究、HU 账本、三类操作 DAG、来源矩阵、break-even、
 15 题确认单和合同文字已经归档；甲方私有答案、共同 workload/placement、P 上下界和 paired
 数据仍缺失。
 
@@ -891,7 +895,7 @@ expected violation 必须修复或进入正式限制表。
 | 目标 1A | capacity ratio >=1.5 | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 1B | extra latency <50 cycles | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 2 | applicable mean reduction >=10% | 待 `>=500ns` 多轮重算 | PARTIAL | E4 historical | 待补 |
-| 目标 3 | OurCC < HA theoretical mean | Scheme A/B 模型和 sensitivity 已完成 | UNPROVEN | E0-E1 | 待 `q_on/h_L3/Q/Wcrit` 和权重签署 |
+| 目标 3 | OurCC < HA theoretical mean | Scheme A/B 和 C_meta sensitivity 已完成 | UNPROVEN | E0-E1 | 待 `C_meta/q_on/h_L3/Q/Wcrit/P_steal` 和权重签署 |
 | 8N direct | 冻结矩阵 PASS | 待统一 | PARTIAL | E3/E4 | 待补 manifest |
 | 16N Switch | 真正 16 nodes PASS或waiver | 未实现 | TODO | E0 | 待决策 |
 | Correctness | mandatory 100% PASS | 待冻结全回归 | PARTIAL | E3/E4 | 待补 |

@@ -4,7 +4,7 @@
 
 ## 明早汇报建议顺序
 
-1. 先讲两个正式性能目标及结论：目标 1、目标 2 均 PASS。
+1. 先讲两个正式性能目标及结论：目标 1、目标 2 历史数值 PASS，最终状态均为 `PARTIAL`。
 2. 再讲结果边界：spill 主要改善 capacity pressure 后的高复用路径，不是所有路径都更快。
 3. 用 HA10 展示可跨方案比较的实际 workload：延迟降低 47.24%，吞吐提升 89.54%。
 4. 用四类请求链解释差异来源：remote read、shared-to-writer、dirty capacity、mixed catalog。
@@ -14,7 +14,7 @@
 
 | 文档 | 用途 |
 |---|---|
-| `docs/delivery/three_performance_metrics_delivery_v1_20260812_zh.md` | 三项合同性能指标第一版；目标 3 分类讨论 Scheme A/B、micro-scenario 数值和加权平均方法 |
+| `docs/delivery/three_performance_metrics_delivery_v1_20260812_zh.md` | 三项合同性能指标第一版；目标 3 分类讨论 Scheme A/B、64 MiB L3的 `C_meta` 扫描、micro-scenario 数值和加权方法 |
 | `docs/delivery/performance_metrics_summary_20260731_zh.md` | 当前全部性能证据、两个目标判定、风险和汇报口径 |
 | `docs/delivery/ha_comparison_request_chains_20260731_zh.md` | 代表场景的请求树、时序、dataflow 和 HA trace 契约 |
 | `docs/delivery/ha_workload_scenario_catalog_20260731_zh.md` | HA01-HA12、TC142-TC147 和 2N1S adapted TC 的逐场景详细规范 |
@@ -59,9 +59,9 @@ progress stall FAIL，不能列为 full-scale qualified。
 
 | 项目 | 结果 | 状态 |
 |---|---:|---|
-| 目标 1：等效追踪容量 | 102,656 / 65,536 = 156.64% | PASS |
-| 目标 1：压力后附加成本 | +6.03 ns = 12.06 cycles @ 2 GHz，门限 50 cycles | PASS，需最新代码复跑 TC131 |
-| 目标 2：`>500 ns` 适用场景平均时延降幅 | 54.32%，门限 10% | PASS |
+| 目标 1：等效追踪容量 | 102,656 / 65,536 = 156.64% | 数值 PASS；最终 PARTIAL |
+| 目标 1：压力后附加成本 | +6.03 ns = 12.06 cycles @ 2 GHz，门限 50 cycles | 数值 PASS；最终 PARTIAL，需冻结代码复跑 |
+| 目标 2：`>=500 ns` 适用场景平均时延降幅 | 54.32%，门限 10% | 历史数值 PASS；最终 PARTIAL |
 | HA10 useful latency | 500.74 → 264.19 ns/op，-47.24% | PASS |
 | HA10 useful throughput | 1.997 → 3.785 Mops/s，+89.54% | PASS |
 | TC142-TC147 多拓扑 | 4 topology × 6 TC = 24/24 | PASS |
