@@ -28,6 +28,7 @@
 | 状态 | 含义 |
 |---|---|
 | `PASS` | 满足明确验收门槛，且有冻结代码、配置和原始证据 |
+| `CONDITIONAL PASS` | 在明确方案、完成点和参数/权重不等式成立时满足门槛，条件必须随结论同时披露 |
 | `PARTIAL` | 有实现或历史 PASS，但范围、统计、拓扑、可复现性或当前代码复验尚未闭环 |
 | `UNPROVEN` | 当前信息不足，不能判定成立或失败 |
 | `TODO` | 尚未完成，实现或证据缺失 |
@@ -45,8 +46,9 @@
 | `E4` | 多 testcase、多拓扑或 fault/performance matrix PASS |
 | `E5` | 冻结 commit、环境、binary hash、原始 artifact、多轮统计和独立复现齐全 |
 
-最终合同 PASS 应以 `E5` 为目标。形式化结论可以在其明确的小模型范围内达到强证据，
-但不能替代生产规模 E2E 和性能复验。
+目标 1/2 等实测指标的最终合同 PASS 应以 `E5` 为目标。目标 3 是参数化理论指标，其证据闭环由
+方案和假设签署、场景向量、break-even、参数来源与独立复核构成；可选实测不能替代理论证明，
+理论证明也不能替代功能正确性和生产规模 E2E qualification。
 
 ## 3. 当前总体判断
 
@@ -56,7 +58,7 @@
 | 可靠性与 fault | `PARTIAL` | TC117-TC159 bounded fault 证据较强；完整 Q1-Q7 release qualification 尚未全部落地 |
 | 目标 1：512 KiB 容量与成本 | `PARTIAL` | 历史结果达标，但最新协议代码复跑和 E5 provenance 未闭环 |
 | 目标 2：时延降低 | `PARTIAL` | 历史结果达标，但 `>=500 ns` 口径、多轮统计和冻结基线未闭环 |
-| 目标 3：相对甲方 HA | `UNPROVEN` | 外部研究、条件 DAG、来源矩阵和 litmus 规格已归档；甲方私有参数、共同完成语义、paired 数据和 ARM/RISC-V 实跑尚未关闭，且存在合法 direct-authority 风险分支 |
+| 目标 3：相对甲方 HA | `CONDITIONAL PASS`（理论） | 8 月 11 日冻结方案已完成 Scheme B 场景向量和 N=2/4/8 break-even；合同权重满足对应不等式时严格 `<` |
 | 3N/8N 拓扑 | `PARTIAL` | 1S、2S、8N1S、8N2S 实现存在；当前代码完整矩阵和 8N direct 状态需统一冻结 |
 | 16N Switch | `TODO` | 没有真正 `num_nodes=16` 的 Switch qualification，8N2S/16 planes 不能替代 |
 | 形式化验证 | `PASS/PARTIAL` | 指定小模型内零反例；代码轨迹反校验、ARM memory model 和生产 timeout 数值未覆盖 |
@@ -152,16 +154,15 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 
 #### 必须冻结的比较条件
 
-- 甲方 HA write-through/write-back/hybrid。
-- peer response 是 central-return、data-only 还是 data+authority。
-- invalidate completion 语义。
-- metadata commit 点。
-- requester root completion 点。
-- dirty/latest data 定位方式。
-- same-line serialization。
-- HA/IODie 物理 placement。
-- store、fence、DMB/DSB 完成语义。
-- contention/retry 和本地 service/queue 上下界。
+- OurCC：MESI directory + metadata offload + lossless one-way Clear，不同步等待 `ClearResp`。
+- HA：VI + `(N-1)`-bit remote presence + 1-bit local VI、limited exact range、write-back、write-invalidate。
+- HA 每次 write 均经过 Home transaction，即使 requester 已是唯一 holder。
+- 双方覆盖相同目标 coherent address space；采用 Scheme B，不采用各自缩小范围的 Scheme A。
+- HA 512 KiB flat bitmap在 N=2/4/8 下完整覆盖 128/64/32 MiB 目标空间；OurCC resident miss走 metadata offload。
+- 双方 distributed Home、外部拓扑和 fabric `tau` 一致，不考虑 direct transfer。
+- HA requester Ack 与 OurCC one-way Clear 对齐；双方 Home 均在 Ack/Clear 到达后 release。
+- 未配置的本地处理差近似为 0；表中已显式计入的 offload latency 不得再次清零。
+- requester install ordering、same-line serialization 和 strong barrier completion 作为安全接口假设冻结。
 
 #### 统一输出指标
 
@@ -174,16 +175,20 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 
 #### 当前状态
 
-外部研究整合后的正式结论为 `UNPROVEN（存在实质性 RISK）`：
+以 `docs/research/ourcc_vs_vi_bitmap_ha_theory_and_simulation_contract_20260811_zh.md` 为主 source，
+正式理论结论为 `CONDITIONAL PASS`：
 
-- 当前 `clear-ack` profile 真实存在并等待 ClearResp accepted。
-- 拟议 `lossless-oneway` 尚未实现，不能作为当前代码结果。
-- 2 节点下现有 C4 Direct-Forward 的三角色路径不可达，不能作为主要胜因。
-- 甲方 HA 多个高敏感参数仍为 unknown。
-- ARM acquire/release/barrier/OoO 验证未完成。
-- 公开资料确认 direct data 不自动等于 authority，无显式 Ack 不等于无 completion。
-- 合法 direct-data+authority HA 分支可具有更短 K=3 visible path，对 OurCC 构成风险。
-- central-return 分支常见同 K=4；同 K 仍需证明 `P_OurCC<P_HA`。
+- 正确比较对象不是 current `clear-ack`，而是 lossless one-way Clear 理论 profile。
+- HA requester Ack 对应 OurCC Clear/Ack；同步 `ClearResp` 不进入 OurCC requester root。
+- 双方 exact-hit 的首次冲突协议路径大多为 `TIE`；Scheme B 全地址平均还需加入 OurCC resident miss
+  的 offload penalty。
+- OurCC 的主要严格优势来自 E/M repeated write permission reuse，以及 HA 无 dirty/latest 状态时的
+  sole-holder ambiguity。
+- 地址空间对齐采用 Scheme B：HA flat bitmap在目标空间内全部 exact，OurCC resident directory +
+  metadata offload。
+- Scheme B 中多数首次事务因 metadata offload使 OurCC 较慢，因此不能声称所有权重下无条件 PASS。
+- N=2/4/8 的场景向量和严格 break-even 不等式已经形成；不需要 workload 才能成立。
+- workload、trace 或实测只是在合同未直接给权重时用于确定 `w` 的可选来源。
 
 已完成并归档：
 
@@ -191,17 +196,20 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 - Arm CHI/Arm ARM、CCIX/CXL、目录论文、RISC-V、formal/statistics 来源矩阵。
 - Remote Read、Shared-to-Writer、Ownership Handoff 条件 DAG 和 placement 账本。
 - ARM/RISC-V 五类 litmus 规格，当前明确为未运行。
+- 8 月 11 日 VI bitmap HA 冻结模型、Scheme A/B 场景向量和 Scheme B break-even。
 
 #### 最终 PASS 条件
 
-1. HU-01 至 HU-12 高敏感项已确认，或双方接受明确的 unknown 区间。
-2. 至少对 Remote Read、Shared-to-Writer、Ownership Handoff 建立完整 DAG。
-3. 按共同安全完成点计算上下界和 break-even。
-4. 使用相同 target/guest-visible root counter 的可复现 workload。
-5. ARM/RISC-V 弱内存序与 transport reorder 的证明域明确分离。
-6. 使用 paired samples，并预注册最大轮数、inconclusive 和 95% 单侧 CI 规则。
-7. 主指标 `delta=T_mean_HA-T_mean_OurCC` 的置信下界严格大于 0。
-8. 最终结论达到 `STRICT PASS`；若仅 `CONDITIONAL PASS`，需合同方书面接受。
+1. 双方书面确认第 4.3 节的指定方案、Scheme B 和共同安全完成点。
+2. 确认 HA 不含超出 VI/presence bitmap 的 clean/dirty 等价持久状态；若存在则重算 sole-holder 场景。
+3. 确认 HA flat bitmap `N bit/line` 容量和 OurCC metadata offload 的理论参数口径。
+4. 合同直接冻结 operation weights，或冻结一个允许的 weight 区域。
+5. 对冻结权重代入 N=2/4/8 对应 break-even，得到 `Delta_mean < 0`。
+6. ARM/RISC-V 弱内存序与 transport reorder 的证明域明确分离。
+7. 最终结论达到 `STRICT PASS`；若只接受特定权重区域，则状态保持 `CONDITIONAL PASS`。
+
+理论 PASS 不要求 workload、多轮运行或置信区间。若合同未直接给权重，可选用 portable workload、
+trace 或 target counter校准 `w`，但它们不是参数化证明本身的前置条件。
 
 ## 5. 工程验收指标
 
@@ -843,6 +851,7 @@ expected violation 必须修复或进入正式限制表。
 研究原件为：
 
 - `docs/research/ourcc_vs_customer_ha_external_research_report_20260806_zh.md`
+- `docs/research/ourcc_vs_vi_bitmap_ha_theory_and_simulation_contract_20260811_zh.md`
 - `docs/research/target3_onepage_summary_20260806_zh.md`
 - `docs/research/customer_ha_questions_20260806_zh.md`
 - `docs/research/ha_coherence_source_matrix_20260806.tsv`
@@ -880,7 +889,7 @@ expected violation 必须修复或进入正式限制表。
 | 目标 1A | capacity ratio >=1.5 | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 1B | extra latency <50 cycles | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
 | 目标 2 | applicable mean reduction >=10% | 待 `>=500ns` 多轮重算 | PARTIAL | E4 historical | 待补 |
-| 目标 3 | OurCC < HA theoretical mean | 外部条件模型完成；私参/实测未闭环 | UNPROVEN | external research + E0-E1 | 甲方 Q1-Q15、paired E5、litmus 实跑待补 |
+| 目标 3 | OurCC < HA theoretical mean | Scheme B 场景向量和 break-even 已完成 | CONDITIONAL PASS（理论） | E0-E1 | 8 月 11 日冻结稿；待合同权重签署 |
 | 8N direct | 冻结矩阵 PASS | 待统一 | PARTIAL | E3/E4 | 待补 manifest |
 | 16N Switch | 真正 16 nodes PASS或waiver | 未实现 | TODO | E0 | 待决策 |
 | Correctness | mandatory 100% PASS | 待冻结全回归 | PARTIAL | E3/E4 | 待补 |

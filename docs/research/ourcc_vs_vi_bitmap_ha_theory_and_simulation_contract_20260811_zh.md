@@ -1,7 +1,7 @@
 # OurCC 与 VI+Sharer-Bitmap HA 理论对比及仿真合同
 
 **日期：** 2026-08-11  
-**状态：** 理论模型冻结稿；仿真结果尚未填写  
+**状态：** 理论模型冻结稿；2026-08-12 补充 Scheme B 严格 break-even；仿真结果尚未填写
 **目标：** 在不计传输故障、不计瞬态 TxnToken 面积、暂不考虑 direct transfer 的条件下，比较 OurCC 与甲方 HA 的 requester-visible、Home release 和目录扩展性能。
 
 ---
@@ -19,6 +19,10 @@
 > **K5：甲方没有 dirty bit 时，write-back 最新数据位置不能从一般 bitmap 唯一判定。最小安全约定是：多个 holder 必为 clean 且 Home data latest；unique write 后只剩一个 potential latest holder，其他节点读取时必须联系该 holder，或引入未披露的等价状态。**
 
 > **K6：甲方“每次写都触发 invalidation/HA transaction”使其无法复用本地写权限。OurCC 的 E/M repeated write 是最稳定的理论优势。**
+
+> **K7：目标 3 的指定比较对象是 `MESI + metadata offload + lossless one-way Clear` 对
+> `VI + limited address space + write-back + write-invalidate HA`。地址空间对齐时采用 Scheme B，
+> 不是 current sync ClearResp，也不是各自缩小 coherent range 的 Scheme A。**
 
 ---
 
@@ -384,7 +388,7 @@ M_target(N) = 128 MiB / (N/2) = 256/N MiB
 
 ### 6.2 固定面积容量模型
 
-设：
+OurCC resident directory 使用带 tag/replacement 的 set-associative 容量模型。设：
 
 - SRAM `A` bits；
 - associativity `W`；
@@ -402,10 +406,12 @@ capacity = W*S
 represented bytes = capacity*64
 ```
 
-甲方最小模型：
+甲方 HA 与该模型不同。冻结方案是已知 base/range 的 flat packed bitmap，不保存 per-line tag、valid
+或 replacement metadata，因此其 exact capacity 直接为：
 
 ```text
-f_HA(N) = N
+capacity_HA = floor((512 KiB * 8) / N) lines
+represented_HA = capacity_HA * 64 B
 ```
 
 OurCC current stable Epoch：
@@ -427,19 +433,21 @@ f_Our_N(N) = N + 7
 
 | N | HA N-bit | OurCC EPOCH | OurCC NO_STABLE_EPOCH |
 |---:|---:|---:|---:|
-| 2 | 1,048,576 lines / 64 MiB | 98,304 / 6 MiB | 262,144 / 16 MiB |
-| 4 | 524,288 / 32 MiB | 90,112 / 5.5 MiB | 262,144 / 16 MiB |
-| 8 | 327,680 / 20 MiB | 81,920 / 5 MiB | 196,608 / 12 MiB |
+| 2 | 2,097,152 lines / 128 MiB | 98,304 / 6 MiB | 262,144 / 16 MiB |
+| 4 | 1,048,576 lines / 64 MiB | 90,112 / 5.5 MiB | 262,144 / 16 MiB |
+| 8 | 524,288 lines / 32 MiB | 81,920 / 5 MiB | 196,608 / 12 MiB |
 
 相对目标空间：
 
 | N | HA exact coverage | Our EPOCH resident coverage | Our NO_EPOCH resident coverage |
 |---:|---:|---:|---:|
-| 2 | 50.0% | 4.69% | 12.5% |
-| 4 | 50.0% | 8.59% | 25.0% |
-| 8 | 62.5% | 15.63% | 37.5% |
+| 2 | 100.0% | 4.69% | 12.5% |
+| 4 | 100.0% | 8.59% | 25.0% |
+| 8 | 100.0% | 15.63% | 37.5% |
 
-Scheme A 严格含义是把 coherent represented range 缩到上述容量；范围内全部走 exact path，范围外不属于该配置的 coherent address space。
+Scheme A 严格含义是各方案只暴露自身 resident exact capacity。由于目标 3 要求双方 coherent address
+space 对齐，正式比较使用 Scheme B；HA 的 512 KiB flat bitmap 已完整覆盖 `128/64/32 MiB` 目标范围，
+OurCC 超出 resident exact capacity 的地址走 metadata offload。
 
 ### 6.4 Exact requester-visible latency
 
@@ -493,16 +501,19 @@ sum_i(weight_i) = 1
 
 ---
 
-## 7. ScaleScheme B：超出 exact range 后 Broadcast
+## 7. ScaleScheme B：对齐目标空间，HA flat exact / OurCC offload
 
 ### 7.1 HA
 
 ```text
-represented address -> exact bitmap
-unrepresented address -> ideal parallel broadcast
+目标 coherent address space -> exact flat bitmap
 ```
 
-Broadcast write等待所有 required InvAck。理论模型不计 fanout bandwidth、Ack incast 和 queue，因此是 HA 的乐观下界。
+在 N=2/4/8 下，512 KiB 的严格 N-bit flat bitmap分别覆盖 128/64/32 MiB，等于第 6.1 节目标
+地址空间。因此正式 Scheme B 表中 HA 不发生容量 overflow，也不需要 broadcast fallback。
+
+若未来目标地址空间继续扩大到 bitmap 范围外，HA 才使用 ideal parallel broadcast；该扩展不进入本版
+地址空间对齐结果。
 
 ### 7.2 OurCC
 
@@ -521,35 +532,112 @@ cold offload 90 ns
 
 ### 7.3 按目标地址空间的平均场景结果
 
-下表已按第 6.1 节各 N 的 `128/64/32 MiB` 目标空间加权 exact coverage。
+下表按第 6.1 节各 N 的 `128/64/32 MiB` 目标空间计算。HA exact coverage 为 100%；OurCC EPOCH
+resident coverage 分别为 4.6875%、8.59375% 和 15.625%，其余地址增加平均 69.5 ns metadata
+offload latency。
 
 每格：
 
 ```text
-HA bitmap+broadcast / Our EPOCH offload / Delta
+HA exact bitmap / Our EPOCH offload / Delta
 ```
 
 | 场景 | N=2 | N=4 | N=8 |
 |---|---:|---:|---:|
-| Home latest read | `700 / 576 / -124` | `1110 / 775 / -335` | `1311 / 876 / -435` |
-| sole clean/potential holder read | `896 / 962 / +66` 或按 clean proof优化 | `1408 / 1372 / -36` | `1565 / 1573 / +8` |
-| dirty/latest holder read | `896 / 962 / +66` | `1408 / 1372 / -36` | `1565 / 1573 / +8` |
-| cold/no-sharer write | `700 / 576 / -124` | `1110 / 775 / -335` | `1311 / 876 / -435` |
-| single-sharer write | `890 / 956 / +66` | `1403 / 1366 / -37` | `1559 / 1569 / +10` |
-| multi-sharer write | `890 / 956 / +66` | `1505 / 1572 / +67` | `1608 / 1671 / +63` |
-| repeated write | `658 / 1.5 / -656` | `1067 / 1.5 / -1066` | `1280 / 1.5 / -1279` |
+| Home latest read | `510 / 576.2 / +66.2` | `715 / 778.5 / +63.5` | `817.5 / 876.1 / +58.6` |
+| sole clean/potential holder read | `896 / 576.2 / -319.8` | `1306 / 778.5 / -527.5` | `1511 / 876.1 / -634.9` |
+| dirty/latest holder read | `896 / 962.2 / +66.2` | `1306 / 1369.5 / +63.5` | `1511 / 1569.6 / +58.6` |
+| cold/no-sharer write | `510 / 576.2 / +66.2` | `715 / 778.5 / +63.5` | `817.5 / 876.1 / +58.6` |
+| single-sharer write | `890 / 956.2 / +66.2` | `1300 / 1363.5 / +63.5` | `1505 / 1563.6 / +58.6` |
+| multi-sharer write | `890 / 956.2 / +66.2` | `1505 / 1568.5 / +63.5` | `1607.5 / 1666.1 / +58.6` |
+| dirty ownership handoff | `908 / 974.2 / +66.2` | `1318 / 1381.5 / +63.5` | `1523 / 1581.6 / +58.6` |
+| repeated same-writer write | `425 / 1.5 / -423.5` | `630 / 1.5 / -628.5` | `732.5 / 1.5 / -731.0` |
 
-注：sole-holder read 取决于甲方如何识别 Home data valid。若所有 sole holder 一律视为 potential dirty，则走 holder path；若存在未披露的 clean proof，则可走 Home path。
+注：sole-holder read 使用冻结 HA 模型的“无 dirty/latest 等价持久状态”条件。HA 必须把 sole holder
+视为 potential latest 并联系它，而 MESI 可识别 clean singleton 并使用 Home latest data。若甲方存在
+未披露的 clean proof、Home-data-valid 或 owner-mode 状态，该行必须重算为普通 `+offload penalty`。
 
 ### 7.4 权重敏感性
 
-Scheme B 不冻结最终权重。示例 mix 的预期趋势：
+Scheme B 不冻结最终权重。修正后的趋势为：
 
-1. `N=2`：OurCC 优势主要来自 repeated write；metadata offload 在冲突场景可能使 OurCC 慢约 60~70 ns。
-2. `N=4`：HA 约一半地址 broadcast，OurCC offload penalty 仅 49~90 ns，OurCC 优势扩大。
-3. `N=8`：HA exact coverage 虽为 62.5%，但 unrepresented 地址仍需 broadcast；OurCC repeated write 和 offload 路径仍有优势。
-4. pure sharing-heavy、multi-sharer write 且无 repeated write 时，理想 broadcast 可使双方接近，OurCC 甚至可能因 metadata offload慢约 60~70 ns。
-5. 一旦加入非零 broadcast bandwidth/queue，HA 延迟会随 N 和活跃节点增长；本理论表没有计入该效应。
+1. HA flat bitmap在对齐目标空间内全部 exact，不承担容量 broadcast latency。
+2. OurCC resident miss使多数首次事务平均慢约 58.6-66.2 ns。
+3. OurCC 的严格优势集中在 sole-clean ambiguity 和 repeated E/M write permission reuse。
+4. 若 workload 没有这两类操作，OurCC 可能不满足严格 `<`。
+5. 若未来目标空间超出 HA flat bitmap范围，才需要另行加入 HA broadcast latency并重新计算。
+
+### 7.5 Scheme B 的合同严格判定公式
+
+目标 3 的指定理论比较为：
+
+```text
+OurCC:
+    MESI directory
+    + metadata resident miss offload
+    + 与 HA 相同的目标 coherent address space
+    + lossless one-way Clear/Ack，不等待同步 ClearResp
+
+HA:
+    VI + (N-1)-bit remote presence bitmap
+    + limited exact address range
+    + write-back
+    + write-invalidate
+    + 每次 write 均经过 Home transaction
+    + 512 KiB flat bitmap覆盖本版完整目标空间
+```
+
+双方采用相同外部拓扑和相同 fabric 参数；未单独配置的本地处理差按近似 0。表 7.3 中已经明确
+计入的 metadata offload latency不属于“未知项”，不能再清零。本版目标空间内 HA 不发生 overflow，
+因此正式系数不含 broadcast latency。
+
+定义以下非负场景权重，总和不超过 1；其余未列场景在当前表中 `Delta=0`：
+
+| 权重 | 场景 |
+|---|---|
+| `w_s` | sole clean/potential holder read |
+| `w_r` | repeated same-writer write |
+| `w_p` | 其他需要 OurCC metadata lookup/offload 的首次事务总权重：Home latest、dirty holder、cold write、single/multi-sharer write、dirty handoff |
+
+使用 `Delta = T_OurCC - T_HA`，合同通过条件为 `Delta_mean < 0`。由表 7.3 直接得到：
+
+```text
+N=2:
+Delta_mean = 66.2422*w_p
+             - 319.7578*w_s
+             - 423.5*w_r
+
+STRICT PASS iff:
+319.7578*w_s + 423.5*w_r > 66.2422*w_p
+```
+
+```text
+N=4:
+Delta_mean = 63.5273*w_p
+             - 527.4727*w_s
+             - 628.5*w_r
+
+STRICT PASS iff:
+527.4727*w_s + 628.5*w_r > 63.5273*w_p
+```
+
+```text
+N=8:
+Delta_mean = 58.6406*w_p
+             - 634.8594*w_s
+             - 731.0*w_r
+
+STRICT PASS iff:
+634.8594*w_s + 731.0*w_r > 58.6406*w_p
+```
+
+上述系数单位均为 ns。等号成立时为 `TIE`，不满足严格 `<`；左侧小于右侧时为 `FAIL`。
+
+因此当前理论结果不是“所有场景均快”，也不是“尚未分析”，而是：
+
+> **Scheme B 的场景向量和严格 break-even 已完成，结论为 `CONDITIONAL PASS`。合同只要书面冻结
+> 满足上述不等式的 operation weights，即可不运行 workload 直接判定理论 `STRICT PASS`；若不冻结
+> weights，则只能保留条件结论。workload/trace 只是确定 weights 的可选来源。**
 
 ---
 
@@ -653,10 +741,13 @@ requester_root_complete
 - HA receipt-Ack 与 OurCC one-way Clear 在 Home release 路径上同构。
 - 当前 OurCC 代码尚未把 Clear 绑定到 local install；理论可用 OrderedInstallGuard，仿真必须实现或断言。
 - 在强 ordered/lossless、单 outstanding、无 crash 模型中，可删除 stable Epoch，不考虑 TxnToken。
-- HA N-bit bitmap 的片上 exact capacity更大；OurCC 的扩展优势来自 metadata offload，而不是单条 resident entry 更小。
+- HA N-bit flat bitmap用 512 KiB 正好覆盖本版 `128/64/32 MiB` 目标空间；OurCC 依靠 metadata
+  offload覆盖相同地址空间，而不是依靠更小的 resident entry。
 - Exact range 内，首次冲突路径大多相等；OurCC 的核心优势是 repeated E/M write，以及 HA 无 dirty/latest 状态时的 sole-holder ambiguity。
-- Broadcast fallback 下，OurCC 的 49~90 ns metadata offload通常小于一个 410 ns fabric leg，但理想 multi-sharer broadcast可能与 exact invalidation同阶。
-- 最终平均不能在当前阶段冻结；必须输出 scenario vector，并由客户/合同冻结 workload weights。
+- 地址空间对齐的 Scheme B 中，HA 在目标范围内不触发 broadcast；OurCC 的 offload penalty 与
+  sole-clean/repeated-write 优势通过第 7.5 节 break-even统一判定。
+- 最终平均必须使用 scenario vector 和冻结权重判定。权重可由合同直接给出理论分布或允许区域；
+  workload/trace 只是在合同未直接给权重时的可选校准来源。
 
 ---
 
@@ -674,4 +765,5 @@ requester_root_complete
 
 > **C6：Broadcast 物理实现。** 是否真正 single-cycle multicast/parallel Ack，还是存在 per-destination injection 和 Ack aggregation成本？
 
-> **C7：最终 workload weights。** 当前不冻结；正式比较需由合同给出场景比例或 workload trace。
+> **C7：最终 operation weights。** 当前尚未签署；正式比较可由合同直接冻结场景比例或允许区域，
+> 也可选择 workload/trace 作为校准来源。

@@ -14,6 +14,7 @@
 
 | 文档 | 用途 |
 |---|---|
+| `docs/delivery/three_performance_metrics_delivery_v1_20260812_zh.md` | 三项合同性能指标第一版；目标 3 以 8 月 11 日 VI bitmap HA 冻结稿和 Scheme B break-even 为准 |
 | `docs/delivery/performance_metrics_summary_20260731_zh.md` | 当前全部性能证据、两个目标判定、风险和汇报口径 |
 | `docs/delivery/ha_comparison_request_chains_20260731_zh.md` | 代表场景的请求树、时序、dataflow 和 HA trace 契约 |
 | `docs/delivery/ha_workload_scenario_catalog_20260731_zh.md` | HA01-HA12、TC142-TC147 和 2N1S adapted TC 的逐场景详细规范 |
