@@ -14,6 +14,7 @@
 
 | 文档 | 用途 |
 |---|---|
+| `docs/delivery/three_performance_metrics_executive_summary_20260813_zh.md` | 三项性能指标一页领导摘要；给出 8 MiB L3建议、明确结果和最终确认条件 |
 | `docs/delivery/three_performance_metrics_delivery_v1_20260812_zh.md` | 三项合同性能指标第一版；目标 3 分类讨论 Scheme A/B、64 MiB L3的 `C_meta` 扫描、micro-scenario 数值和加权方法 |
 | `docs/delivery/performance_metrics_summary_20260731_zh.md` | 当前全部性能证据、两个目标判定、风险和汇报口径 |
 | `docs/delivery/ha_comparison_request_chains_20260731_zh.md` | 代表场景的请求树、时序、dataflow 和 HA trace 契约 |
