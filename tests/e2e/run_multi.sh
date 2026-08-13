@@ -80,6 +80,12 @@ export EP_PORT_HWM="${EP_PORT_HWM:-8192}"
 export EP_NSIM_MAX_PENDING="${EP_NSIM_MAX_PENDING:-65536}"
 export EP_CPU_MODEL="${EP_CPU_MODEL:-timing}"
 export EP_SEQUENCER_MAX_OUTSTANDING="${EP_SEQUENCER_MAX_OUTSTANDING:-0}"
+# PeerExit tolerates bounded transient loss/delay by retrying Notify while the
+# receiver remains in this bounded quiesce responder window. These defaults
+# fit comfortably inside the runner's 15-second shutdown grace period.
+export UBIO_PEER_EXIT_RETRY_MS="${UBIO_PEER_EXIT_RETRY_MS:-100}"
+export UBIO_PEER_EXIT_QUIESCE_MS="${UBIO_PEER_EXIT_QUIESCE_MS:-2000}"
+export UBIO_PEER_EXIT_DELIVERY_BUDGET_MS="${UBIO_PEER_EXIT_DELIVERY_BUDGET_MS:-1000}"
 
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
@@ -786,6 +792,10 @@ run_tc() {
     # 5. Start N*K ubio processes (plane = node*K + socket)
     UBIO_PIDS=""
     local frules; frules="$(fault_rules_for_tc "$tc")"
+    if [ -n "${UBIO_FAULT_RULES_APPEND:-}" ]; then
+        [ -n "$frules" ] && frules="$frules;"
+        frules="${frules}${UBIO_FAULT_RULES_APPEND}"
+    fi
     local frargs=""
     [ -n "$frules" ] && frargs="--fault-rules=$frules"
     [ -n "$frules" ] && echo "[launch] fault rules (TC${tc}): $frules"
@@ -1057,6 +1067,12 @@ run_tc() {
         --simout "${simouts[@]}" --fault-log "${faultlogs[@]}" 2>&1 | tee "$vlog"
     # Last sentinel line decides
     if tail -n1 "$vlog" 2>/dev/null | grep -q ">>> TC${tc} PASSED <<<"; then
+        if ! python3 "$ROOT_DIR/scripts/verify_peer_exit_logs.py" \
+            "$LOG_BASE" --tc "$tc" --num-nodes "$NUM_NODES" \
+            --num-sockets "$NUM_SOCKETS"; then
+            echo "  TC${tc} FAILED (PeerExit contract)"
+            return 1
+        fi
         # Persist request issue-to-first-response chains for cross-run latency
         # evaluation.  TRACE-PERF is emitted by gem5, UBIO, and networksim.
         python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \

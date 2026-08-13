@@ -77,7 +77,9 @@ enum class CoherenceMessageType : uint16_t {
     MetaRNFLineReadResp,     // gem5 → ubio, response with 64B data + typed status
     MetaRNFLineWriteReq,     // ubio → gem5, write a single 64B metadata line
     MetaRNFLineWriteResp,    // gem5 → ubio, write ack with typed status
-    PeerExit,                // protocol-level peer membership notification
+    // Version 1 requires reqId!=0 and seqNum=1. Mixed old/new UBIO processes
+    // are intentionally unsupported; upgrade every plane as one deployment.
+    PeerExit = 30,           // Notify unless CFLAG_PEER_EXIT_ACK is set
 };
 
 // ---- Message Flags ----
@@ -90,6 +92,7 @@ enum CoherenceMessageFlags : uint32_t {
     CFLAG_IS_READ_RECALL = 1u << 5,
     CFLAG_BUSY            = 1u << 6,
     CFLAG_DATA_FORWARDED  = 1u << 7,  // C4: data was direct-forwarded from owner to requester
+    CFLAG_PEER_EXIT_ACK   = 1u << 8,  // PeerExit ACK; clear means Notify
 };
 
 // ---- Message Header (fixed envelope) ----

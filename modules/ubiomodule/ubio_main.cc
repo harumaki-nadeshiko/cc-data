@@ -14,9 +14,11 @@
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
 #include "modules/ubiomodule/BackstoreHostH64.hh"
+#include "modules/ubiomodule/PeerExitCoordinator.hh"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -27,7 +29,11 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
+
+#include <sys/random.h>
+#include <unistd.h>
 
 using namespace framework;
 using namespace cc::glob;
@@ -83,11 +89,13 @@ isGem5Ingress(CoherenceMessageType t)
 // action ∈ {drop, dup, delay, reorder}. Matching messages emit explicit
 // UBFAULT load, trigger, and (for buffered actions) delivery events.
 enum class UbioFaultAction { Drop, Duplicate, Delay, Reorder };
+enum class PeerExitFaultMatch { Both, Notify, Ack };
 
 struct UbioFaultRule {
     std::string name;
     CoherenceMessageType matchType = CoherenceMessageType::ReadReq;
     bool matchAnyType = false;          // matchType==ReadReq used as wildcard
+    PeerExitFaultMatch peerExitMatch = PeerExitFaultMatch::Both;
     int matchSrc = -1;
     int matchDst = -1;
     uint64_t matchPa = 0;
@@ -110,7 +118,8 @@ faultActionName(UbioFaultAction action)
 }
 
 bool
-parseMsgTypeName(const std::string &s, CoherenceMessageType &type)
+parseMsgTypeName(const std::string &s, CoherenceMessageType &type,
+                 PeerExitFaultMatch &peerExitMatch)
 {
     static const std::map<std::string, CoherenceMessageType> m = {
         {"ReadReq", CoherenceMessageType::ReadReq},
@@ -143,10 +152,15 @@ parseMsgTypeName(const std::string &s, CoherenceMessageType &type)
         {"MetaRNFLineReadResp", CoherenceMessageType::MetaRNFLineReadResp},
         {"MetaRNFLineWriteReq", CoherenceMessageType::MetaRNFLineWriteReq},
         {"MetaRNFLineWriteResp", CoherenceMessageType::MetaRNFLineWriteResp},
+        {"PeerExit", CoherenceMessageType::PeerExit},
+        {"PeerExitNotify", CoherenceMessageType::PeerExit},
+        {"PeerExitAck", CoherenceMessageType::PeerExit},
     };
     auto it = m.find(s);
     if (it == m.end()) return false;
     type = it->second;
+    if (s == "PeerExitNotify") peerExitMatch = PeerExitFaultMatch::Notify;
+    if (s == "PeerExitAck") peerExitMatch = PeerExitFaultMatch::Ack;
     return true;
 }
 
@@ -176,6 +190,53 @@ parseUint64Field(const std::string &s, int base, uint64_t &value)
     if (errno == ERANGE || end == s.c_str() || *end != '\0') return false;
     value = static_cast<uint64_t>(parsed);
     return true;
+}
+
+uint64_t
+peerExitIntervalFromEnv(const char *name, uint64_t defaultValue,
+                        uint64_t minValue, uint64_t maxValue)
+{
+    const char *env = std::getenv(name);
+    if (!env || !*env)
+        return defaultValue;
+    uint64_t value = 0;
+    if (!parseUint64Field(env, 10, value) || value < minValue ||
+        value > maxValue) {
+        LogError("UBIO", "[UBIO-FATAL] {}='{}' must be in [{},{}] ms",
+                 name, env, minValue, maxValue);
+        std::exit(1);
+    }
+    return value;
+}
+
+bool
+logPeerExitAttempt(uint64_t attempt)
+{
+    // Preserve proof of the first retry (attempt=2), then logarithmically
+    // bound output during prolonged transient failures.
+    return attempt != 0 && (attempt & (attempt - 1)) == 0;
+}
+
+uint64_t
+peerExitNonce(int node, int socket)
+{
+    uint64_t value = 0;
+    size_t received = 0;
+    while (received < sizeof(value)) {
+        const ssize_t count = getrandom(
+            reinterpret_cast<unsigned char *>(&value) + received,
+            sizeof(value) - received, 0);
+        if (count > 0) {
+            received += static_cast<size_t>(count);
+            continue;
+        }
+        if (count < 0 && errno == EINTR)
+            continue;
+        LogError("UBIO", "[UBIO-FATAL] getrandom failed for PeerExit nonce "
+                 "local={}:{} errno={}", node, socket, errno);
+        std::exit(1);
+    }
+    return value == 0 ? 1 : value;
 }
 
 std::vector<UbioFaultRule> g_faultRules;
@@ -219,7 +280,8 @@ parseFaultRules(const std::string &all, int localNode)
         UbioFaultRule r;
         r.name = parts[0];
         r.matchAnyType = (parts[1] == "*" || parts[1] == "any");
-        if (!r.matchAnyType && !parseMsgTypeName(parts[1], r.matchType)) {
+        if (!r.matchAnyType &&
+            !parseMsgTypeName(parts[1], r.matchType, r.peerExitMatch)) {
             LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
                     "error=unknown_type type='{}' — skipping",
                     rule_str, parts[1]);
@@ -276,6 +338,15 @@ parseFaultRules(const std::string &all, int localNode)
                 continue;
             }
         }
+        if (!r.matchAnyType &&
+            r.matchType == CoherenceMessageType::PeerExit &&
+            (r.action == UbioFaultAction::Delay ||
+             r.action == UbioFaultAction::Reorder)) {
+            LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
+                    "error=peer_exit_requires_wall_clock_fault — skipping",
+                    rule_str);
+            continue;
+        }
         if (parts.size() > 7 && !parts[7].empty() &&
             !parseIntField(parts[7], r.matchCount)) {
             LogWarn("UBIO", "[UBFAULT-LOAD] malformed rule='{}' "
@@ -322,10 +393,29 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick,
     for (auto &r : g_faultRules) {
         if (r.matchCount > 0 && r.firedCount >= r.matchCount) continue;
         if (!r.matchAnyType && r.matchType != coh.h.type) continue;
+        if (!r.matchAnyType && coh.h.type == CoherenceMessageType::PeerExit) {
+            const bool isAck =
+                (coh.h.flags & static_cast<uint32_t>(CFLAG_PEER_EXIT_ACK)) != 0;
+            if (r.peerExitMatch == PeerExitFaultMatch::Notify && isAck) continue;
+            if (r.peerExitMatch == PeerExitFaultMatch::Ack && !isAck) continue;
+        }
         if (r.matchSrc >= 0 && r.matchSrc != (int)coh.h.srcNode) continue;
         if (r.matchDst >= 0 && r.matchDst != (int)coh.h.dstNode) continue;
         if (r.matchPa != 0 && r.matchPa != coh.h.homeLinePa) continue;
         const char *tn = coherenceMsgTypeName(coh.h.type);
+        if (coh.h.type == CoherenceMessageType::PeerExit &&
+            (r.action == UbioFaultAction::Delay ||
+             r.action == UbioFaultAction::Reorder)) {
+            LogWarn("UBIO", "[UBFAULT-SKIP] node={} rule='{}' action={} "
+                    "type={} src={} dst={} exitId={} currentTick={} "
+                    "warning=peer_exit_wall_clock_protocol_cannot_use_sim_tick "
+                    "— injection skipped",
+                    nid, r.name, faultActionName(r.action),
+                    (coh.h.flags & static_cast<uint32_t>(CFLAG_PEER_EXIT_ACK))
+                        ? "PeerExitAck" : "PeerExitNotify",
+                    coh.h.srcNode, coh.h.dstNode, coh.h.reqId, currentTick);
+            continue;
+        }
         uint64_t fireTick = currentTick;
         if ((r.action == UbioFaultAction::Delay ||
              r.action == UbioFaultAction::Reorder) &&
@@ -2087,19 +2177,30 @@ main(int argc, char **argv)
         ubccDebugClear = (std::atoi(env) != 0);
     }
 
-    if (nid < 0 || nid > 31) {
-        LogError("UBIO", "[ubio:{}] ERROR: need --node=", nid);
+    const uint64_t totalPlanes = g_numNodes > 0 && g_numSockets > 0
+        ? static_cast<uint64_t>(g_numNodes) *
+              static_cast<uint64_t>(g_numSockets)
+        : 0;
+    if (g_numNodes <= 0 || g_numSockets <= 0 || totalPlanes > 32) {
+        LogError("UBIO", "[UBIO-FATAL] invalid topology numNodes={} "
+                 "numSockets={} totalPlanes={} (expected 1..32 planes)",
+                 g_numNodes, g_numSockets, totalPlanes);
+        return 1;
+    }
+    if (nid < 0 || nid >= g_numNodes) {
+        LogError("UBIO", "[UBIO-FATAL] --node={} out of range [0,{})",
+                 nid, g_numNodes);
+        return 1;
+    }
+    if (sid < 0 || sid >= g_numSockets) {
+        LogError("UBIO", "[UBIO-FATAL] --socket={} out of range [0,{})",
+                 sid, g_numSockets);
         return 1;
     }
     for (const auto &rules : faultRuleArgs) parseFaultRules(rules, nid);
 
     // Socket-plane model: this ubio process is the home directory + router for
     // exactly one (node, socket) plane. num_sockets from --num-sockets arg.
-    if (sid < 0 || sid >= g_numSockets) {
-        LogError("UBIO", "[ubio:{}] ERROR: --socket={} out of range [0,{})",
-                     nid, sid, g_numSockets);
-        return 1;
-    }
     int gid = static_cast<int>(gidOf(nid, sid));
 
     LogInfo("UBIO", "[UBIO-START] node={} socket={} gid={} creating ports...",
@@ -2244,7 +2345,100 @@ main(int argc, char **argv)
     }
     // ── End Phase 0 manifest ─────────────────────────────────────────
 
-    bool gem5Done = false, netDone = false;
+    bool gem5Done = false, netDone = false, peerExitFailed = false;
+    bool netTerminateIssued = false;
+    bool peerExitStarted = false;
+    bool peerExitQuiesceLogged = false;
+    std::set<ubiocc::PeerExitCoordinator::PeerId> peerExitMarked;
+    using SteadyClock = std::chrono::steady_clock;
+    const auto peerExitClockOrigin = SteadyClock::now();
+    const uint64_t localPeerExitId = peerExitNonce(nid, sid);
+    const uint64_t peerExitRetryMs = peerExitIntervalFromEnv(
+        "UBIO_PEER_EXIT_RETRY_MS", 100, 1, 5000);
+    const uint64_t peerExitQuiesceMs = peerExitIntervalFromEnv(
+        "UBIO_PEER_EXIT_QUIESCE_MS", 2000, 1, 10000);
+    const uint64_t peerExitDeliveryBudgetMs = peerExitIntervalFromEnv(
+        "UBIO_PEER_EXIT_DELIVERY_BUDGET_MS", 1000, 1, 5000);
+    if (peerExitRetryMs > std::numeric_limits<uint64_t>::max() -
+            peerExitDeliveryBudgetMs ||
+        peerExitQuiesceMs <= peerExitRetryMs + peerExitDeliveryBudgetMs) {
+        LogError("UBIO", "[UBIO-FATAL] PeerExit quiesceMs={} must exceed "
+                 "retryMs={} + deliveryBudgetMs={}", peerExitQuiesceMs,
+                 peerExitRetryMs, peerExitDeliveryBudgetMs);
+        return 1;
+    }
+    auto peerExitNowMs = [&]() -> uint64_t {
+        return static_cast<uint64_t>(std::chrono::duration_cast<
+            std::chrono::milliseconds>(SteadyClock::now() - peerExitClockOrigin)
+                                         .count());
+    };
+    ubiocc::PeerExitCoordinator peerExitCoordinator(
+        static_cast<uint32_t>(g_numNodes), static_cast<uint32_t>(g_numSockets),
+        {static_cast<uint32_t>(nid), static_cast<uint32_t>(sid)},
+        {peerExitRetryMs, peerExitQuiesceMs},
+        [&]() {
+            if (netPort && !netTerminateIssued) {
+                netTerminateIssued = true;
+                LogInfo("UBIO", "[PEER-EXIT-CLOSE] local={}:{} exitId={}",
+                        nid, sid, localPeerExitId);
+                TerminatePort(netPort);
+            }
+            netDone = true;
+        }, localPeerExitId);
+    std::map<std::tuple<ubiocc::PeerExitCoordinator::PeerId, bool, uint64_t>,
+             uint64_t>
+        peerExitSendAttempts;
+    auto sendPeerExitActions =
+        [&](const std::vector<ubiocc::PeerExitCoordinator::Action> &actions) {
+            for (const auto &action : actions) {
+                if (!netPort || netDone)
+                    continue;
+                const bool isAck = action.kind ==
+                    ubiocc::PeerExitCoordinator::ActionKind::Ack;
+                auto attemptKey =
+                    std::make_tuple(action.peer, isAck, action.exitId);
+                const uint64_t attempt = ++peerExitSendAttempts[attemptKey];
+                CoherenceMessage exit;
+                exit.h.type = CoherenceMessageType::PeerExit;
+                exit.h.srcNode = static_cast<uint16_t>(nid);
+                exit.h.srcSocket = static_cast<uint16_t>(sid);
+                exit.h.dstNode = static_cast<uint16_t>(action.peer.node);
+                exit.h.dstSocket = static_cast<uint16_t>(action.peer.socket);
+                exit.h.reqId = action.exitId;
+                exit.h.seqNum = 1;
+                if (isAck)
+                    exit.h.flags |= static_cast<uint32_t>(CFLAG_PEER_EXIT_ACK);
+                if (logPeerExitAttempt(attempt)) {
+                    LogInfo("UBIO", "[PEER-EXIT-{}-SEND] local={}:{} peer={}:{} "
+                            "exitId={} attempt={} version={}",
+                            isAck ? "ACK" : "NOTIFY", nid, sid,
+                            action.peer.node, action.peer.socket, action.exitId,
+                            attempt, exit.h.seqNum);
+                }
+                const bool sent = sendCoh(
+                    netPort, tick,
+                    gidOf(action.peer.node, action.peer.socket), exit, true);
+                if (!sent && logPeerExitAttempt(attempt)) {
+                    LogWarn("UBIO", "[PEER-EXIT-{}-SEND-FAILED] local={}:{} "
+                            "peer={}:{} exitId={} attempt={} "
+                            "recovery=sender_notify_retry",
+                            isAck ? "ACK" : "NOTIFY", nid, sid,
+                            action.peer.node, action.peer.socket, action.exitId,
+                            attempt);
+                }
+            }
+        };
+    auto logPeerExitQuiesce = [&]() {
+        if (!peerExitQuiesceLogged && peerExitCoordinator.state() ==
+                ubiocc::PeerExitCoordinator::State::Quiescing) {
+            peerExitQuiesceLogged = true;
+            LogInfo("UBIO", "[PEER-EXIT-QUIESCE] local={}:{} exitId={} "
+                    "acked={}/{}",
+                    nid, sid, peerExitCoordinator.exitId(),
+                    peerExitCoordinator.ackedPeers().size(),
+                    peerExitCoordinator.requiredPeers().size());
+        }
+    };
     using BarrierKey = std::pair<uint32_t, uint32_t>;
     static constexpr size_t kMaxBarrierPlanes = 32;
     static constexpr size_t kMaxQueuedBarrierGenerations = 4;
@@ -2328,33 +2522,38 @@ main(int argc, char **argv)
                 LogInfo("UBIO", "[ubio:{}] recv TERMINATE ts={} from_net={}",
                              nid, GetMessageTimestamp(m), fromNetwork);
                 if (!fromNetwork) {
-                    // Transport termination is parameterless. Publish peer
-                    // membership as protocol payloads before closing netPort.
-                    ubcc.directory().dumpStatsJson();
-                    LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
-                    if (netPort) {
-                        CoherenceMessage exit;
-                        exit.h.type = CoherenceMessageType::PeerExit;
-                        exit.h.srcNode = nid;
-                        exit.h.srcSocket = sid;
-                        for (int peerNode = 0; peerNode < g_numNodes; ++peerNode) {
-                            for (int peerSocket = 0; peerSocket < g_numSockets;
-                                 ++peerSocket) {
-                                if (peerNode == nid && peerSocket == sid)
-                                    continue;
-                                exit.h.dstNode = peerNode;
-                                exit.h.dstSocket = peerSocket;
-                                panic_if(!sendCoh(netPort, tick,
-                                    gidOf(peerNode, peerSocket), exit, true),
-                                    "PeerExit send failed from={}:{} to={}:{}",
-                                    nid, sid, peerNode, peerSocket);
-                            }
-                        }
-                        TerminatePort(netPort);
+                    if (!gem5Done) {
+                        ubcc.directory().dumpStatsJson();
+                        LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
                     }
+                    gem5Done = true;
                     *doneFlag = true;
-                    netDone = true;
+                    if (!peerExitStarted) {
+                        peerExitStarted = true;
+                        const uint64_t nowMs = peerExitNowMs();
+                        const auto actions =
+                            peerExitCoordinator.startLocalExit(nowMs);
+                        LogInfo("UBIO", "[PEER-EXIT-START] local={}:{} exitId={} "
+                                "version=1 required={} seenNotify={} retryMs={} "
+                                "quiesceMs={} deliveryBudgetMs={} "
+                                "contract=bounded_transient_loss_delay",
+                                nid, sid, peerExitCoordinator.exitId(),
+                                peerExitCoordinator.requiredPeers().size(),
+                                peerExitCoordinator.seenNotifyPeers().size(),
+                                peerExitRetryMs, peerExitQuiesceMs,
+                                peerExitDeliveryBudgetMs);
+                        sendPeerExitActions(actions);
+                        logPeerExitQuiesce();
+                    }
                 } else {
+                    if (peerExitCoordinator.state() !=
+                            ubiocc::PeerExitCoordinator::State::Closed) {
+                        peerExitFailed = true;
+                        LogError("UBIO", "[PEER-EXIT-WARN] local={}:{} "
+                                 "network terminated before handshake state={}",
+                                 nid, sid, static_cast<unsigned>(
+                                     peerExitCoordinator.state()));
+                    }
                     *doneFlag = true;
                 }
                 if (*doneFlag) break;
@@ -2384,10 +2583,14 @@ main(int argc, char **argv)
                 continue;
             }
 
-            if (coh->h.type == CoherenceMessageType::PeerExit) {
-                ubcc.markPeerPlaneExited(coh->h.srcNode, coh->h.srcSocket);
-                LogInfo("UBIO", "[PEER-EXIT] local={}:{} peer={}:{}",
-                        nid, sid, coh->h.srcNode, coh->h.srcSocket);
+            if (gem5Done && coh->h.type != CoherenceMessageType::PeerExit) {
+                static uint64_t postExitDrops = 0;
+                if (++postExitDrops <= 8 || logPeerExitAttempt(postExitDrops)) {
+                    LogWarn("UBIO", "[POST-EXIT-DROP] local={}:{} type={} "
+                            "src={}:{} reqId={} reason=local_cache_plane_exited",
+                            nid, sid, coherenceMsgTypeName(coh->h.type),
+                            coh->h.srcNode, coh->h.srcSocket, coh->h.reqId);
+                }
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
@@ -2495,6 +2698,76 @@ main(int argc, char **argv)
                     m = ReceiveMessage(port, tick, &st);
                     continue;
                 }
+            }
+
+            // PeerExit is deliberately processed only after fault injection so
+            // drop/duplicate rules exercise the reliable wall-clock handshake.
+            if (coh->h.type == CoherenceMessageType::PeerExit) {
+                if (!fromNetwork) {
+                    LogWarn("UBIO", "[PEER-EXIT-WARN] local={}:{} ignored "
+                            "non-network PeerExit src={}:{} exitId={}",
+                            nid, sid, coh->h.srcNode, coh->h.srcSocket,
+                            coh->h.reqId);
+                    m = ReceiveMessage(port, tick, &st);
+                    continue;
+                }
+                constexpr uint32_t kPeerExitFlags =
+                    static_cast<uint32_t>(CFLAG_PEER_EXIT_ACK);
+                const uint32_t sourceModule = gidOf(
+                    static_cast<int>(coh->h.srcNode),
+                    static_cast<int>(coh->h.srcSocket));
+                const uint32_t localModule = gidOf(nid, sid);
+                if (coh->h.seqNum != 1 || coh->h.reqId == 0 ||
+                    (coh->h.flags & ~kPeerExitFlags) != 0 ||
+                    GetMessageRequestId(m) != coh->h.reqId ||
+                    GetMessageSourceId(m) != sourceModule ||
+                    GetMessageTargetId(m) != localModule) {
+                    LogWarn("UBIO", "[PEER-EXIT-WARN] local={}:{} peer={}:{} "
+                            "exitId={} version={} flags=0x{:x} envelope={}:{} "
+                            "reqEnvelope={} ignored=invalid_protocol",
+                            nid, sid, coh->h.srcNode, coh->h.srcSocket,
+                            coh->h.reqId, coh->h.seqNum, coh->h.flags,
+                            GetMessageSourceId(m), GetMessageTargetId(m),
+                            GetMessageRequestId(m));
+                    m = ReceiveMessage(port, tick, &st);
+                    continue;
+                }
+                const bool isAck = (coh->h.flags &
+                    static_cast<uint32_t>(CFLAG_PEER_EXIT_ACK)) != 0;
+                const ubiocc::PeerExitCoordinator::PeerId peer{
+                    coh->h.srcNode, coh->h.srcSocket};
+                if (coh->h.dstNode != static_cast<uint16_t>(nid) ||
+                    coh->h.dstSocket != static_cast<uint16_t>(sid) ||
+                    peer.node >= static_cast<uint32_t>(g_numNodes) ||
+                    peer.socket >= static_cast<uint32_t>(g_numSockets) ||
+                    (peer.node == static_cast<uint32_t>(nid) &&
+                     peer.socket == static_cast<uint32_t>(sid))) {
+                    LogWarn("UBIO", "[PEER-EXIT-WARN] local={}:{} peer={}:{} "
+                            "dst={}:{} exitId={} ignored=invalid_peer_or_route",
+                            nid, sid, peer.node, peer.socket, coh->h.dstNode,
+                            coh->h.dstSocket, coh->h.reqId);
+                    m = ReceiveMessage(port, tick, &st);
+                    continue;
+                }
+                for (int rep = 0; rep < faultCopies; ++rep) {
+                    LogInfo("UBIO", "[PEER-EXIT-{}-RECV] local={}:{} peer={}:{} "
+                            "exitId={} version={} copy={}/{}",
+                            isAck ? "ACK" : "NOTIFY", nid, sid,
+                            peer.node, peer.socket, coh->h.reqId, coh->h.seqNum,
+                            rep + 1, faultCopies);
+                    if (isAck) {
+                        sendPeerExitActions(peerExitCoordinator.receiveAck(
+                            peer, coh->h.reqId, peerExitNowMs()));
+                    } else {
+                        if (peerExitMarked.insert(peer).second)
+                            ubcc.markPeerPlaneExited(peer.node, peer.socket);
+                        sendPeerExitActions(peerExitCoordinator.receiveNotify(
+                            peer, coh->h.reqId, peerExitNowMs()));
+                    }
+                    logPeerExitQuiesce();
+                }
+                m = ReceiveMessage(port, tick, &st);
+                continue;
             }
 
             if (g_debugUbioPerf && (coh->h.type == CoherenceMessageType::ClearReq ||
@@ -2754,6 +3027,17 @@ main(int argc, char **argv)
         if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
         if (netPort && !netDone) pollAndProcess(netPort, netPort, true, &netDone);
 
+        // Reliable exit retry/quiesce is wall-clock driven even when PDES tick
+        // is frozen. Keep pumping it on every host loop iteration.
+        if (!netDone) {
+            sendPeerExitActions(peerExitCoordinator.pump(peerExitNowMs()));
+            logPeerExitQuiesce();
+            // pump() only marks close-ready. Close after every returned action
+            // has been offered to the transport, so callback teardown cannot
+            // suppress an ACK generated in the same dispatch cycle.
+            peerExitCoordinator.finalizeClose();
+        }
+
         // 2.5 Drain deferred H64 MetaRNF operations.  These were enqueued
         // during port message dispatch (reentrantDepth > 0) and must be sent
         // OUTSIDE the port receive/message-dispatch stack to avoid PDES
@@ -2761,7 +3045,8 @@ main(int argc, char **argv)
         // that creates MORE deferred ops; these are drained in the NEXT outer
         // loop iteration (bounded to avoid starvation).
         // Call stack: main() → while(!done) → drainDeferred() → sendCoh().
-        if (host._metaRNF.hasDeferred()) {
+        const bool dataPlaneActive = !gem5Done;
+        if (dataPlaneActive && host._metaRNF.hasDeferred()) {
             static int dd_cnt = 0;
             if (host._metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))
                 LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN] n={} cnt={} deferred={} tick={}",
@@ -2772,9 +3057,11 @@ main(int argc, char **argv)
         // A release send can temporarily backpressure after all arrivals have
         // been observed. Retry only those already-satisfied generations.
         std::vector<BarrierKey> readyBarriers;
-        for (const auto &kv : barrierArrivals) {
-            if (barrierReady(kv.first, kv.second))
-                readyBarriers.push_back(kv.first);
+        if (dataPlaneActive) {
+            for (const auto &kv : barrierArrivals) {
+                if (barrierReady(kv.first, kv.second))
+                    readyBarriers.push_back(kv.first);
+            }
         }
         for (const BarrierKey &bk : readyBarriers)
             releaseBarrier(bk);
@@ -2791,9 +3078,11 @@ main(int argc, char **argv)
             // Run controller maintenance only when virtual time advances.
             // This expires tombstones and recalls without repeatedly scanning
             // state while PDES is parked at the same timestamp.
-            ubcc.wakeup();
-            host.advanceH64Coverage();
-            host.advancePendingGrantReads(tick);
+            if (dataPlaneActive) {
+                ubcc.wakeup();
+                host.advanceH64Coverage();
+                host.advancePendingGrantReads(tick);
+            }
         } else {
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
             // native side crawl billions of ticks ahead of gem5, skewing message
@@ -2802,13 +3091,16 @@ main(int argc, char **argv)
             std::this_thread::yield();
         }
         // 3.3/4.6: Drain delayed fault-injection queue (reorder/delay)
-        drainDelayedQueue(gem5Port, netPort, nid, sid, ubcc, host, tick);
+        if (dataPlaneActive)
+            drainDelayedQueue(gem5Port, netPort, nid, sid, ubcc, host, tick);
 
         // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
         // callbacks simulate real DRAM read latency.
-        host.drainPendingFills(tick);
-        host.drainPendingBackstoreAcks(tick);
-        host.dsmData.drain(tick);
+        if (dataPlaneActive) {
+            host.drainPendingFills(tick);
+            host.drainPendingBackstoreAcks(tick);
+            host.dsmData.drain(tick);
+        }
     }
 
     // 3.4: Dump ResidentDir performance counters
@@ -2820,8 +3112,11 @@ main(int argc, char **argv)
             host.h64ExactCoverageKnown() ? 1 : 0, host.h64ExactLiveCount());
 
     TerminatePort(gem5Port);
-    TerminatePort(netPort);
+    if (netPort && !netTerminateIssued) {
+        netTerminateIssued = true;
+        TerminatePort(netPort);
+    }
     DestroyPort(gem5Port);
     DestroyPort(netPort);
-    return 0;
+    return peerExitFailed ? 1 : 0;
 }

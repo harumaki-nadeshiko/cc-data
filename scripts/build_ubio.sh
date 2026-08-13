@@ -43,7 +43,7 @@ parse_shell_words "${FRAMEWORK_BACKEND_CPPFLAGS:-}" BACKEND_CPPFLAGS
 parse_shell_words "${FRAMEWORK_BACKEND_LDFLAGS:-}" BACKEND_LDFLAGS
 CXXFLAGS+=("${BACKEND_CPPFLAGS[@]}")
 
-SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/BackstoreSchemaH64.cc $MOD/BackstoreHostH64.cc $MOD/NodeAddressMap.cc"
+SRCS="$MOD/UBCCController.cc $MOD/ResidentDir.cc $MOD/BackstoreSchemaA.cc $MOD/BackstoreSchemaC.cc $MOD/BackstoreSchemaH64.cc $MOD/BackstoreHostH64.cc $MOD/NodeAddressMap.cc $MOD/PeerExitCoordinator.cc"
 
 g++ "${CXXFLAGS[@]}" "$MOD/ubio_main.cc" $SRCS "$FW_LIB" "${LDFLAGS[@]}" "${BACKEND_LDFLAGS[@]}" -o "$OUT/ubio"
 echo "[build_ubio] $(ls -lh "$OUT/ubio" | awk '{print $5}') -> $OUT/ubio"

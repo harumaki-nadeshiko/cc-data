@@ -10,19 +10,21 @@ WORKERS="${TLC_WORKERS:-8}"
 
 DIR="$(cd $(dirname $0) && pwd)"
 JAR="$DIR/tla2tools.jar"
+MODEL_BASE="${MODEL%.tla}"
+META_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tlc_${MODEL_BASE}_XXXXXX")"
+LOG="${TLC_LOG:-${TMPDIR:-/tmp}/tlc_${MODEL_BASE}_$$.log}"
+
+cleanup() {
+  rm -rf "$META_DIR"
+}
+trap cleanup EXIT
 
 cd "$DIR"
 
-# Clean stale artifacts before run
-rm -f *TTrace_*.tla *TTrace_*.bin
-rm -rf states/
-
 echo "=== TLC: $MODEL ==="
 timeout "$TIMEOUT" java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-  -config "$CFG" -workers "$WORKERS" "$MODEL" 2>&1 | tee "/tmp/tlc_${MODEL%.tla}.log"
+  -config "$CFG" -workers "$WORKERS" -metadir "$META_DIR" \
+  -noGenerateSpecTE -teSpecOutDir "$META_DIR" "$MODEL" \
+  2>&1 | tee "$LOG"
 
-# Clean after run
-rm -f *TTrace_*.tla *TTrace_*.bin
-rm -rf states/
-
-echo "=== Done. Cleaned artifacts. ==="
+echo "=== Done. Log: $LOG ==="
