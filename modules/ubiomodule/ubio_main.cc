@@ -800,12 +800,31 @@ struct MetaRNFClient : public MetaRNFClientIF {
     }
     bool hasDeferred() const { return _deferredCount > 0; }
 
+    int deferredLineCount(bool writes) const {
+        int count = 0;
+        for (int i = 0; i < _deferredCount; ++i)
+            count += _deferredOps[i].isWrite == writes;
+        return count;
+    }
+
     void drainDeferred() {
         int drained = 0;
         while (_deferredCount > 0 && drained < kMaxDeferredLineOps) {
-            int idx = 0;
+            int idx = -1;
+            for (int i = 0; i < _deferredCount; ++i) {
+                const bool hasCredit = _deferredOps[i].isWrite
+                    ? _pendingLineWrites.size() < kMaxLinePendingWrites
+                    : _pendingLineReads.size() < kMaxLinePendingReads;
+                if (hasCredit) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0)
+                break;
             auto op = _deferredOps[idx];
-            for (int i = 1; i < _deferredCount; ++i) _deferredOps[i-1] = _deferredOps[i];
+            for (int i = idx + 1; i < _deferredCount; ++i)
+                _deferredOps[i - 1] = _deferredOps[i];
             _deferredCount--;
             drained++;
             if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-OP] n={} op={} off={} reqId=0x{:x} remain={}",
@@ -859,7 +878,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
     void readLine(uint64_t bucketOffset,
                   std::function<void(MetaRNFLineStatus, const uint8_t* data64)> cb) {
         // Bounded: pending reads + deferred reads ≤ kMaxLinePendingReads (32)
-        int combined = (int)_pendingLineReads.size() + _deferredCount;
+        int combined = static_cast<int>(_pendingLineReads.size()) +
+            deferredLineCount(false);
         if (combined >= kMaxLinePendingReads) {
             if (cb) cb(MetaRNFLineStatus::RetryableBusy, nullptr);
             return;
@@ -898,6 +918,35 @@ struct MetaRNFClient : public MetaRNFClientIF {
         }
     }
 
+    bool retryReadLine(uint64_t bucketOffset,
+                       std::function<void(MetaRNFLineStatus,
+                                          const uint8_t* data64)> cb) override {
+        // Outer-loop retries are older than deferred new work. Reserve the
+        // next available in-flight read credit for them.
+        if (_pendingLineReads.size() >= kMaxLinePendingReads) {
+            if (cb) cb(MetaRNFLineStatus::RetryableBusy, nullptr);
+            return false;
+        }
+        const uint64_t rid = _nextLineReadReqId++;
+        _pendingLineReads[rid] = {rid, bucketOffset, std::move(cb)};
+        CoherenceMessage req;
+        req.h.type = CoherenceMessageType::MetaRNFLineReadReq;
+        req.h.srcNode = _nodeId; req.h.srcSocket = _socketId;
+        req.h.dstNode = _nodeId; req.h.dstSocket = _socketId;
+        req.h.reqId = rid;
+        req.b.metaRNFLineReadReq.bucketOffset = bucketOffset;
+        const bool sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        if (!sent) {
+            auto it = _pendingLineReads.find(rid);
+            if (it != _pendingLineReads.end()) {
+                auto cb2 = std::move(it->second.callback);
+                _pendingLineReads.erase(it);
+                if (cb2) cb2(MetaRNFLineStatus::IoError, nullptr);
+            }
+        }
+        return sent;
+    }
+
     void handleLineReadResp(const CoherenceMessage &msg) {
         uint64_t rid = msg.h.reqId;
         auto it = _pendingLineReads.find(rid);
@@ -930,7 +979,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
     void writeLine(uint64_t bucketOffset, const uint8_t* data64,
                    std::function<void(MetaRNFLineStatus)> cb) {
         // Bounded: pending writes + deferred writes ≤ kMaxLinePendingWrites (32)
-        int combined = (int)_pendingLineWrites.size() + _deferredCount;
+        int combined = static_cast<int>(_pendingLineWrites.size()) +
+            deferredLineCount(true);
         if (combined >= kMaxLinePendingWrites) {
             if (cb) cb(MetaRNFLineStatus::RetryableBusy);
             return;
@@ -3046,6 +3096,8 @@ main(int argc, char **argv)
         // loop iteration (bounded to avoid starvation).
         // Call stack: main() → while(!done) → drainDeferred() → sendCoh().
         const bool dataPlaneActive = !gem5Done;
+        if (dataPlaneActive && host._h64Host)
+            host._h64Host->pumpRetries();
         if (dataPlaneActive && host._metaRNF.hasDeferred()) {
             static int dd_cnt = 0;
             if (host._metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))

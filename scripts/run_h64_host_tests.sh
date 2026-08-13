@@ -12,6 +12,7 @@ COMMON="$ROOT_DIR/modules/ubiomodule/UBCCController.cc $ROOT_DIR/modules/ubiomod
 g++ $CXXFLAGS "$ROOT_DIR/tools/h64_host_phase3_test.cc" \
     "$ROOT_DIR/modules/ubiomodule/BackstoreHostH64.cc" \
     "$ROOT_DIR/modules/ubiomodule/BackstoreSchemaH64.cc" \
+    "$ROOT_DIR/framework/Log.cc" \
     -o "$OUT_DIR/h64_host_phase3_test"
 "$OUT_DIR/h64_host_phase3_test"
 

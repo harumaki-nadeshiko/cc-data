@@ -30,6 +30,11 @@ class MetaRNFClientIF {
     virtual ~MetaRNFClientIF() = default;
     virtual void readLine(uint64_t logicalBucketOffset,
         std::function<void(MetaRNFLineStatus, const uint8_t* data64)> cb) = 0;
+    virtual bool retryReadLine(uint64_t logicalBucketOffset,
+        std::function<void(MetaRNFLineStatus, const uint8_t* data64)> cb) {
+        readLine(logicalBucketOffset, std::move(cb));
+        return true;
+    }
     virtual void writeLine(uint64_t logicalBucketOffset, const uint8_t* data64,
         std::function<void(MetaRNFLineStatus)> cb) = 0;
 };
@@ -147,13 +152,17 @@ class BackstoreHostH64
     bool isBucketLocked(size_t flatIdx) const;
     bool isPaBusy(uint64_t linePa) const;
     void setDebugEnabled(bool v) { _debugEnabled = v; }
+    // Retry metadata probes only from the outer event loop. A synchronous
+    // RetryableBusy callback must never recursively resubmit the same read.
+    void pumpRetries();
 
   private:
     static constexpr int kMaxSlots = 128;
     static constexpr int kMaxGroupScans = 1;
 
     enum class SlotState : uint8_t {
-        Free, Probing, WaitingControl, RmwPending, RmwCreditPending
+        Free, Probing, ProbeRetryPending, WaitingControl, RmwPending,
+        RmwCreditPending
     };
 
     struct TxnSlot {
@@ -267,6 +276,7 @@ class BackstoreHostH64
     size_t _groupCtrlsSize = 0;
 
     uint64_t _arrivalSeq = 0;
+    int      _probeRetryCursor = 0;
     bool     _debugEnabled = false;   // [DEBUG-H64-*] gate
 
     // ---- Internal methods ----

@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <limits>
+#include <stdexcept>
 
 #include "framework/iface/Log.hh"
 
@@ -12,6 +14,18 @@ namespace cc { namespace glob {
 BackstoreHostH64::BackstoreHostH64(const H64HostConfig& cfg, MetaRNFClientIF* metaRNF)
     : _cfg(cfg), _metaRNF(metaRNF)
 {
+    if (!_metaRNF || cfg.num_groups == 0 || cfg.num_groups > kTrackedGroups ||
+        cfg.buckets_per_group == 0 ||
+        cfg.buckets_per_group > std::numeric_limits<uint32_t>::max() ||
+        cfg.num_groups > std::numeric_limits<size_t>::max() /
+            cfg.buckets_per_group) {
+        throw std::invalid_argument("invalid H64 host geometry");
+    }
+    const size_t tableLines = cfg.num_groups * cfg.buckets_per_group;
+    if (cfg.metadata_socket_lines < cfg.num_groups ||
+        tableLines > cfg.metadata_socket_lines - cfg.num_groups) {
+        throw std::invalid_argument("invalid H64 metadata capacity");
+    }
     _groupCtrlsSize = cfg.num_groups;
     _groupCtrls.reset(new GroupCtrlCache[cfg.num_groups]);
     for (size_t i = 0; i < cfg.num_groups; ++i) _groupCtrls[i] = {false, 0, 0, 0};
@@ -180,6 +194,39 @@ bool BackstoreHostH64::isPaBusy(uint64_t linePa) const {
         }
     }
     return false;
+}
+
+void
+BackstoreHostH64::pumpRetries()
+{
+    const int start = _probeRetryCursor;
+    for (int offset = 0; offset < kMaxSlots; ++offset) {
+        const int slotIdx = (start + offset) % kMaxSlots;
+        auto &txn = _slots[slotIdx];
+        if (txn.state != SlotState::ProbeRetryPending)
+            continue;
+        if (txn.activeBuckets == 0 ||
+            txn.activeBuckets > _cfg.buckets_per_group) {
+            txn.result.status = BackstoreStatus::Corrupt;
+            txn.result.linePa = txn.linePa;
+            txn.result.op = txn.op;
+            completeSlot(slotIdx);
+            continue;
+        }
+        const size_t bucketIdx =
+            (txn.homeBucket + txn.probeIdx) % txn.activeBuckets;
+        const size_t bucketOff = tableBucketOffset(txn.groupIdx, bucketIdx);
+        txn.state = SlotState::Probing;
+        const bool accepted = _metaRNF->retryReadLine(bucketOff,
+            [this, slotIdx](MetaRNFLineStatus st, const uint8_t *data64) {
+                onProbeBucketRead(slotIdx, st, data64);
+            });
+        if (!accepted) {
+            _probeRetryCursor = slotIdx;
+            break;
+        }
+        _probeRetryCursor = (slotIdx + 1) % kMaxSlots;
+    }
 }
 
 static void replyBusy(uint64_t pa, BackstoreOp op, uint64_t snapEpoch,
@@ -456,16 +503,30 @@ void BackstoreHostH64::onGroupControlRead(int slotIdx, MetaRNFLineStatus st, con
             [this, slotIdx](MetaRNFLineStatus wst) {
             auto& tx2 = _slots[slotIdx];
             auto& gc2 = _groupCtrls[tx2.groupIdx];
-            if (wst == MetaRNFLineStatus::Ok) {
-                gc2.valid = true;
-                gc2.active_bucket_count = static_cast<uint32_t>(_cfg.buckets_per_group);
-                gc2.salt = (tx2.groupIdx * 0x9e3779b97f4a7c15ULL) ^ 0x12345678ULL;
-                gc2.generation = 1;
+            if (wst != MetaRNFLineStatus::Ok) {
+                tx2.result.status = mapMetaRNFStatus(wst);
+                tx2.result.linePa = tx2.linePa;
+                tx2.result.op = tx2.op;
+                completeSlot(slotIdx);
+                return;
             }
-            // Even on write failure, proceed with configured active count
+            gc2.valid = true;
+            gc2.active_bucket_count =
+                static_cast<uint32_t>(_cfg.buckets_per_group);
+            gc2.salt = (tx2.groupIdx * 0x9e3779b97f4a7c15ULL) ^
+                0x12345678ULL;
+            gc2.generation = 1;
             tx2.activeBuckets = _cfg.buckets_per_group;
             startProbe(slotIdx);
         });
+        return;
+    }
+
+    if (ctrl.active_bucket_count > _cfg.buckets_per_group) {
+        txn.result.status = BackstoreStatus::Corrupt;
+        txn.result.linePa = txn.linePa;
+        txn.result.op = txn.op;
+        completeSlot(slotIdx);
         return;
     }
 
@@ -524,14 +585,9 @@ void BackstoreHostH64::onProbeBucketRead(int slotIdx, MetaRNFLineStatus st, cons
                                            slotIdx, (int)st, txn.probeIdx, pa);
 
     if (st == MetaRNFLineStatus::RetryableBusy) {
-        // Gem5 MetaRNF rejected (TBE full, buffer full). Retry the same
-        // read after a short deferral; do NOT abort the transaction.
-        // Use the same logical offset computed for this probe step.
-        size_t bucketIdx = (txn.homeBucket + txn.probeIdx) % txn.activeBuckets;
-        size_t bucketOff = tableBucketOffset(txn.groupIdx, bucketIdx);
-        _metaRNF->readLine(bucketOff, [this, slotIdx](MetaRNFLineStatus st2, const uint8_t* d2) {
-            onProbeBucketRead(slotIdx, st2, d2);
-        });
+        // Queue saturation can report Busy synchronously. Resubmitting here
+        // would recurse without allowing pending/deferred operations to drain.
+        txn.state = SlotState::ProbeRetryPending;
         return;
     }
     if (st != MetaRNFLineStatus::Ok) {

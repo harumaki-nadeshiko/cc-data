@@ -38,6 +38,8 @@ public:
     // injected errors
     bool _injectCorrupt = false;   uint64_t _corruptOffset = ~0ULL;
     bool _injectIoError = false;   uint64_t _ioerrOffset = ~0ULL;
+    int _syncBusyReads = 0;
+    uint64_t _syncBusyOffset = ~0ULL;
     // track reads issued
     std::vector<uint64_t> _readHistory;
     std::vector<uint64_t> _writeHistory;
@@ -45,6 +47,11 @@ public:
     void readLine(uint64_t offset,
                   std::function<void(MetaRNFLineStatus, const uint8_t* data64)> cb) override {
         _readHistory.push_back(offset);
+        if (_syncBusyReads > 0 && offset == _syncBusyOffset) {
+            --_syncBusyReads;
+            cb(MetaRNFLineStatus::RetryableBusy, nullptr);
+            return;
+        }
         if (_injectIoError && offset == _ioerrOffset) {
             auto c = std::move(cb);
             _readCallbacks.push_back([c](){ c(MetaRNFLineStatus::IoError, nullptr); });
@@ -64,6 +71,15 @@ public:
             static uint8_t z[64]{};
             _readCallbacks.push_back([c](){ c(MetaRNFLineStatus::Ok, nullptr); });
         }
+    }
+
+    bool retryReadLine(uint64_t offset,
+                       std::function<void(MetaRNFLineStatus,
+                                          const uint8_t* data64)> cb) override {
+        const bool accepted = !(_syncBusyReads > 0 &&
+                                offset == _syncBusyOffset);
+        readLine(offset, std::move(cb));
+        return accepted;
     }
 
     void writeLine(uint64_t offset, const uint8_t* data64,
@@ -447,11 +463,52 @@ static void test_error_not_found() {
 }
 
 // ============================================================
-// Test 11: Async DSM persistence gate (Req C)
+// Test 11: Synchronous Busy defers probe retry to the outer loop
+// ============================================================
+static void test_sync_busy_probe_retry() {
+    std::fprintf(stderr,"[T11] Synchronous Busy probe retry...\n");
+    MockMetaRNF mock;
+    H64HostConfig cfg;
+    cfg.num_groups = 1; cfg.buckets_per_group = 1;
+    cfg.metadata_socket_lines = cfg.num_groups + cfg.totalBuckets() + 1;
+    H64GroupControl ctrl;
+    ctrl.active_bucket_count = 1;
+    ctrl.salt = 1;
+    ctrl.generation = 1;
+    uint8_t raw[64]; ctrl.storeTo(raw);
+    std::memcpy(mock._storage[0], raw, 64);
+
+    mock._syncBusyOffset = cfg.tableDataStartOffset();
+    constexpr int kBusyRetries = 10000;
+    mock._syncBusyReads = kBusyRetries;
+    BackstoreHostH64 host(cfg, &mock);
+    bool done = false;
+    BackstoreCompletion result;
+    host.lookup(0x4000, [&](const BackstoreCompletion &r) {
+        done = true;
+        result = r;
+    });
+    mock.drain();
+    assert(!done && host.activeSlotCount() == 1);
+
+    for (int i = 0; i < kBusyRetries; ++i) {
+        host.pumpRetries();
+        assert(!done && host.activeSlotCount() == 1);
+    }
+    host.pumpRetries();
+    mock.drain();
+    assert(done && result.status == BackstoreStatus::Ok && !result.found);
+    assert(host.activeSlotCount() == 0);
+    assert(mock._readHistory.size() == static_cast<size_t>(kBusyRetries + 2));
+    std::fprintf(stderr,"[T11] 10000 Busy responses without recursion: PASS\n");
+}
+
+// ============================================================
+// Test 12: Async DSM persistence gate (Req C)
 // Exercised: writeDataAsync → drain → callback → data visible
 // ============================================================
 static void test_dsm_persistence_gate() {
-    std::fprintf(stderr,"[T11] Async DSM persistence gate...\n");
+    std::fprintf(stderr,"[T12] Async DSM persistence gate...\n");
 
     // Use actual DsmDataStore with async write
     struct DsmDataStoreMini {
@@ -506,24 +563,24 @@ static void test_dsm_persistence_gate() {
     assert(w2done);
     assert(dsm.data[0x1000ULL][0] == 0xCD); // overwritten
 
-    std::fprintf(stderr,"[T11] Async DSM persistence gate: PASS\n");
+    std::fprintf(stderr,"[T12] Async DSM persistence gate: PASS\n");
 }
 
 // ============================================================
-// Test 12: H64 grants do not depend on a software data cache
+// Test 13: H64 grants do not depend on a software data cache
 // ============================================================
 static void test_h64_no_linedatacache_invariant() {
-    std::fprintf(stderr,"[T12] H64 authoritative-home-data invariant...\n");
+    std::fprintf(stderr,"[T13] H64 authoritative-home-data invariant...\n");
     // Production grant construction carries transaction-owned data only;
     // ubio_main falls back to direct-indexed authoritative home memory.
-    std::fprintf(stderr,"[T12] Verified by code structure: PASS\n");
+    std::fprintf(stderr,"[T13] Verified by code structure: PASS\n");
 }
 
 // ============================================================
-// Test 13: Forced collision, delete, and probe continuity
+// Test 14: Forced collision, delete, and probe continuity
 // ============================================================
 static void test_collision_delete_probe_continuity() {
-    std::fprintf(stderr,"[T13] Forced collision/delete probe continuity...\n");
+    std::fprintf(stderr,"[T14] Forced collision/delete probe continuity...\n");
     MockMetaRNF mock;
     H64HostConfig cfg;
     cfg.num_groups = 1; cfg.buckets_per_group = 1; // every PA collides
@@ -547,14 +604,14 @@ static void test_collision_delete_probe_continuity() {
     host.lookup(pa2, [&](const BackstoreCompletion& r) { found = r.status == BackstoreStatus::Ok && r.found; });
     mock.drain();
     assert(found && "delete must not truncate a collision probe cluster");
-    std::fprintf(stderr,"[T13] PASS\n");
+    std::fprintf(stderr,"[T14] PASS\n");
 }
 
 // ============================================================
-// Test 14: Bounded async group scan validates persisted LIVE slots
+// Test 15: Bounded async group scan validates persisted LIVE slots
 // ============================================================
 static void test_group_live_scan() {
-    std::fprintf(stderr,"[T14] Async group LIVE scan...\n");
+    std::fprintf(stderr,"[T15] Async group LIVE scan...\n");
     MockMetaRNF mock;
     H64HostConfig cfg;
     cfg.num_groups = 1; cfg.buckets_per_group = 4;
@@ -613,14 +670,14 @@ static void test_group_live_scan() {
                        [&](BackstoreStatus st) { result = st; });
     mock.drain();
     assert(result == BackstoreStatus::IoError);
-    std::fprintf(stderr,"[T14] PASS\n");
+    std::fprintf(stderr,"[T15] PASS\n");
 }
 
 // ============================================================
-// Test 15: never-allocated group is an exact empty scan
+// Test 16: never-allocated group is an exact empty scan
 // ============================================================
 static void test_empty_group_scan() {
-    std::fprintf(stderr,"[T15] Empty group scan...\n");
+    std::fprintf(stderr,"[T16] Empty group scan...\n");
     MockMetaRNF mock;
     H64HostConfig cfg;
     cfg.num_groups = 1; cfg.buckets_per_group = 4;
@@ -634,7 +691,7 @@ static void test_empty_group_scan() {
                        [&](BackstoreStatus st) { status = st; });
     mock.drain();
     assert(status == BackstoreStatus::Ok && live == 0);
-    std::fprintf(stderr,"[T15] PASS\n");
+    std::fprintf(stderr,"[T16] PASS\n");
 }
 
 // ============================================================
@@ -653,12 +710,13 @@ int main() {
     test_logical_only();
     test_no_linedatacache();
     test_error_not_found();
+    test_sync_busy_probe_retry();
     test_dsm_persistence_gate();
     test_h64_no_linedatacache_invariant();
     test_collision_delete_probe_continuity();
     test_group_live_scan();
     test_empty_group_scan();
 
-    std::fprintf(stderr,"\n=== 15/15 TESTS PASSED ===\n");
+    std::fprintf(stderr,"\n=== 16/16 TESTS PASSED ===\n");
     return 0;
 }
