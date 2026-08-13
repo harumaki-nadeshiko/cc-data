@@ -1,0 +1,90 @@
+diff --git a/modules/ubiomodule/UBCCController.cc b/modules/ubiomodule/UBCCController.cc
+index 4ec50f6..83ed9d1 100644
+--- a/modules/ubiomodule/UBCCController.cc
++++ b/modules/ubiomodule/UBCCController.cc
+@@ -1192,12 +1192,26 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+                 ost->opType == OpType::GRANT_HANDSHAKE &&
+                 ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
+                 ost->stage == OpStage::WAITING_CLEAR;
++            bool requestRequeued = false;
++            auto queued = _residentWaiters.find(linePa);
++            if (queued != _residentWaiters.end()) {
++                for (const auto &pending : queued->second) {
++                    if (pending.opKind == pr.opKind &&
++                        pending.node == pr.node &&
++                        pending.socket == pr.socket &&
++                        pending.reqId == pr.reqId) {
++                        requestRequeued = true;
++                        break;
++                    }
++                }
++            }
+             // A local requester can receive ReadResp and synchronously Clear it
+             // before processOuterRequest returns.  The API still returns its
+             // legacy busy sentinel, but a resident entry with no in-flight state
+             // proves this capacity waiter was fully processed.
+             DirEntry resolvedEntry;
+             const bool residentResolved =
++                static_cast<int>(g) >= 0 &&
+                 _directory.lookup(linePa, resolvedEntry) &&
+                 !_directory.fillPending(linePa) &&
+                 !_directory.wbPending(linePa) &&
+@@ -1215,11 +1229,14 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+                 return;
+             }
+             if (static_cast<int>(g) == -1 && !replaySucceeded) {
+-                // A capacity miss re-enqueues the waiter itself before it
+-                // returns busy. Do not restore this popped copy, or a request
+-                // that completed synchronously can remain pinned forever.
+-                restore = pr.waitReason != ResidentWaitReason::Capacity &&
+-                    (!_directory.fillPending(linePa) && !_directory.wbPending(linePa));
++                // Restore an allocation-BUSY request unless the nested resident
++                // path already retained the same request. Capacity misses can
++                // re-enqueue themselves, while an outstanding-table-full grant
++                // failure does not; treating both as capacity requeues silently
++                // loses the latter waiter.
++                restore = !requestRequeued &&
++                    !_directory.fillPending(linePa) &&
++                    !_directory.wbPending(linePa);
+             // A capacity eviction can recursively replay this waiter. If that
+             // nested pass created the grant, this outer call returns Busy but
+             // sees its outstanding request. The nested pass already pushed it.
+@@ -1696,6 +1713,17 @@ UBCCController::processOuterRequest(
+                     OutstandingRequest *invOreq = createOutstanding(
+                         line_pa, OpType::INVALIDATE, requesterNode, -1,
+                         requesterSocket);
++                    if (!invOreq) {
++                        framework::LogWarn(
++                            "UBCC",
++                            "[UBCC-GRANT-ALLOC-BUSY] home={} pa=0x{:x} "
++                            "state={} req={} requester={} socket={} reqId={} "
++                            "phase=invalidate",
++                            _nodeId, line_pa, mesiStateName(entry.state),
++                            static_cast<int>(reqType), requesterNode,
++                            requesterSocket, reqId);
++                        return static_cast<UBCC_OuterGrantType>(-1);
++                    }
+                     // fix2: fan out FIRST so we learn the effective (live) target
+                     // set, then size the ack accounting to exactly what we sent.
+                     uint64_t effectiveMask = otherSharers;
+@@ -2027,6 +2055,20 @@ UBCCController::processOuterRequest(
+     // v4: §4.1.3 — SHALL NOT modify committed DirEntry here.
+     // Committed DirEntry stays as-is until matching Clear is accepted.
+ 
++    // Every non-BUSY path reaching this point promises an immediate grant and
++    // therefore requires a matching GRANT_HANDSHAKE. Returning a positive grant
++    // after createOutstanding() failed strands deferred requesters: replay has
++    // no object from which to build the pushed ReadResp.
++    if (!oreq) {
++        framework::LogWarn(
++            "UBCC",
++            "[UBCC-GRANT-ALLOC-BUSY] home={} pa=0x{:x} state={} req={} "
++            "requester={} socket={} reqId={} phase=immediate_grant",
++            _nodeId, line_pa, mesiStateName(entry.state),
++            static_cast<int>(reqType), requesterNode, requesterSocket, reqId);
++        return static_cast<UBCC_OuterGrantType>(-1);
++    }
++
+     framework::LogInfo("UBCC",
+             "UBCC node_id={}: v4 grant decision PA=0x{:x} "
+             "prev={} intended_state={} grant={} reservedEpoch={} "
