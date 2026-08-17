@@ -184,8 +184,8 @@ ResidentDir::init(const ResidentDirConfig &cfg)
 {
     framework::LogAssertIf(cfg.pa_bits >= 7 && cfg.pa_bits <= 44,
         "ResidentDir", "pa_bits must be in [7,44]");
-    framework::LogAssertIf(cfg.sharers_bits >= 1 && cfg.sharers_bits <= 10,
-        "ResidentDir", "sharers_bits must be in [1,10]");
+    framework::LogAssertIf(cfg.sharers_bits >= 1 && cfg.sharers_bits <= 16,
+        "ResidentDir", "sharers_bits must be in [1,16]");
     framework::LogAssertIf(cfg.epoch_bits >= 1 && cfg.epoch_bits <= 24,
         "ResidentDir", "epoch_bits must be in [1,24]");
     _layout = searchOptimalLayout(cfg);
@@ -330,15 +330,24 @@ ResidentDir::readBits(size_t bitOffset, int numBits) const
 // Set/way addressing
 // ========================================================================
 
+void
+ResidentDir::validatePa(uint64_t pa) const
+{
+    framework::LogAssertIf((pa >> _layout.pa_bits) == 0, "ResidentDir",
+        "PA exceeds configured width");
+}
+
 int
 ResidentDir::setIndex(uint64_t pa) const
 {
+    validatePa(pa);
     return (int)((pa >> 6) & ((1ULL << _layout.set_bits) - 1));
 }
 
 uint64_t
 ResidentDir::tagOf(uint64_t pa) const
 {
+    validatePa(pa);
     return (pa >> (6 + _layout.set_bits)) & ((1ULL << _layout.tag_bits) - 1);
 }
 
@@ -419,13 +428,9 @@ void ResidentDir::setEpoch(int set, int way, uint64_t ep)
 void
 ResidentDir::encodeEntry(int set, int way, uint64_t pa, const UBCCDirEntry &in)
 {
-    // 4.1 CompactCodec guard: backstore CompactCodec uses 10-bit sharers mask
-    // (kMask10 in BackstoreTypes.hh). SRAM default is 8-bit — verified safe for
-    // 8 nodes (no overflow). For 16-node expansion, --sharers-bits=10 MUST be
-    // passed or this assert fires and backstore data loses high sharer bits.
-    framework::LogAssertIf(
-        _layout.sharers_bits <= 10, "ResidentDir",
-        "sharers_bits exceeds CompactCodec kMask10 capacity");
+    const uint64_t sharersMask = (1ULL << _layout.sharers_bits) - 1ULL;
+    framework::LogAssertIf((in.sharersMask & ~sharersMask) == 0,
+        "ResidentDir", "sharers mask exceeds configured width");
     validateCanonical(in, pa);
     setValid(set, way, true);
     setTag(set, way, tagOf(pa));

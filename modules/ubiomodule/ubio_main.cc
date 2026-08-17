@@ -10,6 +10,7 @@
 #include "framework/iface/Port.hh"
 #include "framework/iface/Log.hh"
 #include "protocol/TracePerfPolicy.hh"
+#include "protocol/NodeAddressMap.hh"
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
@@ -2793,6 +2794,8 @@ main(int argc, char **argv)
     std::vector<std::string> faultRuleArgs;
     int nid = 0;
     int sid = 0;
+    bool paBitsExplicit = false;
+    bool sharersBitsExplicit = false;
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
@@ -2824,8 +2827,14 @@ main(int argc, char **argv)
             g_rdcfg.bloom_bytes = (size_t)std::strtoull(argv[i] + 14, nullptr, 10);
         if (!std::strncmp(argv[i], "--sram-bytes=", 13))
             g_rdcfg.sram_bytes = (size_t)std::strtoull(argv[i] + 13, nullptr, 10);
-        if (!std::strncmp(argv[i], "--sharers-bits=", 15))
+        if (!std::strncmp(argv[i], "--pa-bits=", 10)) {
+            g_rdcfg.pa_bits = std::atoi(argv[i] + 10);
+            paBitsExplicit = true;
+        }
+        if (!std::strncmp(argv[i], "--sharers-bits=", 15)) {
             g_rdcfg.sharers_bits = std::atoi(argv[i] + 15);
+            sharersBitsExplicit = true;
+        }
         if (!std::strncmp(argv[i], "--epoch-bits=", 13))
             g_rdcfg.epoch_bits = std::atoi(argv[i] + 13);
         if (!std::strncmp(argv[i], "--ways=", 7))
@@ -2959,10 +2968,34 @@ main(int argc, char **argv)
         ? static_cast<uint64_t>(g_numNodes) *
               static_cast<uint64_t>(g_numSockets)
         : 0;
-    if (g_numNodes <= 0 || g_numSockets <= 0 || totalPlanes > 32) {
+    if (g_numNodes <= 0 || g_numNodes > NodeAddressMap::MAX_NODES ||
+        g_numSockets <= 0 || totalPlanes > 32) {
         LogError("UBIO", "[UBIO-FATAL] invalid topology numNodes={} "
-                 "numSockets={} totalPlanes={} (expected 1..32 planes)",
-                 g_numNodes, g_numSockets, totalPlanes);
+                 "numSockets={} totalPlanes={} (expected 1..{} nodes and "
+                 "1..32 planes)",
+                 g_numNodes, g_numSockets, totalPlanes,
+                 NodeAddressMap::MAX_NODES);
+        return 1;
+    }
+    int nodeIdBits = 0;
+    for (int maxNodeId = g_numNodes - 1; maxNodeId > 0; maxNodeId >>= 1)
+        ++nodeIdBits;
+    const int requiredPaBits = NodeAddressMap::NODE_ADDR_SHIFT + nodeIdBits;
+    if (!paBitsExplicit)
+        g_rdcfg.pa_bits = requiredPaBits;
+    if (!sharersBitsExplicit)
+        g_rdcfg.sharers_bits = std::max(8, g_numNodes);
+    if (g_rdcfg.pa_bits < requiredPaBits || g_rdcfg.pa_bits > 44) {
+        LogError("UBIO", "[UBIO-FATAL] pa_bits={} cannot represent {} nodes "
+                 "with NODE_ADDR_SHIFT={} (required {}..44)",
+                 g_rdcfg.pa_bits, g_numNodes, NodeAddressMap::NODE_ADDR_SHIFT,
+                 requiredPaBits);
+        return 1;
+    }
+    if (g_rdcfg.sharers_bits < g_numNodes || g_rdcfg.sharers_bits > 16) {
+        LogError("UBIO", "[UBIO-FATAL] sharers_bits={} cannot represent {} "
+                 "nodes (required {}..16)", g_rdcfg.sharers_bits, g_numNodes,
+                 g_numNodes);
         return 1;
     }
     if (g_schemaMode == BackstoreSchemaMode::LegacySchemaA &&

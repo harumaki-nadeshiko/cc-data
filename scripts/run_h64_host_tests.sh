@@ -19,3 +19,10 @@ g++ $CXXFLAGS "$ROOT_DIR/tools/h64_host_phase3_test.cc" \
 g++ $CXXFLAGS "$ROOT_DIR/tools/h64_joint_bloom_rebuild_test.cc" $COMMON \
     -o "$OUT_DIR/h64_joint_bloom_rebuild_test"
 "$OUT_DIR/h64_joint_bloom_rebuild_test"
+
+g++ $CXXFLAGS "$ROOT_DIR/tools/resident_dir_n16_test.cc" \
+    "$ROOT_DIR/modules/ubiomodule/ResidentDir.cc" \
+    "$ROOT_DIR/modules/ubiomodule/BackstoreSchemaH64.cc" \
+    "$ROOT_DIR/framework/Log.cc" \
+    -o "$OUT_DIR/resident_dir_n16_test"
+"$OUT_DIR/resident_dir_n16_test"

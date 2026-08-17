@@ -77,8 +77,8 @@ struct ResidentDirConfig {
     // Phase 0 legacy default: 0 — not implemented.
     size_t desc_scratch_bytes = 0;        // legacy default: 0
 
-    int    pa_bits        = 40;           // effective PA bits (1TB = 40)
-    int    sharers_bits   = 8;            // width of sharers field
+    int    pa_bits        = 40;           // overridden from topology at startup
+    int    sharers_bits   = 8;            // overridden from topology at startup
     int    epoch_bits     = 24;           // width of epoch field
     int    ways           = 0;            // 0 = auto-search optimal
     int    set_bits       = 0;            // 0 = auto-search optimal
@@ -237,6 +237,7 @@ class ResidentDir
     static int nextPow2(int v);
 
     // ---- Set/way addressing ----
+    void validatePa(uint64_t pa) const;
     int  setIndex(uint64_t pa) const;
     uint64_t tagOf(uint64_t pa) const;
     size_t globalSlot(int set, int way) const { return (size_t)set * _layout.ways + way; }
