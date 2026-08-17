@@ -30,10 +30,17 @@
  * not the DSM EP path. */
 #define LOCAL_DRAM_VA_BASE 0x01000000ULL
 
+static inline volatile uint32_t* dsm_addr_plane(int home_node, int home_socket,
+                                                uint32_t offset)
+{
+    uint64_t segment = (uint64_t)home_node * NUM_SOCKETS + home_socket;
+    uint64_t va = DSM_VA_BASE + segment * SEG_SIZE + offset;
+    return (volatile uint32_t*)va;
+}
+
 static inline volatile uint32_t* dsm_addr(int home_node, uint32_t offset)
 {
-    uint64_t va = DSM_VA_BASE + (uint64_t)home_node * SEG_SIZE + offset;
-    return (volatile uint32_t*)va;
+    return dsm_addr_plane(home_node, 0, offset);
 }
 
 static inline volatile uint32_t* local_dram_addr(uint32_t offset)
@@ -65,6 +72,22 @@ static inline uint32_t dsm_load(int home_node, uint32_t offset)
 static inline void dsm_store(int home_node, uint32_t offset, uint32_t val)
 {
     __asm__ volatile("str %w0, [%1]" : : "r"(val), "r"(dsm_addr(home_node, offset)));
+}
+
+static inline uint32_t dsm_load_plane(int home_node, int home_socket,
+                                      uint32_t offset)
+{
+    uint32_t val;
+    __asm__ volatile("ldr %w0, [%1]" : "=r"(val) :
+                     "r"(dsm_addr_plane(home_node, home_socket, offset)));
+    return val;
+}
+
+static inline void dsm_store_plane(int home_node, int home_socket,
+                                   uint32_t offset, uint32_t val)
+{
+    __asm__ volatile("str %w0, [%1]" : : "r"(val),
+                     "r"(dsm_addr_plane(home_node, home_socket, offset)));
 }
 
 /* DSM load (64-bit) */

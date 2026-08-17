@@ -416,7 +416,9 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
     sync.header.timestamp = currentTimestamp + port->linkLatency;
     sync.header.sourceId = port->gid;
     sync.header.type = static_cast<std::uint32_t>(MessageType::ControlSync);
-    if (!SendWire(port, sync, zmq::send_flags::none))
+    // Heartbeats are retryable and must not block a simulator thread while
+    // the peer is still binding or reconnecting.
+    if (!SendWire(port, sync, zmq::send_flags::dontwait))
         return false;
     port->lastSyncTimestamp = currentTimestamp;
     port->hasEmittedSync = true;

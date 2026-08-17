@@ -5,8 +5,8 @@ set -e
 
 ZMQ_VERSION="4.3.5"
 CPPZMQ_VERSION="4.10.0"
-BUILD_DIR="$(cd $(dirname $0) && pwd)"
-THIRD_PARTY="$BUILD_DIR/thirdparty/zeromq"
+BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
+THIRD_PARTY="$BUILD_DIR"
 ZMQ_SRC="$THIRD_PARTY/libzmq-$ZMQ_VERSION"
 
 mkdir -p "$THIRD_PARTY/include" "$THIRD_PARTY/lib"

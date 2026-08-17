@@ -30,6 +30,55 @@ enum class MetaRNFLineStatus : uint8_t {
     InvalidArgument = 5,
 };
 
+// ---- HA permission / presence protocol wire enums ----
+enum class HAOperation : uint8_t {
+    Read  = 0,
+    Write = 1,
+};
+
+enum class HAProbeAction : uint8_t {
+    Query    = 0,
+    Validate = 1,
+};
+
+enum class HAStatus : uint8_t {
+    Ok              = 0,
+    RetryableBusy   = 1,
+    Denied          = 2,
+    NotPresent      = 3,
+    InvalidArgument = 4,
+};
+
+static constexpr const char* haOperationName(HAOperation op)
+{
+    switch (op) {
+        case HAOperation::Read:  return "Read";
+        case HAOperation::Write: return "Write";
+    }
+    return "Unknown";
+}
+
+static constexpr const char* haProbeActionName(HAProbeAction action)
+{
+    switch (action) {
+        case HAProbeAction::Query:    return "Query";
+        case HAProbeAction::Validate: return "Validate";
+    }
+    return "Unknown";
+}
+
+static constexpr const char* haStatusName(HAStatus status)
+{
+    switch (status) {
+        case HAStatus::Ok:              return "Ok";
+        case HAStatus::RetryableBusy:   return "RetryableBusy";
+        case HAStatus::Denied:          return "Denied";
+        case HAStatus::NotPresent:      return "NotPresent";
+        case HAStatus::InvalidArgument: return "InvalidArgument";
+    }
+    return "Unknown";
+}
+
 static constexpr const char* metaRNFLineStatusName(MetaRNFLineStatus s)
 {
     switch (s) {
@@ -80,6 +129,12 @@ enum class CoherenceMessageType : uint16_t {
     // Version 1 requires reqId!=0 and seqNum=1. Mixed old/new UBIO processes
     // are intentionally unsupported; upgrade every plane as one deployment.
     PeerExit = 30,           // Notify unless CFLAG_PEER_EXIT_ACK is set
+    // HA protocol additions are append-only: existing wire values stay stable.
+    HAPermissionReq = 31,    // permission read/write request; write carries 64B
+    HAPermissionResp = 32,   // permission response; successful read carries 64B
+    HAPermissionAck = 33,    // requester acknowledges accepted permission result
+    HAPresenceProbeReq = 34, // query/validate line presence at an HA participant
+    HAPresenceProbeResp = 35,// typed presence result
 };
 
 // ---- Message Flags ----
@@ -288,6 +343,59 @@ struct UBMetaRNFLineWriteRespBody {
     UBMetaRNFLineWriteRespBody() : status(MetaRNFLineStatus::IoError), bucketOffset(0) {}
 };
 
+// HA permission bodies use explicit reserved bytes so their wire offsets do
+// not depend on compiler-inserted interior padding. The data arrays are always
+// present: they are meaningful for Write requests and successful Read replies.
+struct UBHAPermissionReqBody {
+    HAOperation operation;
+    uint8_t reserved[7];
+    uint64_t permissionEpoch;
+    uint8_t data[64];
+    UBHAPermissionReqBody()
+        : operation(HAOperation::Read), reserved{}, permissionEpoch(0), data{} {}
+};
+
+struct UBHAPermissionRespBody {
+    HAOperation operation;
+    HAStatus status;
+    uint8_t hasData;
+    uint8_t reserved[5];
+    uint64_t permissionEpoch;
+    uint8_t data[64];
+    UBHAPermissionRespBody()
+        : operation(HAOperation::Read), status(HAStatus::InvalidArgument),
+          hasData(0), reserved{}, permissionEpoch(0), data{} {}
+};
+
+struct UBHAPermissionAckBody {
+    HAOperation operation;
+    HAStatus status;
+    uint8_t reserved[6];
+    uint64_t permissionEpoch;
+    UBHAPermissionAckBody()
+        : operation(HAOperation::Read), status(HAStatus::InvalidArgument),
+          reserved{}, permissionEpoch(0) {}
+};
+
+struct UBHAPresenceProbeReqBody {
+    HAProbeAction action;
+    uint8_t reserved[7];
+    uint64_t expectedEpoch;
+    UBHAPresenceProbeReqBody()
+        : action(HAProbeAction::Query), reserved{}, expectedEpoch(0) {}
+};
+
+struct UBHAPresenceProbeRespBody {
+    HAProbeAction action;
+    HAStatus status;
+    uint8_t present;
+    uint8_t reserved[5];
+    uint64_t observedEpoch;
+    UBHAPresenceProbeRespBody()
+        : action(HAProbeAction::Query), status(HAStatus::InvalidArgument),
+          present(0), reserved{}, observedEpoch(0) {}
+};
+
 union CoherenceMessageBody {
     UBReadReqBody readReq;
     UBReadRespBody readResp;
@@ -315,6 +423,11 @@ union CoherenceMessageBody {
     UBMetaRNFLineReadRespBody metaRNFLineReadResp;   // Phase 2: MetaRNFLineReadResp
     UBMetaRNFLineWriteReqBody metaRNFLineWriteReq;   // Phase 2: MetaRNFLineWriteReq
     UBMetaRNFLineWriteRespBody metaRNFLineWriteResp; // Phase 2: MetaRNFLineWriteResp
+    UBHAPermissionReqBody haPermissionReq;
+    UBHAPermissionRespBody haPermissionResp;
+    UBHAPermissionAckBody haPermissionAck;
+    UBHAPresenceProbeReqBody haPresenceProbeReq;
+    UBHAPresenceProbeRespBody haPresenceProbeResp;
 
     CoherenceMessageBody() {} // value-initialized by CoherenceMessage default ctor
 };
@@ -363,6 +476,11 @@ coherenceMsgTypeName(CoherenceMessageType t)
         case CoherenceMessageType::MetaRNFLineWriteReq: return "MetaRNFLineWriteReq";
         case CoherenceMessageType::MetaRNFLineWriteResp:return "MetaRNFLineWriteResp";
         case CoherenceMessageType::PeerExit:            return "PeerExit";
+        case CoherenceMessageType::HAPermissionReq:     return "HAPermissionReq";
+        case CoherenceMessageType::HAPermissionResp:    return "HAPermissionResp";
+        case CoherenceMessageType::HAPermissionAck:     return "HAPermissionAck";
+        case CoherenceMessageType::HAPresenceProbeReq:  return "HAPresenceProbeReq";
+        case CoherenceMessageType::HAPresenceProbeResp: return "HAPresenceProbeResp";
         default:                           return "Unknown";
     }
 }
@@ -393,5 +511,11 @@ ubMsgToString(const CoherenceMessage &msg)
 
 } // namespace glob
 } // namespace cc
+
+// Keep the gem5-facing include compatible with the historical forwarding
+// header while allowing this file to be mirrored byte-for-byte.
+namespace gem5 { namespace ruby {
+using namespace cc::glob;
+} }
 
 #endif // __MEM_RUBY_PROTOCOL_CHI_EP_UBMSG_HH__

@@ -9,6 +9,7 @@ USAGE (Python runner mode):
 """
 
 import sys, os, re, subprocess, argparse, tempfile, shutil, json
+from collections import Counter
 
 # gem5 v25.1 SimObject hierarchy can be deep; increase recursion limit.
 sys.setrecursionlimit(20000)
@@ -165,6 +166,14 @@ TESTCASES = {
     225: "e2e_ha_cgroup_2n1s",        # C135-HA preserved sharer revisit
     226: "e2e_ha_cgroup_2n1s",        # C138-HA dirty owner handoff
     227: "e2e_ha_cgroup_2n1s",        # C139-HA mixed batch throughput
+    228: "e2e_ha_topology",            # all-plane remote-read ring
+    229: "e2e_ha_topology",            # all-plane ownership handoff ring
+    230: "e2e_ha_topology",            # all-sharer to one writer
+    231: "e2e_ha_extended",            # clean shared read/reuse
+    232: "e2e_ha_extended",            # contended hot-key read/write
+    233: "e2e_ha_extended",            # all-plane producer-consumer
+    234: "e2e_ha_extended",            # queued ownership token
+    235: "e2e_ha_extended",            # shared catalog/KV
     300: "e2e_tc300_o3_remote_publication",
     301: "e2e_tc301_o3_dirty_handoff",
     302: "e2e_tc302_o3_multiline_mlp",
@@ -2209,14 +2218,13 @@ def verify_tc125(reads, lines):
 
 
 def verify_tc127(reads, lines):
-    """TC127: Writeback offload/onload — dirty writeback survives metadata spill.
+    """TC127: dirty data survives local eviction under the selected home.
 
     Checks:
       1. At least 2 READ_VAL from remote nodes after writeback.
       2. All reads MATCH (both must see the nonzero payload V0).
-      3. Log evidence: UBCC-WB-REQ WritebackReq, WB-DATA-PERSIST,
-         RESIDENT-SPILL-START (victim=), and RESIDENT-FILL-ISSUED (pa=)
-         for the target PA.
+      3. UBCC profile: spill/fill and writeback-persistence evidence.
+      4. HA-VI profile: HA write install plus target eviction notification.
     """
     target_fill_pat = 'pa=0x10004000'
     target_spill_pat = 'victim=0x10004000'
@@ -2234,6 +2242,29 @@ def verify_tc127(reads, lines):
         if int(r['actual'], 16) != v0:
             return False, (f'TC127 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
                            f'expected 0x{v0:X}'), [r]
+
+    is_ha_vi = any(
+        'UBIO-HA-MANIFEST' in l and 'controller=ha-vi' in l
+        for l in lines)
+    if is_ha_vi:
+        has_write_grant = any(
+            'HA-SLICC-GATE' in l and 'phase=WRITE_GRANTED' in l and
+            'pa=0x10004000' in l for l in lines)
+        has_write_ack = any(
+            'HA-SLICC-GATE' in l and 'phase=WRITE_ACK' in l and
+            'pa=0x10004000' in l for l in lines)
+        has_evict = any(
+            'HA-SLICC-GATE' in l and 'phase=EVICT' in l and
+            'pa=0x10004000' in l for l in lines)
+        diag = (f'ha_write_grant={has_write_grant}, '
+                f'ha_write_ack={has_write_ack}, ha_evict={has_evict}')
+        if not has_write_grant:
+            return False, f'TC127 FAILED: no HA write grant for target ({diag})', []
+        if not has_write_ack:
+            return False, f'TC127 FAILED: no HA write install ack for target ({diag})', []
+        if not has_evict:
+            return False, f'TC127 FAILED: no HA eviction notification for target ({diag})', []
+        return True, f'TC127 PASSED: HA-VI eviction preserved persisted data ({diag})', []
 
     # Log evidence
     has_dirty_spill = any(
@@ -2270,7 +2301,7 @@ def verify_tc127(reads, lines):
 
 
 def verify_tc128(reads, lines):
-    """TC128: Clean evict offload/onload — data integrity after clean eviction.
+    """TC128: clean eviction preserves data under the selected home.
 
     Checks:
       1. At least 2 READ_VAL (Phase 2 shared reads + Phase 5 verify).
@@ -2296,6 +2327,28 @@ def verify_tc128(reads, lines):
         if int(r['actual'], 16) != v0:
             return False, (f'TC128 FAILED: node{r["node"]} got 0x{int(r["actual"],16):X}, '
                            f'expected 0x{v0:X}'), [r]
+
+    is_ha_vi = any(
+        'UBIO-HA-MANIFEST' in l and 'controller=ha-vi' in l
+        for l in lines)
+    if is_ha_vi:
+        has_evict = any(
+            'HA-SLICC-GATE' in l and 'phase=EVICT' in l and
+            'pa=0x10006000' in l for l in lines)
+        read_enters = sum(
+            'HA-SLICC-GATE' in l and 'phase=READ_ENTER' in l and
+            'homePa=0x10006000' in l for l in lines)
+        read_acks = sum(
+            re.search(r'HA-SLICC-GATE.*phase=READ_ACK '
+                      r'pa=0x(?:[0-9a-f]+)?10006000\b', l)
+            is not None for l in lines)
+        diag = (f'ha_evict={has_evict}, read_enters={read_enters}, '
+                f'read_acks={read_acks}')
+        if not has_evict:
+            return False, f'TC128 FAILED: no HA target eviction ({diag})', []
+        if read_enters < 4 or read_acks < 4:
+            return False, f'TC128 FAILED: incomplete HA reread chain ({diag})', []
+        return True, f'TC128 PASSED: HA-VI clean eviction and reread preserved data ({diag})', []
 
     # Log evidence: spill uses victim=, fill uses pa=
     has_spill = any(
@@ -2360,6 +2413,31 @@ def verify_tc129(reads, lines):
     n0_v1 = [r for r in reads if r['node'] == 0 and int(r['actual'], 16) == v1]
     if not n0_v1:
         return False, 'TC129 FAILED: Node0 did not read V1', reads
+
+    is_ha_vi = any(
+        'UBIO-HA-MANIFEST' in l and 'controller=ha-vi' in l
+        for l in lines)
+    if is_ha_vi:
+        has_evict = any(
+            'HA-SLICC-GATE' in l and 'phase=EVICT' in l and
+            'pa=0x10008000' in l for l in lines)
+        read_acks = sum(
+            re.search(r'HA-SLICC-GATE.*phase=READ_ACK '
+                      r'pa=0x(?:[0-9a-f]+)?10008000\b', l)
+            is not None for l in lines)
+        write_acks = sum(
+            re.search(r'HA-SLICC-GATE.*phase=WRITE_ACK '
+                      r'pa=0x(?:[0-9a-f]+)?10008000\b', l)
+            is not None for l in lines)
+        has_recall_data = any(
+            'RecallResp' in l and '0x10008000' in l for l in lines)
+        diag = (f'ha_evict={has_evict}, read_acks={read_acks}, '
+                f'write_acks={write_acks}, recall_data={has_recall_data}')
+        if not has_evict:
+            return False, f'TC129 FAILED: no HA target eviction ({diag})', []
+        if read_acks < 4 or write_acks < 2 or not has_recall_data:
+            return False, f'TC129 FAILED: incomplete HA lifecycle ({diag})', []
+        return True, f'TC129 PASSED: HA-VI V0-to-V1 lifecycle preserved data ({diag})', []
 
     # H64 can persist a clean target asynchronously before capacity pressure.
     # Count either dirty victim spill or the equivalent safe force-remove as an
@@ -2816,6 +2894,236 @@ def verify_tc217(reads, lines):
                   "128 useful operations completed"), []
 
 
+def verify_ha_topology(reads, lines, scenario, timer_phase, timer_count):
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    topology = [match for match in topology if match]
+    if not topology:
+        return False, f"{scenario} FAILED: missing topology markers", []
+    plane_counts = {int(match.group(2)) for match in topology}
+    if len(plane_counts) != 1:
+        return False, f"{scenario} FAILED: inconsistent plane counts {plane_counts}", []
+    planes = next(iter(plane_counts))
+    marker_planes = {int(match.group(1)) for match in topology}
+    if marker_planes != set(range(planes)):
+        return False, (f"{scenario} FAILED: topology participants "
+                       f"{sorted(marker_planes)} expected 0..{planes - 1}"), []
+
+    validations = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (record.get("kind") == "validation" and
+                record.get("scenario") == scenario):
+            validations.append(record)
+    valid_planes = Counter(record.get("plane") for record in validations
+                           if record.get("errors") == 0 and
+                           record.get("planes") == planes)
+    if valid_planes != Counter({plane: 1 for plane in range(planes)}):
+        return False, f"{scenario} FAILED: invalid validations {validations}", []
+
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    expected_reads = planes * 16
+    if mismatches or len(reads) != expected_reads:
+        return False, (f"{scenario} FAILED: reads={len(reads)} expected={expected_reads} "
+                       f"mismatches={len(mismatches)}"), reads
+
+    timers = [_RE_GUEST_TIMER.search(line) for line in lines]
+    timers = [match for match in timers
+              if match and match.group(2) == timer_phase]
+    if len(timers) != timer_count or any(
+            int(match.group(3)) != 16 or int(match.group(4)) == 0 or
+            int(match.group(5)) == 0 for match in timers):
+        return False, (f"{scenario} FAILED: invalid {timer_phase} timers "
+                       f"count={len(timers)} expected={timer_count}"), []
+    return True, (f"{scenario} PASSED: {planes} participant planes, "
+                  f"{len(reads)} reads and {timer_count} 16-op timers validated"), []
+
+
+def verify_tc228(reads, lines):
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    planes = max((int(match.group(2)) for match in topology if match), default=0)
+    return verify_ha_topology(
+        reads, lines, "HAT01", "topology_remote_read", planes)
+
+
+def verify_tc229(reads, lines):
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    planes = max((int(match.group(2)) for match in topology if match), default=0)
+    return verify_ha_topology(
+        reads, lines, "HAT02", "topology_ownership_handoff", planes)
+
+
+def verify_tc230(reads, lines):
+    return verify_ha_topology(
+        reads, lines, "HAT03", "topology_all_sharer_to_writer", 1)
+
+
+def verify_ha_extended_base(reads, lines, scenario, expected_reads):
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    topology = [match for match in topology if match]
+    if not topology:
+        return False, f"{scenario} FAILED: missing topology markers", [], 0
+    plane_counts = {int(match.group(2)) for match in topology}
+    if len(plane_counts) != 1:
+        return False, f"{scenario} FAILED: inconsistent plane counts", [], 0
+    planes = next(iter(plane_counts))
+    if Counter(int(match.group(1)) for match in topology) != Counter(
+            {plane: 1 for plane in range(planes)}):
+        return False, f"{scenario} FAILED: invalid topology participants", [], 0
+    validations = []
+    for line in lines:
+        if not line.startswith('{'):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (record.get("kind") == "validation" and
+                record.get("scenario") == scenario):
+            validations.append(record)
+    valid = Counter(record.get("plane") for record in validations
+                    if record.get("planes") == planes and
+                    record.get("errors") == 0)
+    if valid != Counter({plane: 1 for plane in range(planes)}):
+        return False, f"{scenario} FAILED: invalid validations {validations}", [], 0
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    expected = expected_reads(planes)
+    if mismatches or len(reads) != expected:
+        return False, (f"{scenario} FAILED: reads={len(reads)} expected={expected} "
+                       f"mismatches={len(mismatches)}"), reads, 0
+    return True, "", [], planes
+
+
+def timer_records(lines, phase):
+    records = [_RE_GUEST_TIMER.search(line) for line in lines]
+    return [record for record in records
+            if record and record.group(2) == phase]
+
+
+def latency_records(lines, phase):
+    records = [_RE_PERF_LATENCY.search(line) for line in lines]
+    return [record for record in records
+            if record and record.group(2) == phase]
+
+
+def valid_timer_set(records, expected_nodes, expected_operations):
+    return (Counter(int(record.group(1)) for record in records) ==
+            Counter(expected_nodes) and
+            all(int(record.group(3)) == expected_operations and
+                int(record.group(4)) > 0 and int(record.group(5)) > 0
+                for record in records))
+
+
+def valid_latency_set(records, expected_nodes, expected_samples):
+    return (Counter(int(record.group(1)) for record in records) ==
+            Counter(expected_nodes) and
+            all(int(record.group(3)) == expected_samples and
+                int(record.group(4)) <= int(record.group(5)) <=
+                int(record.group(6)) <= int(record.group(7)) <=
+                int(record.group(8)) and
+                int(record.group(4)) <= int(record.group(9)) <=
+                int(record.group(8)) and int(record.group(10)) > 0
+                for record in records))
+
+
+def verify_tc231(reads, lines):
+    passed, message, failures, planes = verify_ha_extended_base(
+        reads, lines, "HAE01", lambda p: p)
+    if not passed:
+        return passed, message, failures
+    timers = timer_records(lines, "clean_shared_read_service")
+    latency = latency_records(lines, "clean_shared_first_sweep")
+    if not valid_timer_set(timers, range(planes), 256):
+        return False, f"TC231 FAILED: invalid service timers {len(timers)}", []
+    if not valid_latency_set(latency, range(planes), 32):
+        return False, f"TC231 FAILED: invalid latency summaries {len(latency)}", []
+    return True, f"TC231 PASSED: {planes} planes clean-shared reuse", []
+
+
+def verify_tc232(reads, lines):
+    passed, message, failures, planes = verify_ha_extended_base(
+        reads, lines, "HAE02", lambda p: p * 16)
+    if not passed:
+        return passed, message, failures
+    reads_t = timer_records(lines, "hot_key_read_service")
+    writes_t = timer_records(lines, "hot_key_write_service")
+    if not valid_timer_set(reads_t, range(planes), 16):
+        return False, "TC232 FAILED: invalid read timers", []
+    write_ops = [int(m.group(3)) for m in writes_t]
+    if (Counter(int(m.group(1)) for m in writes_t) !=
+            Counter(range(planes)) or sum(write_ops) != 16 or
+            any(op <= 0 or int(m.group(4)) <= 0 or int(m.group(5)) <= 0
+                for op, m in zip(write_ops, writes_t))):
+        return False, f"TC232 FAILED: invalid write operation split {write_ops}", []
+    write_ops_by_plane = {int(m.group(1)): int(m.group(3)) for m in writes_t}
+    write_latency = latency_records(lines, "hot_key_write")
+    if not valid_latency_set(latency_records(lines, "hot_key_read"),
+                             range(planes), 16) or \
+            Counter(int(m.group(1)) for m in write_latency) != \
+            Counter(range(planes)) or any(
+                int(m.group(3)) != write_ops_by_plane[int(m.group(1))] or
+                int(m.group(4)) > int(m.group(5)) or
+                int(m.group(5)) > int(m.group(6)) or
+                int(m.group(6)) > int(m.group(7)) or
+                int(m.group(7)) > int(m.group(8)) or
+                not int(m.group(4)) <= int(m.group(9)) <= int(m.group(8)) or
+                int(m.group(10)) <= 0 for m in write_latency):
+        return False, "TC232 FAILED: missing latency summaries", []
+    return True, f"TC232 PASSED: 16 hot-key rounds across {planes} planes", []
+
+
+def verify_tc233(reads, lines):
+    passed, message, failures, planes = verify_ha_extended_base(
+        reads, lines, "HAE03", lambda p: p * 16)
+    if not passed:
+        return passed, message, failures
+    timers = timer_records(lines, "producer_consumer_service")
+    latency = latency_records(lines, "producer_consumer_load")
+    if not valid_timer_set(timers, range(planes), 32):
+        return False, "TC233 FAILED: invalid service timers", []
+    if not valid_latency_set(latency, range(planes), 16):
+        return False, "TC233 FAILED: invalid load latency summaries", []
+    return True, f"TC233 PASSED: {planes * 16} records consumed", []
+
+
+def verify_tc234(reads, lines):
+    passed, message, failures, planes = verify_ha_extended_base(
+        reads, lines, "HAE04", lambda p: p)
+    if not passed:
+        return passed, message, failures
+    stores = timer_records(lines, "queued_token_store")
+    end_to_end = timer_records(lines, "queued_token_end_to_end")
+    if not valid_timer_set(stores, range(planes), 8):
+        return False, "TC234 FAILED: invalid store timers", []
+    if not valid_timer_set(end_to_end, [0], 8 * planes):
+        return False, "TC234 FAILED: invalid end-to-end timer", []
+    if not valid_latency_set(latency_records(lines, "queued_token_store"),
+                             range(planes), 8):
+        return False, "TC234 FAILED: missing store latency summaries", []
+    return True, f"TC234 PASSED: {8 * planes} ordered token handoffs", []
+
+
+def verify_tc235(reads, lines):
+    passed, message, failures, planes = verify_ha_extended_base(
+        reads, lines, "HAE05", lambda p: p * 9)
+    if not passed:
+        return passed, message, failures
+    service = timer_records(lines, "catalog_kv_service")
+    end_to_end = timer_records(lines, "catalog_kv_end_to_end")
+    latency = latency_records(lines, "catalog_kv_batch_64ops")
+    if not valid_timer_set(service, range(planes), 1024):
+        return False, "TC235 FAILED: invalid service timers", []
+    if not valid_timer_set(end_to_end, range(planes), 1024):
+        return False, "TC235 FAILED: invalid end-to-end timers", []
+    if not valid_latency_set(latency, range(planes), 16):
+        return False, "TC235 FAILED: invalid batch latency summaries", []
+    return True, f"TC235 PASSED: {planes * 1024} catalog/KV operations", []
+
+
 def verify_o3_exact_reads(tc_id, reads, expected_count):
     mismatches = [read for read in reads if read["verdict"] != "MATCH"]
     if mismatches:
@@ -2923,6 +3231,14 @@ VERIFIERS = {
     225: verify_tc225,
     226: verify_tc226,
     227: verify_tc227,
+    228: verify_tc228,
+    229: verify_tc229,
+    230: verify_tc230,
+    231: verify_tc231,
+    232: verify_tc232,
+    233: verify_tc233,
+    234: verify_tc234,
+    235: verify_tc235,
     300: lambda reads, lines: verify_o3_exact_reads(300, reads, 2),
     301: lambda reads, lines: verify_o3_exact_reads(301, reads, 2),
     302: lambda reads, lines: verify_o3_exact_reads(302, reads, 32),
@@ -3095,6 +3411,7 @@ def gem5_config_main():
     _parser.add_argument("--ep-wakeup-retry", type=int, default=-1)
     _parser.add_argument("--ep-upgrade-retry-min", type=int, default=-1)
     _parser.add_argument("--ep-upgrade-retry-max", type=int, default=-1)
+    _parser.add_argument("--ep-upgrade-retry-max-resends", type=int, default=-1)
     _parser.add_argument("--ep-delta-noc", type=int, default=-1)
     _parser.add_argument("--ep-wait-cap", type=int, default=-1)
     _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
@@ -3111,6 +3428,7 @@ def gem5_config_main():
         ("EPRN_WAKEUP_RETRY_CYCLES", _args.ep_wakeup_retry),
         ("EP_UPGRADE_RETRY_MIN_CYCLES", _args.ep_upgrade_retry_min),
         ("EP_UPGRADE_RETRY_MAX_CYCLES", _args.ep_upgrade_retry_max),
+        ("EP_UPGRADE_RETRY_MAX_RESENDS", _args.ep_upgrade_retry_max_resends),
         ("EP_DELTA_NOC_CYCLES", _args.ep_delta_noc),
         ("UB_WAIT_CAP", _args.ep_wait_cap),
         ("UBCC_BLOOM_BYTES", _args.ubcc_bloom_bytes),
@@ -3417,11 +3735,14 @@ def gem5_config_main():
     # Build proper per-node mem_ranges
     all_ranges = []
     for nid in range(NODES):
-        cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE)
-        all_ranges.append(cfg.local_private_range(0))
-        all_ranges.append(cfg.metadata_private_range(0))
+        cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE, _cfg_num_sockets)
+        for sid in range(_cfg_num_sockets):
+            all_ranges.append(cfg.local_private_range(sid))
+            all_ranges.append(cfg.metadata_private_range(sid))
         for hn in range(NODES):
-            all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
+            for sid in range(_cfg_num_sockets):
+                all_ranges.append(NodeConfig.dsm_range_for(
+                    hn, DEFAULT_SEG_SIZE, cfg.phy_base, _cfg_num_sockets, sid))
     system.mem_ranges = all_ranges
 
     # ── Q2 FIX: Pre-map binary + stack pages per-node ──────────────

@@ -19,6 +19,13 @@ static inline void perf_store_complete(int home_node, uint32_t offset,
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
+static inline void perf_store_complete_plane(int home_node, int home_socket,
+                                             uint32_t offset, uint32_t value)
+{
+    dsm_store_plane(home_node, home_socket, offset, value);
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
 static inline int perf_fmt_u64(char *buf, int p, uint64_t value)
 {
     char digits[24];

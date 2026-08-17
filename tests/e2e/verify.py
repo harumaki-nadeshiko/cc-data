@@ -58,8 +58,12 @@ def main():
                         "[UBCC-NAIVE-EVICT-DONE]" in line or
                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD]" in line or
                         "[UBIO-POLICY]" in line or
-                        "[RUNNER-MANIFEST]" in line or
-                        "BATCH-RS" in line or
+                         "[RUNNER-MANIFEST]" in line or
+                         "HA_PROFILE=" in line or
+                         "UBIO-HA-MANIFEST" in line or
+                         "HA-SLICC-GATE" in line or
+                         "RecallResp" in line or
+                         "BATCH-RS" in line or
                         "SILENT" in line or
                         "C4" in line or
                         "DIRECT-FWD" in line or

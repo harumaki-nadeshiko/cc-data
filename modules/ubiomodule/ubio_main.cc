@@ -15,6 +15,7 @@
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
 #include "modules/ubiomodule/BackstoreHostH64.hh"
 #include "modules/ubiomodule/PeerExitCoordinator.hh"
+#include "modules/hamodule/HAController.hh"
 
 #include <algorithm>
 #include <array>
@@ -55,6 +56,9 @@ isUbccIngress(CoherenceMessageType t)
       case CoherenceMessageType::InvalidateAck:
       case CoherenceMessageType::QueryLineMetaReq:
       case CoherenceMessageType::HomeWritebackNotify:
+      case CoherenceMessageType::HAPermissionReq:
+      case CoherenceMessageType::HAPermissionAck:
+      case CoherenceMessageType::HAPresenceProbeResp:
         return true;
       default:
         return false;
@@ -75,6 +79,69 @@ isGem5Ingress(CoherenceMessageType t)
       case CoherenceMessageType::ClearResp:
       case CoherenceMessageType::UpgradeAckNotify:
       case CoherenceMessageType::QueryLineMetaResp:
+      case CoherenceMessageType::HAPermissionResp:
+      case CoherenceMessageType::HAPresenceProbeReq:
+        return true;
+      default:
+        return false;
+    }
+}
+
+// HA mode deliberately constructs neither UBCCController nor
+// UbioBackstoreHost. Reject legacy request/response pairs without touching
+// either object. One-way notifications and unknown types return false so the
+// dispatch site can emit an explicit fatal diagnostic.
+bool
+buildHaLegacyReject(const CoherenceMessage &request, int nid, int sid,
+                    CoherenceMessage &response)
+{
+    response.h.srcNode = nid;
+    response.h.srcSocket = sid;
+    response.h.dstNode = request.h.srcNode;
+    response.h.dstSocket = request.h.srcSocket;
+    response.h.homeNode = nid;
+    response.h.homeSocket = sid;
+    response.h.requesterNode = request.h.requesterNode;
+    response.h.homeLinePa = request.h.homeLinePa;
+    response.h.localLinePa = request.h.localLinePa;
+    response.h.epoch = request.h.epoch;
+    response.h.reqId = request.h.reqId;
+
+    switch (request.h.type) {
+      case CoherenceMessageType::ReadReq:
+        response.h.type = CoherenceMessageType::ReadResp;
+        response.h.flags = static_cast<uint32_t>(CFLAG_BUSY);
+        response.b.readResp.grantType = -1;
+        response.b.readResp.dataSource =
+            static_cast<int8_t>(GrantDataSource::NoData);
+        return true;
+      case CoherenceMessageType::WritebackReq:
+        response.h.type = CoherenceMessageType::WritebackResp;
+        response.b.writebackResp.success = false;
+        return true;
+      case CoherenceMessageType::EvictReq:
+        response.h.type = CoherenceMessageType::EvictResp;
+        response.b.evictResp.success = false;
+        return true;
+      case CoherenceMessageType::UpgradeReq:
+        response.h.type = CoherenceMessageType::UpgradeResp;
+        response.h.flags = static_cast<uint32_t>(CFLAG_BUSY);
+        response.b.upgradeResp.upgradeTargetMask = 0;
+        response.b.upgradeResp.committedEpoch = request.h.epoch;
+        return true;
+      case CoherenceMessageType::UpgradeDoneReq:
+        response.h.type = CoherenceMessageType::UpgradeDoneResp;
+        response.b.upgradeDoneResp.accepted = false;
+        return true;
+      case CoherenceMessageType::ClearReq:
+        response.h.type = CoherenceMessageType::ClearResp;
+        response.b.clearResp.accepted = false;
+        return true;
+      case CoherenceMessageType::QueryLineMetaReq:
+        response.h.type = CoherenceMessageType::QueryLineMetaResp;
+        response.b.queryLineMetaResp.found = false;
+        response.b.queryLineMetaResp.epoch = 0;
+        response.b.queryLineMetaResp.ownerNode = -1;
         return true;
       default:
         return false;
@@ -402,6 +469,16 @@ applyUbioFault(const CoherenceMessage &coh, int nid, uint64_t currentTick,
         if (r.matchSrc >= 0 && r.matchSrc != (int)coh.h.srcNode) continue;
         if (r.matchDst >= 0 && r.matchDst != (int)coh.h.dstNode) continue;
         if (r.matchPa != 0 && r.matchPa != coh.h.homeLinePa) continue;
+        // reason=1 is emitted only by clear_profile=lossless-oneway. Such a
+        // run explicitly assumes eventual delivery and has no requester-side
+        // retransmission/recovery path, so fault injection must not weaken the
+        // Clear channel (including delay/reorder experiments).
+        if (coh.h.type == CoherenceMessageType::ClearReq &&
+            coh.b.clearReq.reason == 1) {
+            LogWarn("UBIO", "[UBFAULT-REJECT] rule='{}' type=ClearReq "
+                    "reqId={} reason=lossless-oneway", r.name, coh.h.reqId);
+            continue;
+        }
         const char *tn = coherenceMsgTypeName(coh.h.type);
         if (coh.h.type == CoherenceMessageType::PeerExit &&
             (r.action == UbioFaultAction::Delay ||
@@ -471,6 +548,12 @@ static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
 static bool g_batchRs = true;        // argv --batch-rs= override
 static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
 static bool g_debugUbioPerf = false;  // [DEBUG-UBIO-*] gate, set via UBIO_DEBUG_PERF=1
+enum class HomeControllerMode { Ubcc, HaVi };
+static HomeControllerMode g_homeControllerMode = HomeControllerMode::Ubcc;
+static uint64_t g_haExactBase = 0;
+static uint64_t g_haExactBytes = 64ULL * 1024 * 1024;
+static size_t g_haMaxActive = 256;
+static size_t g_haQueueDepth = 8;
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -1752,6 +1835,603 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
 };
 
+// Wire/transport adapter for the VI home controller.  The HA core deliberately
+// knows neither CoherenceMessage nor Port; this class owns those translations
+// and the DsmDataStore persistence completions.
+struct HomeVIHost {
+    Port *gem5Port;
+    Port *netPort;
+    int nodeId;
+    int socketId;
+    uint64_t &tickRef;
+    DsmDataStore dsmData;
+
+    HomeVIHost(Port *gem5, Port *net, int nid, int sid, uint64_t &tick)
+        : gem5Port(gem5), netPort(net), nodeId(nid), socketId(sid), tickRef(tick)
+    {}
+
+    bool routeControlToTarget(const CoherenceMessage &msg) {
+        if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
+            return sendCoh(gem5Port, tickRef, gidOf(nodeId, socketId), msg);
+        return sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket),
+                       msg, true);
+    }
+};
+
+struct HomeVIAdapter {
+    cc::ha::HAController &ha;
+    HomeVIHost &host;
+    int nodeId;
+    int socketId;
+    uint64_t &tickRef;
+    size_t maxActive;
+    NodeAddressMap addressMap;
+
+    struct RequestContext {
+        uint16_t requesterNode = 0;
+        uint16_t requesterSocket = 0;
+        uint64_t address = 0;
+        uint64_t wireReqId = 0;
+        HAOperation operation = HAOperation::Read;
+        uint64_t epoch = 0;
+        std::array<uint8_t, 64> data{};
+        bool hasData = false;
+    };
+    struct WireRequestKey {
+        uint16_t node = 0;
+        uint16_t socket = 0;
+        uint64_t address = 0;
+        uint64_t reqId = 0;
+        HAOperation operation = HAOperation::Read;
+        uint64_t epoch = 0;
+        bool operator<(const WireRequestKey &o) const {
+            return std::tie(node, socket, address, reqId, operation, epoch) <
+                   std::tie(o.node, o.socket, o.address, o.reqId, o.operation, o.epoch);
+        }
+    };
+    struct ResponseKey {
+        CoherenceMessageType type = CoherenceMessageType::ReadReq;
+        uint16_t node = 0;
+        uint16_t socket = 0;
+        uint64_t address = 0;
+        uint64_t reqId = 0;
+        bool operator<(const ResponseKey &o) const {
+            return std::tie(type, node, socket, address, reqId) <
+                   std::tie(o.type, o.node, o.socket, o.address, o.reqId);
+        }
+    };
+    struct WritebackContext {
+        uint16_t node = 0;
+        uint16_t socket = 0;
+        uint64_t address = 0;
+        uint64_t wireReqId = 0;
+    };
+    std::map<uint64_t, RequestContext> requests;
+    std::map<WireRequestKey, uint64_t> wireRequests;
+    std::map<ResponseKey, uint64_t> expectedResponses;
+    std::map<uint64_t, WritebackContext> writebacks;
+    uint64_t nextInternalReqId = 1;
+    uint64_t nextControlSeq = 1;
+
+    HomeVIAdapter(cc::ha::HAController &controller, HomeVIHost &backing,
+                  int nid, int sid, uint64_t &tick, size_t activeLimit)
+        : ha(controller), host(backing), nodeId(nid), socketId(sid),
+          tickRef(tick), maxActive(activeLimit),
+          addressMap(g_numNodes, g_numSockets)
+    {}
+
+    uint32_t participant(uint32_t node, uint32_t socket) const {
+        return node * static_cast<uint32_t>(g_numSockets) + socket;
+    }
+
+    uint32_t participantNode(uint32_t plane) const {
+        return plane / static_cast<uint32_t>(g_numSockets);
+    }
+
+    uint16_t participantSocket(uint32_t plane) const {
+        return static_cast<uint16_t>(plane % static_cast<uint32_t>(g_numSockets));
+    }
+
+    uint64_t allocInternalReqId() {
+        while (!nextInternalReqId || requests.count(nextInternalReqId) ||
+               writebacks.count(nextInternalReqId))
+            ++nextInternalReqId;
+        return nextInternalReqId++;
+    }
+
+    ResponseKey responseKey(CoherenceMessageType type,
+                            const CoherenceMessage &msg) const {
+        return {type, msg.h.srcNode, msg.h.srcSocket,
+                msg.h.homeLinePa, msg.h.reqId};
+    }
+
+    bool takeExpected(CoherenceMessageType type, const CoherenceMessage &msg,
+                      uint64_t &internalId) {
+        auto it = expectedResponses.find(responseKey(type, msg));
+        if (it == expectedResponses.end()) return false;
+        internalId = it->second;
+        expectedResponses.erase(it);
+        return true;
+    }
+
+    void eraseRequest(uint64_t internalId) {
+        auto it = requests.find(internalId);
+        if (it == requests.end()) return;
+        wireRequests.erase({it->second.requesterNode, it->second.requesterSocket,
+                            it->second.address, it->second.wireReqId,
+                            it->second.operation, it->second.epoch});
+        for (auto expected = expectedResponses.begin();
+             expected != expectedResponses.end();) {
+            if (expected->second == internalId) expected = expectedResponses.erase(expected);
+            else ++expected;
+        }
+        requests.erase(it);
+    }
+
+    void sendPermissionStatus(const CoherenceMessage &request, HAStatus status) {
+        CoherenceMessage response;
+        response.h.type = CoherenceMessageType::HAPermissionResp;
+        response.h.srcNode = nodeId;
+        response.h.srcSocket = socketId;
+        response.h.dstNode = request.h.srcNode;
+        response.h.dstSocket = request.h.srcSocket;
+        response.h.homeNode = nodeId;
+        response.h.homeSocket = socketId;
+        response.h.homeLinePa = request.h.homeLinePa;
+        response.h.reqId = request.h.reqId;
+        response.b.haPermissionResp.operation = request.b.haPermissionReq.operation;
+        response.b.haPermissionResp.status = status;
+        response.b.haPermissionResp.permissionEpoch =
+            request.b.haPermissionReq.permissionEpoch;
+        panic_if(!host.routeControlToTarget(response),
+                 "HA permission status send failed reqId={}", request.h.reqId);
+    }
+
+    bool handle(const CoherenceMessage &msg) {
+        using EventKind = cc::ha::HAController::EventKind;
+        const uint32_t sourceParticipant = participant(msg.h.srcNode, msg.h.srcSocket);
+        switch (msg.h.type) {
+          case CoherenceMessageType::HAPermissionReq: {
+            if (msg.b.haPermissionReq.operation != HAOperation::Read &&
+                msg.b.haPermissionReq.operation != HAOperation::Write) {
+                sendPermissionStatus(msg, HAStatus::InvalidArgument);
+                return true;
+            }
+            const WireRequestKey wireKey{msg.h.srcNode, msg.h.srcSocket,
+                msg.h.homeLinePa, msg.h.reqId, msg.b.haPermissionReq.operation,
+                msg.b.haPermissionReq.permissionEpoch};
+            if (wireRequests.find(wireKey) != wireRequests.end())
+                return true; // exact duplicate of a still-pending request
+            if (requests.size() >= maxActive) {
+                sendPermissionStatus(msg, HAStatus::RetryableBusy);
+                return true;
+            }
+            const uint64_t internalId = allocInternalReqId();
+            RequestContext context;
+            context.requesterNode = msg.h.srcNode;
+            context.requesterSocket = msg.h.srcSocket;
+            context.address = msg.h.homeLinePa;
+            context.wireReqId = msg.h.reqId;
+            context.operation = msg.b.haPermissionReq.operation;
+            context.epoch = msg.b.haPermissionReq.permissionEpoch;
+            if (context.operation == HAOperation::Write) {
+                std::memcpy(context.data.data(), msg.b.haPermissionReq.data, 64);
+                context.hasData = true;
+            }
+            requests[internalId] = context;
+            wireRequests[wireKey] = internalId;
+            if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                LogInfo("UBIO", "[HA-PHASE] phase=home_receive tick={} internalId={} "
+                    "wireReqId={} requester={}:{} home={}:{} pa=0x{:x} op={}",
+                    tickRef, internalId, context.wireReqId,
+                    context.requesterNode, context.requesterSocket, nodeId,
+                    socketId, context.address,
+                    context.operation == HAOperation::Read ? "read" : "write");
+            const bool accepted = ha.submit({
+                msg.h.homeLinePa, sourceParticipant,
+                context.operation == HAOperation::Read
+                    ? cc::ha::HAController::RequestKind::Read
+                    : cc::ha::HAController::RequestKind::Write,
+                internalId,
+                context.hasData
+                    ? cc::ha::HAController::Payload{context.data, true}
+                    : cc::ha::HAController::Payload{}});
+            (void)accepted; // a false submit emits Reject, which still needs its context
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::HAPermissionAck: {
+            uint64_t internalId = 0;
+            auto expected = expectedResponses.find(responseKey(
+                CoherenceMessageType::HAPermissionAck, msg));
+            if (expected == expectedResponses.end()) return true;
+            auto request = requests.find(expected->second);
+            if (request == requests.end() ||
+                msg.h.srcNode != request->second.requesterNode ||
+                msg.h.srcSocket != request->second.requesterSocket ||
+                msg.b.haPermissionAck.operation != request->second.operation ||
+                msg.b.haPermissionAck.status != HAStatus::Ok ||
+                msg.b.haPermissionAck.permissionEpoch != request->second.epoch)
+                return true;
+            internalId = expected->second;
+            expectedResponses.erase(expected);
+            if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                LogInfo("UBIO", "[HA-PHASE] phase=install_ack_receive tick={} "
+                    "internalId={} wireReqId={} requester={}:{} home={}:{} "
+                    "pa=0x{:x}", tickRef, internalId,
+                    request->second.wireReqId, request->second.requesterNode,
+                    request->second.requesterSocket, nodeId, socketId,
+                    msg.h.homeLinePa);
+            ha.accept({EventKind::InstallAck, msg.h.homeLinePa, sourceParticipant,
+                       internalId, {}, false, false});
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::HAPresenceProbeResp: {
+            uint64_t internalId = 0;
+            auto expected = expectedResponses.find(responseKey(
+                CoherenceMessageType::HAPresenceProbeResp, msg));
+            if (expected == expectedResponses.end()) return true;
+            internalId = expected->second;
+            if (msg.b.haPresenceProbeResp.status != HAStatus::Ok ||
+                msg.b.haPresenceProbeResp.action != HAProbeAction::Query) {
+                expectedResponses.erase(expected);
+                ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
+                           internalId, {}, false, false});
+                drainActions();
+                return true;
+            }
+            expectedResponses.erase(expected);
+            ha.accept({EventKind::ProbeResponse, msg.h.homeLinePa, sourceParticipant,
+                       internalId, {},
+                       msg.b.haPresenceProbeResp.present != 0, false});
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::RecallResp: {
+            uint64_t internalId = 0;
+            if (!takeExpected(CoherenceMessageType::RecallResp, msg, internalId))
+                return true;
+            if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                LogInfo("UBIO", "[HA-PHASE] phase=owner_data_receive tick={} "
+                    "internalId={} source={}:{} home={}:{} pa=0x{:x}",
+                    tickRef, internalId, msg.h.srcNode, msg.h.srcSocket,
+                    nodeId, socketId, msg.h.homeLinePa);
+            cc::ha::HAController::Payload payload;
+            if (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) {
+                auto it = requests.find(internalId);
+                if (it != requests.end()) {
+                    std::memcpy(it->second.data.data(), msg.b.recallResp.data, 64);
+                    it->second.hasData = true;
+                }
+                std::memcpy(payload.bytes.data(), msg.b.recallResp.data, 64);
+                payload.valid = true;
+            }
+            if (!payload.valid) {
+                ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
+                           internalId, {}, false, false});
+                drainActions();
+                return true;
+            }
+            ha.accept({EventKind::OwnerData, msg.h.homeLinePa, sourceParticipant,
+                       internalId, payload, true, true});
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::InvalidateAck: {
+            uint64_t internalId = 0;
+            if (!takeExpected(CoherenceMessageType::InvalidateAck, msg, internalId))
+                return true;
+            if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                LogInfo("UBIO", "[HA-PHASE] phase=invalidate_ack_receive tick={} "
+                    "internalId={} source={}:{} home={}:{} pa=0x{:x}",
+                    tickRef, internalId, msg.h.srcNode, msg.h.srcSocket,
+                    nodeId, socketId, msg.h.homeLinePa);
+            ha.accept({EventKind::InvalidateAck, msg.h.homeLinePa, sourceParticipant,
+                       internalId, {}, false, false});
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::WritebackReq: {
+            for (const auto &pending : writebacks) {
+                if (pending.second.address != msg.h.homeLinePa) continue;
+                CoherenceMessage response;
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+                response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa;
+                response.h.localLinePa = msg.h.localLinePa;
+                response.h.reqId = msg.h.reqId;
+                response.b.writebackResp.success = false;
+                host.routeControlToTarget(response);
+                return true;
+            }
+            const uint64_t internalId = allocInternalReqId();
+            cc::ha::HAController::Payload payload;
+            if (msg.b.writebackReq.hasData) {
+                std::memcpy(payload.bytes.data(), msg.b.writebackReq.data, 64);
+                payload.valid = true;
+            }
+            if (!payload.valid) {
+                CoherenceMessage response;
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+                response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa;
+                response.h.localLinePa = msg.h.localLinePa;
+                response.h.reqId = msg.h.reqId;
+                response.b.writebackResp.success = false;
+                host.routeControlToTarget(response);
+                return true;
+            }
+            ha.accept({EventKind::Writeback, msg.h.homeLinePa,
+                       sourceParticipant, internalId, payload,
+                       (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0,
+                       msg.b.writebackReq.hasData});
+            writebacks[internalId] = {msg.h.srcNode, msg.h.srcSocket,
+                                      msg.h.homeLinePa, msg.h.reqId};
+            drainActions();
+            return true;
+          }
+          case CoherenceMessageType::EvictReq: {
+            ha.accept({EventKind::Evict, msg.h.homeLinePa, sourceParticipant,
+                       msg.h.reqId, {}, false, false});
+            CoherenceMessage response;
+            response.h.type = CoherenceMessageType::EvictResp;
+            response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+            response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+            response.h.homeLinePa = msg.h.homeLinePa; response.h.reqId = msg.h.reqId;
+            response.b.evictResp.success = true;
+            panic_if(!host.routeControlToTarget(response), "HA evict response send failed");
+            return true;
+          }
+          case CoherenceMessageType::PeerExit:
+            ha.accept({EventKind::PeerExit, ha.directory().config().base,
+                       sourceParticipant, 0, {}, false, false});
+            drainActions();
+            return true;
+          default:
+            return false;
+        }
+    }
+
+    void drainActions() {
+        using ActionKind = cc::ha::HAController::ActionKind;
+        while (ha.hasAction()) {
+            const auto action = ha.popAction();
+            auto contextIt = requests.find(action.requestId);
+            if (action.kind == ActionKind::FetchMemory) {
+                const bool queued = host.dsmData.readData(
+                    action.address, tickRef,
+                    [this, action](DsmDataStatus status, const uint8_t *data) {
+                        auto it = requests.find(action.requestId);
+                        if (it == requests.end()) return;
+                        const bool zeroFill = status == DsmDataStatus::NotWritten;
+                        if (status == DsmDataStatus::Ok && data) {
+                            std::memcpy(it->second.data.data(), data, 64);
+                            it->second.hasData = true;
+                        } else if (zeroFill) {
+                            it->second.data.fill(0);
+                            it->second.hasData = true;
+                        }
+                        cc::ha::HAController::Payload payload;
+                        if (status == DsmDataStatus::Ok && data) {
+                            std::memcpy(payload.bytes.data(), data, 64);
+                            payload.valid = true;
+                        } else if (zeroFill) {
+                            payload.bytes.fill(0);
+                            payload.valid = true;
+                        }
+                        ha.accept({payload.valid
+                                       ? cc::ha::HAController::EventKind::OwnerData
+                                       : cc::ha::HAController::EventKind::Unavailable,
+                                   action.address, action.source, action.requestId,
+                                   payload, payload.valid, false});
+                        drainActions();
+                    });
+                if (!queued && requests.count(action.requestId)) {
+                    ha.accept({cc::ha::HAController::EventKind::Unavailable,
+                               action.address, action.source, action.requestId,
+                               {}, false, false});
+                    drainActions();
+                }
+                continue;
+            }
+            if (action.kind == ActionKind::Commit || action.kind == ActionKind::Release) {
+                if (action.kind == ActionKind::Commit && contextIt != requests.end()) {
+                    const auto &context = contextIt->second;
+                    if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                        LogInfo("UBIO", "[HA-PHASE] phase=home_commit tick={} "
+                            "internalId={} wireReqId={} requester={}:{} "
+                            "home={}:{} pa=0x{:x}", tickRef, action.requestId,
+                            context.wireReqId, context.requesterNode,
+                            context.requesterSocket, nodeId, socketId,
+                            action.address);
+                }
+                if (action.kind == ActionKind::Release) eraseRequest(action.requestId);
+                continue;
+            }
+            if (action.kind == ActionKind::PersistMemory) {
+                panic_if(!action.data.valid,
+                         "HA persistence action lacks data reqId={}", action.requestId);
+                const auto payload = action.data;
+                if (contextIt != requests.end()) {
+                    const auto &context = contextIt->second;
+                    if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                        LogInfo("UBIO", "[HA-PHASE] phase=persist_start tick={} "
+                            "internalId={} wireReqId={} requester={}:{} "
+                            "home={}:{} pa=0x{:x}", tickRef, action.requestId,
+                            context.wireReqId, context.requesterNode,
+                            context.requesterSocket, nodeId, socketId,
+                            action.address);
+                }
+                const bool queued = host.dsmData.writeDataAsync(
+                    action.address, payload.bytes.data(), tickRef,
+                    [this, action](DsmDataStatus status) {
+                        const bool isWriteback = writebacks.count(action.requestId) != 0;
+                        if (!isWriteback && requests.count(action.requestId) == 0) return;
+                        if (status != DsmDataStatus::Ok) {
+                            if (isWriteback) {
+                                const auto wb = writebacks.at(action.requestId);
+                                CoherenceMessage response;
+                                response.h.type = CoherenceMessageType::WritebackResp;
+                                response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+                                response.h.dstNode = wb.node; response.h.dstSocket = wb.socket;
+                                response.h.homeLinePa = wb.address;
+                                response.h.localLinePa = wb.address;
+                                response.h.reqId = wb.wireReqId;
+                                response.b.writebackResp.success = false;
+                                if (host.routeControlToTarget(response))
+                                    writebacks.erase(action.requestId);
+                            } else {
+                                ha.accept({cc::ha::HAController::EventKind::Unavailable,
+                                           action.address, action.source, action.requestId,
+                                           {}, false, false});
+                                drainActions();
+                            }
+                            return;
+                        }
+                        auto requestIt = requests.find(action.requestId);
+                        if (requestIt != requests.end()) {
+                            const auto &context = requestIt->second;
+                            if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
+                                LogInfo("UBIO", "[HA-PHASE] phase=persist_complete "
+                                    "tick={} internalId={} wireReqId={} "
+                                    "requester={}:{} home={}:{} pa=0x{:x}",
+                                    tickRef, action.requestId,
+                                    context.wireReqId, context.requesterNode,
+                                    context.requesterSocket, nodeId, socketId,
+                                    action.address);
+                        }
+                        ha.accept({cc::ha::HAController::EventKind::PersistenceComplete,
+                                   action.address, action.source, action.requestId,
+                                   {}, false, false});
+                        drainActions();
+                        auto wbIt = writebacks.find(action.requestId);
+                        if (wbIt != writebacks.end()) {
+                            CoherenceMessage response;
+                            response.h.type = CoherenceMessageType::WritebackResp;
+                            response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+                            response.h.dstNode = wbIt->second.node;
+                            response.h.dstSocket = wbIt->second.socket;
+                            response.h.homeLinePa = wbIt->second.address;
+                            response.h.localLinePa = wbIt->second.address;
+                            response.h.reqId = wbIt->second.wireReqId;
+                            response.b.writebackResp.success = true;
+                            if (host.routeControlToTarget(response))
+                                writebacks.erase(wbIt);
+                        }
+                    });
+                (void)queued; // failure callback applies safe unavailable/negative response
+                continue;
+            }
+            // A failure can reject a transaction while sibling probe/invalidate
+            // actions for it are already queued.  Those stale actions are safe
+            // to discard; callbacks and queue draining must not dereference a
+            // context that has since been released.
+            if (contextIt == requests.end()) continue;
+            const RequestContext &context = contextIt->second;
+            const uint32_t recipient = action.kind == ActionKind::FetchOwner
+                ? action.source : action.target;
+            const uint32_t recipientNode = participantNode(recipient);
+            const uint16_t recipientSocket = participantSocket(recipient);
+            CoherenceMessage out;
+            out.h.srcNode = nodeId; out.h.srcSocket = socketId;
+            out.h.dstNode = recipientNode;
+            out.h.dstSocket = recipientSocket;
+            out.h.homeNode = nodeId; out.h.homeSocket = socketId;
+            out.h.seqNum = nextControlSeq++;
+            out.h.requesterNode = context.requesterNode;
+            out.h.targetNode = recipientNode;
+            out.h.homeLinePa = action.address;
+            out.h.localLinePa = addressMap.buildDsmPA(
+                recipientNode, nodeId, addressMap.dsmOffset(action.address), socketId);
+            out.h.reqId = context.wireReqId;
+            if (action.kind == ActionKind::FetchOwner) {
+                out.h.type = CoherenceMessageType::RecallReq;
+                out.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+                if (context.operation == HAOperation::Read)
+                    out.h.flags |= static_cast<uint32_t>(CFLAG_IS_READ_RECALL);
+            } else if (action.kind == ActionKind::Invalidate) {
+                out.h.type = CoherenceMessageType::InvalidateReq;
+            } else if (action.kind == ActionKind::Probe) {
+                out.h.type = CoherenceMessageType::HAPresenceProbeReq;
+                out.b.haPresenceProbeReq.action = HAProbeAction::Query;
+                out.b.haPresenceProbeReq.expectedEpoch = context.epoch;
+            } else if (action.kind == ActionKind::GrantRead ||
+                       action.kind == ActionKind::GrantWrite ||
+                       action.kind == ActionKind::Reject) {
+                out.h.type = CoherenceMessageType::HAPermissionResp;
+                out.b.haPermissionResp.operation = context.operation;
+                out.b.haPermissionResp.status = action.kind == ActionKind::Reject
+                    ? HAStatus::RetryableBusy : HAStatus::Ok;
+                out.b.haPermissionResp.permissionEpoch = context.epoch;
+                if (context.hasData) {
+                    out.b.haPermissionResp.hasData = 1;
+                    std::memcpy(out.b.haPermissionResp.data, context.data.data(), 64);
+                }
+                if (action.data.valid) {
+                    out.b.haPermissionResp.hasData = 1;
+                    std::memcpy(out.b.haPermissionResp.data,
+                                action.data.bytes.data(), 64);
+                }
+                panic_if(action.kind == ActionKind::GrantRead &&
+                         !out.b.haPermissionResp.hasData,
+                         "HA GrantRead missing 64-byte data pa=0x%lx requester=%u reqId=%lu",
+                         action.address, context.requesterNode, context.wireReqId);
+            } else {
+                continue;
+            }
+            CoherenceMessageType responseType = CoherenceMessageType::ReadReq;
+            bool expectsResponse = true;
+            if (action.kind == ActionKind::FetchOwner)
+                responseType = CoherenceMessageType::RecallResp;
+            else if (action.kind == ActionKind::Invalidate)
+                responseType = CoherenceMessageType::InvalidateAck;
+            else if (action.kind == ActionKind::Probe)
+                responseType = CoherenceMessageType::HAPresenceProbeResp;
+            else if (action.kind == ActionKind::GrantRead || action.kind == ActionKind::GrantWrite)
+                responseType = CoherenceMessageType::HAPermissionAck;
+            else
+                expectsResponse = false;
+            if (expectsResponse)
+                expectedResponses[{responseType, out.h.dstNode, out.h.dstSocket,
+                                   out.h.homeLinePa, out.h.reqId}] = action.requestId;
+            const bool sent = host.routeControlToTarget(out);
+            if (!sent) {
+                if (expectsResponse)
+                    expectedResponses.erase({responseType, out.h.dstNode,
+                                             out.h.dstSocket, out.h.homeLinePa,
+                                             out.h.reqId});
+                warn("HA action send unavailable type={} reqId={} target={}",
+                     coherenceMsgTypeName(out.h.type), out.h.reqId, out.h.dstNode);
+                if (action.kind != ActionKind::Reject &&
+                    requests.count(action.requestId)) {
+                    ha.accept({cc::ha::HAController::EventKind::Unavailable,
+                               action.address, action.source, action.requestId,
+                               {}, false, false});
+                }
+                continue;
+            }
+            const char *phase = nullptr;
+            if (action.kind == ActionKind::FetchOwner) phase = "recall_send";
+            else if (action.kind == ActionKind::Invalidate) phase = "invalidate_send";
+            else if (action.kind == ActionKind::GrantRead ||
+                     action.kind == ActionKind::GrantWrite) phase = "grant_send";
+            if (phase && TracePerfPolicy::get().shouldEmit("ubio-ha-phase")) {
+                LogInfo("UBIO", "[HA-PHASE] phase={} tick={} internalId={} "
+                        "wireReqId={} requester={}:{} home={}:{} target={}:{} "
+                        "pa=0x{:x}", phase, tickRef, action.requestId,
+                        context.wireReqId, context.requesterNode,
+                        context.requesterSocket, nodeId, socketId,
+                        out.h.dstNode, out.h.dstSocket, action.address);
+            }
+            if (action.kind == ActionKind::Reject)
+                eraseRequest(action.requestId);
+        }
+    }
+};
+
 bool
 handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int sid,
                   const CoherenceMessage &msg,
@@ -1927,6 +2607,9 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::ClearReq: {
+        LogInfo("UBIO", "[HOME-CLEAR-COMMIT] home={}:{} src={}:{} "
+                "pa=0x{:x} reqId={}", nid, sid, msg.h.srcNode,
+                msg.h.srcSocket, msg.h.homeLinePa, msg.h.reqId);
         if (g_debugUbioPerf) {
             LogDebug("UBIO",
                          "[DEBUG-UBIO-CLEAR] ubcc-enter nid={} type=ClearReq reqId={} pa=0x{:x} srcNode={} dstNode={} epoch={}",
@@ -1950,7 +2633,11 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
                          nid, msg.h.reqId, msg.h.homeLinePa,
                          accepted ? 1 : 0, response.h.dstNode);
         }
-        hasResponse = true;
+        // Explicit lossless-oneway Clear still runs the exact same UBCC commit,
+        // outstanding retirement, tombstone and waiter replay. It simply does
+        // not create a ClearResp that the requester intentionally will not
+        // consume.
+        hasResponse = (msg.b.clearReq.reason != 1);
         return true;
       }
 
@@ -2013,8 +2700,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 // as if it were a fresh network ingress (fromNetwork=true) so it goes through
 // the normal handleUbccMessage / forwarding path.
 static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
-                               UBCCController &ubcc, UbioBackstoreHost &host,
-                               uint64_t tick) {
+                               UBCCController *ubcc, UbioBackstoreHost *host,
+                               HomeVIAdapter *haAdapter, uint64_t tick) {
     while (!g_delayedQueue.empty() && g_delayedQueue.front().fireTick <= tick) {
         DelayedMsg dm = g_delayedQueue.front();
         g_delayedQueue.pop_front();
@@ -2029,9 +2716,26 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
         // Re-inject: if it was from network, process as network message; else as gem5 message.
         // We push through the same handleUbccMessage path.
         for (int rep = 0; rep < dm.faultCopies; ++rep) {
+            if (haAdapter) {
+                if (haAdapter->handle(coh))
+                    continue;
+                if (dm.fromNetwork && isGem5Ingress(coh.h.type)) {
+                    panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), coh),
+                             "delayed HA network-to-gem5 send failed type={} reqId={}",
+                             coherenceMsgTypeName(coh.h.type), coh.h.reqId);
+                    continue;
+                }
+                panic_if(true, "delayed HA message unsupported type={} reqId={}",
+                         coherenceMsgTypeName(coh.h.type), coh.h.reqId);
+            }
+
+            panic_if(!ubcc || !host,
+                     "delayed legacy message lacks UBCC host type={} reqId={}",
+                     coherenceMsgTypeName(coh.h.type), coh.h.reqId);
             CoherenceMessage response;
             bool hasResponse = false;
-            bool handled = handleUbccMessage(ubcc, host, nid, sid, coh, response, hasResponse);
+            bool handled = handleUbccMessage(*ubcc, *host, nid, sid, coh,
+                                             response, hasResponse);
             if (dm.fromNetwork) {
                 if (handled && hasResponse) {
                     sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
@@ -2095,6 +2799,23 @@ main(int argc, char **argv)
         if (!std::strncmp(argv[i], "--socket=", 9)) sid = std::atoi(argv[i] + 9);
         if (!std::strncmp(argv[i], "--num-sockets=", 14)) g_numSockets = std::atoi(argv[i] + 14);
         if (!std::strncmp(argv[i], "--num-nodes=", 12)) g_numNodes = std::atoi(argv[i] + 12);
+        if (!std::strncmp(argv[i], "--home-controller=", 18)) {
+            const char *p = argv[i] + 18;
+            if (!std::strcmp(p, "ubcc")) g_homeControllerMode = HomeControllerMode::Ubcc;
+            else if (!std::strcmp(p, "ha-vi")) g_homeControllerMode = HomeControllerMode::HaVi;
+            else {
+                LogError("UBIO", "[UBIO-FATAL] invalid --home-controller={} (valid: ubcc, ha-vi)", p);
+                return 1;
+            }
+        }
+        if (!std::strncmp(argv[i], "--ha-exact-base=", 16))
+            g_haExactBase = std::strtoull(argv[i] + 16, nullptr, 0);
+        if (!std::strncmp(argv[i], "--ha-exact-bytes=", 17))
+            g_haExactBytes = std::strtoull(argv[i] + 17, nullptr, 0);
+        if (!std::strncmp(argv[i], "--ha-max-active=", 16))
+            g_haMaxActive = static_cast<size_t>(std::strtoull(argv[i] + 16, nullptr, 0));
+        if (!std::strncmp(argv[i], "--ha-max-queue=", 15))
+            g_haQueueDepth = static_cast<size_t>(std::strtoull(argv[i] + 15, nullptr, 0));
         if (!std::strncmp(argv[i], "--fault-rules=", 14)) {
             faultRuleArgs.emplace_back(argv[i] + 14);
         }
@@ -2161,6 +2882,13 @@ main(int argc, char **argv)
         // Phase 0: metadata DRAM capacity (for startup manifest)
         if (!std::strncmp(argv[i], "--metadata-dram-bytes=", 22))
             g_metadataDramTotalBytes = std::strtoull(argv[i] + 22, nullptr, 10);
+    }
+
+    if (g_homeControllerMode == HomeControllerMode::HaVi) {
+        // VI owns coherence state exclusively in FlatBitmapDirectory.  Disable
+        // every ResidentDir/H64 budget and metadata path before construction.
+        g_schemaMode = BackstoreSchemaMode::Disabled;
+        g_overflowPolicy = ResidentOverflowPolicy::NaiveEvict;
     }
 
     // Phase 0: Naive eviction never persists or probes metadata backstore,
@@ -2286,17 +3014,18 @@ main(int argc, char **argv)
     uint64_t tick = 0;
     cc::setUbioTickSource(&tick);
 
-    UBCCController ubcc(nid, sid, nullptr, 64,
-                           g_rdcfg.bloom_bytes,
-                           0, g_numSockets, g_numNodes, &g_rdcfg);
-    ubcc.setBatchRsEnabled(g_batchRs);
-    ubcc.setResidentOverflowPolicy(g_overflowPolicy);
-    if (ubccDebugClear) {
-        ubcc.setDebugClearTrace(true);
+    std::unique_ptr<UBCCController> ubcc;
+    if (g_homeControllerMode == HomeControllerMode::Ubcc) {
+        ubcc.reset(new UBCCController(nid, sid, nullptr, 64,
+                                      g_rdcfg.bloom_bytes, 0, g_numSockets,
+                                      g_numNodes, &g_rdcfg));
+        ubcc->setBatchRsEnabled(g_batchRs);
+        ubcc->setResidentOverflowPolicy(g_overflowPolicy);
+        if (ubccDebugClear) ubcc->setDebugClearTrace(true);
     }
     // Phase 3: H64 mode disables Bloom-negative shortcut
-    if (g_schemaMode == BackstoreSchemaMode::H64) {
-        ubcc.setH64BloomAllMisses(true);
+    if (ubcc && g_schemaMode == BackstoreSchemaMode::H64) {
+        ubcc->setH64BloomAllMisses(true);
     }
 
     // Phase 3: Build H64HostConfig if schema is H64 (production default)
@@ -2318,16 +3047,53 @@ main(int argc, char **argv)
         h64cfg.max_waiters_per_bucket = 8;
     }
 
-    UbioBackstoreHost host(ubcc, gem5Port, netPort, nid, sid, tick,
-                            useH64, useH64 ? &h64cfg : nullptr);
+    std::unique_ptr<UbioBackstoreHost> host;
+    std::unique_ptr<HomeVIHost> haHost;
+    std::unique_ptr<cc::ha::HAController> haController;
+    std::unique_ptr<HomeVIAdapter> haAdapter;
+    if (g_homeControllerMode == HomeControllerMode::Ubcc) {
+        host.reset(new UbioBackstoreHost(*ubcc, gem5Port, netPort, nid, sid, tick,
+                                        useH64, useH64 ? &h64cfg : nullptr));
+    } else {
+        if (g_haExactBase == 0) {
+            constexpr uint64_t kSegSize = 128ULL * 1024 * 1024;
+            g_haExactBase = (static_cast<uint64_t>(nid) << 40) + 2 * kSegSize
+                + static_cast<uint64_t>(nid * g_numSockets + sid) * kSegSize;
+        }
+        cc::ha::HAController::Config config;
+        config.directory = {
+            g_haExactBase, g_haExactBytes, 64,
+            static_cast<uint32_t>(g_numNodes * g_numSockets)};
+        config.perAddressQueueDepth = g_haQueueDepth;
+        haController.reset(new cc::ha::HAController(config));
+        haHost.reset(new HomeVIHost(gem5Port, netPort, nid, sid, tick));
+        haAdapter.reset(new HomeVIAdapter(*haController, *haHost, nid, sid, tick,
+                                         g_haMaxActive));
+    }
     // T_ubio_dram: argv --dram-delay-ps= has priority (no env fallback)
-    host._ubioDramDelayPs = g_dramDelayPs;
-    ubcc.setHost(&host);
-    ubcc.setOutbound(&host);
+    if (host) {
+        host->_ubioDramDelayPs = g_dramDelayPs;
+        ubcc->setHost(host.get());
+        ubcc->setOutbound(host.get());
+    }
 
     // ── Phase 3: Startup manifest & diagnostics ──────────────────────
     {
-        const auto &layout = ubcc.directory().layout();
+        if (g_homeControllerMode == HomeControllerMode::HaVi) {
+            const auto &directory = haController->directory();
+            LogInfo("UBIO",
+                "[UBIO-HA-MANIFEST] controller=ha-vi node={} socket={} exact_base=0x{:x} "
+                "exact_bytes={} line_bytes={} nodes={} line_count={} payload_bits={} "
+                "payload_bytes_exact={} payload_bytes_allocated={} budget_bytes={} "
+                "max_active={} per_address_queue={} resident_dir_bytes=0 h64_bytes=0",
+                nid, sid, directory.config().base, directory.config().bytes,
+                directory.config().lineBytes, directory.config().nodeCount,
+                directory.lineCount(), directory.payloadBits(),
+                directory.exactPayloadBytes(), directory.payloadBytes(),
+                cc::ha::FlatBitmapDirectory::MaxPayloadBytes,
+                g_haMaxActive, g_haQueueDepth);
+        } else {
+        const auto &layout = ubcc->directory().layout();
         constexpr size_t groupIndexStorage = ResidentDir::BloomGroups
                                              * sizeof(GroupIndex);
         // Phase 3: When H64 is active, the Host _groupIdx[16] (4 KiB) is
@@ -2391,6 +3157,7 @@ main(int argc, char **argv)
                 "limit. Reduce bloom/blc/desc or increase sram.",
                 total_on_chip / 1024);
             std::exit(1);
+        }
         }
     }
     // ── End Phase 0 manifest ─────────────────────────────────────────
@@ -2562,6 +3329,7 @@ main(int argc, char **argv)
     };
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
+        (void)replyPort;
         if (!port) return;
         ReceiveStatus st;
         const Message *m = ReceiveMessage(port, tick, &st);
@@ -2573,8 +3341,10 @@ main(int argc, char **argv)
                              nid, GetMessageTimestamp(m), fromNetwork);
                 if (!fromNetwork) {
                     if (!gem5Done) {
-                        ubcc.directory().dumpStatsJson();
-                        LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
+                        if (ubcc) {
+                        ubcc->directory().dumpStatsJson();
+                        LogInfo("UBIO", "[UBCC-STATS] {}", ubcc->dumpStatsJson());
+                        }
                     }
                     gem5Done = true;
                     *doneFlag = true;
@@ -2809,8 +3579,12 @@ main(int argc, char **argv)
                         sendPeerExitActions(peerExitCoordinator.receiveAck(
                             peer, coh->h.reqId, peerExitNowMs()));
                     } else {
-                        if (peerExitMarked.insert(peer).second)
-                            ubcc.markPeerPlaneExited(peer.node, peer.socket);
+                        if (peerExitMarked.insert(peer).second) {
+                            if (ubcc)
+                                ubcc->markPeerPlaneExited(peer.node, peer.socket);
+                            if (haAdapter)
+                                haAdapter->handle(*coh);
+                        }
                         sendPeerExitActions(peerExitCoordinator.receiveNotify(
                             peer, coh->h.reqId, peerExitNowMs()));
                     }
@@ -2849,7 +3623,9 @@ main(int argc, char **argv)
 
             if (coh->h.dstNode != nid || coh->h.dstSocket != sid) {
                 // If this PA belongs to our local DSM plane, force local processing
-                bool isDsm = ubcc.isDsmAddr(coh->h.homeLinePa);
+                bool isDsm = ubcc ? ubcc->isDsmAddr(coh->h.homeLinePa)
+                                  : (haController &&
+                                     haController->directory().contains(coh->h.homeLinePa));
                 if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
                     LogDebug("UBIO",
                                  "[DEBUG-UBIO-RR-PATH] reqId={} dstNode!=nid true, isDsmAddr={} -> pass_non_dsm_check={} homeLinePa=0x{:x}",
@@ -2899,11 +3675,63 @@ main(int argc, char **argv)
 
             if (fromNetwork) {
                 for (int rep = 0; rep < faultCopies; ++rep) {
+                    if (haAdapter) {
+                        // Home-directed HA wire traffic (permission requests and
+                        // acknowledgements, recall responses, invalidate acks,
+                        // probes, writebacks, and evictions) terminates here.
+                        if (haAdapter->handle(*coh)) continue;
+
+                        // Point-to-point HA control traffic terminates in the
+                        // local gem5 participant, not in the home controller.
+                        if (isGem5Ingress(coh->h.type)) {
+                            if (gem5Done) {
+                                LogError("UBIO",
+                                    "[UBIO-HA-FATAL] cannot deliver network {} to exited "
+                                    "gem5 node={} socket={} reqId={} pa=0x{:x}",
+                                    coherenceMsgTypeName(coh->h.type), nid, sid,
+                                    coh->h.reqId, coh->h.homeLinePa);
+                            } else {
+                                panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), *coh),
+                                    "HA network-to-gem5 send failed type={} reqId={}",
+                                    coherenceMsgTypeName(coh->h.type), coh->h.reqId);
+                            }
+                            continue;
+                        }
+
+                        CoherenceMessage reject;
+                        if (buildHaLegacyReject(*coh, nid, sid, reject)) {
+                            LogError("UBIO",
+                                "[UBIO-HA-REJECT] unsupported legacy network request "
+                                "type={} reqId={} pa=0x{:x}",
+                                coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                coh->h.homeLinePa);
+                            panic_if(!sendCoh(netPort, tick,
+                                      gidOf(coh->h.srcNode, coh->h.srcSocket),
+                                      reject, true),
+                                "HA legacy reject send failed type={} reqId={}",
+                                coherenceMsgTypeName(reject.h.type), reject.h.reqId);
+                        } else {
+                            LogError("UBIO",
+                                "[UBIO-HA-FATAL] unsupported network message type={} "
+                                "reqId={} pa=0x{:x}; no legacy UBCC/MetaRNF path exists",
+                                coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                coh->h.homeLinePa);
+                            panic_if(true,
+                                "HA mode unsupported network message type={} reqId={} pa=0x{:x}",
+                                coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                                coh->h.homeLinePa);
+                        }
+                        continue;
+                    }
+
+                    panic_if(!ubcc || !host,
+                             "UBCC network dispatch lacks controller/host type={} reqId={}",
+                             coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                     CoherenceMessage response;
                     bool hasResponse = false;
-                    host._metaRNF.enterReentrant();
-                    bool handled = handleUbccMessage(ubcc, host, nid, sid, *coh, response, hasResponse);
-                    host._metaRNF.leaveReentrant();
+                    host->_metaRNF.enterReentrant();
+                    bool handled = handleUbccMessage(*ubcc, *host, nid, sid, *coh, response, hasResponse);
+                    host->_metaRNF.leaveReentrant();
                     if (handled && coh->h.type == CoherenceMessageType::RecallResp) {
                         // RECALL.DONE only flips state inside the home UBCC; there is
                         // no normal response packet back to gem5. Mirror the RecallResp
@@ -2948,7 +3776,7 @@ main(int argc, char **argv)
                             // 尝试从 DsmDataStore 获取数据，而不是直接填零
                             // DsmDataStore 缓存了最近访问的 DSM 行数据
                             {
-                                if (host.dsmData.copyData(coh->h.homeLinePa,
+                                if (host->dsmData.copyData(coh->h.homeLinePa,
                                                           resp.b.recallResp.data)) {
                                     LogWarn("UBIO",
                                         "[RECALL-PROXY] n{} using DsmDataStore data for PA=0x{:x}",
@@ -2993,36 +3821,70 @@ main(int argc, char **argv)
                 continue;
             }
 
+            if (haAdapter) {
+                for (int rep = 0; rep < faultCopies; ++rep) {
+                    if (haAdapter->handle(*coh)) continue;
+
+                    CoherenceMessage reject;
+                    if (buildHaLegacyReject(*coh, nid, sid, reject)) {
+                        LogError("UBIO",
+                            "[UBIO-HA-REJECT] unsupported legacy local request "
+                            "type={} reqId={} pa=0x{:x}",
+                            coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                            coh->h.homeLinePa);
+                        panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), reject),
+                            "HA local legacy reject send failed type={} reqId={}",
+                            coherenceMsgTypeName(reject.h.type), reject.h.reqId);
+                    } else {
+                        LogError("UBIO",
+                            "[UBIO-HA-FATAL] unsupported local message type={} reqId={} "
+                            "pa=0x{:x}; no legacy UBCC/MetaRNF path exists",
+                            coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                            coh->h.homeLinePa);
+                        panic_if(true,
+                            "HA mode unsupported local message type={} reqId={} pa=0x{:x}",
+                            coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                            coh->h.homeLinePa);
+                    }
+                }
+                m = ReceiveMessage(port, tick, &st);
+                continue;
+            }
+
+            panic_if(!ubcc || !host,
+                     "UBCC local dispatch lacks controller/host type={} reqId={}",
+                     coherenceMsgTypeName(coh->h.type), coh->h.reqId);
+
             // MetaRNFReadResp: response from gem5 MetaRNFController (Phase 3)
             if (coh->h.type == CoherenceMessageType::MetaRNFReadResp) {
-                host._metaRNF.enterReentrant();
-                host._metaRNF.handleResp(*coh);
-                host._metaRNF.leaveReentrant();
+                host->_metaRNF.enterReentrant();
+                host->_metaRNF.handleResp(*coh);
+                host->_metaRNF.leaveReentrant();
                 // Deferred ops drained at outer loop boundary (after pollAndProcess)
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFWriteResp: durable write ack from gem5 (Phase D2)
             if (coh->h.type == CoherenceMessageType::MetaRNFWriteResp) {
-                host._metaRNF.enterReentrant();
-                host._metaRNF.handleWriteResp(*coh);
-                host._metaRNF.leaveReentrant();
+                host->_metaRNF.enterReentrant();
+                host->_metaRNF.handleWriteResp(*coh);
+                host->_metaRNF.leaveReentrant();
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFLineReadResp: typed 64B line read response (Phase 2)
             if (coh->h.type == CoherenceMessageType::MetaRNFLineReadResp) {
-                host._metaRNF.enterReentrant();
-                host._metaRNF.handleLineReadResp(*coh);
-                host._metaRNF.leaveReentrant();
+                host->_metaRNF.enterReentrant();
+                host->_metaRNF.handleLineReadResp(*coh);
+                host->_metaRNF.leaveReentrant();
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
             // MetaRNFLineWriteResp: typed 64B line write ack (Phase 2)
             if (coh->h.type == CoherenceMessageType::MetaRNFLineWriteResp) {
-                host._metaRNF.enterReentrant();
-                host._metaRNF.handleLineWriteResp(*coh);
-                host._metaRNF.leaveReentrant();
+                host->_metaRNF.enterReentrant();
+                host->_metaRNF.handleLineWriteResp(*coh);
+                host->_metaRNF.leaveReentrant();
                 m = ReceiveMessage(port, tick, &st);
                 continue;
             }
@@ -3040,9 +3902,9 @@ main(int argc, char **argv)
                 // Wrap UBCC ingress with reentrant guard: any H64 backstore
                 // operations triggered during handleUbccMessage will defer their
                 // MetaRNF sends, avoiding reentrant sendCoh during port->recv.
-                host._metaRNF.enterReentrant();
-                bool handled = handleUbccMessage(ubcc, host, nid, sid, *coh, response, hasResponse);
-                host._metaRNF.leaveReentrant();
+                host->_metaRNF.enterReentrant();
+                bool handled = handleUbccMessage(*ubcc, *host, nid, sid, *coh, response, hasResponse);
+                host->_metaRNF.leaveReentrant();
                 if (!handled) {
                     LogWarn("UBIO", "[ubio:{}] UBCC unhandled type={}",
                                  nid, coherenceMsgTypeName(coh->h.type));
@@ -3096,14 +3958,14 @@ main(int argc, char **argv)
         // loop iteration (bounded to avoid starvation).
         // Call stack: main() → while(!done) → drainDeferred() → sendCoh().
         const bool dataPlaneActive = !gem5Done;
-        if (dataPlaneActive && host._h64Host)
-            host._h64Host->pumpRetries();
-        if (dataPlaneActive && host._metaRNF.hasDeferred()) {
+        if (dataPlaneActive && host && host->_h64Host)
+            host->_h64Host->pumpRetries();
+        if (dataPlaneActive && host && host->_metaRNF.hasDeferred()) {
             static int dd_cnt = 0;
-            if (host._metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))
+            if (host->_metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))
                 LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN] n={} cnt={} deferred={} tick={}",
-                             nid, dd_cnt, host._metaRNF._deferredCount, tick);
-            host._metaRNF.drainDeferred();
+                             nid, dd_cnt, host->_metaRNF._deferredCount, tick);
+            host->_metaRNF.drainDeferred();
         }
 
         // A release send can temporarily backpressure after all arrivals have
@@ -3131,9 +3993,11 @@ main(int argc, char **argv)
             // This expires tombstones and recalls without repeatedly scanning
             // state while PDES is parked at the same timestamp.
             if (dataPlaneActive) {
-                ubcc.wakeup();
-                host.advanceH64Coverage();
-                host.advancePendingGrantReads(tick);
+                if (ubcc) ubcc->wakeup();
+                if (host) {
+                    host->advanceH64Coverage();
+                    host->advancePendingGrantReads(tick);
+                }
             }
         } else {
             // Bounded by a peer: do NOT drift forward with ++tick (that let the
@@ -3143,25 +4007,30 @@ main(int argc, char **argv)
             std::this_thread::yield();
         }
         // 3.3/4.6: Drain delayed fault-injection queue (reorder/delay)
-        if (dataPlaneActive)
-            drainDelayedQueue(gem5Port, netPort, nid, sid, ubcc, host, tick);
+        if (dataPlaneActive && ((ubcc && host) || haAdapter))
+            drainDelayedQueue(gem5Port, netPort, nid, sid, ubcc.get(),
+                              host.get(), haAdapter.get(), tick);
 
         // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
         // callbacks simulate real DRAM read latency.
-        if (dataPlaneActive) {
-            host.drainPendingFills(tick);
-            host.drainPendingBackstoreAcks(tick);
-            host.dsmData.drain(tick);
+        if (dataPlaneActive && host) {
+            host->drainPendingFills(tick);
+            host->drainPendingBackstoreAcks(tick);
+            host->dsmData.drain(tick);
+        } else if (dataPlaneActive && haHost) {
+            haHost->dsmData.drain(tick);
         }
     }
 
     // 3.4: Dump ResidentDir performance counters
-    ubcc.directory().dumpStatsJson();
-    LogInfo("UBIO", "[UBCC-STATS] {}", ubcc.dumpStatsJson());
-    LogInfo("UBIO", "[UBCC-STATS] {{\"asyncWbCount\":{}}}",
-            ubcc.getAsyncWbCount());
-    LogInfo("UBIO", "[UBCC-STATS] {{\"h64ExactLiveKnown\":{},\"h64ExactLiveCount\":{}}}",
-            host.h64ExactCoverageKnown() ? 1 : 0, host.h64ExactLiveCount());
+    if (ubcc && host) {
+        ubcc->directory().dumpStatsJson();
+        LogInfo("UBIO", "[UBCC-STATS] {}", ubcc->dumpStatsJson());
+        LogInfo("UBIO", "[UBCC-STATS] {{\"asyncWbCount\":{}}}",
+                ubcc->getAsyncWbCount());
+        LogInfo("UBIO", "[UBCC-STATS] {{\"h64ExactLiveKnown\":{},\"h64ExactLiveCount\":{}}}",
+                host->h64ExactCoverageKnown() ? 1 : 0, host->h64ExactLiveCount());
+    }
 
     TerminatePort(gem5Port);
     if (netPort && !netTerminateIssued) {

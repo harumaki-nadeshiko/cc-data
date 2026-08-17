@@ -52,7 +52,7 @@ RUN_ID="${E2E_RUN_ID:-$(date +%Y%m%d_%H%M%S)_$$}"
 RUN_DIR="$ROOT_DIR/build/runs/$RUN_ID"
 WORKLOAD="$RUN_DIR/workload.elf"
 TOPO_JSON="$RUN_DIR/topo.json"
-IPC_DIR="$RUN_DIR/ipc"
+IPC_DIR="${E2E_IPC_DIR:-$ROOT_DIR/gem5/shared_ipc/$RUN_ID}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 
 # ── Supervisor (opt-in long-run watchdog) conf ─────────────────────
@@ -86,18 +86,46 @@ export EP_SEQUENCER_MAX_OUTSTANDING="${EP_SEQUENCER_MAX_OUTSTANDING:-0}"
 export UBIO_PEER_EXIT_RETRY_MS="${UBIO_PEER_EXIT_RETRY_MS:-100}"
 export UBIO_PEER_EXIT_QUIESCE_MS="${UBIO_PEER_EXIT_QUIESCE_MS:-2000}"
 export UBIO_PEER_EXIT_DELIVERY_BUDGET_MS="${UBIO_PEER_EXIT_DELIVERY_BUDGET_MS:-1000}"
+export EP_HA_PROFILE="${EP_HA_PROFILE:-ubcc}"
+export OURCC_CLEAR_PROFILE="${OURCC_CLEAR_PROFILE:-ack}"
+HA_EXACT_BYTES="${HA_EXACT_BYTES:-}"
+export HA_MAX_ACTIVE="${HA_MAX_ACTIVE:-256}"
+export HA_MAX_QUEUE="${HA_MAX_QUEUE:-8}"
+
+case "$OURCC_CLEAR_PROFILE" in
+    ack|lossless-oneway) ;;
+    *) echo "FATAL: OURCC_CLEAR_PROFILE must be ack or lossless-oneway" >&2; exit 2 ;;
+esac
+if [ "$OURCC_CLEAR_PROFILE" = "lossless-oneway" ] && [ "$EP_HA_PROFILE" != "ubcc" ]; then
+    echo "FATAL: lossless-oneway Clear is only valid with EP_HA_PROFILE=ubcc" >&2
+    exit 2
+fi
 
 # ── Config selection ────────────────────────────────────────────────
 TOPO_KIND="1s"
+GENERATED_TOPO_NODES=""
+GENERATED_TOPO_SOCKETS=""
 case "${1:-}" in
     --1s)          TOPO_KIND="1s"; shift ;;
+    --3n1s)        TOPO_KIND="3n1s"; GENERATED_TOPO_NODES=3; GENERATED_TOPO_SOCKETS=1; shift ;;
+    --4n1s)        TOPO_KIND="4n1s"; GENERATED_TOPO_NODES=4; GENERATED_TOPO_SOCKETS=1; shift ;;
     --1s-tinydir)  TOPO_KIND="1s_tinydir"; shift ;;
     --2s)          TOPO_KIND="2s"; shift ;;
+    --2n2s)        TOPO_KIND="2n2s"; GENERATED_TOPO_NODES=2; GENERATED_TOPO_SOCKETS=2; shift ;;
+    --4n2s)        TOPO_KIND="4n2s"; GENERATED_TOPO_NODES=4; GENERATED_TOPO_SOCKETS=2; shift ;;
     --8n1s)        TOPO_KIND="8n1s"; shift ;;
     --8n2s)        TOPO_KIND="8n2s"; shift ;;
     --2n1s)        TOPO_KIND="2n1s"; shift ;;
 esac
-JSON="$ROOT_DIR/configs/topo_${TOPO_KIND}.json"
+if [ -n "$GENERATED_TOPO_NODES" ]; then
+    JSON="$RUN_DIR/process_topology.json"
+    mkdir -p "$RUN_DIR"
+    python3 "$ROOT_DIR/scripts/gen_process_topology.py" \
+        --nodes "$GENERATED_TOPO_NODES" --sockets "$GENERATED_TOPO_SOCKETS" \
+        --out "$JSON"
+else
+    JSON="$ROOT_DIR/configs/topo_${TOPO_KIND}.json"
+fi
 [ -f "$JSON" ] || { echo "FATAL: config $JSON not found" >&2; exit 2; }
 
 # ── Determine sockets + nmod from JSON ───────────────────────────────
@@ -107,9 +135,18 @@ c=json.load(open('$JSON'))
 print(c['num_nodes'], c['num_sockets'])
 ")
 NMOD=$((NUM_NODES * NUM_SOCKETS))
+if [ -z "$HA_EXACT_BYTES" ]; then
+    # 512 KiB exact bitmap budget, one participant bit per node/socket plane.
+    HA_EXACT_BYTES=$(( (512 * 1024 * 8 / NMOD) * 64 ))
+fi
+export HA_EXACT_BYTES
 
 # ── Per-TC fault-injection rules (ubio --fault-rules=...) ────────────
 fault_rules_for_tc() {
+    if [ -n "${E2E_FAULT_RULES_OVERRIDE:-}" ]; then
+        printf '%s\n' "$E2E_FAULT_RULES_OVERRIDE"
+        return
+    fi
     case "$1" in
         47) echo "tc47_drop_clear:ClearReq:1:0:0:drop::1" ;;
         48) echo "tc48_dup_inv_ack:InvalidateAck:2:0:0:dup::1" ;;
@@ -313,6 +350,9 @@ ubio_extra_args_for_tc() {
                 optimized|*) echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
             esac
             ;;
+        228|229|230|231|232|233|234|235)
+            echo "${UBCC_OPTS:-}"
+            ;;
         98)  echo "--ways=1" ;;
         *)   echo "" ;;
     esac
@@ -323,10 +363,11 @@ ubio_extra_args_for_tc() {
 # Env: runtime paths used to substitute runner-specific placeholders.
 expand_cmd() {
     local mod_id="$1"; local frules="$2"; local uextra="$3"; local node_od="${4:-}"
-    NODE_OUTDIR="$node_od" python3 - "$JSON" "$mod_id" "$frules" "$uextra" <<'PY'
+    NODE_OUTDIR="$node_od" RUN_ROOT_DIR="$ROOT_DIR" \
+        python3 - "$JSON" "$mod_id" "$frules" "$uextra" <<'PY'
 import json, os, shlex, sys
 cfg_path, mod_id, frules, uextra = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(cfg_path)))
+ROOT = os.environ["RUN_ROOT_DIR"]
 c = json.load(open(cfg_path))
 mod = next((m for m in c["modules"] if m["id"]==mod_id), None)
 if not mod:
@@ -355,6 +396,29 @@ mkdir -p "$LOG_BASE" "$RUN_DIR" "$IPC_DIR"
 export UBCC_IPC_DIR="$IPC_DIR"
 export RUN_WORKLOAD="$WORKLOAD"
 export RUN_TOPO_JSON="$TOPO_JSON"
+{
+    echo "RUN_ID=$RUN_ID"
+    echo "DOCKER_CPUSET=${EP_DOCKER_CPUSET:-unknown}"
+    echo "HA_PROFILE=$EP_HA_PROFILE"
+    echo "OURCC_CLEAR_PROFILE=$OURCC_CLEAR_PROFILE"
+    echo "HA_EXACT_BYTES=$HA_EXACT_BYTES"
+    echo "HA_MAX_ACTIVE=$HA_MAX_ACTIVE"
+    echo "HA_MAX_QUEUE=$HA_MAX_QUEUE"
+    echo "EP_PERF_PROFILE=${EP_PERF_PROFILE:-unknown}"
+    echo "UBCC_POLICY=${UBCC_POLICY:-unknown}"
+    echo "UBCC_OPTS=${UBCC_OPTS:-}"
+    echo "EP_GEM5_OPTS=${EP_GEM5_OPTS:-}"
+    echo "EP_CPU_MODEL=$EP_CPU_MODEL"
+    echo "EP_SEQUENCER_MAX_OUTSTANDING=$EP_SEQUENCER_MAX_OUTSTANDING"
+    echo "EP_SYNC_INTERVAL_PS=$EP_SYNC_INTERVAL_PS"
+    echo "EP_LINK_LATENCY_PS=$EP_LINK_LATENCY_PS"
+    echo "UBCC_METADATA_SIZE=$UBCC_METADATA_SIZE"
+    echo "EP_TRACE_PERF=$EP_TRACE_PERF"
+    echo "WORKLOAD_CFLAGS=${WORKLOAD_CFLAGS:-}"
+    echo "IPC_DIR=$IPC_DIR"
+    echo "RUN_DIR=$RUN_DIR"
+    echo "LOG_BASE=$LOG_BASE"
+} > "$LOG_BASE/launch_manifest.txt"
 
 # Kill any leftover infra from a previous TC / abort.
 _kill_pid_tree() {
@@ -697,7 +761,76 @@ run_tc() {
         return 1
     fi
 
-    # 4. Start N gem5 nodes, wait until each binds its ports (STEP5 marker)
+    # 4. Start N*K ubio processes before gem5. This gives every gem5 tick-zero
+    # heartbeat a bound peer and avoids same-tick startup starvation.
+    UBIO_PIDS=""
+    local frules; frules="$(fault_rules_for_tc "$tc")"
+    if [ -n "${UBIO_FAULT_RULES_APPEND:-}" ]; then
+        [ -n "$frules" ] && frules="$frules;"
+        frules="${frules}${UBIO_FAULT_RULES_APPEND}"
+    fi
+    if [ "$OURCC_CLEAR_PROFILE" = "lossless-oneway" ] && [[ "$frules" == *":ClearReq:"* ]]; then
+        echo "FATAL: TC${tc} injects ClearReq faults but lossless-oneway assumes eventual delivery" >&2
+        return 1
+    fi
+    local frargs=""
+    [ -n "$frules" ] && frargs="--fault-rules=$frules"
+    [ -n "$frules" ] && echo "[launch] fault rules (TC${tc}): $frules"
+    local uextra; uextra="$(ubio_extra_args_for_tc "$tc")"
+    if [ "$EP_HA_PROFILE" = "ha-vi" ]; then
+        uextra="$uextra --home-controller=ha-vi --ha-exact-bytes=$HA_EXACT_BYTES"
+        uextra="$uextra --ha-max-active=$HA_MAX_ACTIVE --ha-max-queue=$HA_MAX_QUEUE"
+    fi
+    uextra="$uextra --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
+    [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
+    for nid in $(seq 0 $((NUM_NODES-1))); do
+        for sid in $(seq 0 $((NUM_SOCKETS-1))); do
+            local mod_id="ubio_${nid}_s${sid}"
+            local cmd
+            if python3 -c "import json,sys;sys.exit(0 if any(m['id']==sys.argv[1] for m in json.load(open('$JSON'))['modules']) else 1)" "$mod_id" 2>/dev/null; then
+                cmd="$(expand_cmd "$mod_id" "$frargs" "$uextra")"
+            else
+                cmd="$(expand_cmd "ubio_${nid}" "$frargs" "$uextra")"
+            fi
+            local logdir="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}"
+            mkdir -p "$logdir"
+            ( set +e; eval "$cmd" 2>"$logdir/stderr.log" >"$logdir/stdout.log"; status=$?; \
+              printf '%s\n' "$status" >"$child_status_dir/ubio_n${nid}_s${sid}.exit"; exit "$status" ) &
+            UBIO_PIDS="$UBIO_PIDS $!"
+        done
+    done
+    local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
+    echo "[launch] waiting for $n_ubio ubio receive ports..."
+    local ubio_index=0 ubio_pid ubio_nid ubio_sid ubio_exit
+    for ubio_pid in $UBIO_PIDS; do
+        ubio_nid=$((ubio_index / NUM_SOCKETS))
+        ubio_sid=$((ubio_index % NUM_SOCKETS))
+        local ubio_log="$LOG_BASE/ubio_tc${tc}_n${ubio_nid}_s${ubio_sid}/stdout.log"
+        local ubio_ready=0
+        for _ in $(seq 1 300); do
+            if grep -q '\[UBIO-IPC\]' "$ubio_log" 2>/dev/null; then
+                ubio_ready=1
+                break
+            fi
+            if ! kill -0 "$ubio_pid" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        ubio_exit="$child_status_dir/ubio_n${ubio_nid}_s${ubio_sid}.exit"
+        if [ "$ubio_ready" -ne 1 ]; then
+            local ubio_status="unknown"
+            [ -f "$ubio_exit" ] && \
+                ubio_status=$(tr -d '[:space:]' <"$ubio_exit")
+            echo "[launch] ubio node=$ubio_nid socket=$ubio_sid not ready (status=$ubio_status)"
+            _kill_infra
+            return 1
+        fi
+        echo "[launch]   ubio node=$ubio_nid socket=$ubio_sid ready"
+        ubio_index=$((ubio_index + 1))
+    done
+
+    # 5. Start N gem5 nodes, wait until each binds its ports (STEP5 marker)
     GEM5_PIDS=""; local gem5_arr=()
     for nid in $(seq 0 $((NUM_NODES-1))); do
         local gdir="$LOG_BASE/gem5_tc${tc}_node${nid}"
@@ -789,54 +922,7 @@ run_tc() {
         }
     done
 
-    # 5. Start N*K ubio processes (plane = node*K + socket)
-    UBIO_PIDS=""
-    local frules; frules="$(fault_rules_for_tc "$tc")"
-    if [ -n "${UBIO_FAULT_RULES_APPEND:-}" ]; then
-        [ -n "$frules" ] && frules="$frules;"
-        frules="${frules}${UBIO_FAULT_RULES_APPEND}"
-    fi
-    local frargs=""
-    [ -n "$frules" ] && frargs="--fault-rules=$frules"
-    [ -n "$frules" ] && echo "[launch] fault rules (TC${tc}): $frules"
-    local uextra; uextra="$(ubio_extra_args_for_tc "$tc")"
-    # Phase 0: propagate metadata DRAM capacity to every ubio
-    uextra="$uextra --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
-    [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
-    for nid in $(seq 0 $((NUM_NODES-1))); do
-        for sid in $(seq 0 $((NUM_SOCKETS-1))); do
-            local mod_id="ubio_${nid}_s${sid}"
-            local cmd
-            if python3 -c "import json,sys;sys.exit(0 if any(m['id']==sys.argv[1] for m in json.load(open('$JSON'))['modules']) else 1)" "$mod_id" 2>/dev/null; then
-                cmd="$(expand_cmd "$mod_id" "$frargs" "$uextra")"
-            else
-                cmd="$(expand_cmd "ubio_${nid}" "$frargs" "$uextra")"
-            fi
-            local logdir="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}"
-            mkdir -p "$logdir"
-            ( set +e; eval "$cmd" 2>"$logdir/stderr.log" >"$logdir/stdout.log"; status=$?; \
-              printf '%s\n' "$status" >"$child_status_dir/ubio_n${nid}_s${sid}.exit"; exit "$status" ) &
-            UBIO_PIDS="$UBIO_PIDS $!"
-        done
-    done
-    local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
     echo "[launch] $n_ubio ubio (${NUM_NODES}x${NUM_SOCKETS}) + $NUM_NODES gem5 running"
-    sleep 1
-    local ubio_index=0 ubio_pid ubio_nid ubio_sid ubio_exit
-    for ubio_pid in $UBIO_PIDS; do
-        ubio_nid=$((ubio_index / NUM_SOCKETS))
-        ubio_sid=$((ubio_index % NUM_SOCKETS))
-        ubio_exit="$child_status_dir/ubio_n${ubio_nid}_s${ubio_sid}.exit"
-        if ! kill -0 "$ubio_pid" 2>/dev/null; then
-            local ubio_status="unknown"
-            [ -f "$ubio_exit" ] && \
-                ubio_status=$(tr -d '[:space:]' <"$ubio_exit")
-            echo "[launch] ubio node=$ubio_nid socket=$ubio_sid exited during startup (status=$ubio_status)"
-            _kill_infra
-            return 1
-        fi
-        ubio_index=$((ubio_index + 1))
-    done
     _start_memory_monitor "$tc"
 
     # 6b. Supervisor: opt-in long-run watchdog (EP_SUPERVISOR=1)
@@ -1038,7 +1124,9 @@ run_tc() {
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
             faultlogs+=("$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}/stdout.log")
         done
+        faultlogs+=("$LOG_BASE/gem5_tc${tc}_node${nid}/stderr.log")
     done
+    faultlogs+=("$LOG_BASE/launch_manifest.txt")
     # Strict UBFAULT events are consumed directly from the raw UBIO logs.
     # Keep a separate auxiliary input only for TC111's gem5 silent-upgrade
     # markers, which do not originate in an UBIO log.
