@@ -182,6 +182,12 @@ ResidentDir::ResidentDir(const ResidentDirConfig &cfg)
 void
 ResidentDir::init(const ResidentDirConfig &cfg)
 {
+    framework::LogAssertIf(cfg.pa_bits >= 7 && cfg.pa_bits <= 44,
+        "ResidentDir", "pa_bits must be in [7,44]");
+    framework::LogAssertIf(cfg.sharers_bits >= 1 && cfg.sharers_bits <= 10,
+        "ResidentDir", "sharers_bits must be in [1,10]");
+    framework::LogAssertIf(cfg.epoch_bits >= 1 && cfg.epoch_bits <= 24,
+        "ResidentDir", "epoch_bits must be in [1,24]");
     _layout = searchOptimalLayout(cfg);
     _count = 0;
 

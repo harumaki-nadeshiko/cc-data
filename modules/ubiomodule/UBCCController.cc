@@ -2689,6 +2689,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 // Replay queued requesters after commit
                 replayPendingRequesters(line_pa);
                 replayResidentWaiters(line_pa);
+                replayResidentWaitersForCapacity(line_pa);
             }
         } else if (isNaiveEvictPath) {
             removeOutstanding(line_pa);
@@ -3534,6 +3535,7 @@ UBCCController::processOuterUpgradeDone(
     // Replay queued requesters after commit
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
+    replayResidentWaitersForCapacity(line_pa);
 
     return true;
 }
@@ -3737,6 +3739,9 @@ UBCCController::processClear(
     // newly committed state (just committed by this Clear).
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
+    // Clear removes the grant-handshake pin, which can free a way for another
+    // PA waiting on the same full set.
+    replayResidentWaitersForCapacity(line_pa);
 
     // Order log audit (§3.6)
     if (_debugClearTrace) {

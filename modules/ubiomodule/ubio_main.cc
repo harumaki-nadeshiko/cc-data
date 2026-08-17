@@ -2965,6 +2965,21 @@ main(int argc, char **argv)
                  g_numNodes, g_numSockets, totalPlanes);
         return 1;
     }
+    if (g_schemaMode == BackstoreSchemaMode::LegacySchemaA &&
+        g_rdcfg.sharers_bits > 10) {
+        LogError("UBIO", "[UBIO-FATAL] legacy_schema_a stores only 10 "
+                 "sharer bits; configured sharers_bits={}",
+                 g_rdcfg.sharers_bits);
+        return 1;
+    }
+    if ((g_schemaMode == BackstoreSchemaMode::LegacySchemaA ||
+         g_schemaMode == BackstoreSchemaMode::H64) &&
+        g_rdcfg.epoch_bits > 24) {
+        LogError("UBIO", "[UBIO-FATAL] schema {} stores only 24 epoch bits; "
+                 "configured epoch_bits={}",
+                 backstoreSchemaModeName(g_schemaMode), g_rdcfg.epoch_bits);
+        return 1;
+    }
     if (nid < 0 || nid >= g_numNodes) {
         LogError("UBIO", "[UBIO-FATAL] --node={} out of range [0,{})",
                  nid, g_numNodes);
