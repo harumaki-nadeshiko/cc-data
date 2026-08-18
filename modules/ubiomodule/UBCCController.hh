@@ -809,6 +809,20 @@ class UBCCController
     // capacity sweeps; the outer pass owns the current finite snapshot.
     bool _capacityReplayActive = false;
 
+    // H64 can reject initial lookup admission synchronously when its fixed
+    // transaction table is full or the same PA is already active. Keep retry
+    // state in a fixed table so a Bloom-positive miss cannot retain its fill
+    // pin forever, and never recursively resubmit from the completion callback.
+    struct PendingH64LookupRetry {
+        bool active = false;
+        uint64_t linePa = 0;
+    };
+    static constexpr size_t kMaxH64LookupRetries = MAX_RESIDENT_WAITERS_TOTAL;
+    static constexpr size_t kMaxH64LookupRetriesPerWake = 8;
+    std::array<PendingH64LookupRetry, kMaxH64LookupRetries>
+        _pendingH64LookupRetries{};
+    size_t _h64LookupRetryCursor = 0;
+
     // Phase 3: _backstoreMetadataPAs REMOVED (was forbidden exact-PA shadow set).
     // Resident miss now uses Bloom advisory negative shortcut + H64 lookup;
     // Bloom false negatives after rebuild are handled by the actual H64 table,
@@ -942,7 +956,12 @@ public:
     size_t retireCommittedResidentWaiters(const OutstandingRequest &ost);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);
+    void scheduleH64LookupRetry(uint64_t linePa);
+    void cancelH64LookupRetry(uint64_t linePa);
+    void retryPendingH64Lookups();
     void dumpStableCapacityBlockDiagnostics(Tick now) const;
+    bool tryPushGrant(OutstandingRequest &ost, const char *reason);
+    void retryPendingGrantPushes();
     ResidentEvictResult evictOneVictim(uint64_t avoidPa);
     void scheduleBackstoreWrite(uint64_t linePa);
     void scheduleBackstoreDelete(uint64_t linePa);
@@ -1067,6 +1086,8 @@ public:
     size_t _diagLastPendingRequesterCount = 0;
     unsigned _diagStableSamples = 0;
     bool _diagStableDumped = false;
+    size_t _grantPushRetryCursor = 0;
+    static constexpr size_t kGrantPushAttemptsPerWake = 8;
 
     // ---- v4 fanout helpers (home UBCC direct invalidation) ----
     bool fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,

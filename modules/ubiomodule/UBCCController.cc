@@ -266,6 +266,8 @@ UBCCController::wakeup()
     cleanupTombstones();
     cleanupExpiredRecalls();
     cleanupExpiredInvalidations();
+    retryPendingGrantPushes();
+    retryPendingH64Lookups();
     const Tick now = curTick();
     if (now >= _lastStateLogTick + 100000000) {
         size_t tombstoneCount = 0;
@@ -322,6 +324,86 @@ UBCCController::wakeup()
     if (++_asyncWbCounter >= _asyncWbInterval) {
         _asyncWbCounter = 0;
         doAsyncWriteback();
+    }
+}
+
+void
+UBCCController::scheduleH64LookupRetry(uint64_t linePa)
+{
+    for (const auto &slot : _pendingH64LookupRetries) {
+        if (slot.active && slot.linePa == linePa) {
+            return;
+        }
+    }
+    for (auto &slot : _pendingH64LookupRetries) {
+        if (slot.active) {
+            continue;
+        }
+        slot.active = true;
+        slot.linePa = linePa;
+        framework::LogInfo("UBCC",
+            "[RESIDENT-FILL-RETRY-QUEUED] tick={} home={} pa=0x{:x}",
+            _host ? _host->hostCurrentTick() : 0, _nodeId, linePa);
+        return;
+    }
+    fatal("UBCC node_id={}: H64 lookup retry table full PA=0x{:x}",
+          _nodeId, linePa);
+}
+
+void
+UBCCController::cancelH64LookupRetry(uint64_t linePa)
+{
+    for (auto &slot : _pendingH64LookupRetries) {
+        if (slot.active && slot.linePa == linePa) {
+            slot = PendingH64LookupRetry{};
+        }
+    }
+}
+
+void
+UBCCController::retryPendingH64Lookups()
+{
+    if (!_host) {
+        return;
+    }
+
+    std::array<uint64_t, kMaxH64LookupRetriesPerWake> retryPas{};
+    size_t retryCount = 0;
+    size_t scanned = 0;
+    while (scanned++ < _pendingH64LookupRetries.size() &&
+           retryCount < retryPas.size()) {
+        const size_t index = _h64LookupRetryCursor;
+        _h64LookupRetryCursor =
+            (_h64LookupRetryCursor + 1) % _pendingH64LookupRetries.size();
+        auto &slot = _pendingH64LookupRetries[index];
+        if (!slot.active) {
+            continue;
+        }
+        const uint64_t linePa = slot.linePa;
+        slot = PendingH64LookupRetry{};
+
+        auto waiter = _residentWaiters.find(linePa);
+        if (!_directory.fillPending(linePa)) {
+            continue;
+        }
+        if (waiter == _residentWaiters.end() || waiter->second.empty()) {
+            // The retained operation was cancelled while admission was Busy.
+            // Release the orphan placeholder instead of leaving an unowned
+            // fill pin behind forever.
+            _directory.setFillPending(linePa, false);
+            refreshPinnedBit(linePa);
+            continue;
+        }
+        retryPas[retryCount++] = linePa;
+    }
+
+    // Issue only after taking the bounded snapshot. A synchronous Busy
+    // callback can requeue the PA, but it will not recurse in this wakeup.
+    for (size_t i = 0; i < retryCount; ++i) {
+        framework::LogInfo("UBCC",
+            "[RESIDENT-FILL-RETRY-ISSUED] tick={} home={} pa=0x{:x}",
+            _host->hostCurrentTick(), _nodeId, retryPas[i]);
+        _host->hostIssueBackstoreRead(retryPas[i]);
     }
 }
 
@@ -1223,14 +1305,12 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             // A capacity eviction can recursively replay this waiter. If that
             // nested pass created the grant, this outer call returns Busy but
             // sees its outstanding request. The nested pass already pushed it.
-            } else if (grantCreated && _outbound && static_cast<int>(g) != -1) {
-                CoherenceMessage push;
-                buildGrantResponse(*ost, push);
-                _outbound->sendGrantPush(push);
+            } else if (grantCreated && static_cast<int>(g) != -1) {
+                const bool pushOk = tryPushGrant(*ost, "resident-replay");
                 framework::LogInfo("UBCC", "[RESIDENT-REPLAY-PUSH] tick={} home={} pa=0x{:x} "
-                        "requester={} reqId={}",
+                        "requester={} reqId={} pushOk={}",
                         _host ? _host->hostCurrentTick() : 0,
-                        _nodeId, linePa, pr.node, pr.reqId);
+                        _nodeId, linePa, pr.node, pr.reqId, pushOk ? 1 : 0);
             }
             stop = (static_cast<int>(g) == -1 && !replaySucceeded);
             break;
@@ -1756,16 +1836,16 @@ UBCCController::processOuterRequest(
                             invOreq->replayArmed = true;
                             invOreq->recallBarrierDone = false;
                             if (_outbound) {
-                                CoherenceMessage push;
-                                buildGrantResponse(*invOreq, push);
-                                _outbound->sendGrantPush(push);
+                                const bool pushOk = tryPushGrant(
+                                    *invOreq, "invalidate-empty");
                                 framework::LogWarn("UBCC","[PUSH-GRANT] INVALIDATE-EMPTY home={} "
-                                       "pa=0x{:x} requester={} sock={} reqId={} "
-                                       "grantType={}",
-                                       _nodeId, line_pa, invOreq->requesterNode,
-                                       invOreq->requesterSocket, invOreq->reqId,
-                                       static_cast<int>(
-                                          grantTypeFromIntended(invOreq->intendedState)));
+                                        "pa=0x{:x} requester={} sock={} reqId={} "
+                                        "grantType={} pushOk={}",
+                                        _nodeId, line_pa, invOreq->requesterNode,
+                                        invOreq->requesterSocket, invOreq->reqId,
+                                        static_cast<int>(
+                                           grantTypeFromIntended(invOreq->intendedState)),
+                                        pushOk ? 1 : 0);
                             }
                         }
                     }
@@ -2432,9 +2512,7 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     // instead of waiting for the 20000-cycle retry timer.
     // replayArmed stays true as pull fallback if push fails.
     if (_outbound) {
-        CoherenceMessage push;
-        buildGrantResponse(*grantOst, push);
-        bool pushOk = _outbound->sendGrantPush(push);
+        bool pushOk = tryPushGrant(*grantOst, "recall");
         framework::LogInfo("UBCC","[PUSH-GRANT] RECALL home={} pa=0x{:x} requester={} sock={} "
                "reqId={} grantType={} dataSource={} pushOk={}",
                _nodeId, line_pa, grantOst->requesterNode,
@@ -2732,14 +2810,13 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             // Push-grant: home proactively delivers ReadResp so requester's
             // retry hits _readyResponses immediately.
             if (_outbound) {
-                CoherenceMessage push;
-                buildGrantResponse(*ost, push);
-                _outbound->sendGrantPush(push);
+                const bool pushOk = tryPushGrant(*ost, "invalidate");
                 framework::LogWarn("UBCC","[PUSH-GRANT] INVALIDATE home={} pa=0x{:x} requester={} "
-                       "sock={} reqId={} grantType={}",
+                       "sock={} reqId={} grantType={} pushOk={}",
                        _nodeId, line_pa, ost->requesterNode,
                        ost->requesterSocket, ost->reqId,
-                       static_cast<int>(grantTypeFromIntended(ost->intendedState)));
+                       static_cast<int>(grantTypeFromIntended(ost->intendedState)),
+                       pushOk ? 1 : 0);
             }
 
             framework::LogInfo("UBCC","[UBCC-INV-TO-GRANT] home={} pa=0x{:x} requester={} stage={} "
@@ -3753,8 +3830,8 @@ UBCCController::processClear(
     // newly committed state (just committed by this Clear).
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
-    // Clear removes the grant-handshake pin, which can free a way for another
-    // PA waiting on the same full set.
+    // Clear removes the grant-handshake pin. A different PA waiting on the
+    // same full set may now evict this entry and must not lose that wakeup.
     replayResidentWaitersForCapacity(line_pa);
 
     // Order log audit (§3.6)
@@ -3877,10 +3954,8 @@ UBCCController::onDsmPersistComplete(uint64_t linePa)
             if (static_cast<int>(grant) >= 0 && ost &&
                 ost->opType == OpType::GRANT_HANDSHAKE &&
                 ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
-                ost->stage == OpStage::WAITING_CLEAR && _outbound) {
-                CoherenceMessage push;
-                buildGrantResponse(*ost, push);
-                _outbound->sendGrantPush(push);
+                ost->stage == OpStage::WAITING_CLEAR) {
+                tryPushGrant(*ost, "dsm-persist");
             }
         }
     }
@@ -4214,6 +4289,7 @@ void
 UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
+    cancelH64LookupRetry(linePa);
     framework::LogInfo("UBCC", "[RESIDENT-FILL-DONE] tick={} home={} pa=0x{:x} found={} waiters={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, linePa, found ? 1 : 0,
@@ -4372,12 +4448,18 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
                 entry.epoch   = 0;
             }
             onBackstoreFillComplete(linePa, comp.found, entry);
+        } else if (comp.status == BackstoreStatus::RetryableBusy) {
+            // Initial H64 admission can fail synchronously. Retain the exact
+            // fill placeholder and waiter, then retry from the outer wakeup
+            // loop with a fixed per-wakeup budget. Never fabricate G_I and
+            // never recursively resubmit from this callback.
+            scheduleH64LookupRetry(linePa);
         } else {
-            // Error retains fill pin — caller must retry or fail
-            if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-LOOKUP-ERR] home={} pa=0x{:x} status={} — "
-                    "fill pin retained, no G_I fabricated",
-                    _nodeId, linePa, backstoreStatusName(comp.status));
-            // Do NOT call onBackstoreFillComplete with found=false on error
+            // There is no safe fallback for an I/O/corruption failure: treating
+            // it as NotFound would lose metadata, while retaining the pin would
+            // silently deadlock the set.
+            fatal("UBCC node_id={}: H64 lookup failed PA=0x{:x} status={}",
+                  _nodeId, linePa, backstoreStatusName(comp.status));
         }
         break;
       }
@@ -4696,15 +4778,14 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                 // GRANT_HANDSHAKE (G_S+RS case). Push the grant immediately
                 // so the requester gets it without waiting for retry timer.
                 if (ost->opType == OpType::GRANT_HANDSHAKE && _outbound) {
-                    CoherenceMessage push;
-                    buildGrantResponse(*ost, push);
-                    _outbound->sendGrantPush(push);
+                    const bool pushOk = tryPushGrant(*ost, "queue-replay");
                     framework::LogInfo("UBCC","[PUSH-GRANT] QUEUE-REPLAY home={} pa=0x{:x} "
-                           "requester={} sock={} reqId={} grantType={}",
+                           "requester={} sock={} reqId={} grantType={} pushOk={}",
                            _nodeId, linePa, ost->requesterNode,
                            ost->requesterSocket, ost->reqId,
                            static_cast<int>(
-                               grantTypeFromIntended(ost->intendedState)));
+                               grantTypeFromIntended(ost->intendedState)),
+                           pushOk ? 1 : 0);
                 }
             }
             break;
@@ -4891,6 +4972,56 @@ UBCCController::grantTupleLive(uint64_t linePa, int requesterNode,
         }
     }
     return false;
+}
+
+bool
+UBCCController::tryPushGrant(OutstandingRequest &ost, const char *reason)
+{
+    if (!_outbound || ost.opType != OpType::GRANT_HANDSHAKE ||
+        ost.stage != OpStage::WAITING_CLEAR) {
+        return false;
+    }
+
+    CoherenceMessage push;
+    buildGrantResponse(ost, push);
+    ost.respTick = curTick();
+    const bool accepted = _outbound->sendGrantPush(push);
+    ost.replayArmed = !accepted;
+    framework::LogInfo("UBCC",
+        "[PUSH-GRANT-TRY] reason={} home={} pa=0x{:x} requester={} "
+        "sock={} reqId={} accepted={}",
+        reason ? reason : "unknown", _nodeId, ost.linePa,
+        ost.requesterNode, ost.requesterSocket, ost.reqId,
+        accepted ? 1 : 0);
+    return accepted;
+}
+
+void
+UBCCController::retryPendingGrantPushes()
+{
+    if (!_outbound || _outstandingReqs.empty())
+        return;
+
+    const size_t count = _outstandingReqs.size();
+    const size_t start = _grantPushRetryCursor % count;
+    auto it = _outstandingReqs.begin();
+    std::advance(it, start);
+    size_t visited = 0;
+    size_t attempted = 0;
+    while (visited < count && attempted < kGrantPushAttemptsPerWake) {
+        if (it == _outstandingReqs.end())
+            it = _outstandingReqs.begin();
+        OutstandingRequest &ost = it->second;
+        ++it;
+        ++visited;
+        if (ost.opType != OpType::GRANT_HANDSHAKE ||
+            ost.stage != OpStage::WAITING_CLEAR || !ost.replayArmed) {
+            continue;
+        }
+        ++attempted;
+        tryPushGrant(ost, "bounded-retry");
+    }
+    _grantPushRetryCursor = (start + visited) % count;
 }
 
 // ---- Push-Grant: build a complete ReadResp from GRANT_HANDSHAKE outstanding ----

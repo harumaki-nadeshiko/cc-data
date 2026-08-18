@@ -58,6 +58,10 @@ def main():
     cross_node = args.cross_node_latency
     cross_sock = args.cross_socket_latency
     nmod = num_nodes * num_sockets
+    if num_nodes < 1 or num_nodes > 16:
+        p.error(f"nodes must be in [1,16], got {num_nodes}")
+    if num_sockets < 1 or nmod > 32:
+        p.error(f"topology must contain 1..32 planes, got {nmod}")
 
     links = []
     # Per-class counters for summary
@@ -88,7 +92,11 @@ def main():
             links.append([a, 1, b, 1, lat])
 
     with open(args.out, "w") as f:
-        json.dump({"links": links}, f, indent=2)
+        json.dump({
+            "num_nodes": num_nodes,
+            "num_sockets": num_sockets,
+            "links": links,
+        }, f, indent=2)
         f.write("\n")
     n_links = len(links)
     print(f"[gen_topo] nodes={num_nodes} sockets={num_sockets} "
