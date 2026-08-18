@@ -1460,14 +1460,20 @@ UBCCController::processOuterRequest(
             // F24: Unless this outstanding was created by replay (replayArmed=true)
             // and the retry matches the grant tuple — then return the grant directly.
             if (existing->requesterNode == requesterNode) {
-                // Same-requester has live outstanding in WAITING_CLEAR:
-                // the grant was already delivered. Return it directly regardless
-                // of replayArmed or reqId match. The retry is idempotent.
-                if (existing->stage == OpStage::WAITING_CLEAR) {
+                // Only the exact original tuple is an idempotent grant retry.
+                // A different socket or reqId from the same node is a distinct
+                // transaction and must not receive the old outstanding's grant:
+                // doing so creates a mixed ReadResp tuple whose Clear can never
+                // match the retained GRANT_HANDSHAKE.
+                const bool exactGrantRetry =
+                    existing->stage == OpStage::WAITING_CLEAR &&
+                    existing->requesterSocket == requesterSocket &&
+                    existing->reqId == reqId;
+                if (exactGrantRetry) {
                     framework::LogInfo("UBCC",
                             "UBCC node_id={}: grant hit PA=0x{:x} "
-                            "requester={} reqId={} intended={} — granting",
-                            _nodeId, line_pa, requesterNode, reqId,
+                            "requester={} socket={} reqId={} intended={} — granting",
+                            _nodeId, line_pa, requesterNode, requesterSocket, reqId,
                              mesiStateName(existing->intendedState));
                     if (outDataSource) *outDataSource = existing->dataSource;
                     if (outGrantVisibleTick) *outGrantVisibleTick = curTick();
@@ -1477,6 +1483,14 @@ UBCCController::processOuterRequest(
                     if (outAuthEpoch) *outAuthEpoch = existing->baseEpoch;
                     if (outGrantEpoch) *outGrantEpoch = existing->reservedEpoch;
                     return grantTypeFromIntended(existing->intendedState);
+                }
+                if (existing->stage == OpStage::WAITING_CLEAR) {
+                    framework::LogWarn("UBCC",
+                            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home={} pa=0x{:x} "
+                            "requester={} incomingSocket={} incomingReqId={} "
+                            "outstandingSocket={} outstandingReqId={} — BUSY",
+                            _nodeId, line_pa, requesterNode, requesterSocket, reqId,
+                            existing->requesterSocket, existing->reqId);
                 }
                 // TC98 fix: rate-limit high-frequency BUSY log
                 { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)

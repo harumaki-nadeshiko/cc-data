@@ -212,6 +212,54 @@ main()
     OutstandingRequest *afterClear = commitUbcc.findOutstanding(committedPa);
     assert(!afterClear || afterClear->reqId != committedReqId);
 
+    // TC35: a second socket on the same requester node must not treat a new
+    // reqId as an idempotent retry of an older WAITING_CLEAR grant. The exact
+    // tuple may retry, while wrong-socket or wrong-reqId requests remain BUSY
+    // and cannot alter the original outstanding transaction.
+    UBCCController tupleUbcc(
+        0, 1, nullptr, 64, commitCfg.bloom_bytes, 0, 2, 3, &commitCfg);
+    tupleUbcc.setHost(&host);
+    tupleUbcc.setResidentOverflowPolicy(ResidentOverflowPolicy::Spill);
+    constexpr uint64_t tuplePa = 0x18000380;
+    constexpr uint64_t tupleReqId = (1ULL << 56) | 0x4f;
+    constexpr uint64_t tupleNextReqId = tupleReqId + 1;
+    constexpr uint64_t tupleBaseEpoch = 77;
+    assert(tupleUbcc.debugSeedResidentForTest(
+        tuplePa, static_cast<int>(MESIState::G_I), 0, 0, false));
+    uint64_t tupleClearEpoch = 0;
+    const auto tupleGrant = tupleUbcc.processOuterRequest(
+        tuplePa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, tupleBaseEpoch, tupleReqId,
+        nullptr, nullptr, nullptr, nullptr, nullptr,
+        &tupleClearEpoch, nullptr);
+    assert(static_cast<int>(tupleGrant) != -1);
+    OutstandingRequest *tupleOutstanding = tupleUbcc.findOutstanding(tuplePa);
+    assert(tupleOutstanding);
+    assert(tupleOutstanding->stage == OpStage::WAITING_CLEAR);
+    assert(tupleOutstanding->requesterSocket == 0);
+    assert(tupleOutstanding->reqId == tupleReqId);
+
+    const auto exactTupleRetry = tupleUbcc.processOuterRequest(
+        tuplePa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, tupleBaseEpoch, tupleReqId);
+    assert(static_cast<int>(exactTupleRetry) == static_cast<int>(tupleGrant));
+    const auto wrongSocketRetry = tupleUbcc.processOuterRequest(
+        tuplePa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 1, tupleBaseEpoch, tupleNextReqId);
+    assert(static_cast<int>(wrongSocketRetry) == -1);
+    const auto wrongReqIdRetry = tupleUbcc.processOuterRequest(
+        tuplePa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, tupleBaseEpoch, tupleNextReqId);
+    assert(static_cast<int>(wrongReqIdRetry) == -1);
+    tupleOutstanding = tupleUbcc.findOutstanding(tuplePa);
+    assert(tupleOutstanding);
+    assert(tupleOutstanding->requesterSocket == 0);
+    assert(tupleOutstanding->reqId == tupleReqId);
+    assert(!tupleUbcc.processClear(
+        tuplePa, 1, tupleClearEpoch, tupleNextReqId));
+    assert(tupleUbcc.processClear(
+        tuplePa, 1, tupleClearEpoch, tupleReqId));
+
     // A normal dirty writeback can race a naive capacity recall after the
     // owner has already dropped its cache line. The matching data-bearing
     // writeback must complete the recall instead of being rejected as BUSY.
