@@ -3064,13 +3064,14 @@ main(int argc, char **argv)
                                              nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                             }
                             bool sentToGem5 = sendCoh(gem5Port, tick,
-                                gidOf(coh->h.srcNode, coh->h.srcSocket), *coh);
+                                gidOf(coh->h.dstNode, coh->h.dstSocket), *coh);
                             if (g_debugUbioPerf) {
                                 LogDebug("UBIO",
-                                             "[DEBUG-TRACE-4-SEND] n{} net->gem5 sendCoh_ret={} type={} reqId={} dstModule={} dstPort={} srcSocket={}",
+                                             "[DEBUG-TRACE-4-SEND] n{} net->gem5 sendCoh_ret={} type={} reqId={} src={}:{} dst={}:{}",
                                              nid, sentToGem5 ? "true" : "false",
                                              coherenceMsgTypeName(coh->h.type), coh->h.reqId,
-                                             coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
+                                             coh->h.srcNode, coh->h.srcSocket,
+                                             coh->h.dstNode, coh->h.dstSocket);
                             }
                         }
                     }
