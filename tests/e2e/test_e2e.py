@@ -144,6 +144,7 @@ TESTCASES = {
     157: "e2e_tc149_upgrade_invalidate_fault_qualification",
     158: "e2e_tc149_upgrade_invalidate_fault_qualification",
     159: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    160: "e2e_tc160_16n1s_sharer_smoke",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
     202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
@@ -1298,6 +1299,23 @@ def verify_tc90(reads, lines):
     if mismatches:
         return False, f"TC90 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
     return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
+
+
+def verify_tc160(reads, lines):
+    """TC160: 16 nodes share a node-15 line, then node 0 invalidates it."""
+    if len(reads) != 32:
+        return False, f"TC160 FAILED: expected 32 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC160 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    nodes = {r["node"] for r in reads}
+    homes = {r["home"] for r in reads}
+    if nodes != set(range(16)) or homes != {15}:
+        return False, (f"TC160 FAILED: nodes={sorted(nodes)} homes={sorted(homes)}"), reads
+    counts = {node: sum(r["node"] == node for r in reads) for node in nodes}
+    if any(count != 2 for count in counts.values()):
+        return False, f"TC160 FAILED: per-node read counts={counts}", reads
+    return True, "TC160 PASSED: 16-way share and node-0 invalidation on node-15 home", []
 
 
 def verify_tc91(reads, lines):
@@ -3209,6 +3227,7 @@ VERIFIERS = {
     157: verify_tc157,
     158: verify_tc158,
     159: verify_tc159,
+    160: verify_tc160,
     200: verify_tc200,
     201: verify_tc201,
     202: verify_tc202,
@@ -3401,6 +3420,13 @@ def gem5_config_main():
     _parser.add_argument("--sequencer-max-outstanding", type=int, default=0,
                          help="Override Ruby Sequencer outstanding limit; "
                               "0 keeps the model default")
+    _parser.add_argument("--ha-profile", choices=("ubcc", "ha-vi", "ha"),
+                         default=os.environ.get("EP_HA_PROFILE", "ubcc"),
+                         help="EP home-controller profile")
+    _parser.add_argument("--clear-profile",
+                         choices=("ack", "lossless-oneway"),
+                         default=os.environ.get("OURCC_CLEAR_PROFILE", "ack"),
+                         help="OurCC Clear completion profile")
     # Phase 0.3: EP controller params (mapped to env for SimObject; argv planned)
     _parser.add_argument("--silent-upgrade", type=int, default=-1,
                          help="EP: silent upgrade (0=off, 1=on, -1=env/defaults)")
@@ -3421,21 +3447,33 @@ def gem5_config_main():
     # Phase 0.3: map script args to env vars for SimObject params
     # (precedes Ruby system creation so SimObjects see them in init)
     _ep_env_map = [
-        ("EP_SILENT_UPGRADE", _args.silent_upgrade),
-        ("EP_DIRECT_FWD", _args.direct_fwd),
-        ("EP_RETRY_CYCLES", _args.ep_retry_cycles),
-        ("EPRN_COMPACK_RETRY_CYCLES", _args.ep_compack_retry),
-        ("EPRN_WAKEUP_RETRY_CYCLES", _args.ep_wakeup_retry),
-        ("EP_UPGRADE_RETRY_MIN_CYCLES", _args.ep_upgrade_retry_min),
-        ("EP_UPGRADE_RETRY_MAX_CYCLES", _args.ep_upgrade_retry_max),
-        ("EP_UPGRADE_RETRY_MAX_RESENDS", _args.ep_upgrade_retry_max_resends),
-        ("EP_DELTA_NOC_CYCLES", _args.ep_delta_noc),
-        ("UB_WAIT_CAP", _args.ep_wait_cap),
-        ("UBCC_BLOOM_BYTES", _args.ubcc_bloom_bytes),
-        ("UBCC_BATCH_RS", _args.ubcc_batch_rs),
+        ("EP_HA_PROFILE", _args.ha_profile, True),
+        ("OURCC_CLEAR_PROFILE", _args.clear_profile, True),
+        ("EP_SILENT_UPGRADE", _args.silent_upgrade,
+         _args.silent_upgrade >= 0),
+        ("EP_DIRECT_FWD", _args.direct_fwd, _args.direct_fwd >= 0),
+        ("EP_RETRY_CYCLES", _args.ep_retry_cycles,
+         _args.ep_retry_cycles >= 0),
+        ("EPRN_COMPACK_RETRY_CYCLES", _args.ep_compack_retry,
+         _args.ep_compack_retry >= 0),
+        ("EPRN_WAKEUP_RETRY_CYCLES", _args.ep_wakeup_retry,
+         _args.ep_wakeup_retry >= 0),
+        ("EP_UPGRADE_RETRY_MIN_CYCLES", _args.ep_upgrade_retry_min,
+         _args.ep_upgrade_retry_min >= 0),
+        ("EP_UPGRADE_RETRY_MAX_CYCLES", _args.ep_upgrade_retry_max,
+         _args.ep_upgrade_retry_max >= 0),
+        ("EP_UPGRADE_RETRY_MAX_RESENDS", _args.ep_upgrade_retry_max_resends,
+         _args.ep_upgrade_retry_max_resends >= 0),
+        ("EP_DELTA_NOC_CYCLES", _args.ep_delta_noc,
+         _args.ep_delta_noc >= 0),
+        ("UB_WAIT_CAP", _args.ep_wait_cap, _args.ep_wait_cap >= 0),
+        ("UBCC_BLOOM_BYTES", _args.ubcc_bloom_bytes,
+         _args.ubcc_bloom_bytes >= 0),
+        ("UBCC_BATCH_RS", _args.ubcc_batch_rs,
+         _args.ubcc_batch_rs >= 0),
     ]
-    for _ek, _ev in _ep_env_map:
-        if _ev >= 0:
+    for _ek, _ev, _enabled in _ep_env_map:
+        if _enabled:
             os.environ[_ek] = str(_ev)
 
     # Workload selection: --workload (decoupled launcher path) wins; else

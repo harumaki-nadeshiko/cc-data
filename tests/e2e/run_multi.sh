@@ -8,7 +8,7 @@
 # tests/e2e/verify.py. Set E2E_RUN_ID to run independent TCs concurrently.
 #
 # Usage:
-#   bash tests/e2e/run_multi.sh [--1s|--2s] <tc> ... [<tc> ...]
+#   bash tests/e2e/run_multi.sh [--1s|--2s|--16n1s] <tc> ... [<tc> ...]
 #
 # Default is --1s. Dual-socket TCs (32-35,39) require --2s; if you pass a
 # dual-socket TC under --1s the script will auto-error.
@@ -116,6 +116,7 @@ case "${1:-}" in
     --8n1s)        TOPO_KIND="8n1s"; shift ;;
     --8n2s)        TOPO_KIND="8n2s"; shift ;;
     --2n1s)        TOPO_KIND="2n1s"; shift ;;
+    --16n1s)       TOPO_KIND="16n1s"; shift ;;
 esac
 if [ -n "$GENERATED_TOPO_NODES" ]; then
     JSON="$RUN_DIR/process_topology.json"
@@ -342,6 +343,9 @@ ubio_extra_args_for_tc() {
             # Phase 5: H64 spill/onload regression. Hash collision and
             # tombstone semantics are tested directly by the focused Host test.
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
+        160)
+            echo "--dir-overflow-policy=spill --backstore-schema=h64 ${UBCC_OPTS:-}"
             ;;
         210|211|212|213|214|215|216|217|218|219|220|221|222|223|224|225|226|227)
             case "${EP_PERF_PROFILE:-optimized}" in
@@ -696,6 +700,7 @@ run_tc() {
         132) TC_TIMEOUT="${TIMEOUT_SEC_TC132:-7200}" ;;
         133) TC_TIMEOUT="${TIMEOUT_SEC_TC133:-7200}" ;;
         134) TC_TIMEOUT="${TIMEOUT_SEC_TC134:-7200}" ;;
+        160) TC_TIMEOUT="${TIMEOUT_SEC_TC160:-1800}" ;;
     esac
     # Always respect a higher value passed via TIMEOUT_SEC env var
     if [ "$TIMEOUT_SEC" -gt "$TC_TIMEOUT" ] 2>/dev/null; then
@@ -883,6 +888,8 @@ run_tc() {
         fi
         # Phase 0: propagate metadata DRAM capacity to gem5 config
         cmd="$cmd --ubcc_metadata_size=${UBCC_METADATA_SIZE}"
+        cmd="$cmd --ha-profile=${EP_HA_PROFILE}"
+        cmd="$cmd --clear-profile=${OURCC_CLEAR_PROFILE}"
         cmd="$cmd --cpu-model=${EP_CPU_MODEL}"
         if [ "$EP_SEQUENCER_MAX_OUTSTANDING" -gt 0 ] 2>/dev/null; then
             cmd="$cmd --sequencer-max-outstanding=${EP_SEQUENCER_MAX_OUTSTANDING}"
@@ -1192,6 +1199,7 @@ required_topology_for_tc() {
         32|33|34|35|39|81)                 printf '%s\n' 2s ;;
         82|90|91|92|93|94|133)             printf '%s\n' 8n1s ;;
         95|96|97|98|99|100|101|134)        printf '%s\n' 8n2s ;;
+        160)                                printf '%s\n' 16n1s ;;
         210|211|212|213|214|215|216|217|218|219|220|221|222|223|224|225|226|227) printf '%s\n' 2n1s ;;
     esac
 }
