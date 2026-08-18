@@ -143,6 +143,7 @@ TESTCASES = {
     157: "e2e_tc149_upgrade_invalidate_fault_qualification",
     158: "e2e_tc149_upgrade_invalidate_fault_qualification",
     159: "e2e_tc149_upgrade_invalidate_fault_qualification",
+    160: "e2e_tc160_16n1s_sharer_smoke",
     200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
     201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
     202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
@@ -1289,6 +1290,23 @@ def verify_tc90(reads, lines):
     if mismatches:
         return False, f"TC90 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
     return True, "TC90 PASSED: 8-node all-to-all (8x8 reads all MATCH)", []
+
+
+def verify_tc160(reads, lines):
+    """TC160: 16 nodes share a node-15 line, then node 0 invalidates it."""
+    if len(reads) != 32:
+        return False, f"TC160 FAILED: expected 32 READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC160 FAILED: {len(mismatches)} MISMATCH(es)", mismatches
+    nodes = {r["node"] for r in reads}
+    homes = {r["home"] for r in reads}
+    if nodes != set(range(16)) or homes != {15}:
+        return False, (f"TC160 FAILED: nodes={sorted(nodes)} homes={sorted(homes)}"), reads
+    counts = {node: sum(r["node"] == node for r in reads) for node in nodes}
+    if any(count != 2 for count in counts.values()):
+        return False, f"TC160 FAILED: per-node read counts={counts}", reads
+    return True, "TC160 PASSED: 16-way share and node-0 invalidation on node-15 home", []
 
 
 def verify_tc91(reads, lines):
@@ -2901,6 +2919,7 @@ VERIFIERS = {
     157: verify_tc157,
     158: verify_tc158,
     159: verify_tc159,
+    160: verify_tc160,
     200: verify_tc200,
     201: verify_tc201,
     202: verify_tc202,

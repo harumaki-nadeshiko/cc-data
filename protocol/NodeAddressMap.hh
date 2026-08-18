@@ -2,6 +2,7 @@
 #define __MEM_RUBY_PROTOCOL_CHI_EP_NODEADDRESSMAP_HH__
 
 #include <cstdint>
+#include <stdexcept>
 
 namespace cc
 {
@@ -20,6 +21,8 @@ class NodeAddressMap
                    uint64_t seg_size = 128ULL * 1024 * 1024);
 
     uint64_t nodeBase(int node_id) const {
+        if (node_id < 0 || node_id >= _numNodes)
+            throw std::out_of_range("node_id is outside configured topology");
         return static_cast<uint64_t>(node_id) << NODE_ADDR_SHIFT;
     }
 
@@ -63,7 +66,13 @@ class NodeAddressMap
 
     // v4-dual-socket: buildDsmPA now takes homeSocket
     uint64_t buildDsmPA(int tgt_node, int home_node, uint64_t offset,
-                        int home_socket = 0) const {
+                         int home_socket = 0) const {
+        if (home_node < 0 || home_node >= _numNodes)
+            throw std::out_of_range("home_node is outside configured topology");
+        if (home_socket < 0 || home_socket >= _numSockets)
+            throw std::out_of_range("home_socket is outside configured topology");
+        if (offset >= _segSize)
+            throw std::out_of_range("DSM offset exceeds segment size");
         return nodeBase(tgt_node) + 2 * _segSize
                + (home_node * _numSockets + home_socket) * _segSize
                + offset;

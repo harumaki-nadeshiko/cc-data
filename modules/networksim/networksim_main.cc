@@ -72,7 +72,7 @@ public:
         loadTopology(topoPath);
         if (requiredModules(_links) > _numNodes * _numSockets)
             throw std::runtime_error("networksim topology exceeds configured dimensions");
-        buildPorts(); buildRoutes();
+        buildRoutes(); buildPorts();
         if (_ports.empty())
             throw std::runtime_error("networksim created no transport ports");
     }
@@ -144,15 +144,40 @@ void NetworkSim::buildPorts() {
 
 void NetworkSim::loadTopology(const std::string& path) {
     std::ifstream f(path);
-    if (!f.is_open()) { LogError("NetworkSim", "[NetworkSim] bad topo {}", path.c_str()); return; }
+    if (!f.is_open())
+        throw std::runtime_error("networksim cannot open topology file");
     std::string json((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const auto topologyDimension = [&json](const char *name) {
+        const std::string key = std::string("\"") + name + "\"";
+        size_t keyPos = json.find(key);
+        if (keyPos == std::string::npos)
+            throw std::runtime_error("networksim topology is missing dimensions");
+        size_t colon = json.find(':', keyPos + key.size());
+        if (colon == std::string::npos)
+            throw std::runtime_error("networksim topology dimension is malformed");
+        char *end = nullptr;
+        const long value = std::strtol(json.c_str() + colon + 1, &end, 10);
+        if (end == json.c_str() + colon + 1 || value <= 0)
+            throw std::runtime_error("networksim topology dimension is invalid");
+        return value;
+    };
+    if (topologyDimension("num_nodes") != _numNodes ||
+        topologyDimension("num_sockets") != _numSockets)
+        throw std::runtime_error("networksim topology dimensions do not match runtime");
     size_t pos = json.find("\"links\"");
-    if (pos == std::string::npos) return;
+    if (pos == std::string::npos)
+        throw std::runtime_error("networksim topology has no links array");
     pos = json.find('[', pos);          // opening '[' of the links array
-    size_t end = json.rfind(']');       // closing ']' of the links array (NOT
-                                        // the first inner link's ']' — that bug
-                                        // dropped every link after the first,
-                                        // so mod2 never got a port/route).
+    if (pos == std::string::npos)
+        throw std::runtime_error("networksim topology links array is malformed");
+    size_t end = pos;
+    int depth = 0;
+    for (; end < json.size(); ++end) {
+        if (json[end] == '[') ++depth;
+        if (json[end] == ']' && --depth == 0) break;
+    }
+    if (end >= json.size() || depth != 0)
+        throw std::runtime_error("networksim topology links array is malformed");
     std::string arr = json.substr(pos+1, end-pos-1);
     std::istringstream iss(arr);
     std::string triple;
@@ -163,17 +188,30 @@ void NetworkSim::loadTopology(const std::string& path) {
         Link l;
         int n = std::sscanf(nums.c_str(), "%d,%d,%d,%d,%lu",
                             &l.src_mod, &l.src_port, &l.dst_mod, &l.dst_port, &l.latency);
-        if (n >= 4) { if (n < 5) l.latency = 1; _links.push_back(l); }
+        if (n != 5)
+            throw std::runtime_error("networksim topology link is malformed");
+        _links.push_back(l);
     }
     LogInfo("NetworkSim", "[NetworkSim] loaded {} links", _links.size());
 }
 
 void NetworkSim::buildRoutes() {
     _linkLatency.clear();
-    for (auto& l : _links) {
+    const int modules = _numNodes * _numSockets;
+    for (const auto& l : _links) {
+        if (l.src_mod < 0 || l.src_mod >= modules ||
+            l.dst_mod < 0 || l.dst_mod >= modules ||
+            l.src_mod == l.dst_mod || l.latency == 0)
+            throw std::runtime_error("networksim topology contains an invalid link");
+        if (_linkLatency.count({l.src_mod, l.dst_mod}) ||
+            _linkLatency.count({l.dst_mod, l.src_mod}))
+            throw std::runtime_error("networksim topology contains a duplicate link");
         _linkLatency[{l.src_mod, l.dst_mod}] = l.latency;
         _linkLatency[{l.dst_mod, l.src_mod}] = l.latency;
     }
+    const size_t expectedRoutes = static_cast<size_t>(modules) * (modules - 1);
+    if (_linkLatency.size() != expectedRoutes)
+        throw std::runtime_error("networksim topology is not a complete full mesh");
 }
 
 void NetworkSim::step() {
@@ -205,13 +243,11 @@ void NetworkSim::step() {
                         timestamp, mod, requestId, sourceId, targetId);
             }
 
-            uint64_t lat = 1;
             auto lit = _linkLatency.find({static_cast<int>(sourceId),
                                            static_cast<int>(targetId)});
-            if (lit != _linkLatency.end()) lat = lit->second;
-            else
-                LogWarn("NetworkSim", "[NSIM-NOROUTE] src={} dst={} falling back to 1ps",
-                        sourceId, targetId);
+            if (lit == _linkLatency.end())
+                throw std::runtime_error("networksim received a message with no route");
+            const uint64_t lat = lit->second;
 
             uint64_t readyTick = _tick + lat;
             auto destination = _ports.find(static_cast<int>(targetId));

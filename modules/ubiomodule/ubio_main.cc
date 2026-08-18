@@ -10,6 +10,7 @@
 #include "framework/iface/Port.hh"
 #include "framework/iface/Log.hh"
 #include "protocol/TracePerfPolicy.hh"
+#include "protocol/NodeAddressMap.hh"
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
@@ -1101,7 +1102,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     struct PendingGrantRead {
         bool active = false;
         bool readInFlight = false;
+        bool dataReady = false;
         uint64_t retryTick = 0;
+        uint8_t retryCount = 0;
         CoherenceMessage push;
     };
     static constexpr size_t kMaxPendingGrantReads = 32;
@@ -1208,6 +1211,15 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     }
     bool sendGrantPush(const CoherenceMessage &msg) override {
         CoherenceMessage push = msg;
+        for (const PendingGrantRead &slot : pendingGrantReads) {
+            if (slot.active &&
+                slot.push.h.homeLinePa == push.h.homeLinePa &&
+                slot.push.h.requesterNode == push.h.requesterNode &&
+                slot.push.h.dstSocket == push.h.dstSocket &&
+                slot.push.h.reqId == push.h.reqId) {
+                return true;
+            }
+        }
         // UBCC constructs replay pushes without direct access to the physical
         // home DSM backing. Match the pull-path HomeMemory fallback here so a
         // clean line restored from metadata after its owner wrote back carries
@@ -1220,31 +1232,35 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         if (push.h.type != CoherenceMessageType::ReadResp ||
             (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA))) {
-            return routeControlToTarget(push);
+            if (routeControlToTarget(push))
+                return true;
+            return reserveGrantSlot(push, true);
         }
 
         // The synchronous copy missed. Do not push a fabricated zero line:
         // reserve a bounded slot and resolve the direct-indexed home read.
-        size_t slotIdx = kMaxPendingGrantReads;
-        for (size_t i = 0; i < pendingGrantReads.size(); ++i) {
-            if (!pendingGrantReads[i].active) {
-                slotIdx = i;
-                break;
-            }
-        }
-        if (slotIdx == kMaxPendingGrantReads)
-            return false;
+        return reserveGrantSlot(push, false);
+    }
 
-        PendingGrantRead &slot = pendingGrantReads[slotIdx];
-        slot.active = true;
-        slot.push = push;
-        issuePendingGrantRead(slotIdx);
-        return true;
+    bool reserveGrantSlot(const CoherenceMessage &push, bool dataReady) {
+        for (size_t i = 0; i < pendingGrantReads.size(); ++i) {
+            PendingGrantRead &slot = pendingGrantReads[i];
+            if (slot.active)
+                continue;
+            slot.active = true;
+            slot.dataReady = dataReady;
+            slot.retryTick = tickRef;
+            slot.push = push;
+            if (!dataReady)
+                issuePendingGrantRead(i);
+            return true;
+        }
+        return false;
     }
 
     void issuePendingGrantRead(size_t slotIdx) {
         PendingGrantRead &pending = pendingGrantReads[slotIdx];
-        if (!pending.active || pending.readInFlight)
+        if (!pending.active || pending.readInFlight || pending.dataReady)
             return;
         pending.readInFlight = true;
         readDsmDataAsync(pending.push.h.homeLinePa,
@@ -1253,11 +1269,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 if (!slot.active)
                     return;
                 slot.readInFlight = false;
-                CoherenceMessage ready = slot.push;
-
-                if (!ubcc.grantTupleLive(ready.h.homeLinePa,
-                                         ready.h.requesterNode,
-                                         ready.h.reqId)) {
+                if (!ubcc.grantTupleLive(slot.push.h.homeLinePa,
+                                         slot.push.h.requesterNode,
+                                         slot.push.h.reqId)) {
                     slot = PendingGrantRead{};
                     return;
                 }
@@ -1267,20 +1281,39 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                     slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
                     return;
                 }
-
-                slot = PendingGrantRead{};
                 if (status == DsmDataStatus::Ok && data) {
-                    std::memcpy(ready.b.readResp.grantData, data, 64);
-                    ready.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-                    routeControlToTarget(ready);
+                    std::memcpy(slot.push.b.readResp.grantData, data, 64);
+                    slot.push.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
                 } else if (status == DsmDataStatus::NotWritten) {
                     // An unwritten direct-indexed home line is the sole valid
                     // no-data case; EPBackend may initialize it as zero.
-                    routeControlToTarget(ready);
+                } else {
+                    slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
+                    if (slot.retryCount != UINT8_MAX)
+                        ++slot.retryCount;
+                    return;
                 }
-                // IoError sends no fabricated payload; requester retry owns
-                // recovery after this bounded attempt has been released.
+                slot.dataReady = true;
+                trySendPendingGrant(slot);
             });
+    }
+
+    void trySendPendingGrant(PendingGrantRead &slot) {
+        if (!slot.active || !slot.dataReady)
+            return;
+        if (!ubcc.grantTupleLive(slot.push.h.homeLinePa,
+                                 slot.push.h.requesterNode,
+                                 slot.push.h.reqId)) {
+            slot = PendingGrantRead{};
+            return;
+        }
+        if (routeControlToTarget(slot.push)) {
+            slot = PendingGrantRead{};
+            return;
+        }
+        slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
+        if (slot.retryCount != UINT8_MAX)
+            ++slot.retryCount;
     }
 
     void advancePendingGrantReads(uint64_t tick) {
@@ -1288,7 +1321,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             PendingGrantRead &slot = pendingGrantReads[i];
             if (!slot.active || slot.readInFlight || tick < slot.retryTick)
                 continue;
-            issuePendingGrantRead(i);
+            if (slot.dataReady)
+                trySendPendingGrant(slot);
+            else
+                issuePendingGrantRead(i);
         }
     }
     uint64_t hostCurrentTick() const override { return tickRef; }
@@ -2089,6 +2125,8 @@ main(int argc, char **argv)
     std::vector<std::string> faultRuleArgs;
     int nid = 0;
     int sid = 0;
+    bool paBitsExplicit = false;
+    bool sharersBitsExplicit = false;
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
@@ -2103,8 +2141,14 @@ main(int argc, char **argv)
             g_rdcfg.bloom_bytes = (size_t)std::strtoull(argv[i] + 14, nullptr, 10);
         if (!std::strncmp(argv[i], "--sram-bytes=", 13))
             g_rdcfg.sram_bytes = (size_t)std::strtoull(argv[i] + 13, nullptr, 10);
-        if (!std::strncmp(argv[i], "--sharers-bits=", 15))
+        if (!std::strncmp(argv[i], "--pa-bits=", 10)) {
+            g_rdcfg.pa_bits = std::atoi(argv[i] + 10);
+            paBitsExplicit = true;
+        }
+        if (!std::strncmp(argv[i], "--sharers-bits=", 15)) {
             g_rdcfg.sharers_bits = std::atoi(argv[i] + 15);
+            sharersBitsExplicit = true;
+        }
         if (!std::strncmp(argv[i], "--epoch-bits=", 13))
             g_rdcfg.epoch_bits = std::atoi(argv[i] + 13);
         if (!std::strncmp(argv[i], "--ways=", 7))
@@ -2231,10 +2275,50 @@ main(int argc, char **argv)
         ? static_cast<uint64_t>(g_numNodes) *
               static_cast<uint64_t>(g_numSockets)
         : 0;
-    if (g_numNodes <= 0 || g_numSockets <= 0 || totalPlanes > 32) {
+    if (g_numNodes <= 0 || g_numNodes > NodeAddressMap::MAX_NODES ||
+        g_numSockets <= 0 || totalPlanes > 32) {
         LogError("UBIO", "[UBIO-FATAL] invalid topology numNodes={} "
-                 "numSockets={} totalPlanes={} (expected 1..32 planes)",
-                 g_numNodes, g_numSockets, totalPlanes);
+                 "numSockets={} totalPlanes={} (expected 1..{} nodes and "
+                 "1..32 planes)",
+                 g_numNodes, g_numSockets, totalPlanes,
+                 NodeAddressMap::MAX_NODES);
+        return 1;
+    }
+
+    int nodeIdBits = 0;
+    for (int maxNodeId = g_numNodes - 1; maxNodeId > 0; maxNodeId >>= 1)
+        ++nodeIdBits;
+    const int requiredPaBits = NodeAddressMap::NODE_ADDR_SHIFT + nodeIdBits;
+    if (!paBitsExplicit)
+        g_rdcfg.pa_bits = requiredPaBits;
+    if (!sharersBitsExplicit)
+        g_rdcfg.sharers_bits = std::max(8, g_numNodes);
+    if (g_rdcfg.pa_bits < requiredPaBits || g_rdcfg.pa_bits > 44) {
+        LogError("UBIO", "[UBIO-FATAL] pa_bits={} cannot represent {} nodes "
+                 "with NODE_ADDR_SHIFT={} (required {}..44)",
+                 g_rdcfg.pa_bits, g_numNodes, NodeAddressMap::NODE_ADDR_SHIFT,
+                 requiredPaBits);
+        return 1;
+    }
+    if (g_rdcfg.sharers_bits < g_numNodes || g_rdcfg.sharers_bits > 16) {
+        LogError("UBIO", "[UBIO-FATAL] sharers_bits={} cannot represent {} "
+                 "nodes (required {}..16)", g_rdcfg.sharers_bits, g_numNodes,
+                 g_numNodes);
+        return 1;
+    }
+    if (g_schemaMode == BackstoreSchemaMode::LegacySchemaA &&
+        g_rdcfg.sharers_bits > 10) {
+        LogError("UBIO", "[UBIO-FATAL] legacy_schema_a stores only 10 sharer "
+                 "bits; topology requires {}. Use --backstore-schema=h64.",
+                 g_rdcfg.sharers_bits);
+        return 1;
+    }
+    if ((g_schemaMode == BackstoreSchemaMode::LegacySchemaA ||
+         g_schemaMode == BackstoreSchemaMode::H64) &&
+        g_rdcfg.epoch_bits > 24) {
+        LogError("UBIO", "[UBIO-FATAL] schema {} stores only 24 epoch bits; "
+                 "configured epoch_bits={}",
+                 backstoreSchemaModeName(g_schemaMode), g_rdcfg.epoch_bits);
         return 1;
     }
     if (nid < 0 || nid >= g_numNodes) {
@@ -2347,7 +2431,8 @@ main(int argc, char **argv)
                                        / ((size_t)g_numSockets);
         const size_t capacity = layout.capacity;
         LogInfo("UBIO",
-            "[UBIO-MANIFEST] node={} socket={} num_sockets={}\n"
+            "[UBIO-MANIFEST] node={} socket={} num_nodes={} num_sockets={}\n"
+            "[UBIO-MANIFEST] resident_pa_bits={} resident_sharers_bits={}\n"
             "[UBIO-MANIFEST] schema_mode={} overflow_policy={}\n"
             "[UBIO-MANIFEST] metadata_dram_configured={} MiB per_socket={} MiB "
                 "(authoritative range: see [EPBACKEND-MANIFEST])\n"
@@ -2356,7 +2441,8 @@ main(int argc, char **argv)
             "[UBIO-MANIFEST] on_chip_breakdown: dir={} KiB bloom={} KiB "
                 "residentGroupIndex={} KiB hostLegacyGroupIndex={} KiB "
                 "blc_reserved={} KiB desc_reserved={} KiB",
-            nid, sid, g_numSockets,
+            nid, sid, g_numNodes, g_numSockets,
+            layout.pa_bits, layout.sharers_bits,
             backstoreSchemaModeName(g_schemaMode),
             g_overflowPolicy == ResidentOverflowPolicy::Spill ? "spill" : "naive",
             g_metadataDramTotalBytes / (1024 * 1024),
