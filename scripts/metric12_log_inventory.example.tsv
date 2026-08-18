@@ -1,0 +1,9 @@
+target	round	case	profile	phase	simout_logs	ubio_logs	required_markers
+# Repeat these three TC131 rows for round 2 and round 3.
+target1	1	TC131	naive	post_pressure_catalog_reuse	round1/tc131/naive/simout_node1.log;round1/tc131/naive/simout_node2.log	round1/tc131/naive/ubio_home0.log	phase=catalog_reuse;phase=exclusive_upgrade
+target1	1	TC131	spill-noopt	post_pressure_catalog_reuse	round1/tc131/spill-noopt/simout_node1.log;round1/tc131/spill-noopt/simout_node2.log	round1/tc131/spill-noopt/ubio_home0.log	phase=catalog_reuse;phase=exclusive_upgrade
+target1	1	TC131	optimized	post_pressure_catalog_reuse	round1/tc131/optimized/simout_node1.log;round1/tc131/optimized/simout_node2.log	round1/tc131/optimized/ubio_home0.log	phase=catalog_reuse;phase=exclusive_upgrade
+# Repeat each target2 case for all three profiles and all three rounds.
+target2	1	TC135	naive	preserved_sharer_first_load	round1/tc135/naive/simout_node1.log		>>> TC135 PASSED <<<
+target2	1	TC135	spill-noopt	preserved_sharer_first_load	round1/tc135/spill-noopt/simout_node1.log		>>> TC135 PASSED <<<
+target2	1	TC135	optimized	preserved_sharer_first_load	round1/tc135/optimized/simout_node1.log		>>> TC135 PASSED <<<
