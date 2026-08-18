@@ -61,6 +61,44 @@ def relation(old, new):
     return "different_reqid"
 
 
+def reqid_in_line(text, reqid):
+    decimal = re.compile(rf"(?<![0-9]){reqid}(?![0-9])")
+    hexadecimal = re.compile(rf"(?<![0-9a-fA-F]){re.escape(hex(reqid))}(?![0-9a-fA-F])",
+                             re.IGNORECASE)
+    return bool(decimal.search(text) or hexadecimal.search(text))
+
+
+def chain_summary(records, reqid, pa, context_limit):
+    evidence = []
+    counts = {}
+    for path, path_records in records.items():
+        for line_number, kind, text in path_records:
+            if not reqid_in_line(text, reqid):
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+            if len(evidence) < context_limit:
+                evidence.append({
+                    "file": str(path), "line": line_number,
+                    "kind": kind, "text": text,
+                })
+    return {
+        "reqid": reqid,
+        "pa_hex": pa,
+        "event_counts": counts,
+        "hints": {
+            "outer_request_seen": counts.get("outer_request", 0) > 0,
+            "grant_seen": counts.get("grant", 0) > 0,
+            "read_response_seen": counts.get("read_response", 0) > 0,
+            "pending_grant_seen": counts.get("pending_grant", 0) > 0,
+            "clear_send_seen": counts.get("clear_send", 0) > 0,
+            "home_clear_seen": counts.get("clear_home", 0) > 0,
+            "clear_response_seen": counts.get("clear_response", 0) > 0,
+            "epsnf_retry_seen": counts.get("epsnf_retry", 0) > 0,
+        },
+        "evidence": evidence,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("log_root", type=pathlib.Path)
@@ -118,35 +156,14 @@ def main():
     }
 
     for mismatch in mismatches:
-        old_dec = str(mismatch["outstanding_reqid"])
-        new_dec = str(mismatch["incoming_reqid"])
-        old_hex = hex(mismatch["outstanding_reqid"])
-        new_hex = hex(mismatch["incoming_reqid"])
         pa = mismatch["pa_hex"]
-        evidence = []
-        counts = {}
-        for path, records in cached_lines.items():
-            for line_number, kind, text in records:
-                lowered = text.lower()
-                if (pa in lowered or old_dec in text or new_dec in text or
-                        old_hex in lowered or new_hex in lowered):
-                    counts[kind] = counts.get(kind, 0) + 1
-                    if len(evidence) < args.context_limit:
-                        evidence.append({
-                            "file": str(path), "line": line_number,
-                            "kind": kind, "text": text,
-                        })
         item = dict(mismatch)
-        item["event_counts"] = counts
-        item["evidence"] = evidence
-        item["old_chain_hints"] = {
-            "read_response_seen": counts.get("read_response", 0) > 0,
-            "pending_grant_seen": counts.get("pending_grant", 0) > 0,
-            "clear_send_seen": counts.get("clear_send", 0) > 0,
-            "home_clear_seen": counts.get("clear_home", 0) > 0,
-            "clear_response_seen": counts.get("clear_response", 0) > 0,
-            "epsnf_retry_seen": counts.get("epsnf_retry", 0) > 0,
-        }
+        item["old_chain"] = chain_summary(
+            cached_lines, mismatch["outstanding_reqid"], pa,
+            args.context_limit)
+        item["new_chain"] = chain_summary(
+            cached_lines, mismatch["incoming_reqid"], pa,
+            args.context_limit)
         report["mismatches"].append(item)
 
     if args.json_out:
@@ -160,12 +177,15 @@ def main():
             f"old=({item['outstanding_socket']},{item['outstanding_reqid']}) "
             f"new=({item['incoming_socket']},{item['incoming_reqid']}) "
             f"relation={item['relation']}")
-        hints = item["old_chain_hints"]
-        print("  old_chain " + " ".join(
-            f"{key}={int(value)}" for key, value in hints.items()))
-        print("  event_counts " + json.dumps(item["event_counts"], sort_keys=True))
-        for event in item["evidence"]:
-            print(f"  {event['kind']} {event['file']}:{event['line']}: {event['text']}")
+        for label in ("old_chain", "new_chain"):
+            chain = item[label]
+            print(f"  {label} " + " ".join(
+                f"{key}={int(value)}" for key, value in chain["hints"].items()))
+            print(f"  {label}_counts " +
+                  json.dumps(chain["event_counts"], sort_keys=True))
+            for event in chain["evidence"]:
+                print(f"  {label} {event['kind']} {event['file']}:"
+                      f"{event['line']}: {event['text']}")
 
     if not mismatches:
         return 1
