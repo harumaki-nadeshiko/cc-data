@@ -3572,7 +3572,12 @@ main(int argc, char **argv)
                         Message *fwd = AllocateSendMessage(netPort, tick);
                         if (fwd) {
                             CopyMessage(fwd, m);
-                            SetMessageTargetId(fwd, gidOf(leaderNode, 0));
+                            // CopyMessage preserves the gem5-local envelope.
+                            // This UBIO plane is the real network source and
+                            // the computed leader plane is the real target.
+                            SetMessageSourceId(fwd, gidOf(nid, sid));
+                            SetMessageTargetId(
+                                fwd, gidOf(leaderNode, leaderSocket));
                             SendMessage(netPort, fwd);
                         }
                     }
