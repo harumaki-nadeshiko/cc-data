@@ -3395,6 +3395,58 @@ main(int argc, char **argv)
         }
         networkExitLastSendMs = peerExitNowMs();
     };
+    struct ReliableResponse {
+        CoherenceMessage message;
+        uint32_t targetGid = 0;
+        uint64_t attempts = 0;
+    };
+    static constexpr size_t kMaxReliableResponses = 8192;
+    std::deque<ReliableResponse> reliableResponses;
+    auto sendNetworkResponse = [&](const CoherenceMessage &response,
+                                   uint32_t targetGid) {
+        if (!reliableResponses.empty()) {
+            panic_if(reliableResponses.size() >= kMaxReliableResponses,
+                     "reliable response queue full type={} reqId={}",
+                     coherenceMsgTypeName(response.h.type), response.h.reqId);
+            reliableResponses.push_back({response, targetGid, 0});
+            return;
+        }
+        if (sendCoh(netPort, tick, gidOf(nid, sid), targetGid,
+                    response, true)) {
+            return;
+        }
+        panic_if(reliableResponses.size() >= kMaxReliableResponses,
+                 "reliable response queue full type={} reqId={}",
+                 coherenceMsgTypeName(response.h.type), response.h.reqId);
+        reliableResponses.push_back({response, targetGid, 1});
+        LogWarn("UBIO", "[UBIO-RESP-QUEUED] local={}:{} type={} reqId={} "
+                "target={} depth={} reason=send_failed", nid, sid,
+                coherenceMsgTypeName(response.h.type), response.h.reqId,
+                targetGid, reliableResponses.size());
+    };
+    auto drainReliableResponses = [&]() {
+        while (!reliableResponses.empty()) {
+            ReliableResponse &pending = reliableResponses.front();
+            ++pending.attempts;
+            if (!sendCoh(netPort, tick, gidOf(nid, sid), pending.targetGid,
+                         pending.message, true)) {
+                if (logPeerExitAttempt(pending.attempts)) {
+                    LogWarn("UBIO", "[UBIO-RESP-RETRY] local={}:{} type={} "
+                            "reqId={} target={} attempt={} depth={}", nid, sid,
+                            coherenceMsgTypeName(pending.message.h.type),
+                            pending.message.h.reqId, pending.targetGid,
+                            pending.attempts, reliableResponses.size());
+                }
+                break;
+            }
+            LogInfo("UBIO", "[UBIO-RESP-SENT] local={}:{} type={} reqId={} "
+                    "target={} attempts={} remaining={}", nid, sid,
+                    coherenceMsgTypeName(pending.message.h.type),
+                    pending.message.h.reqId, pending.targetGid,
+                    pending.attempts, reliableResponses.size() - 1);
+            reliableResponses.pop_front();
+        }
+    };
     using BarrierKey = std::pair<uint32_t, uint32_t>;
     static constexpr size_t kMaxBarrierPlanes = 32;
     static constexpr size_t kMaxQueuedBarrierGenerations = 4;
@@ -3933,8 +3985,8 @@ main(int argc, char **argv)
                                          coh->h.srcNode, coh->h.srcSocket);
                         }
                         // Response returns to the requester's (node, socket) plane.
-                        sendCoh(netPort, tick, gidOf(nid, sid),
-                                gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
+                        sendNetworkResponse(
+                            response, gidOf(coh->h.srcNode, coh->h.srcSocket));
                     } else if (!handled && isGem5Ingress(coh->h.type)) {
                         if (gem5Done && coh->h.type == CoherenceMessageType::RecallReq) {
                             // gem5 已退出，无法处理 RECALL。合成 RecallResp 返回给 home。
@@ -4096,11 +4148,15 @@ main(int argc, char **argv)
                     const uint32_t targetGid = fromNetwork
                         ? gidOf(coh->h.srcNode, coh->h.srcSocket)
                         : gidOf(nid, sid);
-                    panic_if(!sendCoh(out, tick, gidOf(nid, sid),
-                                      targetGid, response, fromNetwork),
-                             "response send failed type={} reqId={} targetGid={}",
-                             coherenceMsgTypeName(response.h.type),
-                             response.h.reqId, targetGid);
+                    if (fromNetwork) {
+                        sendNetworkResponse(response, targetGid);
+                    } else {
+                        panic_if(!sendCoh(out, tick, gidOf(nid, sid),
+                                          targetGid, response, false),
+                                  "response send failed type={} reqId={} targetGid={}",
+                                  coherenceMsgTypeName(response.h.type),
+                                  response.h.reqId, targetGid);
+                    }
                 }
             }
 
@@ -4116,6 +4172,7 @@ main(int argc, char **argv)
         if (!gem5Done) EmitSync(gem5Port, tick);
         if (loop_count <= 5) { LogDebug("UBIO", "[UBIO-POST-EMIT] tick={}", tick); }
         if (netPort && !netDone) EmitSync(netPort, tick);
+        if (netPort && !netDone) drainReliableResponses();
 
         // 2. Drain all ready messages from each port
         if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
