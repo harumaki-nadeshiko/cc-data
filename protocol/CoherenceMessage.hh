@@ -150,6 +150,7 @@ enum CoherenceMessageFlags : uint32_t {
     CFLAG_DATA_FORWARDED  = 1u << 7,  // C4: data was direct-forwarded from owner to requester
     CFLAG_PEER_EXIT_ACK   = 1u << 8,  // PeerExit ACK; clear means Notify
     CFLAG_NETWORK_EXIT_ACK = 1u << 9, // NetworkExit ACK; clear means Request
+    CFLAG_DEFERRED         = 1u << 10, // Request accepted into deferred replay
 };
 
 // ---- Message Header (fixed envelope) ----

@@ -2612,11 +2612,26 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
             static_cast<UBCC_UpgradeCause>(msg.b.upgradeReq.cause),
             &notSharer, &deferred, msg.h.srcSocket);
         if (deferred) {
-            // Resident fill/capacity replay owns the eventual response. Sending
-            // a temporary reject here makes the requester allocate a new reqId
-            // while replay can silently accept the old one, orphaning the home
-            // outstanding forever.
-            hasResponse = false;
+            // Confirm that Home consumed and queued this exact tuple. The
+            // requester keeps the same reqId and does not count this as a
+            // dropped/no-response retry while resident replay owns the eventual
+            // accepted UpgradeResp.
+            response.h.type = CoherenceMessageType::UpgradeResp;
+            response.h.srcNode = nid;
+            response.h.srcSocket = sid;
+            response.h.dstNode = msg.h.srcNode;
+            response.h.dstSocket = msg.h.srcSocket;
+            response.h.homeLinePa = msg.h.homeLinePa;
+            response.h.epoch = msg.h.epoch;
+            response.h.reqId = msg.h.reqId;
+            response.h.flags = static_cast<uint32_t>(CFLAG_DEFERRED);
+            response.b.upgradeResp.upgradeTargetMask = 0;
+            response.b.upgradeResp.committedEpoch =
+                ubcc.getEpochForLine(msg.h.homeLinePa);
+            hasResponse = true;
+            LogInfo("UBIO", "[UPGRADE-DEFERRED-RESP] home={}:{} requester={}:{} "
+                    "pa=0x{:x} epoch={} reqId={}", nid, sid, msg.h.srcNode,
+                    msg.h.srcSocket, msg.h.homeLinePa, msg.h.epoch, msg.h.reqId);
             return true;
         }
         response.h.type = CoherenceMessageType::UpgradeResp;

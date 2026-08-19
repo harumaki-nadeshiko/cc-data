@@ -49,6 +49,11 @@ CLEAR_CHAIN_PATTERNS = {
     "clear_commit": re.compile(r"commitIntendedResult.*path=Clear"),
     "clear_response": re.compile(r"ClearResp|\[CLR-CACHE-HIT\]"),
     "pending_key_drift": re.compile(r"PENDING-GRANT-KEY-DRIFT"),
+    "upgrade_req": re.compile(r"(?:SEND|RECV|FWD).*UpgradeReq|processOuterUpgradeReq"),
+    "upgrade_deferred_home": re.compile(r"UPGRADE-DEFERRED-RESP"),
+    "upgrade_deferred_requester": re.compile(r"UPGRADE-HOME-DEFERRED"),
+    "upgrade_resp": re.compile(r"(?:SEND|RECV|FWD).*UpgradeResp|ADAPTER-GOT-RESP.*UpgradeResp"),
+    "upgrade_terminal": re.compile(r"EPRNF-UPGRADE-TERMINAL"),
 }
 
 ISSUE_PATTERNS = {
