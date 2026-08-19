@@ -2622,6 +2622,13 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 _nodeId, line_pa);
         return true;
     }
+    if (ost->reqId != reqId) {
+        framework::LogWarn("UBCC",
+                "UBCC node_id={}: processInvalidationAck PA=0x{:x} "
+                "reqId mismatch: active={} incoming={} - dropped",
+                _nodeId, line_pa, ost->reqId, reqId);
+        return false;
+    }
 
     // upgrade_invalidate_fix: accept both INVALIDATE and UPGRADE_PENDING (WAITING_ALL_ACKS)
     bool isUpgradePath = (ost->opType == OpType::UPGRADE_PENDING &&
@@ -2748,8 +2755,11 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             CoherenceMessage notifyMsg;
             notifyMsg.h.type = CoherenceMessageType::UpgradeAckNotify;
             notifyMsg.h.srcNode = _nodeId;
+            notifyMsg.h.srcSocket = _socketId;
             notifyMsg.h.dstNode = ost->requesterNode;
+            notifyMsg.h.dstSocket = ost->requesterSocket;
             notifyMsg.h.homeNode = _nodeId;
+            notifyMsg.h.homeSocket = _socketId;
             notifyMsg.h.requesterNode = ost->requesterNode;
             notifyMsg.h.homeLinePa = line_pa;
             notifyMsg.h.epoch = ost->reservedEpoch;
@@ -2759,19 +2769,56 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             notifyMsg.h.seqNum = 0;
             notifyMsg.h.enqueueTick = curTick();
             notifyMsg.h.readyTick = curTick();
+
+            const int requesterNode = ost->requesterNode;
+            const int requesterSocket = ost->requesterSocket;
+            const uint64_t baseEpoch = ost->baseEpoch;
+            const uint64_t reservedEpoch = ost->reservedEpoch;
+            const uint64_t activeReqId = ost->reqId;
+            const bool cachedDone = ost->upgradeDoneArrived;
             _outbound->sendUpgradeAckNotify(notifyMsg);
 
-            // TENTATIVE: if Done arrived early (upgradeDoneArrived), auto-commit now
-            if (ost->upgradeDoneArrived) {
+            // The notification may synchronously re-enter UpgradeDone and
+            // retire this outstanding. Reacquire and validate the tuple before
+            // acting on a cached early Done.
+            OutstandingRequest *current = findOutstanding(line_pa);
+            if (!current)
+                return true;
+            if (current->opType != OpType::UPGRADE_PENDING ||
+                current->stage != OpStage::WAITING_LOCAL_DONE ||
+                current->requesterNode != requesterNode ||
+                current->requesterSocket != requesterSocket ||
+                current->baseEpoch != baseEpoch ||
+                current->reservedEpoch != reservedEpoch ||
+                current->reqId != activeReqId) {
+                framework::LogWarn("UBCC",
+                        "UpgradeAckNotify callback changed active tuple "
+                        "PA=0x{:x}; old reqId={} new reqId={}",
+                        line_pa, activeReqId, current->reqId);
+                return true;
+            }
+
+            if (cachedDone) {
+                panic_if(current->upgradeDoneEpoch != current->baseEpoch ||
+                         current->upgradeDoneReqId != current->reqId,
+                         "cached UpgradeDone tuple changed PA=0x{:x} "
+                         "cachedEpoch={} baseEpoch={} cachedReqId={} reqId={}",
+                         line_pa, current->upgradeDoneEpoch,
+                         current->baseEpoch, current->upgradeDoneReqId,
+                         current->reqId);
                 framework::LogInfo("UBCC","[UPGRADE-TENTATIVE-DONE-CACHED] pa=0x{:x} requester={} "
                        "committing after acks complete (Done was cached)",
-                       line_pa, ost->requesterNode);
-                int intendedOwner = ost->intendedOwnerNode;
-                uint64_t reservedEp = ost->reservedEpoch;
-                commitIntendedResult(entry, *ost);
-                _directory.update(line_pa, entry);
-                ost->stage = OpStage::DONE;
-                ost->respTick = curTick();
+                       line_pa, current->requesterNode);
+                int intendedOwner = current->intendedOwnerNode;
+                uint64_t reservedEp = current->reservedEpoch;
+                DirEntry currentEntry;
+                panic_if(!_directory.lookup(line_pa, currentEntry),
+                         "cached UpgradeDone lost directory entry PA=0x{:x}",
+                         line_pa);
+                commitIntendedResult(currentEntry, *current);
+                _directory.update(line_pa, currentEntry);
+                current->stage = OpStage::DONE;
+                current->respTick = curTick();
                 removeOutstanding(line_pa);
                 refreshPinnedBit(line_pa);
 
@@ -2783,6 +2830,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 replayResidentWaiters(line_pa);
                 replayResidentWaitersForCapacity(line_pa);
             }
+            return true;
         } else if (isNaiveEvictPath) {
             removeOutstanding(line_pa);
             _directory.forceRemove(line_pa);
@@ -3556,9 +3604,13 @@ UBCCController::processOuterUpgradeDone(
     }
 
     // Verify matching tuple
-    if (ost->requesterNode != requesterNode) {
-        warn("UBCC node_id={}: UpgradeDone requester mismatch PA=0x{:x}",
-             _nodeId, line_pa);
+    if (ost->requesterNode != requesterNode ||
+        normalizeEpoch(ost->baseEpoch) != epoch || ost->reqId != reqId) {
+        warn("UBCC node_id={}: UpgradeDone tuple mismatch PA=0x{:x} "
+             "incoming requester={} epoch={} reqId={} active requester={} "
+             "baseEpoch={} reqId={} - dropped",
+             _nodeId, line_pa, requesterNode, epoch, reqId,
+             ost->requesterNode, normalizeEpoch(ost->baseEpoch), ost->reqId);
         return false;
     }
 
@@ -3723,31 +3775,6 @@ UBCCController::processClear(
         return false;
     }
 
-    // v4: Verify epoch — the Clear carries the base epoch observed by
-    // requester; the GRANT_HANDSHAKE's reservedEpoch = baseEpoch + 1.
-    // Compare against baseEpoch (not reservedEpoch) for matching.
-    if (normalizeEpoch(ost->baseEpoch) != epoch) {
-        if (_debugClearTrace) {
-            framework::LogError("UBCC",
-                         "[DEBUG-TC5-CLEAR-TRACE] processClearDrop home={} pa=0x{:x} src={} "
-                         "reason=epoch_mismatch ostBase={} clear={}",
-                         _nodeId, line_pa, srcNode,
-                         normalizeEpoch(ost->baseEpoch), epoch);
-            framework::LogError("UBCC",
-                         "[DEBUG-UBCC-CLEAR] drop home={} pa=0x{:x} reason=epoch_mismatch ostBase={} clear={} reqId={}",
-                         _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch, reqId);
-        }
-        warn("UBCC node_id={}: processClear PA=0x{:x} "
-               "epoch mismatch: ost_base={} clear={} - dropping, "
-               "retiring stale GRANT_HANDSHAKE",
-              _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch);
-        // v4 D-18: Retire stale GRANT_HANDSHAKE so it doesn't block
-        // future RECALL/INVALIDATE creation for this PA.
-        retireToTombstone(*ost, false);
-        removeOutstanding(line_pa);
-        return false;
-    }
-
     // Verify reqId match
     if (ost->reqId != reqId) {
         if (_debugClearTrace) {
@@ -3797,6 +3824,18 @@ UBCCController::processClear(
         warn("UBCC node_id={}: processClear PA=0x{:x} "
                "stage mismatch: expected WAITING_CLEAR got {} - dropped",
               _nodeId, line_pa, static_cast<int>(ost->stage));
+        return false;
+    }
+
+    // The message now matches the active requester/reqId/stage tuple. An epoch
+    // mismatch belongs to this transaction rather than an unrelated stale
+    // Clear, so retire the failed grant to preserve the existing recovery path.
+    if (normalizeEpoch(ost->baseEpoch) != epoch) {
+        warn("UBCC node_id={}: processClear PA=0x{:x} "
+             "epoch mismatch for active tuple: ost_base={} clear={} - retiring",
+             _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch);
+        retireToTombstone(*ost, false);
+        removeOutstanding(line_pa);
         return false;
     }
 

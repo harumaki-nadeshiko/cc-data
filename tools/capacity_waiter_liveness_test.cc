@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <vector>
 
 using namespace cc::glob;
@@ -41,6 +42,7 @@ class CaptureOutbound final : public UBCCOutboundIf
     std::vector<CoherenceMessage> grants;
     int grantPushAttempts = 0;
     int rejectedGrantPushes = 0;
+    std::function<void(const CoherenceMessage&)> onUpgradeAck;
 
     bool sendRecallReq(const CoherenceMessage &msg) override
     {
@@ -54,7 +56,11 @@ class CaptureOutbound final : public UBCCOutboundIf
         lastInvalidate = msg;
         return true;
     }
-    bool sendUpgradeAckNotify(const CoherenceMessage&) override { return true; }
+    bool sendUpgradeAckNotify(const CoherenceMessage &msg) override
+    {
+        if (onUpgradeAck) onUpgradeAck(msg);
+        return true;
+    }
     bool sendUpgradeResp(const CoherenceMessage&) override { return true; }
     bool sendGrantPush(const CoherenceMessage &msg) override
     {
@@ -339,7 +345,10 @@ main()
     assert(tupleOutstanding->requesterSocket == 0);
     assert(tupleOutstanding->reqId == tupleReqId);
     assert(!tupleUbcc.processClear(
-        tuplePa, 1, tupleClearEpoch, tupleNextReqId));
+        tuplePa, 1, tupleClearEpoch - 1, tupleNextReqId));
+    tupleOutstanding = tupleUbcc.findOutstanding(tuplePa);
+    assert(tupleOutstanding);
+    assert(tupleOutstanding->reqId == tupleReqId);
     assert(tupleUbcc.processClear(
         tuplePa, 1, tupleClearEpoch, tupleReqId));
 
@@ -487,8 +496,18 @@ main()
         1, 0, 1, upgradeWakeTargetReqId)) == -1);
     assert(upgradeWakeOutbound.recallCount == 0);
 
+    assert(!upgradeWakeUbcc.processOuterUpgradeDone(
+        upgradeWakeVictim, 2, upgradeWakeEpoch - 1,
+        upgradeWakeReqId));
+    assert(!upgradeWakeUbcc.processOuterUpgradeDone(
+        upgradeWakeVictim, 2, upgradeWakeEpoch,
+        upgradeWakeReqId + 1));
+    upgradeWakeOutstanding =
+        upgradeWakeUbcc.findOutstanding(upgradeWakeVictim);
+    assert(upgradeWakeOutstanding);
+    assert(!upgradeWakeOutstanding->upgradeDoneArrived);
     assert(upgradeWakeUbcc.processOuterUpgradeDone(
-        upgradeWakeVictim, 2, upgradeWakeReservedEpoch, upgradeWakeReqId));
+        upgradeWakeVictim, 2, upgradeWakeEpoch, upgradeWakeReqId));
     assert(upgradeWakeOutbound.recallCount == 1);
     assert(upgradeWakeOutbound.lastRecall.h.homeLinePa == upgradeWakeVictim);
     assert(upgradeWakeUbcc.processRecallResponse(
@@ -502,6 +521,79 @@ main()
         upgradeWakeTarget, 1,
         upgradeWakeOutbound.grants[0].b.readResp.authEpoch,
         upgradeWakeTargetReqId));
+
+    // The final invalidation ack sends UpgradeAckNotify through an outbound
+    // interface that may synchronously re-enter UpgradeDone. The outer ack
+    // handler must not dereference or commit the retired outstanding again.
+    UBCCController reentrantUbcc(
+        0, 0, nullptr, 64, 0, 0, 1, 3, &clearWakeCfg);
+    HoldBackstoreHost reentrantHost;
+    CaptureOutbound reentrantOutbound;
+    reentrantUbcc.setHost(&reentrantHost);
+    reentrantUbcc.setOutbound(&reentrantOutbound);
+    constexpr uint64_t reentrantPa = 0x10000800;
+    constexpr uint64_t reentrantEpoch = 71;
+    constexpr uint64_t reentrantReqId = 3001;
+    assert(reentrantUbcc.debugSeedResidentForTest(
+        reentrantPa, static_cast<int>(MESIState::G_S),
+        (1ULL << 1) | (1ULL << 2), reentrantEpoch, false));
+    assert(reentrantUbcc.processOuterUpgradeReq(
+        reentrantPa, 2, reentrantEpoch, reentrantReqId, 1,
+        UBCC_UpgradeCause::LocalStoreUpgrade));
+    assert(reentrantOutbound.invalidateCount == 1);
+    bool reentrantDone = false;
+    reentrantOutbound.onUpgradeAck = [&](const CoherenceMessage &msg) {
+        reentrantDone = reentrantUbcc.processOuterUpgradeDone(
+            msg.h.homeLinePa, msg.h.requesterNode,
+            reentrantEpoch, msg.h.reqId);
+    };
+    assert(reentrantUbcc.processInvalidationAck(
+        reentrantPa, 1, reentrantOutbound.lastInvalidate.h.epoch,
+        reentrantOutbound.lastInvalidate.h.reqId));
+    assert(reentrantDone);
+    assert(reentrantUbcc.findOutstanding(reentrantPa) == nullptr);
+    DirEntry reentrantEntry;
+    assert(reentrantUbcc.directory().lookup(reentrantPa, reentrantEntry));
+    assert(reentrantEntry.epoch == reentrantEpoch + 1);
+
+    // The requester may send UpgradeDone before the final invalidation ack.
+    // The cached tuple must commit exactly once before UpgradeAckNotify, and a
+    // callback observing the notification must see no live outstanding.
+    UBCCController cachedDoneUbcc(
+        0, 0, nullptr, 64, 0, 0, 1, 3, &clearWakeCfg);
+    HoldBackstoreHost cachedDoneHost;
+    CaptureOutbound cachedDoneOutbound;
+    cachedDoneUbcc.setHost(&cachedDoneHost);
+    cachedDoneUbcc.setOutbound(&cachedDoneOutbound);
+    constexpr uint64_t cachedDonePa = 0x10000880;
+    constexpr uint64_t cachedDoneEpoch = 81;
+    constexpr uint64_t cachedDoneReqId = 3002;
+    assert(cachedDoneUbcc.debugSeedResidentForTest(
+        cachedDonePa, static_cast<int>(MESIState::G_S),
+        (1ULL << 1) | (1ULL << 2), cachedDoneEpoch, false));
+    assert(cachedDoneUbcc.processOuterUpgradeReq(
+        cachedDonePa, 2, cachedDoneEpoch, cachedDoneReqId, 1,
+        UBCC_UpgradeCause::LocalStoreUpgrade));
+    assert(cachedDoneUbcc.processOuterUpgradeDone(
+        cachedDonePa, 2, cachedDoneEpoch, cachedDoneReqId));
+    OutstandingRequest *cachedOutstanding =
+        cachedDoneUbcc.findOutstanding(cachedDonePa);
+    assert(cachedOutstanding);
+    assert(cachedOutstanding->upgradeDoneArrived);
+    bool cachedDoneReentered = false;
+    cachedDoneOutbound.onUpgradeAck = [&](const CoherenceMessage &msg) {
+        cachedDoneReentered = cachedDoneUbcc.processOuterUpgradeDone(
+            msg.h.homeLinePa, msg.h.requesterNode,
+            cachedDoneEpoch, msg.h.reqId);
+    };
+    assert(cachedDoneUbcc.processInvalidationAck(
+        cachedDonePa, 1, cachedDoneOutbound.lastInvalidate.h.epoch,
+        cachedDoneOutbound.lastInvalidate.h.reqId));
+    assert(cachedDoneReentered);
+    assert(cachedDoneUbcc.findOutstanding(cachedDonePa) == nullptr);
+    DirEntry cachedDoneEntry;
+    assert(cachedDoneUbcc.directory().lookup(cachedDonePa, cachedDoneEntry));
+    assert(cachedDoneEntry.epoch == cachedDoneEpoch + 1);
 
     std::fprintf(stderr, "capacity waiter liveness regression passed\n");
     return 0;
