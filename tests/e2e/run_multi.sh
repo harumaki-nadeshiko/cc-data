@@ -731,9 +731,14 @@ run_tc() {
     local nsim_pid_file="$child_status_dir/networksim.pid"
     rm -f "$nsim_pid_file"
     echo "[launch] networksim (NMOD=$NMOD)"
+    local nsim_extra_args=()
+    if [ "${NSIM_TRACE_ALL_FORWARDED:-0}" = "1" ]; then
+        nsim_extra_args+=(--trace-all-forwarded)
+    fi
     (
       set +e
       "$NSIM_BIN" "$TOPO_JSON" "$NUM_NODES" "$NUM_SOCKETS" \
+          "${nsim_extra_args[@]}" \
           >"$LOG_BASE/nsim_tc${tc}.log" 2>&1 &
       local_nsim_child=$!
       printf '%s\n' "$local_nsim_child" >"$nsim_pid_file"

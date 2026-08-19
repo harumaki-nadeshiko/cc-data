@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that every UBIO plane completed the PeerExit handshake."""
+"""Verify PeerExit and application-level UBIO/networksim shutdown."""
 import argparse
 import pathlib
 import re
@@ -13,6 +13,18 @@ QUIESCE_RE = re.compile(
     r"\[PEER-EXIT-QUIESCE\] local=(\d+):(\d+) exitId=(\d+) acked=(\d+)/(\d+)")
 CLOSE_RE = re.compile(
     r"\[PEER-EXIT-CLOSE\] local=(\d+):(\d+) exitId=(\d+)")
+NETWORK_EXIT_REQUEST_RE = re.compile(
+    r"\[NETWORK-EXIT-REQUEST-SEND\] local=(\d+):(\d+) exitId=(\d+) "
+    r"attempt=(\d+) sent=([01])")
+NETWORK_EXIT_ACK_RE = re.compile(
+    r"\[NETWORK-EXIT-ACK-RECV\] local=(\d+):(\d+) exitId=(\d+) "
+    r"attempts=(\d+)")
+NSIM_NETWORK_EXIT_REQUEST_RE = re.compile(
+    r"\[NSIM-NETWORK-EXIT-REQUEST-RECV\] mod=(\d+) exitId=(\d+) "
+    r"requests=(\d+)/(\d+)(?: serial=\d+)? tick=(\d+)")
+NSIM_NETWORK_EXIT_ACK_RE = re.compile(
+    r"\[NSIM-NETWORK-EXIT-ACK-SEND\] mod=(\d+) exitId=(\d+) sent=([01]) "
+    r"fifo=(\d+) tick=(\d+)")
 NOTIFY_RECV_RE = re.compile(
     r"\[PEER-EXIT-NOTIFY-RECV\] local=(\d+):(\d+) peer=(\d+):(\d+) "
     r"exitId=(\d+)")
@@ -53,6 +65,8 @@ def main():
         starts = START_RE.findall(text)
         quiesces = QUIESCE_RE.findall(text)
         closes = CLOSE_RE.findall(text)
+        network_exit_requests = NETWORK_EXIT_REQUEST_RE.findall(text)
+        network_exit_acks = NETWORK_EXIT_ACK_RE.findall(text)
         ack_receives = ACK_RECV_RE.findall(text)
         path_match = PATH_RE.fullmatch(path.parent.name)
         path_plane = path_match.groups() if path_match else None
@@ -75,6 +89,11 @@ def main():
                 f"{path}: acked={quiesces[0][3]}/{quiesces[0][4]}")
         if len(closes) != 1:
             failures.append(f"{path}: CLOSE count={len(closes)}")
+        if not network_exit_requests:
+            failures.append(f"{path}: NETWORK-EXIT-REQUEST-SEND count=0")
+        if len(network_exit_acks) != 1:
+            failures.append(
+                f"{path}: NETWORK-EXIT-ACK-RECV count={len(network_exit_acks)}")
         if len(quiesces) == 1 and len(closes) == 1:
             start_id = starts[0][2]
             start_required = int(starts[0][3])
@@ -121,8 +140,29 @@ def main():
                     f"{path}: ACK set mismatch expected={sorted(expected_required)} "
                     f"actual={sorted(matching_ack_peers)}")
             lifecycle.append((path, start_local, start_id, text))
+            if network_exit_requests:
+                request_identities = {request[:3] for request in network_exit_requests}
+                if request_identities != {closes[0]}:
+                    failures.append(
+                        f"{path}: NetworkExit Request identity differs from CLOSE")
+                close_position = text.find("[PEER-EXIT-CLOSE]")
+                request_position = text.find("[NETWORK-EXIT-REQUEST-SEND]")
+                if request_position <= close_position:
+                    failures.append(
+                        f"{path}: NetworkExit Request precedes PeerExit CLOSE")
+            if len(network_exit_acks) == 1:
+                if network_exit_acks[0][:3] != closes[0]:
+                    failures.append(
+                        f"{path}: NetworkExit ACK identity differs from CLOSE")
+                close_position = text.find("[PEER-EXIT-CLOSE]")
+                ack_position = text.find("[NETWORK-EXIT-ACK-RECV]")
+                if ack_position <= close_position:
+                    failures.append(
+                        f"{path}: NetworkExit ACK precedes PeerExit CLOSE")
         if "[PEER-EXIT-WARN]" in text:
             failures.append(f"{path}: contains PEER-EXIT-WARN")
+        if "[NETWORK-EXIT-WARN]" in text:
+            failures.append(f"{path}: contains NETWORK-EXIT-WARN")
 
     if observed_planes != expected_planes:
         failures.append(
@@ -141,12 +181,64 @@ def main():
         if positions != sorted(positions):
             failures.append(f"{path}: lifecycle order is not START/QUIESCE/CLOSE")
 
+    nsim_path = root / f"nsim_tc{args.tc}.log"
+    if not nsim_path.is_file():
+        failures.append(f"{nsim_path}: missing networksim log")
+    else:
+        nsim_text = nsim_path.read_text(errors="replace")
+        nsim_requests = NSIM_NETWORK_EXIT_REQUEST_RE.findall(nsim_text)
+        nsim_acks = NSIM_NETWORK_EXIT_ACK_RE.findall(nsim_text)
+        expected_mods = {str(mod) for mod in range(plane_count)}
+        request_mods = {entry[0] for entry in nsim_requests}
+        successful_acks = [entry for entry in nsim_acks if entry[2] == "1"]
+        ack_mods = {entry[0] for entry in successful_acks}
+        full_request_matches = [
+            match for match in NSIM_NETWORK_EXIT_REQUEST_RE.finditer(nsim_text)
+            if int(match.group(3)) == plane_count and
+               int(match.group(4)) == plane_count
+        ]
+        if not full_request_matches:
+            failures.append(
+                f"{nsim_path}: missing requests={plane_count}/{plane_count} "
+                "drain barrier")
+        else:
+            full_request_position = full_request_matches[0].start()
+            for ack_match in NSIM_NETWORK_EXIT_ACK_RE.finditer(nsim_text):
+                if ack_match.group(3) == "1" and \
+                        ack_match.start() < full_request_position:
+                    failures.append(
+                        f"{nsim_path}: NetworkExit ACK precedes full request "
+                        "barrier")
+                    break
+        if request_mods != expected_mods:
+            failures.append(
+                f"{nsim_path}: NetworkExit Request mod set mismatch "
+                f"expected={sorted(expected_mods)} actual={sorted(request_mods)}")
+        if ack_mods != expected_mods:
+            failures.append(
+                f"{nsim_path}: NetworkExit ACK mod set mismatch "
+                f"expected={sorted(expected_mods)} actual={sorted(ack_mods)}")
+        for ack in successful_acks:
+            if int(ack[3]) != 0:
+                failures.append(
+                    f"{nsim_path}: NetworkExit ACK mod={ack[0]} sent with "
+                    f"fifo={ack[3]}")
+        request_ids = {entry[0]: entry[1] for entry in nsim_requests}
+        ack_ids = {entry[0]: entry[1] for entry in successful_acks}
+        if ack_ids != request_ids:
+            failures.append(
+                f"{nsim_path}: NetworkExit ACK nonce map differs from Requests")
+        if "[NSIM-NETWORK-EXIT-WARN]" in nsim_text:
+            failures.append(f"{nsim_path}: contains NSIM-NETWORK-EXIT-WARN")
+
     if failures:
         print("FAIL: PeerExit log contract")
         for failure in failures:
             print(failure)
         return 1
-    print(f"PASS: TC{args.tc} PeerExit closed {len(logs)}/{plane_count} planes")
+    print(
+        f"PASS: TC{args.tc} PeerExit closed and NetworkExit ACK completed on "
+        f"{len(logs)}/{plane_count} planes")
     return 0
 
 
