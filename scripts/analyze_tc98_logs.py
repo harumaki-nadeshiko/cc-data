@@ -35,7 +35,13 @@ REQID_RE = re.compile(r"(?:reqId|requestId)=(0x[0-9a-fA-F]+|\d+)")
 
 CLEAR_CHAIN_PATTERNS = {
     "grant_ready": re.compile(r"\[(?:UBCC-GRANT-READY|ADAPTER-GOT-RESP)\]"),
-    "pending_grant_saved": re.compile(r"savePendingGrantTxn|phase=grant_received"),
+    "pending_read_saved": re.compile(r"PENDING-READ-SAVE"),
+    "pending_read_hit": re.compile(r"PENDING-READ-HIT"),
+    "pending_read_conflict": re.compile(r"PENDING-READ-CONFLICT"),
+    "pending_grant_saved": re.compile(r"PENDING-GRANT-SAVE|phase=grant_received"),
+    "pending_grant_erased": re.compile(r"PENDING-GRANT-ERASE"),
+    "pending_grant_overwrite_blocked": re.compile(
+        r"PENDING-GRANT-OVERWRITE-BLOCKED"),
     "clear_send": re.compile(r"\[CLEAR-SEND\]|\[CLR-TX\]|phase=clear_queued"),
     "clear_transport_handoff": re.compile(r"phase=transport_handoff"),
     "network_clear": re.compile(r"(?:TRACE-PERF|NSIM-FWD-ALL).*ClearReq"),
