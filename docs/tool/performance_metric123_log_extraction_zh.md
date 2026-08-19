@@ -27,6 +27,21 @@
 证据，不是原合同指标 1/2 的主矩阵。它不能替代指标 1 的 TC131，或指标 2 的
 TC135-TC140/TC217；可在最终报告附录中单列 service、end-to-end、P99 和吞吐。
 
+当前历史最终归档已经按正式口径复核对齐：
+
+```text
+72 matrix rows
+72 verifier PASS
+576 child exits，全部为0
+指标1容量比 = 1.56640625
+指标1 guest delta = -825.3134890562957 ns/op
+指标2等权平均 = 54.12200730285039%
+```
+
+归档冻结了UBIO、networksim、framework、gem5.opt、runner、verifier和workload源码SHA-256。
+尚缺的是直接记录的main/gem5 commit和Docker image digest；这是provenance身份缺口，不是性能
+marker或公式未对齐。
+
 ## 2. 历史上数字是怎么得到的
 
 ### 2.1 第一代：2026-07 历史报告
@@ -112,7 +127,7 @@ scripts/summarize_2n1s_guest.py
 reduction_pct = (naive_mean_ns - optimized_mean_ns) / naive_mean_ns * 100
 ```
 
-然后只选 naive mean 大于 500 ns 的 case 做等权平均。历史六个 case 为 TC135-TC139、
+然后只选 naive mean 大于等于 500 ns 的 case 做等权平均。历史六个 case 为 TC135-TC139、
 TC217，结果约 54.32%。TC138 的负结果必须保留。
 
 ### 2.2 第二代：m12b Timing/O3 配对矩阵
@@ -206,8 +221,9 @@ verify_tc131.log
 最终 argv、commit、二进制 SHA-256、timer frequency
 ```
 
-解析脚本只需要前三类日志；后四类必须由人工或运行协调器做 correctness/provenance gate。
-不得因为解析脚本返回 PASS 就忽略 verifier 或非零 child exit。
+旧的显式manifest解析脚本只需要前三类日志；后四类必须由人工或运行协调器做
+correctness/provenance gate。新的`analyze_metric12_run_list.py`已经强制嵌入verifier和
+child-exit门禁；commit、最终argv、二进制SHA和镜像digest仍需由运行协调器或外部metadata保存。
 
 ### 3.3 公式
 
@@ -316,6 +332,128 @@ EP-PERF Outer 日志
 特别注意：HA10 名字中的 HA 不表示它是甲方 VI bitmap HA 实测；历史 TC217 日志是 CC reference。
 
 ## 6. 远端人工操作
+
+### 6.0 直接使用三字段 run list
+
+如果远端只能提供一个`list[dict]`，每个dict包含：
+
+```text
+simulator_log_dir
+workload_output_dir
+feature
+```
+
+可以直接使用：
+
+```text
+scripts/analyze_metric12_run_list.py
+```
+
+记录形状示例见：
+
+```text
+scripts/metric12_run_list.example.json
+```
+
+该文件只有两条记录片段，不可直接执行。正式输入必须包含完整72项矩阵。
+
+每个run的目录职责：
+
+```text
+simulator_log_dir:
+  Home UBIO stdout/stderr
+  verify_tc*.log
+  child_status*/**.exit
+
+workload_output_dir:
+  node0/simout_n0
+  node1/simout_n1
+  ...
+
+feature:
+  描述target、round、TC、topology和profile的字符串
+```
+
+默认feature格式是分号分隔的`key=value`：
+
+```text
+target=target1;round=1;case=TC131;topology=8n1s;profile=naive
+target=target2;round=1;case=TC135;topology=3n1s;profile=optimized
+```
+
+执行：
+
+```bash
+python3 scripts/analyze_metric12_run_list.py \
+  --input metric12_runs.json \
+  --out-dir metric12_report \
+  --min-rounds 3 \
+  --hash-inputs
+```
+
+输出：
+
+```text
+metric12_report/performance_comparison.json
+metric12_report/performance_comparison.md
+metric12_report/resolved_runs.json
+metric12_report/target2_samples.csv
+```
+
+该工具的主体是`Metric12RunListAnalyzer`类。远端若使用类似：
+
+```text
+PERF-B-TC132-3n1s-spill
+```
+
+的自定义标签，不要修改分析主体。继承该类并覆盖：
+
+```python
+def parse_feature(self, feature: str) -> RunFeature:
+    ...
+```
+
+占位示例：
+
+```text
+scripts/metric12_custom_feature_parser.example.py
+```
+
+加载自定义类：
+
+```bash
+python3 scripts/analyze_metric12_run_list.py \
+  --input metric12_runs.json \
+  --analyzer scripts/metric12_custom_feature_parser.example.py:RemoteMetric12Analyzer \
+  --out-dir metric12_report \
+  --min-rounds 3 \
+  --hash-inputs
+```
+
+正式门禁：
+
+```text
+指标1必须是TC131/8N1S
+指标2的TC135-TC140必须是3N1S
+指标2的TC217必须是2N1S
+TC131必须精确取得node1/node2的目标GUEST-TIMER
+指标2每个run的目标PERF-LATENCY必须全目录唯一
+指标2 marker node和samples必须符合各TC正式合同
+timer source必须是arm_cntvct_el0，unit必须是counter_ticks
+必须有唯一verifier，且最后一个非空行是明确PASS sentinel
+child status文件名必须精确覆盖当前TC全部gem5/UBIO/networksim，且值全0
+三轮和三profile必须完整
+指标2适用规则为naive mean >= 500ns
+TC138等负结果不得删除
+```
+
+退出码：
+
+```text
+0: 证据有效且指标1/2均PASS
+1: 证据有效但至少一个指标未达到门槛
+2: 输入schema、feature、目录、marker、verifier或child-exit无效
+```
 
 ### 6.1 准备四个脚本和一个模板
 
