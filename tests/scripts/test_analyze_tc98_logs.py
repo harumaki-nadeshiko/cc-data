@@ -70,6 +70,9 @@ class AnalyzeTc98LogsTest(unittest.TestCase):
             for mod in range(16))
         self.write(self.root / "nsim_tc98.log", nsim)
         self.write(self.root / "verify_tc98.log", ">>> TC98 PASSED <<<\n")
+        self.write(
+            self.root / "gem5_tc98_node0" / "stderr.log",
+            "[EPBACKEND-PROFILE] node=0 clear_profile=ack reliability=clear-ack\n")
         child = self.root / "child_status_tc98"
         for node in range(8):
             self.write(child / f"gem5_node{node}.exit", "0\n")
@@ -114,6 +117,24 @@ class AnalyzeTc98LogsTest(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["progress"]["complete_planes"], 16)
         self.assertEqual(report["done_markers"]["match"], 16)
+
+    def test_tuple_mismatch_clear_chain(self):
+        self.add_common()
+        ubio = self.root / "ubio_tc98_n0_s0" / "stdout.log"
+        with ubio.open("a") as stream:
+            stream.write(
+                "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x10007800 "
+                "requester=2 incomingSocket=0 incomingReqId=5 "
+                "outstandingSocket=0 outstandingReqId=4\n")
+            stream.write("[CLEAR-SEND] node=2 reqId=4\n")
+            stream.write("[HOME-CLEAR-COMMIT] home=0 reqId=4\n")
+        report = self.analyze()
+        top = report["grant_retry_tuple_mismatches"]["top"]
+        self.assertEqual(top["count"], 1)
+        self.assertEqual(top["outstanding_reqid"], 4)
+        self.assertEqual(top["incoming_reqid"], 5)
+        self.assertEqual(top["outstanding_clear_chain"]["clear_send"], 1)
+        self.assertEqual(top["outstanding_clear_chain"]["home_clear"], 1)
 
 
 if __name__ == "__main__":

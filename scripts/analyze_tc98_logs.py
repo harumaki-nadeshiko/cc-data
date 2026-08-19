@@ -25,6 +25,25 @@ UBIO_PATH_RE = re.compile(r"ubio_tc\d+_n(\d+)_s(\d+)")
 PEER_CLOSE_RE = re.compile(r"\[PEER-EXIT-CLOSE\] local=(\d+):(\d+)")
 NETWORK_ACK_RE = re.compile(r"\[NETWORK-EXIT-ACK-RECV\] local=(\d+):(\d+)")
 NSIM_ACK_RE = re.compile(r"\[NSIM-NETWORK-EXIT-ACK-SEND\] mod=(\d+).+sent=1 fifo=0")
+PROFILE_RE = re.compile(r"\[EPBACKEND-PROFILE\].*clear_profile=([^\s]+)")
+GRANT_MISMATCH_RE = re.compile(
+    r"\[UBCC-GRANT-RETRY-TUPLE-MISMATCH\].*home=(\d+).*"
+    r"pa=0x([0-9a-fA-F]+).*requester=(\d+).*incomingSocket=(\d+).*"
+    r"incomingReqId=(0x[0-9a-fA-F]+|\d+).*outstandingSocket=(\d+).*"
+    r"outstandingReqId=(0x[0-9a-fA-F]+|\d+)")
+REQID_RE = re.compile(r"(?:reqId|requestId)=(0x[0-9a-fA-F]+|\d+)")
+
+CLEAR_CHAIN_PATTERNS = {
+    "grant_ready": re.compile(r"\[(?:UBCC-GRANT-READY|ADAPTER-GOT-RESP)\]"),
+    "pending_grant_saved": re.compile(r"savePendingGrantTxn|phase=grant_received"),
+    "clear_send": re.compile(r"\[CLEAR-SEND\]|\[CLR-TX\]|phase=clear_queued"),
+    "clear_transport_handoff": re.compile(r"phase=transport_handoff"),
+    "network_clear": re.compile(r"(?:TRACE-PERF|NSIM-FWD-ALL).*ClearReq"),
+    "home_clear": re.compile(r"\[HOME-CLEAR-COMMIT\]|processClear"),
+    "clear_commit": re.compile(r"commitIntendedResult.*path=Clear"),
+    "clear_response": re.compile(r"ClearResp|\[CLR-CACHE-HIT\]"),
+    "pending_key_drift": re.compile(r"PENDING-GRANT-KEY-DRIFT"),
+}
 
 ISSUE_PATTERNS = {
     "epoch_decreased": re.compile(r"epoch DECREASED"),
@@ -91,6 +110,9 @@ def analyze(args):
     commits = defaultdict(list)
     commit_owners = defaultdict(Counter)
     commit_paths = Counter()
+    clear_profiles = Counter()
+    grant_mismatches = Counter()
+    clear_chain = defaultdict(Counter)
     issues = Counter()
     issue_samples = defaultdict(list)
     protocol = Counter()
@@ -126,6 +148,27 @@ def analyze(args):
                 if match:
                     key = (int(match.group(1)), int(match.group(2)))
                     progress[key] = max(progress.get(key, -1), int(match.group(3)))
+
+                match = PROFILE_RE.search(line)
+                if match:
+                    clear_profiles[match.group(1)] += 1
+
+                match = GRANT_MISMATCH_RE.search(line)
+                if match:
+                    key = (
+                        int(match.group(1)), int(match.group(2), 16),
+                        int(match.group(3)), int(match.group(4)),
+                        int(match.group(5), 0), int(match.group(6)),
+                        int(match.group(7), 0),
+                    )
+                    grant_mismatches[key] += 1
+
+                reqids = {int(value, 0) for value in REQID_RE.findall(line)}
+                if reqids:
+                    for stage, pattern in CLEAR_CHAIN_PATTERNS.items():
+                        if pattern.search(line):
+                            for reqid in reqids:
+                                clear_chain[reqid][stage] += 1
 
                 match = READ_RE.search(line)
                 if match:
@@ -257,6 +300,23 @@ def analyze(args):
         status = "INCOMPLETE"
 
     recommendations = []
+    top_mismatch = None
+    if grant_mismatches:
+        key, count = grant_mismatches.most_common(1)[0]
+        (home, pa, requester, incoming_socket, incoming_reqid,
+         outstanding_socket, outstanding_reqid) = key
+        top_mismatch = {
+            "count": count,
+            "home": home,
+            "pa": f"0x{pa:x}",
+            "requester": requester,
+            "incoming_socket": incoming_socket,
+            "incoming_reqid": incoming_reqid,
+            "outstanding_socket": outstanding_socket,
+            "outstanding_reqid": outstanding_reqid,
+            "outstanding_clear_chain": dict(clear_chain[outstanding_reqid]),
+            "incoming_clear_chain": dict(clear_chain[incoming_reqid]),
+        }
     if status == "PASS":
         recommendations.append("TC98 completed normally; no recovery action is needed.")
     if issues["epoch_decreased"] or epoch_drops:
@@ -277,6 +337,14 @@ def analyze(args):
     if status == "INCOMPLETE":
         recommendations.append(
             "Evidence is incomplete; preserve verify, simout, UBIO, networksim, and child_status logs.")
+    if top_mismatch:
+        old_chain = top_mismatch["outstanding_clear_chain"]
+        if old_chain.get("home_clear", 0) == 0:
+            recommendations.append(
+                "The dominant outstanding reqId has no Home Clear evidence; inspect its Clear send and routing chain.")
+        elif old_chain.get("clear_commit", 0) == 0:
+            recommendations.append(
+                "The dominant outstanding reqId reached Home but did not commit; inspect processClear rejection logs.")
 
     return {
         "status": status,
@@ -290,6 +358,7 @@ def analyze(args):
             "rounds": args.rounds,
         },
         "verifier": {"pass": verify_pass, "fail": verify_fail},
+        "clear_profiles": dict(clear_profiles),
         "progress": {
             "expected_last_marker": expected_last_progress,
             "complete_planes": len(progress_complete),
@@ -317,6 +386,11 @@ def analyze(args):
         "protocol_counts": dict(protocol),
         "commit_paths": dict(commit_paths),
         "issues": dict(issues),
+        "grant_retry_tuple_mismatches": {
+            "total": sum(grant_mismatches.values()),
+            "unique": len(grant_mismatches),
+            "top": top_mismatch,
+        },
         "issue_samples": dict(issue_samples),
         "last_ticks": {
             f"{node}:{socket}": tick
@@ -366,6 +440,23 @@ def print_human(report):
         if count
     ) or "none"
     print(f"issues: {issue_text}")
+    profiles = report["clear_profiles"]
+    print("clear-profile: " + (" ".join(
+        f"{name}={count}" for name, count in sorted(profiles.items())) or
+        "unknown"))
+    mismatch = report["grant_retry_tuple_mismatches"]
+    if mismatch["top"]:
+        top = mismatch["top"]
+        print(
+            "top-mismatch: "
+            f"count={top['count']} home={top['home']} pa={top['pa']} "
+            f"requester={top['requester']} "
+            f"incoming={top['incoming_socket']}:{top['incoming_reqid']} "
+            f"outstanding={top['outstanding_socket']}:{top['outstanding_reqid']}")
+        old_chain = top["outstanding_clear_chain"]
+        print("old-reqid-chain: " + (" ".join(
+            f"{stage}={count}" for stage, count in sorted(old_chain.items())) or
+            "none"))
     print(
         "shutdown: "
         f"peer_exit={shutdown['peer_exit']}/{report['topology']['planes']} "
