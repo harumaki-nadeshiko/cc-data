@@ -763,6 +763,13 @@ class UBCCController
         int waitReason);
     bool debugClearResidentWaitersForTest(uint64_t linePa);
     bool debugForceResidentEvictForTest(uint64_t linePa);
+    bool debugEnqueuePendingRequesterForTest(
+        uint64_t linePa, int node, int socket, bool shared,
+        uint64_t epoch, uint64_t reqId);
+    void debugReplayPendingRequestersForTest(uint64_t linePa)
+    {
+        replayPendingRequesters(linePa);
+    }
 
     // ---- v4: Backstore Organization access ----
     ResidentDir& directory() { return _directory; }
@@ -804,6 +811,7 @@ class UBCCController
     // the same PA are queued here.  Replayed on Clear commit.
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
+    std::set<uint64_t> _pendingReplayActive;
     std::set<uint64_t> _evictionPendingRemoval;
     // Replay can synchronously execute another protocol path. Suppress nested
     // capacity sweeps; the outer pass owns the current finite snapshot.
@@ -1003,7 +1011,8 @@ public:
      * Commit intended directory result from OutstandingRequest to DirEntry.
      * Only called from processClear() or processOuterUpgradeDone().
      */
-    void commitIntendedResult(DirEntry &entry, const OutstandingRequest &ost);
+    bool commitIntendedResult(DirEntry &entry, const OutstandingRequest &ost,
+                              const char *path);
 
     /**
      * Retire a GRANT_HANDSHAKE to tombstone(W) for duplicate Clear replay.

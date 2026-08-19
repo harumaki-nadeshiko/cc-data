@@ -15,7 +15,8 @@ READ_RE = re.compile(
     r"\[READ_VAL\].*expected=([0-9a-fA-F]+) actual=([0-9a-fA-F]+) "
     r"(MATCH|MISMATCH)")
 COMMIT_RE = re.compile(
-    r"commitIntendedResult PA=0x([0-9a-fA-F]+).*epoch=(\d+)")
+    r"commitIntendedResult PA=0x([0-9a-fA-F]+) "
+    r"(?:path=([A-Za-z0-9_]+) )?.*?epoch=(\d+)")
 OWNER_RE = re.compile(r"owner=(-?\d+)")
 EPOCH_DECREASE_RE = re.compile(r"epoch DECREASED\s+(\d+)\s*->\s*(\d+)")
 TICK_RE = re.compile(r"(?:^|[\s|])tick[=:](\d+)")
@@ -30,6 +31,7 @@ ISSUE_PATTERNS = {
     "upgrade_done_tuple_mismatch": re.compile(r"UpgradeDone tuple mismatch"),
     "invalidate_ack_reqid_mismatch": re.compile(
         r"processInvalidationAck.*reqId mismatch"),
+    "reservation_superseded": re.compile(r"UBCC-RESERVATION-SUPERSEDED"),
     "grant_retry_tuple_mismatch": re.compile(
         r"UBCC-GRANT-RETRY-TUPLE-MISMATCH"),
     "clear_epoch_mismatch": re.compile(r"processClear.*epoch mismatch"),
@@ -88,6 +90,7 @@ def analyze(args):
     reads = {"match": 0, "mismatch": 0}
     commits = defaultdict(list)
     commit_owners = defaultdict(Counter)
+    commit_paths = Counter()
     issues = Counter()
     issue_samples = defaultdict(list)
     protocol = Counter()
@@ -131,8 +134,10 @@ def analyze(args):
                 match = COMMIT_RE.search(line)
                 if match:
                     pa = int(match.group(1), 16)
-                    epoch = int(match.group(2))
+                    commit_path = match.group(2) or "Legacy"
+                    epoch = int(match.group(3))
                     commits[pa].append(epoch)
+                    commit_paths[commit_path] += 1
                     owner = OWNER_RE.search(line)
                     if owner:
                         commit_owners[pa][int(owner.group(1))] += 1
@@ -224,7 +229,8 @@ def analyze(args):
 
     critical_count = (
         issues["epoch_decreased"] + issues["upgrade_done_tuple_mismatch"] +
-        issues["invalidate_ack_reqid_mismatch"] + issues["panic"] +
+        issues["invalidate_ack_reqid_mismatch"] +
+        issues["reservation_superseded"] + issues["panic"] +
         reads["mismatch"] + len(child_nonzero)
     )
     shutdown_complete = (
@@ -259,6 +265,9 @@ def analyze(args):
     if issues["upgrade_done_tuple_mismatch"]:
         recommendations.append(
             "UpgradeDone tuple mismatch detected; compare incoming baseEpoch/reqId with active tuple.")
+    if issues["reservation_superseded"]:
+        recommendations.append(
+            "A reservation was superseded; inspect its path and pending replay ordering.")
     if status == "HEALTHY_TIMEOUT":
         recommendations.append(
             "The run timed out but progress is balanced and epochs are monotonic; increase TC98 timeout.")
@@ -306,6 +315,7 @@ def analyze(args):
             "owners": dict(sorted(commit_owners.get(hot_pa, {}).items())),
         },
         "protocol_counts": dict(protocol),
+        "commit_paths": dict(commit_paths),
         "issues": dict(issues),
         "issue_samples": dict(issue_samples),
         "last_ticks": {

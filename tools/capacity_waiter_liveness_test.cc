@@ -595,6 +595,46 @@ main()
     assert(cachedDoneUbcc.directory().lookup(cachedDonePa, cachedDoneEntry));
     assert(cachedDoneEntry.epoch == cachedDoneEpoch + 1);
 
+    // TC98 regression: a home reservation at epoch 69 reserves 70 while the
+    // requester carries its own base epoch 10. Pending Batch-RS replay must not
+    // cross that live reservation and advance the directory to 71 before Clear.
+    UBCCController reservationUbcc(
+        0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
+    HoldBackstoreHost reservationHost;
+    CaptureOutbound reservationOutbound;
+    reservationUbcc.setHost(&reservationHost);
+    reservationUbcc.setOutbound(&reservationOutbound);
+    reservationUbcc.setBatchRsEnabled(true);
+    constexpr uint64_t reservationPa = 0x10007800;
+    constexpr uint64_t requesterBaseEpoch = 10;
+    constexpr uint64_t reservationReqId = 4001;
+    assert(reservationUbcc.debugSeedResidentForTest(
+        reservationPa, static_cast<int>(MESIState::G_S),
+        1ULL << 0, 69, false));
+    const auto reservationGrant = reservationUbcc.processOuterRequest(
+        reservationPa, UBCC_OuterReqType::GlobalReadShared, false,
+        4, 0, requesterBaseEpoch, reservationReqId);
+    assert(static_cast<int>(reservationGrant) >= 0);
+    OutstandingRequest *reservationOutstanding =
+        reservationUbcc.findOutstanding(reservationPa);
+    assert(reservationOutstanding);
+    assert(reservationOutstanding->reservedEpoch == 70);
+    assert(reservationUbcc.debugEnqueuePendingRequesterForTest(
+        reservationPa, 5, 0, true, requesterBaseEpoch, 4002));
+    assert(reservationUbcc.debugEnqueuePendingRequesterForTest(
+        reservationPa, 6, 0, true, requesterBaseEpoch, 4003));
+    reservationUbcc.debugReplayPendingRequestersForTest(reservationPa);
+    DirEntry reservationEntry;
+    assert(reservationUbcc.directory().lookup(reservationPa, reservationEntry));
+    assert(reservationEntry.epoch == 69);
+    assert(reservationUbcc.findOutstanding(reservationPa) ==
+           reservationOutstanding);
+    assert(reservationUbcc.processClear(
+        reservationPa, 4, requesterBaseEpoch, reservationReqId));
+    assert(reservationUbcc.directory().lookup(reservationPa, reservationEntry));
+    assert(reservationEntry.epoch == 72);
+    assert(reservationUbcc.findOutstanding(reservationPa) == nullptr);
+
     std::fprintf(stderr, "capacity waiter liveness regression passed\n");
     return 0;
 }

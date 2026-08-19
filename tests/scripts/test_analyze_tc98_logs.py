@@ -54,7 +54,7 @@ class AnalyzeTc98LogsTest(unittest.TestCase):
             epochs.append(3)
         commit_lines = [
             "UBCC node_id=0: commitIntendedResult PA=0x10007800 "
-            f"state=G_M owner=0 epoch={epoch}\n" for epoch in epochs
+            f"path=Clear state=G_M owner=0 epoch={epoch}\n" for epoch in epochs
         ]
         for node in range(8):
             for socket in range(2):

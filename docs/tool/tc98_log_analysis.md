@@ -58,6 +58,7 @@ per-plane latest progress marker
 done-marker MATCH/MISMATCH counts
 automatically detected hot PA
 hot-line commit count and epoch sequence
+commit counts split by path (`Clear`, `UpgradeDone`, `CachedUpgradeDone`, `BatchRS`)
 epoch rollback and tuple mismatch counts
 PeerExit and NetworkExit completion counts
 child exit counts
@@ -75,3 +76,9 @@ python3 scripts/analyze_tc98_logs.py /path/to/logs \
 For a normal TC98 run, all 16 planes should reach progress marker `r=12`.
 TC98 has 16 rounds, and the workload prints markers every four rounds at
 `r=0,4,8,12`.
+
+`reservation_superseded` is a critical issue. It means a committed directory
+epoch moved past a live transaction's reserved epoch. The corresponding
+`[UBCC-RESERVATION-SUPERSEDED]` line reports the commit path, current entry
+epoch, expected predecessor, requester base epoch, reserved epoch, requester
+node/socket, reqId, op type, and stage.

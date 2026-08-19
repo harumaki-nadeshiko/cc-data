@@ -2815,7 +2815,14 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 panic_if(!_directory.lookup(line_pa, currentEntry),
                          "cached UpgradeDone lost directory entry PA=0x{:x}",
                          line_pa);
-                commitIntendedResult(currentEntry, *current);
+                if (!commitIntendedResult(
+                        currentEntry, *current, "CachedUpgradeDone")) {
+                    retireToTombstone(*current, false);
+                    removeOutstanding(line_pa);
+                    refreshPinnedBit(line_pa);
+                    replayPendingRequesters(line_pa);
+                    return true;
+                }
                 _directory.update(line_pa, currentEntry);
                 current->stage = OpStage::DONE;
                 current->respTick = curTick();
@@ -3655,7 +3662,13 @@ UBCCController::processOuterUpgradeDone(
     // v4: §4.1.4 step 5 — commit intended result to DirEntry
     int intendedOwner = ost->intendedOwnerNode;
     uint64_t reservedEp = ost->reservedEpoch;
-    commitIntendedResult(entry, *ost);
+    if (!commitIntendedResult(entry, *ost, "UpgradeDone")) {
+        retireToTombstone(*ost, false);
+        removeOutstanding(line_pa);
+        refreshPinnedBit(line_pa);
+        replayPendingRequesters(line_pa);
+        return false;
+    }
     _directory.update(line_pa, entry);
     // UBInvariant: validate canonical form after commit
     validateSharersCanonical(line_pa);
@@ -3845,7 +3858,13 @@ UBCCController::processClear(
 
     // v4: §3.3, §3.5 — commit intended result to committed DirEntry
     MESIState oldState = entry.state;
-    commitIntendedResult(entry, *ost);
+    if (!commitIntendedResult(entry, *ost, "Clear")) {
+        retireToTombstone(*ost, false);
+        removeOutstanding(line_pa);
+        refreshPinnedBit(line_pa);
+        replayPendingRequesters(line_pa);
+        return false;
+    }
     _directory.update(line_pa, entry);
     // UBInvariant: validate canonical form after commit
     validateSharersCanonical(line_pa);
@@ -4034,20 +4053,30 @@ UBCCController::onDsmPersistFailed(uint64_t linePa)
     }
 }
 
-void
-UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &ost)
+bool
+UBCCController::commitIntendedResult(
+    DirEntry &entry, const OutstandingRequest &ost, const char *path)
 {
-    // UBInvariant: warn on double-commit (per-PA counter)
+    const uint64_t predecessor = normalizeEpoch(ost.reservedEpoch - 1);
+    if (normalizeEpoch(entry.epoch) != predecessor) {
+        framework::LogError("UBCC",
+                "[UBCC-RESERVATION-SUPERSEDED] path={} home={}:{} "
+                "pa=0x{:x} entryEpoch={} predecessor={} requesterBaseEpoch={} "
+                "reservedEpoch={} requester={}:{} reqId={} op={} stage={}",
+                path, _nodeId, _socketId, ost.linePa, entry.epoch,
+                predecessor, ost.baseEpoch, ost.reservedEpoch,
+                ost.requesterNode, ost.requesterSocket, ost.reqId,
+                static_cast<int>(ost.opType), static_cast<int>(ost.stage));
+        return false;
+    }
+
+    // This is a per-PA commit ordinal, not a duplicate transaction count.
     int &cnt = _commitCount[ost.linePa];
     cnt++;
-    if (cnt > 1) {
-        _invariantWarnCount++;
-        framework::LogWarn("UBCC-invariant",
-                "[UBINV-WARN] double-commit #{} PA=0x{:x} cnt={}",
-                _invariantWarnCount, ost.linePa, cnt);
-        warn("[UBINV] double-commit PA=0x{:x} cnt={} (warn #{})",
-             ost.linePa, cnt, _invariantWarnCount);
-    }
+    framework::LogDebug("UBCC-invariant",
+            "[UBINV-COMMIT-ORDINAL] path={} PA=0x{:x} ordinal={} "
+            "entryEpoch={} reservedEpoch={} reqId={}",
+            path, ost.linePa, cnt, entry.epoch, ost.reservedEpoch, ost.reqId);
 
     // UBInvariant: epoch monotonicity check before overwriting entry.epoch
     validateEpochMonotonic(entry.epoch, ost.reservedEpoch, ost.linePa);
@@ -4102,15 +4131,19 @@ UBCCController::commitIntendedResult(DirEntry &entry, const OutstandingRequest &
 
     framework::LogInfo("UBCC",
             "UBCC node_id={}: commitIntendedResult PA=0x{:x} "
-            "state={} owner={} sharers=0x{:x} dirty={} epoch={}",
-            _nodeId, ost.linePa,
+            "path={} state={} owner={} sharers=0x{:x} dirty={} epoch={} "
+            "baseEpoch={} reservedEpoch={} requester={}:{} reqId={}",
+            _nodeId, ost.linePa, path,
             mesiStateName(entry.state), DirEntry::ownerFromSharers(entry),
-            entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch);
+            entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch,
+            ost.baseEpoch, ost.reservedEpoch, ost.requesterNode,
+            ost.requesterSocket, ost.reqId);
 
     if (entry.state != MESIState::G_I) {
         publishBloomLive(ost.linePa);
     }
     // v4-A3: Don't force-delete G_I — let ResidentDir eviction handle cleanup
+    return true;
 }
 
 void
@@ -4700,6 +4733,26 @@ UBCCController::debugForceResidentEvictForTest(uint64_t linePa)
     return true;
 }
 
+bool
+UBCCController::debugEnqueuePendingRequesterForTest(
+    uint64_t linePa, int node, int socket, bool shared,
+    uint64_t epoch, uint64_t reqId)
+{
+    auto &queue = _pendingRequesters[linePa];
+    if (queue.size() >= MAX_PENDING_PER_PA)
+        return false;
+    PendingRequester pr;
+    pr.node = node;
+    pr.socket = socket;
+    pr.reqType = shared ? UBCC_OuterReqType::GlobalReadShared :
+                          UBCC_OuterReqType::GlobalReadUnique;
+    pr.writeIntent = !shared;
+    pr.epoch = normalizeEpoch(epoch);
+    pr.reqId = reqId;
+    queue.push_back(pr);
+    return true;
+}
+
 // ---- recall_done_fix.md §5: Replay queued pending requesters ----
 void
 UBCCController::replayPendingRequesters(uint64_t linePa)
@@ -4709,19 +4762,27 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
     // path bypasses processOuterRequest for the batch shared fast path.
     if (_h64BloomAllMisses && _h64DsmPending.count(linePa))
         return;
-
-    auto qit = _pendingRequesters.find(linePa);
-    if (qit == _pendingRequesters.end() || qit->second.empty())
+    if (findOutstanding(linePa))
         return;
-
-    // Get current committed entry (just committed by Clear or UpgradeDone)
-    DirEntry entry;
-    if (!_directory.lookup(linePa, entry))
+    if (!_pendingReplayActive.insert(linePa).second)
         return;
+    struct ReplayGuard {
+        std::set<uint64_t> &active;
+        uint64_t linePa;
+        ~ReplayGuard() { active.erase(linePa); }
+    } guard{_pendingReplayActive, linePa};
 
     // Replay all queued entries one by one, each as a fresh processOuterRequest
     // with rebased epoch against the NEW committed state.
-    while (!qit->second.empty()) {
+    while (true) {
+        if (findOutstanding(linePa))
+            break;
+        auto qit = _pendingRequesters.find(linePa);
+        if (qit == _pendingRequesters.end() || qit->second.empty())
+            break;
+        DirEntry entry;
+        if (!_directory.lookup(linePa, entry))
+            break;
         PendingRequester pr = qit->second.front();
         qit->second.pop_front();
 
@@ -4770,8 +4831,14 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
 
             tempOst.dataSource = GrantDataSource::HomeMemory;
 
-            // Commit directly (no Clear needed for shared)
-            commitIntendedResult(entry, tempOst);
+            // Commit directly (no Clear needed for shared). A live
+            // reservation or callback-side commit must not be crossed.
+            if (!commitIntendedResult(entry, tempOst, "BatchRS")) {
+                auto currentQueue = _pendingRequesters.find(linePa);
+                if (currentQueue != _pendingRequesters.end())
+                    currentQueue->second.push_front(pr);
+                break;
+            }
             _directory.update(linePa, entry);
             validateSharersCanonical(linePa);
             retireToTombstone(tempOst, true);
@@ -4788,6 +4855,8 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                        static_cast<int>(grantTypeFromIntended(tempOst.intendedState)));
             }
 
+            if (findOutstanding(linePa))
+                break;
             continue;  // skip processOuterRequest, continue to next queued entry
         }
         // ── End C3 Batch RS ──
@@ -4817,13 +4886,16 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
                 // GRANT_HANDSHAKE (G_S+RS case). Push the grant immediately
                 // so the requester gets it without waiting for retry timer.
                 if (ost->opType == OpType::GRANT_HANDSHAKE && _outbound) {
+                    const int requesterNode = ost->requesterNode;
+                    const int requesterSocket = ost->requesterSocket;
+                    const uint64_t requestId = ost->reqId;
+                    const int grantType = static_cast<int>(
+                        grantTypeFromIntended(ost->intendedState));
                     const bool pushOk = tryPushGrant(*ost, "queue-replay");
                     framework::LogInfo("UBCC","[PUSH-GRANT] QUEUE-REPLAY home={} pa=0x{:x} "
                            "requester={} sock={} reqId={} grantType={} pushOk={}",
-                           _nodeId, linePa, ost->requesterNode,
-                           ost->requesterSocket, ost->reqId,
-                           static_cast<int>(
-                               grantTypeFromIntended(ost->intendedState)),
+                           _nodeId, linePa, requesterNode,
+                           requesterSocket, requestId, grantType,
                            pushOk ? 1 : 0);
                 }
             }
@@ -4835,9 +4907,9 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
     }
 
     // Clean up empty queue to avoid stale entries
-    if (qit->second.empty()) {
+    auto qit = _pendingRequesters.find(linePa);
+    if (qit != _pendingRequesters.end() && qit->second.empty())
         _pendingRequesters.erase(qit);
-    }
 }
 
 
