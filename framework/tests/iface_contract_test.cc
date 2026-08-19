@@ -118,16 +118,20 @@ bool CheckLogAssertIfContract()
            output.find("success predicate must not fire") == std::string::npos;
 }
 
-PortConfig Config(const char* self, const char* peer)
+PortConfig Config(const char* self, const char* peer,
+                  std::uint32_t nodeId = 1,
+                  std::uint32_t socketId = 1,
+                  std::uint32_t numNodes = 2,
+                  std::uint32_t numSockets = 2)
 {
     PortConfig config;
     config.selfRole = self;
     config.peerRole = peer;
     config.channelName = "coherence";
-    config.nodeId = 0;
-    config.socketId = 0;
-    config.numNodes = 1;
-    config.numSockets = 1;
+    config.nodeId = nodeId;
+    config.socketId = socketId;
+    config.numNodes = numNodes;
+    config.numSockets = numSockets;
     return config;
 }
 
@@ -150,15 +154,22 @@ bool CheckChildAborts(int testCase)
         if (!peer)
             _exit(94);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        if (testCase == 0 || testCase == 1) {
+        if (testCase == 0 || testCase == 1 ||
+            testCase == 4 || testCase == 5) {
             Message* message = AllocateSendMessage(port, 0);
             if (!message)
                 _exit(92);
             if (testCase == 0) {
                 std::vector<unsigned char> payload(GetMaxPayloadSize() + 1, 0);
                 SetMessagePayload(message, payload.data(), payload.size());
-            } else {
+            } else if (testCase == 1) {
                 SetMessagePayload(message, nullptr, 1);
+            } else if (testCase == 4) {
+                SetMessageTargetId(message, 3);
+                SendMessage(port, message);
+            } else {
+                SetMessageSourceId(message, 3);
+                SendMessage(port, message);
             }
         } else if (testCase == 2) {
             EmitSync(port, std::numeric_limits<std::uint64_t>::max() - 9);
@@ -202,6 +213,8 @@ int main()
           "nonzero null payload is a contract violation");
     Check(CheckChildAborts(2), "EmitSync timestamp overflow is rejected");
     Check(CheckChildAborts(3), "EmitSync timestamp rollback is rejected");
+    Check(CheckChildAborts(4), "Payload without explicit sourceId is rejected");
+    Check(CheckChildAborts(5), "Payload without explicit targetId is rejected");
 
     const std::string ipcDirectory =
         "/tmp/framework_iface_test_" + std::to_string(getpid());
@@ -243,6 +256,11 @@ int main()
         DestroyPort(ubio);
         return 1;
     }
+    Check(GetMessageSourceId(source) == 0 &&
+              GetMessageTargetId(source) == 0 &&
+              GetMessageRequestId(source) == 0 &&
+              GetMessagePayloadSize(source) == 0,
+          "allocation leaves application endpoint metadata at zero");
     const unsigned char payload[] = {1, 2, 3, 4};
     SetMessageSourceId(source, 11);
     SetMessageTargetId(source, 22);
@@ -274,18 +292,28 @@ int main()
     borrowed = ReceiveMessage(ubio, 110, &status);
     Check(borrowed && status == ReceiveStatus::Message,
           "pending message becomes visible");
-    Check(borrowed && GetMessageRequestId(borrowed) == 33,
+    Check(borrowed && GetMessageSourceId(borrowed) == 11 &&
+              GetMessageTargetId(borrowed) == 22 &&
+              GetMessageRequestId(borrowed) == 33,
           "borrowed message contents");
 
     Message* second = AllocateSendMessage(gem5, 110);
     Check(second != nullptr, "allocate second message");
     if (second) {
+        Check(GetMessageSourceId(second) == 0 &&
+                  GetMessageTargetId(second) == 0,
+              "second allocation does not inherit Port gid");
+        SetMessageSourceId(second, 44);
+        SetMessageTargetId(second, 55);
         SetMessageRequestId(second, 44);
         Check(SendMessage(gem5, second), "send second message");
     }
     const Message* secondBorrow = WaitReceive(ubio, 1000, status);
-    Check(second && secondBorrow && GetMessageRequestId(secondBorrow) == 44,
-           "next receive replaces per-port borrowed storage");
+    Check(second && secondBorrow &&
+              GetMessageSourceId(secondBorrow) == 44 &&
+              GetMessageTargetId(secondBorrow) == 55 &&
+              GetMessageRequestId(secondBorrow) == 44,
+          "next receive replaces per-port borrowed storage");
     Check(second && secondBorrow == borrowed,
            "receive borrow uses storage valid until next receive");
 
@@ -295,7 +323,10 @@ int main()
     const Message* sync = WaitReceive(ubio, 210, status);
     Check(sync && status == ReceiveStatus::Message &&
               GetMessageType(sync) == MessageType::ControlSync &&
-              GetMessageTimestamp(sync) == 210,
+              GetMessageTimestamp(sync) == 210 &&
+              GetMessageSourceId(sync) == 0 &&
+              GetMessageTargetId(sync) == 0 &&
+              GetMessageRequestId(sync) == 0,
           "sync is delivered with link latency");
     Check(EmitSync(gem5, 205), "throttled EmitSync succeeds without sending");
     sync = WaitReceive(ubio, 1000, status);
@@ -323,7 +354,9 @@ int main()
     sync = WaitReceive(ubio, std::numeric_limits<std::uint64_t>::max(), status);
     Check(sync && GetMessageType(sync) == MessageType::ControlSync &&
               GetMessageTimestamp(sync) ==
-                  std::numeric_limits<std::uint64_t>::max(),
+                  std::numeric_limits<std::uint64_t>::max() &&
+              GetMessageSourceId(sync) == 0 &&
+              GetMessageTargetId(sync) == 0,
           "EmitSync boundary timestamp does not overflow");
 
     // TerminatePort owns the parameterless transport termination message.
@@ -332,6 +365,9 @@ int main()
         ubio, std::numeric_limits<std::uint64_t>::max(), status);
     Check(terminate && status == ReceiveStatus::Message &&
               GetMessageType(terminate) == MessageType::Terminate &&
+              GetMessageSourceId(terminate) == 0 &&
+              GetMessageTargetId(terminate) == 0 &&
+              GetMessageRequestId(terminate) == 0 &&
               GetMessagePayloadSize(terminate) == 0,
           "TerminatePort sends a parameterless transport notification");
     DestroyPort(gem5);

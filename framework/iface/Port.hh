@@ -33,11 +33,15 @@ struct PortRuntime {
 
 Port* CreatePort(const PortConfig& config,
                  const PortRuntime& runtime = PortRuntime{});
+// Built-in Terminate messages leave sourceId and targetId at zero.
 void TerminatePort(Port* port);
 void DestroyPort(Port* port);
 
+// Allocation initializes transport-owned timestamp/type/size state only.
+// sourceId and targetId remain zero until the application sets them.
 Message* AllocateSendMessage(Port* port, std::uint64_t timestamp);
-// SendMessage consumes message whether the send succeeds or fails.
+// Payload sourceId and targetId must have been set explicitly (or copied from
+// a received Payload). SendMessage consumes message whether it succeeds.
 bool SendMessage(Port* port, Message* message);
 
 // The returned Message is borrowed and remains valid only until the next call
@@ -45,6 +49,8 @@ bool SendMessage(Port* port, Message* message);
 const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
                               ReceiveStatus* status);
 
+// Built-in Sync messages leave sourceId and targetId at zero. Endpoint
+// identity is application-owned and is never inferred here.
 bool EmitSync(Port* port, std::uint64_t currentTimestamp);
 std::uint64_t SafeTimestamp(const Port* port,
                             std::uint64_t currentTimestamp);

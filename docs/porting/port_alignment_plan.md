@@ -69,7 +69,7 @@ MessageHeader* receive(u64 curT, ReceiveStatus* status);   // 我们叫 recv
 ### 0.3 不变式（三项都必须保持，改完回归验证）
 
 1. **发送打戳**：`allocateSendBuffer(t)` 必须把 `hdr.timestamp = t + linkLatency`、
-   `hdr.sourceId = moduleId`、`hdr.size = kMemMessageHeaderSize` 预置好。
+   历史方案曾要求预置`hdr.sourceId = moduleId`；当前合同已变更为只预置size/timestamp，sourceId/targetId由应用显式设置。
 2. **接收乱序缓冲**：`recv` 遇 `timestamp > curT` 的消息必须缓存为 pending 并返回
    `kPendingFuture`；直到 curT 追上才交付。
 3. **safeTs 语义**：`min(receiveTimestamp(), (lastSyncTs? lastSyncTs : curT) + syncInterval)`；
@@ -249,7 +249,7 @@ bool        Port::send(MemMessage* msg);             // memcpy 进 zmq 发送 + 
    改为
    ```cpp
    // Allocate a NEW transport packet stamped at `timestamp` (hdr.timestamp =
-   // ts + linkLatency, sourceId, size preset). Returns a heap MemMessage* the
+   // Historical sourceId preset removed; current iface presets timestamp/size only.
    // caller fills. Ownership passes to send(); if the caller decides NOT to
    // send, it must delete the returned pointer itself. Returns nullptr only on
    // allocation failure.
@@ -279,12 +279,12 @@ bool        Port::send(MemMessage* msg);             // memcpy 进 zmq 发送 + 
        if (!msg) return nullptr;
        msg->clear();
        msg->hdr.timestamp = timestamp + _linkLatency;
-       msg->hdr.sourceId  = _moduleId;
+       // sourceId/targetId are application-owned; do not infer them from Port.
        msg->hdr.size      = sizeof(MemMessageHeader);
        return msg;
    }
    ```
-   > 打戳三件套（timestamp+linkLatency / sourceId / size）**必须保留**（不变式 §0.3.1）。
+   > 当前不变式仅保留timestamp+linkLatency与size；sourceId/targetId不得由传输层隐式填写。
    > `new (std::nothrow)` 使分配失败返回 nullptr 而非抛异常，匹配参考 `if(!msg)` 契约。
    > 需要 `#include <new>`（若未包含）。
 3. 用 `send(MemMessage* msg)` 替换原 `doSend()`（把 zmq 发送逻辑迁进来，操作 `*msg` 而非

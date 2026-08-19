@@ -237,7 +237,8 @@ class Port {
 
     // —— 数据面（发送）——
     // 分配一个以 timestamp 打戳的新堆 MemMessage（hdr.timestamp =
-    // ts + linkLatency, sourceId, size 已预置），返回指针供调用方填字段。
+    // 历史说明已过时：当前opaque iface只预置timestamp/type/size；
+    // sourceId/targetId必须由应用显式设置。
     // 所有权交给 send()；若调用方决定不发，必须自行 delete 返回的指针。
     // 仅在分配失败时返回 nullptr。
     MemMessage* allocateSendBuffer(uint64_t timestamp);
@@ -279,7 +280,7 @@ class Port {
      禁止双重 delete，禁止泄漏。
 2. **发送打戳**：`allocateSendBuffer(timestamp)` 把 `hdr.timestamp` 预置为
    `timestamp + linkLatency`（即"消息在对端最早可见时刻"），并把
-   `hdr.sourceId = moduleId`、`hdr.size = kMemMessageHeaderSize`。上层可再改
+   `hdr.size = kMemMessageHeaderSize`。历史 concrete Port 曾预置sourceId；当前opaque iface不再这样做，上层必须显式设置sourceId/targetId。
    `type`/`req_id`/`targetId`/payload。
 3. **接收乱序缓冲**：`recv` 若取到 `timestamp > curT` 的消息，**不能**返回它，
    而要缓存为 `_pending` 并返回 `kPendingFuture`；直到 `curT` 追上才交付。

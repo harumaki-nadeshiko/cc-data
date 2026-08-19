@@ -98,7 +98,9 @@ cc-ep 是一个**多节点分布式共享内存 (DSM) 缓存一致性仿真器**
 | `gem5.opt` | N | ARM CPU + Ruby/CHI | 1 个 gem5UbioPort(gid) |
 | `ubio` | N×K | Home 目录 | 2 个 Port: gem5Port + netPort |
 
-**全局 ID**: `gid = node × K + socket`, 传输层用此标识源/目标端点.
+**全局 ID**: `gid = node × K + socket`。它是应用层编码源/目标端点的规则；
+Framework/传输层不会从Port隐式填入Message。每个Payload发送方必须显式设置
+`sourceId/targetId`，内建Sync/Terminate保持`0/0`。
 
 **连接拓�结构**:
 - gem5 ↔ 本地 ubio: 双向 IPC pair

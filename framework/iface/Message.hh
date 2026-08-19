@@ -21,6 +21,8 @@ std::uint64_t GetMessageTimestamp(const Message* message);
 
 MessageType GetMessageType(const Message* message);
 
+// Endpoint IDs are application-owned. Allocation and control-message helpers
+// do not infer them from a Port.
 std::uint32_t GetMessageSourceId(const Message* message);
 void SetMessageSourceId(Message* message, std::uint32_t sourceId);
 
@@ -35,8 +37,8 @@ const void* GetMessagePayloadData(const Message* message);
 std::size_t GetMessagePayloadSize(const Message* message);
 std::size_t GetMaxPayloadSize();
 
-// Copy all application-visible fields except the destination timestamp.  The
-// destination's allocation, capacity, and backend ownership are unchanged.
+// Copy type, sourceId, targetId, requestId, and payload. The destination
+// timestamp, allocation, capacity, and backend ownership are unchanged.
 void CopyMessage(Message* destination, const Message* source);
 
 // Releases an allocated message which has not been passed to SendMessage.

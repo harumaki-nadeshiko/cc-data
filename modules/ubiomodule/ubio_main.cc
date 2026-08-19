@@ -560,7 +560,7 @@ static inline uint32_t gidOf(int node, int socket) {
 }
 
 bool
-sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
+sendCoh(Port *port, uint64_t tick, uint32_t srcModule, uint32_t dstModule,
         const CoherenceMessage &msg, bool toNetwork = false)
 {
     const bool traceReadPath =
@@ -604,6 +604,7 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
         }
         return false;
     }
+    SetMessageSourceId(buf, srcModule);
     SetMessageTargetId(buf, dstModule);
     SetMessageRequestId(buf, msg.h.reqId);
     if (sizeof(msg) > GetMaxPayloadSize()) {
@@ -785,7 +786,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = rid;
         req.b.metaRNF.pagePa = pagePa;
         _pendingReads[rid] = {rid, callback};
-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Send MetaRNFWriteReq to gem5 (fire-and-forget)
@@ -800,7 +802,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = _nextReqId++;
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Phase D1: writePage variant that returns send success
@@ -815,7 +818,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = _nextReqId++;
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
-        return sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        return sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Phase D2: per-page write contexts for durable callback
@@ -840,7 +844,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = rid;
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
-        bool sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        bool sent = sendCoh(_gem5Port, _tickRef, gid, gid, req);
         if (sent) {
             _pendingWrites[rid] = {rid, pagePa, cb};
         } else if (cb) {
@@ -924,7 +929,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 req.h.reqId = op.reqId;
                 req.b.metaRNFLineWriteReq.bucketOffset = op.bucketOffset;
                 memcpy(req.b.metaRNFLineWriteReq.data, op.data, 64);
-                sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
+                const uint32_t gid = gidOf(_nodeId, _socketId);
+                sent = sendCoh(_gem5Port, _tickRef, gid, gid, req);
                 if (!sent) {
                     if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-FAIL] n={} write off={}",
                                  _nodeId, op.bucketOffset);
@@ -943,7 +949,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
                 req.h.dstNode = _nodeId; req.h.dstSocket = _socketId;
                 req.h.reqId = op.reqId;
                 req.b.metaRNFLineReadReq.bucketOffset = op.bucketOffset;
-                sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
+                const uint32_t gid = gidOf(_nodeId, _socketId);
+                sent = sendCoh(_gem5Port, _tickRef, gid, gid, req);
                 if (!sent) {
                     if (_debugH64Pdes) LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN-FAIL] n={} read off={}",
                                  _nodeId, op.bucketOffset);
@@ -992,7 +999,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.dstNode = _nodeId; req.h.dstSocket = _socketId;
         req.h.reqId = rid;
         req.b.metaRNFLineReadReq.bucketOffset = bucketOffset;
-        if (!sendCoh(_gem5Port, _tickRef, _nodeId, req)) {
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        if (!sendCoh(_gem5Port, _tickRef, gid, gid, req)) {
             auto it = _pendingLineReads.find(rid);
             if (it != _pendingLineReads.end()) {
                 auto cb2 = std::move(it->second.callback);
@@ -1019,7 +1027,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.dstNode = _nodeId; req.h.dstSocket = _socketId;
         req.h.reqId = rid;
         req.b.metaRNFLineReadReq.bucketOffset = bucketOffset;
-        const bool sent = sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        const bool sent = sendCoh(_gem5Port, _tickRef, gid, gid, req);
         if (!sent) {
             auto it = _pendingLineReads.find(rid);
             if (it != _pendingLineReads.end()) {
@@ -1092,7 +1101,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = rid;
         req.b.metaRNFLineWriteReq.bucketOffset = bucketOffset;
         memcpy(req.b.metaRNFLineWriteReq.data, data64, 64);
-        if (!sendCoh(_gem5Port, _tickRef, _nodeId, req)) {
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        if (!sendCoh(_gem5Port, _tickRef, gid, gid, req)) {
             auto it = _pendingLineWrites.find(rid);
             if (it != _pendingLineWrites.end()) {
                 auto cb2 = std::move(it->second.callback);
@@ -1228,7 +1238,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             // in the header: the gem5 UBAdapter matches srcSocket<<dstSocket
             // and future topology-aware receivers may filter by targetId.
             uint32_t dstGid = gidOf(nodeId, socketId);
-            bool ok = sendCoh(gem5Port, tickRef, dstGid, msg);
+            const uint32_t srcGid = gidOf(nodeId, socketId);
+            bool ok = sendCoh(gem5Port, tickRef, srcGid, dstGid, msg);
             if (g_debugUbioPerf) {
                 LogDebug("UBIO",
                              "[DEBUG-CTRL-ROUTE] node={} sock={} local type={} reqId={} pa=0x{:x} ok={} tick={} dstGid={}",
@@ -1238,7 +1249,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return ok;
         }
         uint32_t dstGid = gidOf(msg.h.dstNode, msg.h.dstSocket);
-        bool ok = sendCoh(netPort, tickRef, dstGid, msg, true);
+        const uint32_t srcGid = gidOf(nodeId, socketId);
+        bool ok = sendCoh(netPort, tickRef, srcGid, dstGid, msg, true);
         if (g_debugUbioPerf) {
             LogDebug("UBIO",
                          "[DEBUG-CTRL-ROUTE] node={} sock={} net type={} reqId={} pa=0x{:x} dst={}:{} dstGid={} ok={} tick={}",
@@ -1888,9 +1900,12 @@ struct HomeVIHost {
 
     bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
-            return sendCoh(gem5Port, tickRef, gidOf(nodeId, socketId), msg);
-        return sendCoh(netPort, tickRef, gidOf(msg.h.dstNode, msg.h.dstSocket),
-                       msg, true);
+            return sendCoh(gem5Port, tickRef,
+                           gidOf(nodeId, socketId),
+                           gidOf(nodeId, socketId), msg);
+        return sendCoh(netPort, tickRef,
+                       gidOf(nodeId, socketId),
+                       gidOf(msg.h.dstNode, msg.h.dstSocket), msg, true);
     }
 };
 
@@ -2756,7 +2771,8 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
                 if (haAdapter->handle(coh))
                     continue;
                 if (dm.fromNetwork && isGem5Ingress(coh.h.type)) {
-                    panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), coh),
+                    panic_if(!sendCoh(gem5Port, tick,
+                                      gidOf(nid, sid), gidOf(nid, sid), coh),
                              "delayed HA network-to-gem5 send failed type={} reqId={}",
                              coherenceMsgTypeName(coh.h.type), coh.h.reqId);
                     continue;
@@ -2774,14 +2790,16 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
                                              response, hasResponse);
             if (dm.fromNetwork) {
                 if (handled && hasResponse) {
-                    sendCoh(netPort, tick, gidOf(coh.h.srcNode, coh.h.srcSocket),
-                            response, true);
+                    sendCoh(netPort, tick, gidOf(nid, sid),
+                            gidOf(coh.h.srcNode, coh.h.srcSocket), response, true);
                 } else if (!handled && isGem5Ingress(coh.h.type)) {
-                    sendCoh(gem5Port, tick, gidOf(coh.h.srcNode, coh.h.srcSocket), coh);
+                    sendCoh(gem5Port, tick,
+                            gidOf(nid, sid), gidOf(nid, sid), coh);
                 }
             } else {
                 if (handled && hasResponse) {
-                    sendCoh(gem5Port, tick, (uint32_t)nid, response, false);
+                    sendCoh(gem5Port, tick,
+                            gidOf(nid, sid), gidOf(nid, sid), response, false);
                 }
             }
         }
@@ -3320,6 +3338,7 @@ main(int argc, char **argv)
                 }
                 const bool sent = sendCoh(
                     netPort, tick,
+                    gidOf(nid, sid),
                     gidOf(action.peer.node, action.peer.socket), exit, true);
                 if (!sent && logPeerExitAttempt(attempt)) {
                     LogWarn("UBIO", "[PEER-EXIT-{}-SEND-FAILED] local={}:{} "
@@ -3380,6 +3399,7 @@ main(int argc, char **argv)
             Message *rel = AllocateSendMessage(deliveryPort, tick);
             panic_if(!rel, "barrier release allocation failed mask=0x{:x} plane={}",
                      bk.first, targetPlane);
+            SetMessageSourceId(rel, gidOf(nid, sid));
             SetMessageTargetId(rel, gidOf(targetNode, targetSocket));
             CoherenceMessage rmsg;
             rmsg.h.type = CoherenceMessageType::BarrierRelease;
@@ -3509,6 +3529,7 @@ main(int argc, char **argv)
                     Message *rel = AllocateSendMessage(gem5Port, tick);
                     if (rel) {
                         CopyMessage(rel, m);
+                        SetMessageSourceId(rel, gidOf(nid, sid));
                         SetMessageTargetId(rel, gidOf(nid, sid));
                         SendMessage(gem5Port, rel);
                         if (g_debugUbioPerf)
@@ -3742,7 +3763,9 @@ main(int argc, char **argv)
                                          coh->h.dstNode, coh->h.dstSocket);
                         }
                         bool sent = sendCoh(netPort, tick,
-                                            gidOf(coh->h.dstNode, coh->h.dstSocket), *coh, true);
+                                            gidOf(nid, sid),
+                                            gidOf(coh->h.dstNode, coh->h.dstSocket),
+                                            *coh, true);
                         if (g_debugUbioPerf && coh->h.type == CoherenceMessageType::ReadReq) {
                             LogDebug("UBIO",
                                          "[DEBUG-UBIO-RR-PATH] reqId={} forward_sendCoh_called=true sendCoh_ret={} dstNode={}",
@@ -3782,7 +3805,9 @@ main(int argc, char **argv)
                                     coherenceMsgTypeName(coh->h.type), nid, sid,
                                     coh->h.reqId, coh->h.homeLinePa);
                             } else {
-                                panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), *coh),
+                                panic_if(!sendCoh(gem5Port, tick,
+                                                  gidOf(nid, sid), gidOf(nid, sid),
+                                                  *coh),
                                     "HA network-to-gem5 send failed type={} reqId={}",
                                     coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                             }
@@ -3796,7 +3821,7 @@ main(int argc, char **argv)
                                 "type={} reqId={} pa=0x{:x}",
                                 coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                                 coh->h.homeLinePa);
-                            panic_if(!sendCoh(netPort, tick,
+                            panic_if(!sendCoh(netPort, tick, gidOf(nid, sid),
                                       gidOf(coh->h.srcNode, coh->h.srcSocket),
                                       reject, true),
                                 "HA legacy reject send failed type={} reqId={}",
@@ -3830,7 +3855,7 @@ main(int argc, char **argv)
                         // requester's EP-SNF retries immediately instead of waiting for
                         // the 20k-cycle fallback timer.
                         bool sentToGem5 = sendCoh(gem5Port, tick,
-                            gidOf(nid, sid), *coh);
+                            gidOf(nid, sid), gidOf(nid, sid), *coh);
                         if (g_debugUbioPerf) {
                             LogDebug("UBIO",
                                          "[DEBUG-TRACE-4-RECALL] n{} net->gem5 recall-done sendCoh_ret={} reqId={} dstSocket={}",
@@ -3845,7 +3870,7 @@ main(int argc, char **argv)
                                          coh->h.srcNode, coh->h.srcSocket);
                         }
                         // Response returns to the requester's (node, socket) plane.
-                        sendCoh(netPort, tick,
+                        sendCoh(netPort, tick, gidOf(nid, sid),
                                 gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
                     } else if (!handled && isGem5Ingress(coh->h.type)) {
                         if (gem5Done && coh->h.type == CoherenceMessageType::RecallReq) {
@@ -3880,7 +3905,7 @@ main(int argc, char **argv)
                                 }
                             }
                             resp.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-                            sendCoh(netPort, tick,
+                            sendCoh(netPort, tick, gidOf(nid, sid),
                                     gidOf(coh->h.homeNode, coh->h.homeSocket),
                                     resp, true);
                         } else if (gem5Done) {
@@ -3897,7 +3922,7 @@ main(int argc, char **argv)
                                              nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
                             }
                             bool sentToGem5 = sendCoh(gem5Port, tick,
-                                gidOf(coh->h.dstNode, coh->h.dstSocket), *coh);
+                                gidOf(nid, sid), gidOf(nid, sid), *coh);
                             if (g_debugUbioPerf) {
                                 LogDebug("UBIO",
                                              "[DEBUG-TRACE-4-SEND] n{} net->gem5 sendCoh_ret={} type={} reqId={} src={}:{} dst={}:{}",
@@ -3924,7 +3949,8 @@ main(int argc, char **argv)
                             "type={} reqId={} pa=0x{:x}",
                             coherenceMsgTypeName(coh->h.type), coh->h.reqId,
                             coh->h.homeLinePa);
-                        panic_if(!sendCoh(gem5Port, tick, gidOf(nid, sid), reject),
+                        panic_if(!sendCoh(gem5Port, tick,
+                                          gidOf(nid, sid), gidOf(nid, sid), reject),
                             "HA local legacy reject send failed type={} reqId={}",
                             coherenceMsgTypeName(reject.h.type), reject.h.reqId);
                     } else {
@@ -4007,7 +4033,8 @@ main(int argc, char **argv)
                     const uint32_t targetGid = fromNetwork
                         ? gidOf(coh->h.srcNode, coh->h.srcSocket)
                         : gidOf(nid, sid);
-                    panic_if(!sendCoh(out, tick, targetGid, response, fromNetwork),
+                    panic_if(!sendCoh(out, tick, gidOf(nid, sid),
+                                      targetGid, response, fromNetwork),
                              "response send failed type={} reqId={} targetGid={}",
                              coherenceMsgTypeName(response.h.type),
                              response.h.reqId, targetGid);

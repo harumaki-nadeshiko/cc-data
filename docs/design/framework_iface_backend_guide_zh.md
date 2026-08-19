@@ -105,6 +105,7 @@ gid = nodeId * numSockets + socketId
 ### 3.2 关闭与销毁
 
 - `TerminatePort(port)`：尝试非阻塞发送 header-only `Terminate`，是 **best-effort** 通知；随后关闭本端资源。它不保证对端收到，不是可靠的分布式 shutdown barrier。
+- Framework 创建的 `ControlSync` 与 `Terminate` 不携带应用端点身份，`sourceId=0`、`targetId=0`。应用若需要可路由/可归因的控制消息，应使用 `Payload` 并由应用显式设置端点。
 - `DestroyPort(port)`：释放对象及底层资源；它不是“保证送达终止消息”的替代品。
 - 正常关闭顺序是 `TerminatePort(port); DestroyPort(port);`。失败清理可直接 `DestroyPort`；二者都接受空指针。
 - 如协议要求可靠退出，应由应用先显式发送带 request/ack 的终止协议并等待确认，再调用上述资源清理 API。
@@ -184,7 +185,7 @@ int main()
         return 2;
     }
     const AppPayload payload{7, 0x1234};
-    SetMessageType(tx, MessageType::Payload);
+    SetMessageSourceId(tx, 0);
     SetMessageTargetId(tx, 0);
     SetMessageRequestId(tx, 42);
     SetMessagePayload(tx, &payload, sizeof(payload));
@@ -213,6 +214,7 @@ int main()
         Message* fwd = AllocateSendMessage(a, now);
         if (fwd) {
             CopyMessage(fwd, rx);
+            SetMessageSourceId(fwd, 0); // 当前转发应用/plane
             SetMessageTargetId(fwd, 1);
             (void)SendMessage(a, fwd); // fwd 总是被消费
         }
@@ -342,7 +344,7 @@ struct Port {
 具体清单：
 
 1. **分配**：`AllocateSendMessage` 调目标 allocator，或按目标要求分配
-   `sizeof(xxx_message)+GetMaxPayloadSize()`；设置 owned、capacity、source gid 和加入 link latency 后的 timestamp。失败返回 `nullptr`。
+   `sizeof(xxx_message)+GetMaxPayloadSize()`；设置 owned、capacity 和加入 link latency 后的 timestamp。`sourceId/targetId`保持为0，必须由Payload发送应用显式设置；缺任一端点时`SendMessage`为合同错误。失败返回`nullptr`。
 2. **借用生命周期**：每个 `Port` 持有独立 receive wrapper/target receive buffer；同 Port 下一次 receive 才可复用或归还。绝不能使用全局 singleton receive wrapper，否则另一个 Port 的 receive 会错误地使借用失效。
 3. **类型映射**：建立显式双向表，把稳定值 `ControlSync=0`、`Terminate=1`、`Payload=2` 映射到目标 enum；未知目标类型应记录并丢弃/报错，不能 `static_cast` 后穿透。
 4. **字段 flattening**：source、target、request id、timestamp、payload size 逐字段映射。若 `xxx.hh` 使用嵌套 union/bitfield/不同宽度，必须显式范围检查和展开；不得 memcpy 公共 Message 对象。
@@ -353,7 +355,7 @@ struct Port {
 9. **终止**：显式 `Terminate` 和可选 12-byte `TerminateInfo` 正常收发；`TerminatePort` 只做 non-blocking best-effort notice 后关闭，`DestroyPort` 负责最终资源释放。不能宣称 best-effort 等于可靠通知。
 10. **PDES**：实现三态 receive、future pending、每 Port receive timestamp、同步节流、溢出/回退检查、`SafeTimestamp` 和 `SyncInterval`；不得以 wall clock 超时推进 virtual timestamp。若目标库内建 PDES，仍需适配为完全相同的可观察语义。
 11. **日志**：实现 `{}`、`{:x}`、`{{`、`}}`、stdout/stderr 分流、恰好一个换行和 debug env；目标 `xxx` 日志若无法满足合同，应由适配层格式化，而不是修改消费者。
-12. **创建与 gid**：消费完整 `PortConfig`，验证范围，按冻结公式计算 gid，再映射到目标 endpoint/channel；无法表示的 role/channel/topology 必须让 `CreatePort` 返回 `nullptr`，不可悄悄连到默认端点。
+12. **创建与 gid**：消费完整 `PortConfig`，验证范围，按冻结公式计算 gid，再映射到目标 endpoint/channel；gid 是 Port/拓扑身份，不得由传输层自动写入 Message 的 sourceId/targetId。无法表示的 role/channel/topology 必须让 `CreatePort` 返回 `nullptr`，不可悄悄连到默认端点。
 
 ## 9. 合同测试与 2026-08-05 验证基线
 
@@ -365,10 +367,11 @@ struct Port {
 - 日志格式结果 `-7 ff {} str 0x1234\n`、恰好一个换行和 assert 行为；
 - payload 超限、非零 null payload、同步溢出和时间回退均 SIGABRT；
 - Port pair 创建、opaque allocate、metadata/payload accessors；
+- 非零Port gid下，allocate仍保持sourceId/targetId为0；Payload端点只来自显式setter；
 - `CopyMessage` 保留 destination timestamp；
 - send consumption、per-Port borrowed receive storage 和 future pending；
 - `ReceiveTimestamp`、`SafeTimestamp`、`SyncInterval`、同步节流及 uint64 边界；
-- `ControlSync` 和 `Terminate` 通过普通 receive 可见，Terminate 立即可见；
+- `ControlSync` 和 `Terminate` 通过普通 receive 可见，二者sourceId/targetId保持0；Terminate立即可见；
 - 最终输出精确包含 `PASS: iface contract`，进程退出码为 0。
 
 对 real 后端执行时，应把该测试对象链接到 `libframework_real.a`，其后放

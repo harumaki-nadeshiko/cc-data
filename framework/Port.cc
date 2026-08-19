@@ -121,6 +121,8 @@ struct Message {
     WireHeader header;
     unsigned char payload[kMaxPayloadSize]{};
     std::size_t capacity = kMaxPayloadSize;
+    bool sourceIdSet = false;
+    bool targetIdSet = false;
 };
 
 struct Port {
@@ -280,7 +282,6 @@ void TerminatePort(Port* port)
     if (port->open) {
         Message terminate;
         terminate.header.type = static_cast<std::uint32_t>(MessageType::Terminate);
-        terminate.header.sourceId = port->gid;
         (void)SendWire(port, terminate, zmq::send_flags::none);
     }
     ClosePort(port);
@@ -307,7 +308,6 @@ Message* AllocateSendMessage(Port* port, std::uint64_t timestamp)
                 "framework", "message timestamp {} plus latency {} overflows",
                 timestamp, port->linkLatency);
     message->header.timestamp = timestamp + port->linkLatency;
-    message->header.sourceId = port->gid;
     return message;
 }
 
@@ -318,6 +318,10 @@ bool SendMessage(Port* port, Message* message)
     LogAssertIf(message->header.type ==
                     static_cast<std::uint32_t>(MessageType::Payload),
                 "framework", "SendMessage only accepts Payload messages");
+    LogAssertIf(message->sourceIdSet, "framework",
+                "Payload sourceId must be set by the application");
+    LogAssertIf(message->targetIdSet, "framework",
+                "Payload targetId must be set by the application");
     const bool result = SendWire(port, *message, zmq::send_flags::none);
     delete message;
     return result;
@@ -378,6 +382,11 @@ const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
                             kWireHeaderSize,
                         wire.size() - kWireHeaderSize);
         }
+        if (incoming.header.type ==
+                static_cast<std::uint32_t>(MessageType::Payload)) {
+            incoming.sourceIdSet = true;
+            incoming.targetIdSet = true;
+        }
         port->lastReceiveTimestamp = incoming.header.timestamp;
         if (incoming.header.timestamp > currentTimestamp) {
             port->pending = true;
@@ -414,7 +423,6 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
     }
     Message sync;
     sync.header.timestamp = currentTimestamp + port->linkLatency;
-    sync.header.sourceId = port->gid;
     sync.header.type = static_cast<std::uint32_t>(MessageType::ControlSync);
     // Heartbeats are retryable and must not block a simulator thread while
     // the peer is still binding or reconnecting.
@@ -469,6 +477,7 @@ void SetMessageSourceId(Message* message, std::uint32_t sourceId)
 {
     CheckMutableMessage(message);
     message->header.sourceId = sourceId;
+    message->sourceIdSet = true;
 }
 
 std::uint32_t GetMessageTargetId(const Message* message)
@@ -481,6 +490,7 @@ void SetMessageTargetId(Message* message, std::uint32_t targetId)
 {
     CheckMutableMessage(message);
     message->header.targetId = targetId;
+    message->targetIdSet = true;
 }
 
 std::uint64_t GetMessageRequestId(const Message* message)
@@ -541,6 +551,8 @@ void CopyMessage(Message* destination, const Message* source)
     destination->header.sourceId = source->header.sourceId;
     destination->header.targetId = source->header.targetId;
     destination->header.requestId = source->header.requestId;
+    destination->sourceIdSet = source->sourceIdSet;
+    destination->targetIdSet = source->targetIdSet;
     destination->header.size = kWireHeaderSize + payloadSize;
     if (payloadSize)
         std::memcpy(destination->payload, source->payload, payloadSize);
