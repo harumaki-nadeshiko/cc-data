@@ -5,6 +5,7 @@ import argparse
 import gzip
 import os
 import pathlib
+import re
 import sys
 from collections import Counter
 
@@ -100,6 +101,48 @@ def format_report(report):
     return "\n".join(lines) + "\n"
 
 
+def compact_fields(text, names):
+    fields = dict(re.findall(r"([A-Za-z][A-Za-z0-9_]*)=([^\s,]+)", text))
+    return " ".join(f"{name}={fields[name]}" for name in names if name in fields)
+
+
+def format_compact(report):
+    totals = report["totals"]
+    build_rows = report["samples"]["build"]
+    build_fields = compact_fields(
+        build_rows[0]["text"], ("revision", "home")) if build_rows else ""
+    lines = [
+        "SUMMARY " + " ".join(
+            f"{kind}={totals[kind]}" for kind, _ in MARKERS) +
+        (f" {build_fields}" if build_fields else "")
+    ]
+    specs = (
+        ("tuple", "TUPLE", (
+            "home", "pa", "resident", "dirState", "dirEpoch", "pinned",
+            "outstandingStage", "outstandingRequester", "outstandingReqId",
+            "outstandingBaseEpoch", "outstandingReservedEpoch",
+            "incomingRequester", "incomingReqId", "incomingEpoch",
+            "pendingDepth", "residentWaiterDepth", "persistenceDepth",
+            "evictionPending", "evictionEpoch", "tombstoneDepth",
+            "completedOld", "completedIncoming")),
+        ("unknown_clear", "UNKNOWN", (
+            "home", "pa", "srcNode", "clearEpoch", "clearReqId",
+            "hasOutstanding", "outstandingStage", "outstandingRequester",
+            "outstandingReqId", "outstandingBaseEpoch",
+            "outstandingReservedEpoch", "pendingDepth",
+            "residentWaiterDepth", "persistenceDepth", "evictionPending",
+            "evictionEpoch", "tombstoneDepth", "completedIdentity")),
+        ("stale_eviction", "EVICTION", (
+            "kind", "home", "pa", "completionEpoch", "pendingEpoch",
+            "currentEpoch", "liveOutstanding", "action")),
+    )
+    for kind, label, names in specs:
+        rows = report["samples"][kind]
+        if rows:
+            lines.append(f"{label} {compact_fields(rows[0]['text'], names)}")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract UBCC build and fault-state markers")
@@ -107,13 +150,16 @@ def main():
     parser.add_argument("--limit", type=int, default=8,
                         help="maximum samples per marker kind")
     parser.add_argument("--output", help="write report to this path")
+    parser.add_argument("--compact", action="store_true",
+                        help="print at most four short phone-friendly lines")
     args = parser.parse_args()
     root = pathlib.Path(args.log_dir).resolve()
     if not root.is_dir():
         parser.error(f"not a directory: {root}")
     if args.limit <= 0:
         parser.error("--limit must be positive")
-    text = format_report(extract(root, args.limit))
+    report = extract(root, 1 if args.compact else args.limit)
+    text = format_compact(report) if args.compact else format_report(report)
     if args.output:
         pathlib.Path(args.output).write_text(text)
     else:
