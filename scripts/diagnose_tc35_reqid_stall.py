@@ -545,7 +545,7 @@ def post_clear_recovery(old_summaries, new_summaries):
     return "POST_CLEAR_RECOVERY_ORDER_UNKNOWN"
 
 
-def identity_resolution(mismatch, events):
+def identity_resolution(mismatch, events, completed_record_total, ubio_file_count):
     matching = [event for event in events
                 if event["home"] == mismatch.home and
                 event["pa"] == mismatch.pa and
@@ -573,7 +573,12 @@ def identity_resolution(mismatch, events):
             duplicate_after_record += 1
 
     if not records:
-        resolution = "NO_RECORD"
+        if ubio_file_count == 0:
+            resolution = "RECORD_FILE_NOT_SCANNED"
+        elif completed_record_total == 0:
+            resolution = "FEATURE_NOT_PRESENT_IN_LOGS"
+        else:
+            resolution = "RECORD_MISSING_FOR_THIS_TUPLE"
     elif record_before and not record_after and not record_between:
         resolution = "RECORD_BEFORE_ALL_MISMATCHES"
     elif record_after and not record_before and not record_between:
@@ -602,6 +607,7 @@ def scan(root, args):
     profiles = []
     progress = []
     completed_identity_events = []
+    ubio_files = set()
     file_errors = []
     lines_scanned = 0
     bytes_scanned = 0
@@ -610,6 +616,11 @@ def scan(root, args):
     max_socket = 0
     for path in files:
         try:
+            process_node, process_socket = process_identity(path)
+            if process_node is not None and process_socket is not None and \
+                    ("ubio" in path.name.lower() or
+                     "ubio" in str(path.parent).lower()):
+                ubio_files.add(str(path))
             remaining = args.max_total_bytes - bytes_scanned
             for line_number, text, truncated, bytes_read in bounded_lines_with_budget(
                     path, args.max_line_bytes, remaining):
@@ -675,7 +686,11 @@ def scan(root, args):
                 mismatch.incoming_socket, num_sockets, args.sample_limit)
         old_chain = chain_cache[old_key]
         new_chain = chain_cache[new_key]
-        identity = identity_resolution(mismatch, completed_identity_events)
+        completed_record_total = sum(
+            1 for event in completed_identity_events if event["kind"] == "record")
+        identity = identity_resolution(
+            mismatch, completed_identity_events, completed_record_total,
+            len(ubio_files))
         items.append({
             "mismatch": asdict(mismatch),
             "relation": relation(mismatch.outstanding_reqid,
@@ -706,6 +721,12 @@ def scan(root, args):
         "decoded_bytes_scanned": bytes_scanned,
         "truncated_lines": truncated_lines,
         "events_indexed": events_indexed,
+        "ubio_files_scanned": len(ubio_files),
+        "completed_read_records": sum(
+            1 for event in completed_identity_events if event["kind"] == "record"),
+        "completed_read_duplicate_drops": sum(
+            1 for event in completed_identity_events
+            if event["kind"] == "duplicate"),
         "file_errors": file_errors,
         "profiles": profiles,
         "progress": progress,
@@ -760,13 +781,18 @@ def main():
             json.dumps(json_report(report), indent=2, sort_keys=True) + "\n")
     print(f"log_root={root}")
     print("scan files={files} lines={lines} bytes={bytes_} events={events} "
-          "truncated={truncated} errors={errors} mismatches={mismatches}".format(
+          "truncated={truncated} errors={errors} mismatches={mismatches} "
+          "ubioFiles={ubio_files} completedRecords={records} "
+          "completedDuplicateDrops={duplicates}".format(
               files=report["files_scanned"], lines=report["lines_scanned"],
               bytes_=report["decoded_bytes_scanned"],
               events=report["events_indexed"],
               truncated=report["truncated_lines"],
               errors=len(report["file_errors"]),
-              mismatches=len(report["mismatches"])))
+              mismatches=len(report["mismatches"]),
+              ubio_files=report["ubio_files_scanned"],
+              records=report["completed_read_records"],
+              duplicates=report["completed_read_duplicate_drops"]))
     for index, item in enumerate(report["mismatches"], 1):
         mismatch = item["mismatch"]
         old_summary = item["_old_summary"]

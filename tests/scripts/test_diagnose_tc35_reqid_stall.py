@@ -203,7 +203,32 @@ class DiagnoseTc35Test(unittest.TestCase):
         report = MODULE.scan(self.root, self.args())
         self.assertEqual(
             report["mismatches"][0]["completed_identity"]["resolution"],
-            "NO_RECORD")
+            "RECORD_MISSING_FOR_THIS_TUPLE")
+
+    def test_no_markers_reports_feature_not_present(self):
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(report["ubio_files_scanned"], 1)
+        self.assertEqual(report["completed_read_records"], 0)
+        self.assertEqual(
+            report["mismatches"][0]["completed_identity"]["resolution"],
+            "FEATURE_NOT_PRESENT_IN_LOGS")
+
+    def test_no_recognized_ubio_file_reports_not_scanned(self):
+        self.write("unknown.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(report["ubio_files_scanned"], 0)
+        self.assertEqual(
+            report["mismatches"][0]["completed_identity"]["resolution"],
+            "RECORD_FILE_NOT_SCANNED")
 
     def test_missing_clear_response_is_reported_after_home_commit(self):
         self.build_full_chain(repeats=1)
