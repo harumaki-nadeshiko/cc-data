@@ -667,6 +667,7 @@ matchesNetEndpoint(const std::string &ep, int nid)
         uint64_t pa;
         bool isDelete;
         bool existed;
+        uint64_t snapshotEpoch;
     };
 
 struct DsmDataStore {
@@ -1708,7 +1709,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         UBCCController::BackstoreEntry e{};
         if (!ubcc.snapshotResidentForBackstore(pa, e)) {
             LogInfo("UBIO", "[BACKSTORE-WRITE] pa=0x{:x} snapshot=0", pa);
-            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
+            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false, 0});
             return;
         }
 
@@ -1746,7 +1747,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         }
         if (!p) {
             LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=no_page", pa, plan.target_page_pa);
-            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false});
+            _pendingBackstoreAcks.push_back({tickRef + 1, pa, false, false, e.epoch});
             return;
         }
 
@@ -1771,12 +1772,15 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             LogInfo("UBIO", "[BACKSTORE-WRITE-PENDING] pa=0x{:x} page=0x{:x}", pa, newPagePa);
             _pagesDirty.insert(newPagePa);
             uint64_t capPa = pa; uint64_t capPage = newPagePa;
-            _metaRNF.writePageD2(capPage, *newP, [this, capPa, capPage](bool durable) {
+            uint64_t capEpoch = e.epoch;
+            _metaRNF.writePageD2(capPage, *newP,
+                [this, capPa, capPage, capEpoch](bool durable) {
                 if (durable) {
                     LogInfo("UBIO", "[BACKSTORE-WRITE-DURABLE] pa=0x{:x} page=0x{:x}", capPa, capPage);
                     _pagesDirty.erase(capPage);
                     replayDeferredReads(capPage);
-                    _pendingBackstoreAcks.push_back({tickRef + 1, capPa, false, true});
+                    _pendingBackstoreAcks.push_back(
+                        {tickRef + 1, capPa, false, true, capEpoch});
                 } else {
                     LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=remote", capPa, capPage);
                 }
@@ -1790,12 +1794,15 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         LogInfo("UBIO", "[BACKSTORE-WRITE-PENDING] pa=0x{:x} page=0x{:x}", pa, plan.target_page_pa);
         _pagesDirty.insert(plan.target_page_pa);
         uint64_t capPa2 = pa; uint64_t capPage2 = plan.target_page_pa;
-        _metaRNF.writePageD2(capPage2, *p, [this, capPa2, capPage2](bool durable) {
+        uint64_t capEpoch2 = e.epoch;
+        _metaRNF.writePageD2(capPage2, *p,
+            [this, capPa2, capPage2, capEpoch2](bool durable) {
             if (durable) {
                 LogInfo("UBIO", "[BACKSTORE-WRITE-DURABLE] pa=0x{:x} page=0x{:x}", capPa2, capPage2);
                 _pagesDirty.erase(capPage2);
                 replayDeferredReads(capPage2);
-                _pendingBackstoreAcks.push_back({tickRef + 1, capPa2, false, true});
+                _pendingBackstoreAcks.push_back(
+                    {tickRef + 1, capPa2, false, true, capEpoch2});
             } else {
                 LogError("UBIO", "[BACKSTORE-WRITE-FAIL] pa=0x{:x} page=0x{:x} reason=remote", capPa2, capPage2);
             }
@@ -1804,11 +1811,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
 
     void hostIssueBackstoreDelete(uint64_t pa) override {
+        const uint64_t deleteEpoch = ubcc.getEpochForLine(pa);
         // Phase 3: dispatch to H64 when active
         if (_useH64 && _h64Host) {
-            // Use a dummy epoch for now; the UBCC will pass the correct one
-            // in the full integration.
-            uint64_t deleteEpoch = ubcc.getEpochForLine(pa);
             _h64Host->erase(pa, deleteEpoch,
                 [this](const BackstoreCompletion &comp) {
                     applyH64CoverageMutation(comp);
@@ -1827,7 +1832,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (existed && p) {
             _metaRNF.writePage(plan.target_page_pa, *p);
         }
-        _pendingBackstoreAcks.push_back({tickRef + 1, pa, true, existed});
+        _pendingBackstoreAcks.push_back(
+            {tickRef + 1, pa, true, existed, deleteEpoch});
     }
 
     void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override {
@@ -1875,9 +1881,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         while (it != _pendingBackstoreAcks.end()) {
             if (tick >= it->fireTick) {
                 if (it->isDelete)
-                    ubcc.onBackstoreDeleteAck(it->pa, it->existed);
+                    ubcc.onBackstoreDeleteAck(
+                        it->pa, it->existed, it->snapshotEpoch);
                 else {
-                    ubcc.onBackstoreWriteAck(it->pa);
+                    ubcc.onBackstoreWriteAck(it->pa, it->snapshotEpoch);
                     // Phase D5: clear dirty flags for pages that may
                     // have been pending when this PA was written.
                     // We don't know exact pagePa, but the ack means

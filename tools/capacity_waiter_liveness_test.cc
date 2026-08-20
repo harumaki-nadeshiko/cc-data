@@ -420,6 +420,52 @@ main()
     grantPinUbcc.removeOutstanding(pinnedPa);
     assert(!grantPinUbcc.directory().pinned(pinnedPa));
 
+    // A delayed eviction completion belongs to the metadata generation that
+    // launched it. If the same PA has since advanced and acquired a new live
+    // grant, the old write/delete ack must not remove the current entry.
+    UBCCController staleAckUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    staleAckUbcc.setHost(&host);
+    staleAckUbcc.setResidentOverflowPolicy(ResidentOverflowPolicy::Spill);
+    constexpr uint64_t staleWritePa = 0x100003a0;
+    constexpr uint64_t staleDeletePa = 0x100003e0;
+    assert(staleAckUbcc.debugSeedResidentForTest(
+        staleWritePa, static_cast<int>(MESIState::G_S), 1ULL << 1, 20, true));
+    assert(staleAckUbcc.debugForceResidentEvictForTest(staleWritePa));
+    DirEntry advancedWrite;
+    assert(staleAckUbcc.directory().lookup(staleWritePa, advancedWrite));
+    advancedWrite.epoch = 21;
+    advancedWrite.state = MESIState::G_S;
+    advancedWrite.sharersMask = 1ULL << 1;
+    staleAckUbcc.directory().update(staleWritePa, advancedWrite);
+    OutstandingRequest *liveWrite = staleAckUbcc.createOutstanding(
+        staleWritePa, OpType::GRANT_HANDSHAKE, 1, -1, 0);
+    assert(liveWrite);
+    liveWrite->stage = OpStage::WAITING_CLEAR;
+    liveWrite->baseEpoch = 21;
+    liveWrite->reqId = 1800;
+    staleAckUbcc.onBackstoreWriteAck(staleWritePa, 20);
+    assert(staleAckUbcc.directory().lookup(staleWritePa, advancedWrite));
+    assert(staleAckUbcc.findOutstanding(staleWritePa));
+
+    assert(staleAckUbcc.debugSeedResidentForTest(
+        staleDeletePa, static_cast<int>(MESIState::G_I), 0, 30, true));
+    assert(staleAckUbcc.debugForceResidentEvictForTest(staleDeletePa));
+    DirEntry advancedDelete;
+    assert(staleAckUbcc.directory().lookup(staleDeletePa, advancedDelete));
+    advancedDelete.epoch = 31;
+    advancedDelete.state = MESIState::G_I;
+    staleAckUbcc.directory().update(staleDeletePa, advancedDelete);
+    OutstandingRequest *liveDelete = staleAckUbcc.createOutstanding(
+        staleDeletePa, OpType::GRANT_HANDSHAKE, 1, -1, 0);
+    assert(liveDelete);
+    liveDelete->stage = OpStage::WAITING_CLEAR;
+    liveDelete->baseEpoch = 31;
+    liveDelete->reqId = 1801;
+    staleAckUbcc.onBackstoreDeleteAck(staleDeletePa, true, 30);
+    assert(staleAckUbcc.directory().lookup(staleDeletePa, advancedDelete));
+    assert(staleAckUbcc.findOutstanding(staleDeletePa));
+
     // A historical accepted tombstone must not mask a newly recreated exact
     // live grant tuple. The matching Clear commits the live WAITING_CLEAR
     // outstanding first; otherwise the tombstone replay leaves a ghost grant.

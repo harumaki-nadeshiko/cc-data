@@ -868,7 +868,7 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
 
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
-    _evictionPendingRemoval.insert(victimPa);
+    _evictionPendingRemoval[victimPa] = victim.epoch;
     framework::LogInfo("UBCC", "[RESIDENT-SPILL-START] tick={} home={} victim=0x{:x} state={} residentDirty={}",
             _host ? _host->hostCurrentTick() : 0,
             _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
@@ -1010,7 +1010,7 @@ UBCCController::scheduleBackstoreWrite(uint64_t linePa)
     if (_host) {
         _host->hostIssueBackstoreWrite(linePa);
     } else {
-        onBackstoreWriteAck(linePa);
+        onBackstoreWriteAck(linePa, getEpochForLine(linePa));
     }
 }
 
@@ -1022,7 +1022,7 @@ UBCCController::scheduleBackstoreDelete(uint64_t linePa)
     if (_host) {
         _host->hostIssueBackstoreDelete(linePa);
     } else {
-        onBackstoreDeleteAck(linePa, true);
+        onBackstoreDeleteAck(linePa, true, getEpochForLine(linePa));
     }
 }
 
@@ -4533,7 +4533,7 @@ UBCCController::onBackstoreFillComplete(
 }
 
 void
-UBCCController::onBackstoreWriteAck(uint64_t linePa)
+UBCCController::onBackstoreWriteAck(uint64_t linePa, uint64_t snapshotEpoch)
 {
     framework::LogInfo("UBCC", "[RESIDENT-SPILL-DONE] tick={} home={} pa=0x{:x} evictionPending={} async={}",
             _host ? _host->hostCurrentTick() : 0,
@@ -4554,6 +4554,32 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
     if (!_directory.lookup(linePa, e)) {
         return;
     }
+    auto eviction = _evictionPendingRemoval.find(linePa);
+    if (eviction == _evictionPendingRemoval.end()) {
+        refreshPinnedBit(linePa);
+        return;
+    }
+    const uint64_t expectedEpoch = eviction->second;
+    const uint64_t completionEpoch = snapshotEpoch ? snapshotEpoch : expectedEpoch;
+    if (completionEpoch != expectedEpoch) {
+        framework::LogWarn("UBCC",
+            "[UBCC-EVICTION-ACK-STALE] kind=write home={} pa=0x{:x} "
+            "completionEpoch={} pendingEpoch={} action=ignore_old_completion",
+            _nodeId, linePa, completionEpoch, expectedEpoch);
+        return;
+    }
+    if (findOutstanding(linePa) || normalizeEpoch(e.epoch) != normalizeEpoch(expectedEpoch)) {
+        framework::LogWarn("UBCC",
+            "[UBCC-EVICTION-ACK-STALE] kind=write home={} pa=0x{:x} "
+            "completionEpoch={} currentEpoch={} liveOutstanding={} "
+            "action=preserve_current_generation",
+            _nodeId, linePa, completionEpoch, e.epoch,
+            findOutstanding(linePa) ? 1 : 0);
+        _evictionPendingRemoval.erase(eviction);
+        _directory.setWbPending(linePa, false);
+        refreshPinnedBit(linePa);
+        return;
+    }
     if (e.state != MESIState::G_I) {
         publishBloomLive(linePa);
     }
@@ -4561,9 +4587,8 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
     _directory.update(linePa, e);
     _directory.setWbPending(linePa, false);
 
-    if (_evictionPendingRemoval.erase(linePa) != 0) {
-        _directory.forceRemove(linePa);
-    }
+    _evictionPendingRemoval.erase(eviction);
+    _directory.forceRemove(linePa);
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
     // A clean resident entry is now a legal victim for waiters in this set.
@@ -4571,13 +4596,43 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
 }
 
 void
-UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
+UBCCController::onBackstoreDeleteAck(
+    uint64_t linePa, bool existed, uint64_t snapshotEpoch)
 {
     // Phase 3: Bloom retains stale bit after delete ack (group rebuild corrects)
     _directory.bloomRemove(linePa);
 
+    auto eviction = _evictionPendingRemoval.find(linePa);
+    if (eviction == _evictionPendingRemoval.end()) {
+        refreshPinnedBit(linePa);
+        return;
+    }
+    const uint64_t expectedEpoch = eviction->second;
+    const uint64_t completionEpoch = snapshotEpoch ? snapshotEpoch : expectedEpoch;
+    if (completionEpoch != expectedEpoch) {
+        framework::LogWarn("UBCC",
+            "[UBCC-EVICTION-ACK-STALE] kind=delete home={} pa=0x{:x} "
+            "completionEpoch={} pendingEpoch={} action=ignore_old_completion",
+            _nodeId, linePa, completionEpoch, expectedEpoch);
+        return;
+    }
+
     DirEntry e;
     if (_directory.lookup(linePa, e)) {
+        if (findOutstanding(linePa) ||
+            normalizeEpoch(e.epoch) != normalizeEpoch(expectedEpoch)) {
+            framework::LogWarn("UBCC",
+                "[UBCC-EVICTION-ACK-STALE] kind=delete home={} pa=0x{:x} "
+                "completionEpoch={} currentEpoch={} liveOutstanding={} "
+                "action=preserve_current_generation",
+                _nodeId, linePa, completionEpoch, e.epoch,
+                findOutstanding(linePa) ? 1 : 0);
+            _evictionPendingRemoval.erase(eviction);
+            _directory.setFillPending(linePa, false);
+            _directory.setWbPending(linePa, false);
+            refreshPinnedBit(linePa);
+            return;
+        }
         _directory.setFillPending(linePa, false);
         _directory.setWbPending(linePa, false);
         if (e.state == MESIState::G_I) {
@@ -4587,7 +4642,7 @@ UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
             _directory.update(linePa, e);
         }
     }
-    _evictionPendingRemoval.erase(linePa);
+    _evictionPendingRemoval.erase(eviction);
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
     replayResidentWaitersForCapacity(linePa);
@@ -4642,7 +4697,7 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
         if (comp.status == BackstoreStatus::Ok) {
             // Bloom: upsert ack inserts
             publishBloomLive(linePa);
-            onBackstoreWriteAck(linePa);
+            onBackstoreWriteAck(linePa, comp.snapshotEpoch);
         } else if (comp.status == BackstoreStatus::StaleEpoch) {
             // An async snapshot may legitimately become stale. Drop only its
             // admission marker; residentDirty remains set for the next bounded
@@ -4682,7 +4737,7 @@ UBCCController::onBackstoreH64Complete(const BackstoreCompletion &comp)
         if (comp.status == BackstoreStatus::Ok ||
             comp.status == BackstoreStatus::AlreadyAbsent) {
             // Delete ack: may retain stale Bloom bit
-            onBackstoreDeleteAck(linePa, comp.existed);
+            onBackstoreDeleteAck(linePa, comp.existed, comp.snapshotEpoch);
         } else {
             if (_debugLog) framework::LogDebug("UBCC", "[BACKSTORE-H64-ERASE-ERR] home={} pa=0x{:x} status={} — "
                     "delete pin retained",
@@ -4827,7 +4882,7 @@ UBCCController::debugForceResidentEvictForTest(uint64_t linePa)
     }
     _directory.setWbPending(linePa, true);
     _directory.setPinned(linePa, true);
-    _evictionPendingRemoval.insert(linePa);
+    _evictionPendingRemoval[linePa] = e.epoch;
     if (e.state == MESIState::G_I) {
         scheduleBackstoreDelete(linePa);
     } else {

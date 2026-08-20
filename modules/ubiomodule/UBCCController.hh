@@ -744,8 +744,9 @@ class UBCCController
 
     void onBackstoreFillComplete(uint64_t linePa, bool found,
                                   const BackstoreEntry &entry);
-    void onBackstoreWriteAck(uint64_t linePa);
-    void onBackstoreDeleteAck(uint64_t linePa, bool existed);
+    void onBackstoreWriteAck(uint64_t linePa, uint64_t snapshotEpoch = 0);
+    void onBackstoreDeleteAck(uint64_t linePa, bool existed,
+                              uint64_t snapshotEpoch = 0);
 
     // Phase 3: typed H64 completion handler
     void onBackstoreH64Complete(const BackstoreCompletion &comp);
@@ -817,7 +818,9 @@ class UBCCController
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
     std::set<uint64_t> _pendingReplayActive;
-    std::set<uint64_t> _evictionPendingRemoval;
+    // PA -> directory epoch captured when eviction persistence was issued.
+    // A delayed completion may only remove that exact metadata generation.
+    std::map<uint64_t, uint64_t> _evictionPendingRemoval;
     // Replay can synchronously execute another protocol path. Suppress nested
     // capacity sweeps; the outer pass owns the current finite snapshot.
     bool _capacityReplayActive = false;
