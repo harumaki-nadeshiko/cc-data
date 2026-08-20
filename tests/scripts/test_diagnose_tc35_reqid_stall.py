@@ -203,7 +203,7 @@ class DiagnoseTc35Test(unittest.TestCase):
         report = MODULE.scan(self.root, self.args())
         self.assertEqual(
             report["mismatches"][0]["completed_identity"]["resolution"],
-            "RECORD_MISSING_FOR_THIS_TUPLE")
+            "NO_EXACT_CLEAR_ACCEPT")
 
     def test_no_markers_reports_feature_not_present(self):
         self.write("ubio-0-0.stderr.log", [
@@ -216,7 +216,7 @@ class DiagnoseTc35Test(unittest.TestCase):
         self.assertEqual(report["completed_read_records"], 0)
         self.assertEqual(
             report["mismatches"][0]["completed_identity"]["resolution"],
-            "FEATURE_NOT_PRESENT_IN_LOGS")
+            "HOME_PLANE_HAS_NO_FEATURE_MARKER")
 
     def test_no_recognized_ubio_file_reports_not_scanned(self):
         self.write("unknown.stderr.log", [
@@ -229,6 +229,57 @@ class DiagnoseTc35Test(unittest.TestCase):
         self.assertEqual(
             report["mismatches"][0]["completed_identity"]["resolution"],
             "RECORD_FILE_NOT_SCANNED")
+
+    def test_exact_clear_accept_without_record_is_explicit(self):
+        self.write("ubio-0-0.stdout.log", [
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x200 "
+            "requester=2:0 reqId=99 cacheSize=1",
+            "[HOME-CLEAR-RESULT] home=0:0 src=1:0 pa=0x100 "
+            "epoch=7 reqId=41 accepted=1",
+        ])
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"],
+                         "EXACT_CLEAR_ACCEPT_WITHOUT_RECORD")
+        self.assertEqual(identity["exact_clear_accepts"], 1)
+        self.assertEqual(identity["home_plane_records"], 1)
+
+    def test_same_reqid_clear_other_tuple_is_detected(self):
+        self.write("ubio-0-0.stdout.log", [
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x200 "
+            "requester=2:0 reqId=99 cacheSize=1",
+            "[HOME-CLEAR-RESULT] home=0:0 src=1:1 pa=0x200 "
+            "epoch=7 reqId=41 accepted=1",
+        ])
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"], "CLEAR_ACCEPT_TUPLE_DIFFERS")
+        self.assertEqual(identity["same_reqid_clear_accepts"], 1)
+
+    def test_mixed_run_file_is_detected(self):
+        self.write("ubio-0-0.stdout.log", [
+            "UBCC node_id=0 socket=0: initialized with epoch_bits=64",
+            "UBCC node_id=0 socket=0: initialized with epoch_bits=64",
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x200 "
+            "requester=2:0 reqId=99 cacheSize=1",
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"], "MIXED_RUN_LOG")
+        self.assertEqual(identity["mixed_run_files"], 1)
 
     def test_missing_clear_response_is_reported_after_home_commit(self):
         self.build_full_chain(repeats=1)

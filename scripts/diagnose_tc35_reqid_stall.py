@@ -30,6 +30,8 @@ GEM5_PATH_RE = re.compile(r"gem5(?:_tc\d+)?_node(\d+)")
 GEM5_FLAT_RE = re.compile(r"(?:^|[-_.])gem5[-_.](\d+)(?:[-_.]|$)")
 COMPLETED_RECORD = "[UBCC-COMPLETED-READ-RECORD]"
 COMPLETED_DUPLICATE = "[UBCC-COMPLETED-READ-DUPLICATE]"
+CLEAR_RESULT = "[HOME-CLEAR-RESULT]"
+UBIO_START_MARKER = "initialized with epoch_bits="
 
 
 STAGE_ORDER = (
@@ -185,6 +187,31 @@ def completed_identity_event(path, line_number, text):
         "line": line_number,
         "text": text,
         "process_node": process_node,
+    }
+
+
+def clear_result_event(path, line_number, text):
+    if CLEAR_RESULT not in text:
+        return None
+    fields = dict(FIELD_RE.findall(text))
+    required = ("home", "src", "pa", "reqId", "accepted")
+    if any(key not in fields for key in required):
+        return None
+    home = fields["home"].split(":", 1)
+    source = fields["src"].split(":", 1)
+    if len(home) != 2 or len(source) != 2:
+        return None
+    return {
+        "home": parse_int(home[0]),
+        "home_socket": parse_int(home[1]),
+        "pa": parse_int(fields["pa"]),
+        "requester": parse_int(source[0]),
+        "requester_socket": parse_int(source[1]),
+        "reqid": parse_int(fields["reqId"]),
+        "accepted": parse_int(fields["accepted"]),
+        "file": str(path),
+        "line": line_number,
+        "text": text,
     }
 
 
@@ -545,7 +572,9 @@ def post_clear_recovery(old_summaries, new_summaries):
     return "POST_CLEAR_RECOVERY_ORDER_UNKNOWN"
 
 
-def identity_resolution(mismatch, events, completed_record_total, ubio_file_count):
+def identity_resolution(mismatch, events, clear_results, completed_record_total,
+                        ubio_file_count, ubio_files_by_plane,
+                        records_by_plane, start_markers_by_file):
     matching = [event for event in events
                 if event["home"] == mismatch.home and
                 event["pa"] == mismatch.pa and
@@ -556,6 +585,28 @@ def identity_resolution(mismatch, events, completed_record_total, ubio_file_coun
                  event["home_socket"] == mismatch.home_socket)]
     records = [event for event in matching if event["kind"] == "record"]
     duplicates = [event for event in matching if event["kind"] == "duplicate"]
+    plane = (mismatch.home, mismatch.home_socket)
+    home_plane_files = ubio_files_by_plane.get(plane, set())
+    home_plane_records = records_by_plane.get(plane, 0)
+    home_file_start_markers = sum(
+        start_markers_by_file.get(path, 0) for path in home_plane_files)
+    mixed_run_files = sum(
+        1 for path in home_plane_files
+        if start_markers_by_file.get(path, 0) > 1)
+
+    exact_clear_accepts = [event for event in clear_results
+                           if event["accepted"] == 1 and
+                           event["home"] == mismatch.home and
+                           event["home_socket"] == mismatch.home_socket and
+                           event["pa"] == mismatch.pa and
+                           event["requester"] == mismatch.requester and
+                           event["requester_socket"] == mismatch.outstanding_socket and
+                           event["reqid"] == mismatch.outstanding_reqid]
+    same_reqid_clear_accepts = [event for event in clear_results
+                                if event["accepted"] == 1 and
+                                event["home"] == mismatch.home and
+                                event["home_socket"] == mismatch.home_socket and
+                                event["reqid"] == mismatch.outstanding_reqid]
     record_before = sum(
         1 for event in records
         if event["file"] == mismatch.file and event["line"] < mismatch.first_line)
@@ -573,12 +624,22 @@ def identity_resolution(mismatch, events, completed_record_total, ubio_file_coun
             duplicate_after_record += 1
 
     if not records:
-        if ubio_file_count == 0:
+        if not home_plane_files and ubio_file_count == 0:
             resolution = "RECORD_FILE_NOT_SCANNED"
+        elif not home_plane_files:
+            resolution = "HOME_PLANE_FILES_NOT_SCANNED"
+        elif mixed_run_files:
+            resolution = "MIXED_RUN_LOG"
+        elif home_plane_records == 0:
+            resolution = "HOME_PLANE_HAS_NO_FEATURE_MARKER"
+        elif exact_clear_accepts:
+            resolution = "EXACT_CLEAR_ACCEPT_WITHOUT_RECORD"
+        elif same_reqid_clear_accepts:
+            resolution = "CLEAR_ACCEPT_TUPLE_DIFFERS"
         elif completed_record_total == 0:
             resolution = "FEATURE_NOT_PRESENT_IN_LOGS"
         else:
-            resolution = "RECORD_MISSING_FOR_THIS_TUPLE"
+            resolution = "NO_EXACT_CLEAR_ACCEPT"
     elif record_before and not record_after and not record_between:
         resolution = "RECORD_BEFORE_ALL_MISMATCHES"
     elif record_after and not record_before and not record_between:
@@ -597,6 +658,12 @@ def identity_resolution(mismatch, events, completed_record_total, ubio_file_coun
         "record_within_mismatch_span": record_between,
         "record_after_mismatch": record_after,
         "duplicate_after_record": duplicate_after_record,
+        "home_plane_files": len(home_plane_files),
+        "home_plane_records": home_plane_records,
+        "home_plane_start_markers": home_file_start_markers,
+        "mixed_run_files": mixed_run_files,
+        "exact_clear_accepts": len(exact_clear_accepts),
+        "same_reqid_clear_accepts": len(same_reqid_clear_accepts),
     }
 
 
@@ -607,7 +674,10 @@ def scan(root, args):
     profiles = []
     progress = []
     completed_identity_events = []
+    clear_result_events = []
     ubio_files = set()
+    ubio_files_by_plane = defaultdict(set)
+    start_markers_by_file = defaultdict(int)
     file_errors = []
     lines_scanned = 0
     bytes_scanned = 0
@@ -621,6 +691,7 @@ def scan(root, args):
                     ("ubio" in path.name.lower() or
                      "ubio" in str(path.parent).lower()):
                 ubio_files.add(str(path))
+                ubio_files_by_plane[(process_node, process_socket)].add(str(path))
             remaining = args.max_total_bytes - bytes_scanned
             for line_number, text, truncated, bytes_read in bounded_lines_with_budget(
                     path, args.max_line_bytes, remaining):
@@ -642,6 +713,11 @@ def scan(root, args):
                 identity_event = completed_identity_event(path, line_number, text)
                 if identity_event:
                     completed_identity_events.append(identity_event)
+                clear_event = clear_result_event(path, line_number, text)
+                if clear_event:
+                    clear_result_events.append(clear_event)
+                if UBIO_START_MARKER in text:
+                    start_markers_by_file[str(path)] += 1
                 if "EPBACKEND-PROFILE" in text or "HA_PROFILE=" in text or \
                         "OURCC_CLEAR_PROFILE=" in text:
                     if len(profiles) < args.sample_limit:
@@ -688,9 +764,14 @@ def scan(root, args):
         new_chain = chain_cache[new_key]
         completed_record_total = sum(
             1 for event in completed_identity_events if event["kind"] == "record")
+        records_by_plane = defaultdict(int)
+        for event in completed_identity_events:
+            if event["kind"] == "record":
+                records_by_plane[(event["home"], event["home_socket"])] += 1
         identity = identity_resolution(
-            mismatch, completed_identity_events, completed_record_total,
-            len(ubio_files))
+            mismatch, completed_identity_events, clear_result_events,
+            completed_record_total, len(ubio_files), ubio_files_by_plane,
+            records_by_plane, start_markers_by_file)
         items.append({
             "mismatch": asdict(mismatch),
             "relation": relation(mismatch.outstanding_reqid,
@@ -823,6 +904,11 @@ def main():
             f"recordBeforeMismatch={item['completed_identity']['record_before_mismatch']} "
             f"recordWithinMismatch={item['completed_identity']['record_within_mismatch_span']} "
             f"recordAfterMismatch={item['completed_identity']['record_after_mismatch']} "
+            f"homePlaneFiles={item['completed_identity']['home_plane_files']} "
+            f"homePlaneRecords={item['completed_identity']['home_plane_records']} "
+            f"exactClearAccepts={item['completed_identity']['exact_clear_accepts']} "
+            f"sameReqIdClearAccepts={item['completed_identity']['same_reqid_clear_accepts']} "
+            f"mixedRunFiles={item['completed_identity']['mixed_run_files']} "
             f"homeAccept={old_summary['HC'].count} "
             f"homeReject={old_summary['HJ'].count} "
             f"cacheAccept={old_summary['CH'].count} "
