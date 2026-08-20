@@ -28,9 +28,11 @@ TRACE_RE = re.compile(
     r"\[TRACE-PERF\]\s+(\d+)\|(\d+)\|(\w+)\|(\d+)\|"
     r"(0x[0-9a-fA-F]+|\d+)\|(\w+)\|([^\s|]+)")
 FIELD_RE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)=([^\s,]+)")
-TICK_RE = re.compile(r"\btick=(\d+)")
-PA_RE = re.compile(r"\b(?:pa|victim)=0x([0-9a-fA-F]+)")
-REQID_RE = re.compile(r"\breqId=(\d+)")
+TICK_RE = re.compile(r"\btick=(\d+)", re.I)
+PA_RE = re.compile(
+    r"\b(?:pa|homePa|homeLinePa|keyPA|victim)=0x([0-9a-fA-F]+)", re.I)
+REQID_RE = re.compile(
+    r"\b(?:reqId|requestId)=(0x[0-9a-fA-F]+|\d+)", re.I)
 UBIO_DIR_RE = re.compile(
     r"ubio(?:_tc\d+)?_n(?:ode)?\d+_s(?:ocket)?\d+", re.I)
 GEM5_DIR_RE = re.compile(r"gem5(?:_tc\d+)?_node\d+", re.I)
@@ -130,6 +132,38 @@ def event(path, line_number, line, **extra):
     return item
 
 
+def protocol_stage(line):
+    markers = (
+        ("PENDING-READ-SAVE", "REQUESTER_PENDING_READ_SAVE"),
+        ("PENDING-READ-HIT", "REQUESTER_PENDING_READ_RETRY"),
+        ("PENDING-READ-CONFLICT", "REQUESTER_PENDING_READ_CONFLICT"),
+        ("UBCC-OUTER-REQ", "HOME_OUTER_REQ"),
+        ("UBCC-GRANT-READY", "HOME_GRANT_READY"),
+        ("PUSH-GRANT", "HOME_PUSH_GRANT"),
+        ("ADAPTER-GOT-RESP", "REQUESTER_ADAPTER_RESPONSE"),
+        ("PENDING-GRANT-SAVE", "REQUESTER_PENDING_GRANT_SAVE"),
+        ("PENDING-GRANT-OVERWRITE-BLOCKED",
+         "REQUESTER_PENDING_GRANT_OVERWRITE_BLOCKED"),
+        ("CLEAR-SEND", "REQUESTER_CLEAR_SEND"),
+        ("CLR-TX", "REQUESTER_CLEAR_TX"),
+        ("HOME-CLEAR-INGRESS", "HOME_CLEAR_INGRESS"),
+        ("HOME-CLEAR-RESULT", "HOME_CLEAR_RESULT"),
+        ("RESIDENT-FILL-ISSUED", "HOME_RESIDENT_FILL_ISSUED"),
+        ("RESIDENT-FILL-DONE", "HOME_RESIDENT_FILL_DONE"),
+        ("RESIDENT-SPILL-START", "HOME_RESIDENT_SPILL_START"),
+        ("RESIDENT-SPILL-DONE", "HOME_RESIDENT_SPILL_DONE"),
+        ("RESIDENT-WAITER-ENQ", "HOME_RESIDENT_WAITER_ENQ"),
+        ("RESIDENT-WAITER-REPLAY", "HOME_RESIDENT_WAITER_REPLAY"),
+        ("UBCC-GRANT-RETRY-TUPLE-MISMATCH", "HOME_GRANT_TUPLE_MISMATCH"),
+    )
+    for marker, stage in markers:
+        if marker in line:
+            if marker == "HOME-CLEAR-RESULT":
+                return stage + ("_ACCEPT" if "accepted=1" in line else "_REJECT")
+            return stage
+    return "PROTOCOL_EVENT"
+
+
 def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
             simout_root=None):
     phases = defaultdict(set)
@@ -212,11 +246,12 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
                 pa_match = PA_RE.search(line)
                 reqid_match = REQID_RE.search(line)
                 pa = int(pa_match.group(1), 16) if pa_match else None
-                reqid = int(reqid_match.group(1)) if reqid_match else None
+                reqid = int(reqid_match.group(1), 0) if reqid_match else None
                 if source in {"ubio", "gem5", "nsim"} and \
                         reqid is not None and pa is not None:
                     generic_by_reqid[reqid].append(
-                        event(path, line_number, line, reqid=reqid, pa=pa))
+                        event(path, line_number, line, reqid=reqid, pa=pa,
+                              source=source, stage=protocol_stage(line)))
 
                 if source == "ubio" and pa is not None:
                     if FILL_ISSUED in line:
@@ -355,6 +390,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
                                 key=lambda item: (item["timestamp"], item["file"],
                                                   item["line"]))
             req_generic = generic_by_reqid.get(reqid, [])
+            last_generic = req_generic[-1] if req_generic else None
             req_summaries.append({
                 "reqid": reqid,
                 "trace_event_count": len(req_traces),
@@ -362,7 +398,9 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
                     f"{item['component']}:{item['stage']}:{item['message_type']}"
                     for item in req_traces],
                 "last_trace": req_traces[-1] if req_traces else None,
-                "last_generic": req_generic[-1] if req_generic else None,
+                "generic_event_count": len(req_generic),
+                "last_protocol_stage": (last_generic or {}).get("stage"),
+                "last_generic": last_generic,
             })
 
         if writer["share_barrier_entered"] and not writer["window_pressure_started"]:
@@ -531,8 +569,9 @@ def print_compact(report):
             f"offsets=[{suspect['suspect_offset_begin']},"
             f"{suspect['suspect_offset_end_exclusive']}) "
             f"diagnosis={suspect['diagnosis']}")
-        reqids = ",".join(str(item["reqid"])
-                          for item in suspect["matching_reqids"]) or "none"
+        reqids = ",".join(
+            f"{item['reqid']}:{item.get('last_protocol_stage') or 'TRACE_ONLY'}"
+            for item in suspect["matching_reqids"]) or "none"
         print(
             f"EVIDENCE fills={len(suspect['unresolved_fills'])} "
             f"spills={len(suspect['unresolved_spills'])} "

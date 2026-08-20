@@ -257,6 +257,35 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         self.assertEqual(len(lines), 3)
         self.assertIn("NO_TC134_EVIDENCE", lines[0])
 
+    def test_pa_aliases_and_hex_request_ids_are_parsed(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        aliases = ("PA", "homePa", "homePA", "homeLinePa", "keyPA")
+        for index, alias in enumerate(aliases, 1):
+            self.write(f"ubio-0-{index}.stderr.log", [
+                f"[UBCC-OUTER-REQ] home=0 {alias}=0x{offset + index * 64:x} "
+                f"reqId=0x{40 + index:x}",
+            ])
+        report = MODULE.analyze(self.root)
+        suspect = report["suspects"][0]
+        reqids = {item["reqid"] for item in suspect["matching_reqids"]}
+        self.assertEqual(reqids, {41, 42, 43, 44, 45})
+        self.assertTrue(all(item["last_protocol_stage"] == "HOME_OUTER_REQ"
+                            for item in suspect["matching_reqids"]))
+
+    def test_compact_reports_last_non_sampled_protocol_stage(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        self.write("gem5-3.stderr.log", [
+            f"[PENDING-READ-SAVE] node=3 localPa=0x{offset:x} "
+            f"homePA=0x{offset:x} sourceSocket=0 epoch=1 reqId=77",
+        ])
+        report = MODULE.analyze(self.root)
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            MODULE.print_compact(report)
+        self.assertIn("77:REQUESTER_PENDING_READ_SAVE", stream.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
