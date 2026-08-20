@@ -197,6 +197,20 @@ def collect(args):
         if key in ENV_NAMES or key.startswith(ENV_PREFIXES)
     }
     implementation = platform.python_implementation()
+    git = git_info(args.repo)
+    if args.git_head:
+        git = {
+            "available": True,
+            "head": args.git_head,
+            "dirty": args.git_dirty == "true" if args.git_dirty else None,
+            "submodules": [],
+        }
+        for item in args.submodule:
+            path, separator, head = item.partition("=")
+            if not separator or not path or not head:
+                raise ValueError("--submodule must be PATH=HEAD")
+            git["submodules"].append({"path": path, "head": head, "state": " "})
+        git["submodules"].sort(key=lambda item: item["path"])
     fingerprint = {
         "schema_version": SCHEMA_VERSION,
         "label": args.label,
@@ -222,7 +236,7 @@ def collect(args):
             "zeromq": zmq_version(args.libzmq),
         },
         "environment": dict(sorted(environment.items())),
-        "git": git_info(args.repo),
+        "git": git,
         "binaries": sorted((binary_info(path) for path in args.binary), key=lambda item: item["path"]),
     }
     return fingerprint
@@ -281,6 +295,11 @@ def main(argv=None):
     parser.add_argument("--binary", action="append", default=[], metavar="PATH",
                         help="binary to hash and inspect with ldd (repeatable)")
     parser.add_argument("--repo", default=".", help="git checkout to inspect (default: cwd)")
+    parser.add_argument("--git-head", help="orchestrator-supplied Git HEAD")
+    parser.add_argument("--git-dirty", choices=("true", "false"),
+                        help="tracked dirty state used with --git-head")
+    parser.add_argument("--submodule", action="append", default=[], metavar="PATH=HEAD",
+                        help="orchestrator-supplied submodule revision")
     parser.add_argument("--compare", metavar="BASELINE.json")
     parser.add_argument("--ignore-field", action="append", default=[], metavar="GLOB",
                         help="ignore dotted field/glob during comparison (repeatable)")

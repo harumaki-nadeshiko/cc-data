@@ -8,6 +8,10 @@ REPORT="${RUNTIME_REPORT:-$ROOT/runtime_fingerprint_remote.json}"
 LIBZMQ="${LIBZMQ_PATH:-}"
 IMAGE_ID="${UBCC_DOCKER_IMAGE_ID:-}"
 IMAGE="${UBCC_DOCKER_IMAGE:-ubcc-dev:ubuntu20.04}"
+GEM5_BIN="${GEM5_BIN:-$ROOT/gem5/build/ARM/gem5.opt}"
+if [ ! -f "$GEM5_BIN" ] && [ -f "$ROOT/gem5/gem5/build/ARM/gem5.opt" ]; then
+    GEM5_BIN="$ROOT/gem5/gem5/build/ARM/gem5.opt"
+fi
 
 usage() {
     cat <<'EOF'
@@ -38,7 +42,7 @@ done
 fingerprint_args=(--label remote --repo "$ROOT"
     --binary "$ROOT/build/bin/ubio"
     --binary "$ROOT/build/bin/networksim"
-    --binary "$ROOT/gem5/build/ARM/gem5.opt")
+    --binary "$GEM5_BIN")
 [ -n "$LIBZMQ" ] && fingerprint_args+=(--libzmq "$LIBZMQ")
 if [ -z "$IMAGE_ID" ] && command -v docker >/dev/null 2>&1; then
     IMAGE_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)"

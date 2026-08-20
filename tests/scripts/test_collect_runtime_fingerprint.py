@@ -105,6 +105,8 @@ class FingerprintTests(unittest.TestCase):
     def test_collected_json_is_deterministic(self):
         args = type("Args", (), {"label": "x", "libzmq": None,
                                   "container_image_id": "sha256:test", "repo": ".",
+                                  "git_head": None, "git_dirty": None,
+                                  "submodule": [],
                                   "binary": ["z", "a"]})()
         uname = type("Uname", (), dict(system="Linux", node="n", release="r",
                                         version="v", machine="m"))()
