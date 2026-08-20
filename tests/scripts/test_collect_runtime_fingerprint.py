@@ -49,7 +49,7 @@ class FingerprintTests(unittest.TestCase):
         classes = {item["field"]: item["classification"] for item in diff}
         self.assertEqual(classes["host.machine"], "ignored")
         self.assertEqual(classes["label"], "ignored")
-        self.assertEqual(classes["git.head"], "required")
+        self.assertEqual(classes["git.head"], "ignored")
         self.assertEqual(classes["runtime.python.version"], "required")
 
     def test_strict_host_and_custom_ignore(self):
@@ -98,7 +98,9 @@ class FingerprintTests(unittest.TestCase):
             with mock.patch.object(fingerprint, "collect", return_value=current):
                 self.assertEqual(fingerprint.main(["--compare", str(baseline)]), 0)
             baseline.write_text(json.dumps({"host": {"machine": "local"},
-                                            "git": {"head": "different"}}))
+                                            "runtime": {"python": {"version": "different"}}}))
+            current = {"host": {"machine": "remote"},
+                       "runtime": {"python": {"version": "same"}}}
             with mock.patch.object(fingerprint, "collect", return_value=current):
                 self.assertEqual(fingerprint.main(["--compare", str(baseline)]), 1)
 
@@ -107,7 +109,7 @@ class FingerprintTests(unittest.TestCase):
                                   "container_image_id": "sha256:test", "repo": ".",
                                   "git_head": None, "git_dirty": None,
                                   "submodule": [],
-                                  "binary": ["z", "a"]})()
+                                  "binary": ["z", "a"], "artifact": []})()
         uname = type("Uname", (), dict(system="Linux", node="n", release="r",
                                         version="v", machine="m"))()
         with mock.patch.object(fingerprint.platform, "uname", return_value=uname), \

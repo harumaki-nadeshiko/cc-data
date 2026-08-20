@@ -32,9 +32,11 @@ ENV_PREFIXES = (
     "HA_", "OURCC_", "NSIM_",
 )
 DEFAULT_HOST_ONLY = (
-    "label", "host", "environment", "runtime.python.executable",
+    "label", "host.machine", "host.uname", "host.cpu", "host.os_release",
+    "environment", "git", "runtime.python.executable",
     "runtime.tools.*.path", "runtime.zeromq.library",
-    "binaries.*.path", "binaries.*.ldd.dependencies.*.resolved",
+    "binaries.*.path", "binaries.*.ldd.dependencies",
+    "artifacts.*.path",
 )
 
 
@@ -155,11 +157,15 @@ def parse_ldd(output):
         if "=>" in line:
             name, target = (part.strip() for part in line.split("=>", 1))
             target = target.split(" (", 1)[0].strip()
-            dependencies.append({"name": name, "resolved": None if target == "not found" else target})
+            dependencies.append({"name": name,
+                                 "resolved": None if target == "not found" else target,
+                                 "missing": target == "not found"})
         else:
             token = line.split(" (", 1)[0].strip()
             # Loader and static/non-dynamic diagnostics have no => form.
-            dependencies.append({"name": token, "resolved": token if token.startswith("/") else None})
+            dependencies.append({"name": token,
+                                 "resolved": token if token.startswith("/") else None,
+                                 "missing": False})
     return sorted(dependencies, key=lambda item: (item["name"], item["resolved"] or ""))
 
 
@@ -179,6 +185,10 @@ def binary_info(path):
             "available": True, "exit_code": rc,
             "dependencies": parse_ldd(output),
         }
+        item["ldd"]["missing"] = sorted(
+            dependency["name"] for dependency in item["ldd"]["dependencies"]
+            if dependency["missing"]
+        )
         if rc and not item["ldd"]["dependencies"]:
             item["ldd"]["error"] = output
     return item
@@ -238,6 +248,11 @@ def collect(args):
         "environment": dict(sorted(environment.items())),
         "git": git,
         "binaries": sorted((binary_info(path) for path in args.binary), key=lambda item: item["path"]),
+        "artifacts": sorted(
+            ({"path": os.path.abspath(path), "exists": os.path.isfile(path),
+              "sha256": sha256(path) if os.path.isfile(path) else None}
+             for path in args.artifact),
+            key=lambda item: item["path"]),
     }
     return fingerprint
 
@@ -294,6 +309,8 @@ def main(argv=None):
                         help="container image ID/digest supplied by the orchestrator")
     parser.add_argument("--binary", action="append", default=[], metavar="PATH",
                         help="binary to hash and inspect with ldd (repeatable)")
+    parser.add_argument("--artifact", action="append", default=[], metavar="PATH",
+                        help="file to hash without ldd inspection (repeatable)")
     parser.add_argument("--repo", default=".", help="git checkout to inspect (default: cwd)")
     parser.add_argument("--git-head", help="orchestrator-supplied Git HEAD")
     parser.add_argument("--git-dirty", choices=("true", "false"),

@@ -42,7 +42,11 @@ done
 fingerprint_args=(--label remote --repo "$ROOT"
     --binary "$ROOT/build/bin/ubio"
     --binary "$ROOT/build/bin/networksim"
-    --binary "$GEM5_BIN")
+    --binary "$GEM5_BIN"
+    --artifact "$ROOT/tests/e2e/run_multi.sh"
+    --artifact "$ROOT/tests/e2e/test_e2e.py"
+    --artifact "$ROOT/configs/topo_8n2s.json"
+    --artifact "$ROOT/scripts/audit_tc_launch.py")
 [ -n "$LIBZMQ" ] && fingerprint_args+=(--libzmq "$LIBZMQ")
 if [ -z "$IMAGE_ID" ] && command -v docker >/dev/null 2>&1; then
     IMAGE_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
