@@ -393,6 +393,46 @@ main()
     assert(tupleUbcc.processClear(
         tuplePa, 1, tupleClearEpoch, tupleReqId));
 
+    // A historical accepted tombstone must not mask a newly recreated exact
+    // live grant tuple. The matching Clear commits the live WAITING_CLEAR
+    // outstanding first; otherwise the tombstone replay leaves a ghost grant.
+    UBCCController liveOverTombstoneUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    liveOverTombstoneUbcc.setHost(&host);
+    constexpr uint64_t liveOverTombstonePa = 0x10000380;
+    constexpr uint64_t liveOverTombstoneReqId = 1750;
+    constexpr uint64_t liveOverTombstoneBaseEpoch = 10;
+    assert(liveOverTombstoneUbcc.debugSeedResidentForTest(
+        liveOverTombstonePa, static_cast<int>(MESIState::G_I), 0,
+        liveOverTombstoneBaseEpoch, false));
+    uint64_t historicalClearEpoch = 0;
+    const auto historicalGrant = liveOverTombstoneUbcc.processOuterRequest(
+        liveOverTombstonePa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, liveOverTombstoneBaseEpoch, liveOverTombstoneReqId,
+        nullptr, nullptr, nullptr, nullptr, nullptr,
+        &historicalClearEpoch, nullptr);
+    assert(static_cast<int>(historicalGrant) != -1);
+    assert(liveOverTombstoneUbcc.processClear(
+        liveOverTombstonePa, 1, historicalClearEpoch,
+        liveOverTombstoneReqId));
+    assert(!liveOverTombstoneUbcc.findOutstanding(liveOverTombstonePa));
+
+    OutstandingRequest *recreated = liveOverTombstoneUbcc.createOutstanding(
+        liveOverTombstonePa, OpType::GRANT_HANDSHAKE, 1, -1, 0);
+    assert(recreated);
+    recreated->baseEpoch = historicalClearEpoch;
+    recreated->reservedEpoch = 12;
+    recreated->reqId = liveOverTombstoneReqId;
+    recreated->stage = OpStage::WAITING_CLEAR;
+    recreated->intendedState = MESIState::G_S;
+    recreated->intendedSharersMask = 1ULL << 1;
+    recreated->intendedOwnerNode = -1;
+    recreated->intendedDirty = false;
+    assert(liveOverTombstoneUbcc.processClear(
+        liveOverTombstonePa, 1, historicalClearEpoch,
+        liveOverTombstoneReqId));
+    assert(!liveOverTombstoneUbcc.findOutstanding(liveOverTombstonePa));
+
     // A queued ReadReq keeps its requester reqId but is replayed against the
     // post-Clear epoch. After that replay commits, a delayed copy of the
     // original pre-rebase ReadReq must hit the accepted reqId tombstone. It

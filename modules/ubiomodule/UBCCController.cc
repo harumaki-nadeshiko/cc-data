@@ -3756,9 +3756,25 @@ UBCCController::processClear(
             "srcNode={} epoch={} reqId={}",
             _nodeId, line_pa, srcNode, epoch, reqId);
 
-    // Check tombstone first (duplicate Clear within window W)
+    // A delayed duplicate ReadReq can recreate the same grant tuple while its
+    // historical Clear tombstone is still live. In that state, replaying the
+    // old ClearAck first would leave the current WAITING_CLEAR outstanding
+    // permanently installed. Prefer an exact live tuple; tombstones only own
+    // Clears that do not match the current live grant.
+    OutstandingRequest *ost = findOutstanding(line_pa);
+    const bool exactLiveGrant = ost &&
+        ost->opType == OpType::GRANT_HANDSHAKE &&
+        ost->stage == OpStage::WAITING_CLEAR &&
+        ost->reqId == reqId &&
+        ost->requesterNode == srcNode &&
+        normalizeEpoch(ost->baseEpoch) == epoch;
+
+    // Check tombstone for a duplicate Clear within window W. An exact live
+    // grant takes precedence, but retain the hit result for diagnostics.
     bool tsAccepted = false;
-    if (checkTombstone(line_pa, epoch, reqId, tsAccepted)) {
+    const bool tombstoneHit = checkTombstone(
+        line_pa, epoch, reqId, tsAccepted);
+    if (!exactLiveGrant && tombstoneHit) {
         // UBInvariant: log tombstone replay (warning-level)
         _tombstoneReplayCount++;
         framework::LogInfo("UBCC-invariant",
@@ -3776,6 +3792,12 @@ UBCCController::processClear(
         }
         return tsAccepted;
     }
+    if (exactLiveGrant && tombstoneHit) {
+        framework::LogWarn("UBCC",
+            "[UBCC-CLEAR-LIVE-OVER-TOMBSTONE] home={}:{} pa=0x{:x} "
+            "requester={} epoch={} reqId={} action=commit_live_tuple",
+            _nodeId, _socketId, line_pa, srcNode, epoch, reqId);
+    }
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
@@ -3791,7 +3813,6 @@ UBCCController::processClear(
     }
 
     // Verify GRANT_HANDSHAKE outstanding
-    OutstandingRequest *ost = findOutstanding(line_pa);
     if (_debugClearTrace) {
         framework::LogInfo("UBCC",
                      "[DEBUG-TC5-CLEAR-TRACE] processClearEnter home={} pa=0x{:x} src={} "
