@@ -114,6 +114,11 @@ UBCCController::UBCCController(int node_id, int socket_id,
 
     framework::LogInfo("UBCC", "UBCC node_id={} socket={}: C3 batch RS {}",
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
+    framework::LogInfo("UBCC",
+            "[UBCC-PROTOCOL-BUILD] revision=20260820-clear-eviction-v1 "
+            "home={}:{} liveOutstandingPin=1 staleEvictionEpoch=1 "
+            "completedReadIdentity=1 liveClearPriority=1",
+            _nodeId, _socketId);
 
     registerInstance(node_id, socket_id, this);
 }
@@ -1595,6 +1600,67 @@ UBCCController::processOuterRequest(
                             "outstandingSocket={} outstandingReqId={} — BUSY",
                             _nodeId, line_pa, requesterNode, requesterSocket, reqId,
                             existing->requesterSocket, existing->reqId);
+                    static uint64_t tupleStateCount = 0;
+                    ++tupleStateCount;
+                    if (tupleStateCount <= 8 ||
+                        (tupleStateCount & (tupleStateCount - 1)) == 0) {
+                        DirEntry stateEntry;
+                        const bool resident = _directory.lookup(line_pa, stateEntry);
+                        auto pendingIt = _pendingRequesters.find(line_pa);
+                        auto residentIt = _residentWaiters.find(line_pa);
+                        auto persistenceIt = _h64PersistenceWaiters.find(line_pa);
+                        auto evictionIt = _evictionPendingRemoval.find(line_pa);
+                        size_t tombstoneDepth = 0;
+                        size_t exactTombstones = 0;
+                        auto tombstoneIt = _tombstones.find(line_pa);
+                        if (tombstoneIt != _tombstones.end()) {
+                            tombstoneDepth = tombstoneIt->second.size();
+                            for (const auto &ts : tombstoneIt->second) {
+                                if (ts.reqId == existing->reqId)
+                                    ++exactTombstones;
+                            }
+                        }
+                        framework::LogWarn("UBCC",
+                            "[UBCC-TUPLE-STATE] revision=20260820-clear-eviction-v1 "
+                            "serial={} home={}:{} pa=0x{:x} resident={} "
+                            "dirState={} dirEpoch={} pinned={} fillPending={} "
+                            "wbPending={} outstandingOp={} outstandingStage={} "
+                            "outstandingRequester={}:{} outstandingReqId={} "
+                            "outstandingBaseEpoch={} outstandingReservedEpoch={} "
+                            "incomingRequester={}:{} incomingReqId={} "
+                            "incomingEpoch={} pendingDepth={} residentWaiterDepth={} "
+                            "persistenceDepth={} evictionPending={} evictionEpoch={} "
+                            "tombstoneDepth={} exactOutstandingTombstones={} "
+                            "completedOld={} completedIncoming={}",
+                            tupleStateCount, _nodeId, _socketId, line_pa,
+                            resident ? 1 : 0,
+                            resident ? static_cast<int>(stateEntry.state) : -1,
+                            resident ? stateEntry.epoch : 0,
+                            resident && _directory.pinned(line_pa) ? 1 : 0,
+                            resident && _directory.fillPending(line_pa) ? 1 : 0,
+                            resident && _directory.wbPending(line_pa) ? 1 : 0,
+                            static_cast<int>(existing->opType),
+                            static_cast<int>(existing->stage),
+                            existing->requesterNode, existing->requesterSocket,
+                            existing->reqId, existing->baseEpoch,
+                            existing->reservedEpoch, requesterNode,
+                            requesterSocket, reqId, baseEpoch,
+                            pendingIt == _pendingRequesters.end()
+                                ? 0 : pendingIt->second.size(),
+                            residentIt == _residentWaiters.end()
+                                ? 0 : residentIt->second.size(),
+                            persistenceIt == _h64PersistenceWaiters.end()
+                                ? 0 : persistenceIt->second.size(),
+                            evictionIt == _evictionPendingRemoval.end() ? 0 : 1,
+                            evictionIt == _evictionPendingRemoval.end()
+                                ? 0 : evictionIt->second,
+                            tombstoneDepth, exactTombstones,
+                            completedReadIdentityContains(
+                                line_pa, existing->requesterNode,
+                                existing->requesterSocket, existing->reqId) ? 1 : 0,
+                            completedReadIdentityContains(
+                                line_pa, requesterNode, requesterSocket, reqId) ? 1 : 0);
+                    }
                 }
                 // TC98 fix: rate-limit high-frequency BUSY log
                 { static uint64_t _cnt = 0; if (++_cnt <= 3 || _cnt % 1000 == 0)
@@ -3801,6 +3867,59 @@ UBCCController::processClear(
 
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
+        static uint64_t unknownClearStateCount = 0;
+        ++unknownClearStateCount;
+        if (unknownClearStateCount <= 8 ||
+            (unknownClearStateCount & (unknownClearStateCount - 1)) == 0) {
+            OutstandingRequest *unknownOst = findOutstanding(line_pa);
+            auto pendingIt = _pendingRequesters.find(line_pa);
+            auto residentIt = _residentWaiters.find(line_pa);
+            auto persistenceIt = _h64PersistenceWaiters.find(line_pa);
+            auto evictionIt = _evictionPendingRemoval.find(line_pa);
+            size_t tombstoneDepth = 0;
+            size_t exactTombstones = 0;
+            auto tombstoneIt = _tombstones.find(line_pa);
+            if (tombstoneIt != _tombstones.end()) {
+                tombstoneDepth = tombstoneIt->second.size();
+                for (const auto &ts : tombstoneIt->second) {
+                    if (ts.reqId == reqId)
+                        ++exactTombstones;
+                }
+            }
+            const int identitySocket = unknownOst
+                ? unknownOst->requesterSocket : -1;
+            framework::LogWarn("UBCC",
+                "[UBCC-UNKNOWN-CLEAR-STATE] revision=20260820-clear-eviction-v1 "
+                "serial={} home={}:{} pa=0x{:x} srcNode={} clearEpoch={} "
+                "clearReqId={} hasOutstanding={} outstandingOp={} "
+                "outstandingStage={} outstandingRequester={}:{} "
+                "outstandingReqId={} outstandingBaseEpoch={} "
+                "outstandingReservedEpoch={} pendingDepth={} "
+                "residentWaiterDepth={} persistenceDepth={} "
+                "evictionPending={} evictionEpoch={} tombstoneDepth={} "
+                "exactClearTombstones={} completedIdentity={}",
+                unknownClearStateCount, _nodeId, _socketId, line_pa,
+                srcNode, epoch, reqId, unknownOst ? 1 : 0,
+                unknownOst ? static_cast<int>(unknownOst->opType) : -1,
+                unknownOst ? static_cast<int>(unknownOst->stage) : -1,
+                unknownOst ? unknownOst->requesterNode : -1,
+                identitySocket,
+                unknownOst ? unknownOst->reqId : 0,
+                unknownOst ? unknownOst->baseEpoch : 0,
+                unknownOst ? unknownOst->reservedEpoch : 0,
+                pendingIt == _pendingRequesters.end()
+                    ? 0 : pendingIt->second.size(),
+                residentIt == _residentWaiters.end()
+                    ? 0 : residentIt->second.size(),
+                persistenceIt == _h64PersistenceWaiters.end()
+                    ? 0 : persistenceIt->second.size(),
+                evictionIt == _evictionPendingRemoval.end() ? 0 : 1,
+                evictionIt == _evictionPendingRemoval.end()
+                    ? 0 : evictionIt->second,
+                tombstoneDepth, exactTombstones,
+                identitySocket >= 0 && completedReadIdentityContains(
+                    line_pa, srcNode, identitySocket, reqId) ? 1 : 0);
+        }
         // Stale Clear for unknown line — log and drop (§3.5)
         if (_debugClearTrace) {
             framework::LogWarn("UBCC",
