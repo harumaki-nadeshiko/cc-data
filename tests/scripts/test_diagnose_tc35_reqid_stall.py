@@ -50,7 +50,7 @@ class DiagnoseTc35Test(unittest.TestCase):
             f"[UBCC-GRANT-READY] home=0 pa={pa} requester=1 reqId={old_req}",
             f"[TRACE-PERF] 100|1|ubio|{old_req}|{pa}|SEND_NET|ReadResp",
             f"[TRACE-PERF] 130|0|ubio|{old_req}|{pa}|RECV_NET|ClearReq",
-            f"[HOME-CLEAR-COMMIT] home=0 pa={pa} reqId={old_req}",
+            f"[HOME-CLEAR-RESULT] home=0 pa={pa} reqId={old_req} accepted=1",
             f"[TRACE-PERF] 140|1|ubio|{old_req}|{pa}|SEND_NET|ClearResp",
             f"[UBCC-OUTER-REQ] home=0 pa={pa} requester=1 reqId={new_req}",
         ] + [
@@ -165,6 +165,18 @@ class DiagnoseTc35Test(unittest.TestCase):
         self.assertEqual(
             report["mismatches"][0]["likely_break"],
             "after_HC_before_HUSN.CR")
+
+    def test_rejected_clear_cache_hit_is_not_completion(self):
+        self.build_full_chain(repeats=1)
+        path = self.root / "gem5_tc35_node1/stderr.log"
+        lines = [line.replace("accepted=1", "accepted=0")
+                 for line in path.read_text().splitlines()]
+        path.write_text("\n".join(lines) + "\n")
+        report = MODULE.scan(self.root, self.args())
+        item = report["mismatches"][0]
+        self.assertEqual(item["old_chain"]["counts"]["CH"], 0)
+        self.assertEqual(item["old_chain"]["counts"]["CJ"], 1)
+        self.assertEqual(item["likely_break"], "clear_response_rejected")
 
     def test_long_line_preserves_prefix_marker(self):
         marker = (

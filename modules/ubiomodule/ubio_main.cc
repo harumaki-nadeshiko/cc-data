@@ -2688,7 +2688,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::ClearReq: {
-        LogInfo("UBIO", "[HOME-CLEAR-COMMIT] home={}:{} src={}:{} "
+        LogInfo("UBIO", "[HOME-CLEAR-INGRESS] home={}:{} src={}:{} "
                 "pa=0x{:x} reqId={}", nid, sid, msg.h.srcNode,
                 msg.h.srcSocket, msg.h.homeLinePa, msg.h.reqId);
         if (g_debugUbioPerf) {
@@ -2699,6 +2699,10 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         }
         bool accepted = ubcc.processClear(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
+        LogInfo("UBIO", "[HOME-CLEAR-RESULT] home={}:{} src={}:{} "
+                "pa=0x{:x} epoch={} reqId={} accepted={}", nid, sid,
+                msg.h.srcNode, msg.h.srcSocket, msg.h.homeLinePa,
+                msg.h.epoch, msg.h.reqId, accepted ? 1 : 0);
         response.h.type = CoherenceMessageType::ClearResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;

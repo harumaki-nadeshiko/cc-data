@@ -45,8 +45,10 @@ CLEAR_CHAIN_PATTERNS = {
     "clear_send": re.compile(r"\[CLEAR-SEND\]|\[CLR-TX\]|phase=clear_queued"),
     "clear_transport_handoff": re.compile(r"phase=transport_handoff"),
     "network_clear": re.compile(r"(?:TRACE-PERF|NSIM-FWD-ALL).*ClearReq"),
-    "home_clear": re.compile(r"\[HOME-CLEAR-COMMIT\]|processClear"),
-    "clear_commit": re.compile(r"commitIntendedResult.*path=Clear"),
+    "home_clear": re.compile(r"\[HOME-CLEAR-(?:INGRESS|COMMIT)\]|processClear"),
+    "clear_commit": re.compile(
+        r"commitIntendedResult.*path=Clear|HOME-CLEAR-RESULT.*accepted=1|"
+        r"DEBUG-UBCC-CLEAR.* accept "),
     "clear_response": re.compile(r"ClearResp|\[CLR-CACHE-HIT\]"),
     "pending_key_drift": re.compile(r"PENDING-GRANT-KEY-DRIFT"),
     "upgrade_req": re.compile(r"(?:SEND|RECV|FWD).*UpgradeReq|processOuterUpgradeReq"),

@@ -31,8 +31,8 @@ GEM5_PATH_RE = re.compile(r"gem5(?:_tc\d+)?_node(\d+)")
 STAGE_ORDER = (
     "HRR", "HG", "HUSN.RR", "NR.RR", "NF.RR", "RURN.RR",
     "RUSG.RR", "AR", "PG", "CS", "RURG.CQ", "RUSN.CQ",
-    "NR.CQ", "NF.CQ", "HURN.CQ", "HC", "HUSN.CR", "NR.CR",
-    "NF.CR", "RURN.CR", "RUSG.CR", "CR", "CH", "ESR",
+    "NR.CQ", "NF.CQ", "HURN.CQ", "HC", "HJ", "HUSN.CR", "NR.CR",
+    "NF.CR", "RURN.CR", "RUSG.CR", "CR", "CH", "CJ", "ESR",
 )
 
 STAGE_DESCRIPTIONS = {
@@ -51,7 +51,8 @@ STAGE_DESCRIPTIONS = {
     "NR.CQ": "networksim received ClearReq",
     "NF.CQ": "networksim forwarded ClearReq",
     "HURN.CQ": "Home UBIO received ClearReq",
-    "HC": "Home committed Clear",
+    "HC": "Home accepted and committed Clear",
+    "HJ": "Home rejected Clear",
     "HUSN.CR": "Home UBIO sent ClearResp to network",
     "NR.CR": "networksim received ClearResp",
     "NF.CR": "networksim forwarded ClearResp",
@@ -59,6 +60,7 @@ STAGE_DESCRIPTIONS = {
     "RUSG.CR": "requester UBIO sent ClearResp to gem5",
     "CR": "requester adapter received ClearResp",
     "CH": "requester consumed cached ClearResp",
+    "CJ": "requester consumed rejected ClearResp",
     "ESR": "EP-SNF retry/request activity",
 }
 
@@ -302,12 +304,18 @@ def classify_text(path, line_number, text):
     if any(marker in text for marker in
            ("CLEAR-SEND", "CLR-CACHE-MISS", "CLR-TX")):
         stages.append("CS")
-    if "HOME-CLEAR-COMMIT" in text or "UBST" in text and "action=COMMIT" in text:
+    if (("HOME-CLEAR-RESULT" in text and "accepted=1" in text) or
+            ("UBST" in text and "action=COMMIT" in text) or
+            ("DEBUG-UBCC-CLEAR" in text and " accept " in text)):
         stages.append("HC")
+    if "HOME-CLEAR-RESULT" in text and "accepted=0" in text:
+        stages.append("HJ")
     if "CLEAR-RESP" in text:
         stages.append("CR")
-    if "CLR-CACHE-HIT" in text:
+    if "CLR-CACHE-HIT" in text and "accepted=0" not in text:
         stages.append("CH")
+    if "CLR-CACHE-HIT" in text and "accepted=0" in text:
+        stages.append("CJ")
     if any(marker in text for marker in
            ("grant BUSY", "DEBUG-EP-SNF", "recvRequestMsg")):
         stages.append("ESR")
@@ -429,11 +437,15 @@ def chain_line(label, summaries):
 
 
 def likely_break(summaries):
+    if summaries["CJ"].count:
+        return "clear_response_rejected"
+    if summaries["CH"].count:
+        return "through_accepted_clear_response_consumption"
     counts = chain_counts(summaries)
     ordered = ("HRR", "HG", "HUSN.RR", "NR.RR", "NF.RR", "RURN.RR",
                "RUSG.RR", "AR", "PG", "CS", "RURG.CQ", "RUSN.CQ",
                "NR.CQ", "NF.CQ", "HURN.CQ", "HC", "HUSN.CR", "NR.CR",
-               "NF.CR", "RURN.CR", "RUSG.CR", "CR", "CH")
+               "NF.CR", "RURN.CR", "RUSG.CR", "CR")
     if not counts[ordered[0]]:
         return "no_old_transaction_events"
     for previous, current in zip(ordered, ordered[1:]):
@@ -441,7 +453,7 @@ def likely_break(summaries):
             return f"after_{previous}_before_{current}"
         if not counts[previous]:
             return f"before_{previous}"
-    return "through_clear_response_consumption"
+    return "after_clear_response_before_cache_consumption"
 
 
 def compact_counts(summaries):
@@ -634,6 +646,10 @@ def main():
             f"new={mismatch['incoming_reqid']} "
             f"sameSocket={int(mismatch['incoming_socket'] == mismatch['outstanding_socket'])} "
             f"relation={item['relation']} break={item['likely_break']} "
+            f"homeAccept={old_summary['HC'].count} "
+            f"homeReject={old_summary['HJ'].count} "
+            f"cacheAccept={old_summary['CH'].count} "
+            f"cacheReject={old_summary['CJ'].count} "
             f"oldCounts={compact_counts(old_summary)}")
         if args.verbose:
             for label, summary in (("old", old_summary), ("new", new_summary)):
