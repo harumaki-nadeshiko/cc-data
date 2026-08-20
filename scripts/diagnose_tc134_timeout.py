@@ -155,6 +155,17 @@ def protocol_stage(line):
         ("RESIDENT-WAITER-ENQ", "HOME_RESIDENT_WAITER_ENQ"),
         ("RESIDENT-WAITER-REPLAY", "HOME_RESIDENT_WAITER_REPLAY"),
         ("UBCC-GRANT-RETRY-TUPLE-MISMATCH", "HOME_GRANT_TUPLE_MISMATCH"),
+        ("processOuterRequest", "HOME_PROCESS_OUTER_REQUEST"),
+        ("sendReadReq", "REQUESTER_SEND_READ_REQ"),
+        ("handleRemoteMiss", "REQUESTER_HANDLE_REMOTE_MISS"),
+        ("processClear", "HOME_PROCESS_CLEAR"),
+        ("grant hit", "HOME_GRANT_RETRY_HIT"),
+        ("existing outstanding", "HOME_EXISTING_OUTSTANDING_BUSY"),
+        ("processRecallResponse", "HOME_PROCESS_RECALL_RESPONSE"),
+        ("sendClear", "REQUESTER_SEND_CLEAR"),
+        ("RECALL-CREATE", "HOME_RECALL_CREATE"),
+        ("RECALL-TO-GRANT", "HOME_RECALL_TO_GRANT"),
+        ("UBCC-QUEUE-REPLAY", "HOME_QUEUE_REPLAY"),
     )
     for marker, stage in markers:
         if marker in line:
@@ -576,6 +587,15 @@ def print_compact(report):
             f"EVIDENCE fills={len(suspect['unresolved_fills'])} "
             f"spills={len(suspect['unresolved_spills'])} "
             f"waiters={len(suspect['unresolved_waiters'])} reqIds={reqids}")
+        for item in suspect["matching_reqids"]:
+            last = item.get("last_generic")
+            if not last:
+                continue
+            location = f"{pathlib.Path(last['file']).name}:{last['line']}"
+            print(
+                f"LAST reqId={item['reqid']} "
+                f"stage={item.get('last_protocol_stage') or 'TRACE_ONLY'} "
+                f"at={location} text={last['text'][:240]}")
 
 
 def main():

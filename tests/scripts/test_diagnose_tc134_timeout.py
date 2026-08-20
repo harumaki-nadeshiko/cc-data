@@ -286,6 +286,40 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
             MODULE.print_compact(report)
         self.assertIn("77:REQUESTER_PENDING_READ_SAVE", stream.getvalue())
 
+    def test_common_unbracketed_protocol_stages_are_classified(self):
+        cases = {
+            "UBCC node_id=0: processOuterRequest PA=0x1180000 reqId=1":
+                "HOME_PROCESS_OUTER_REQUEST",
+            "UBAdapter node=3: sendReadReq homePa=0x1180000 reqId=2":
+                "REQUESTER_SEND_READ_REQ",
+            "EPBackend node=3: handleRemoteMiss PA=0x1180000 reqId=3":
+                "REQUESTER_HANDLE_REMOTE_MISS",
+            "UBCC node_id=0: processClear PA=0x1180000 reqId=4":
+                "HOME_PROCESS_CLEAR",
+            "UBCC node_id=0: grant hit PA=0x1180000 reqId=5":
+                "HOME_GRANT_RETRY_HIT",
+            "UBCC node_id=0: existing outstanding PA=0x1180000 reqId=6":
+                "HOME_EXISTING_OUTSTANDING_BUSY",
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(MODULE.protocol_stage(line), expected)
+
+    def test_compact_unknown_event_includes_text_and_location(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        self.write("ubio-0-0.stderr.log", [
+            f"custom unknown marker PA=0x{offset:x} reqId=88 detail=blocked",
+        ])
+        report = MODULE.analyze(self.root)
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            MODULE.print_compact(report)
+        output = stream.getvalue()
+        self.assertIn("88:PROTOCOL_EVENT", output)
+        self.assertIn("LAST reqId=88 stage=PROTOCOL_EVENT", output)
+        self.assertIn("detail=blocked", output)
+
 
 if __name__ == "__main__":
     unittest.main()
