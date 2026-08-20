@@ -102,6 +102,70 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
             "PRESSURE_COMPLETE_CHECK_POST_PRESSURE_BARRIER_OR_REUSE")
         self.assertEqual(report["suspects"], [])
 
+    def test_guest_progress_is_read_only_from_simout(self):
+        self.write("simout_tc134_node3.log", self.guest_lines(6, 1024))
+        self.write("ubio_tc134_n3_s0/stdout.log", [
+            "[PROGRESS] node=6 phase=window_pressure iter=8192",
+            "[PHASE] node=7 phase=window_share status=done",
+        ])
+        self.write("nsim_tc134.log", [
+            "[PROGRESS] node=6 phase=window_pressure iter=8192",
+        ])
+        report = MODULE.analyze(self.root)
+        plane6 = next(row for row in report["planes"] if row["plane"] == 6)
+        self.assertEqual(plane6["window_pressure_iter"], 1024)
+        self.assertEqual(report["completed_writers"], 7)
+        self.assertEqual(report["source_scan"]["files"]["simout"], 1)
+        self.assertEqual(report["source_scan"]["files"]["ubio"], 1)
+        self.assertEqual(report["source_scan"]["files"]["nsim"], 1)
+
+    def test_resident_markers_are_read_only_from_ubio(self):
+        self.write("simout_tc134_node3.log", self.guest_lines(6, 2048) + [
+            "[RESIDENT-FILL-ISSUED] tick=99 home=0 pa=0x1180000 "
+            "waiterDepth=1 opKind=0",
+        ])
+        report = MODULE.analyze(self.root)
+        self.assertEqual(report["suspects"][0]["unresolved_fills"], [])
+
+    def test_trace_component_must_match_log_source(self):
+        self.write("simout_tc134_node3.log", self.guest_lines(6, 0))
+        self.write("ubio_tc134_n0_s0/stdout.log", [
+            "[TRACE-PERF] 10|0|gem5|55|0x1180000|SEND|ReadReq",
+        ])
+        report = MODULE.analyze(self.root)
+        self.assertFalse(report["trace_available"])
+        self.assertEqual(
+            report["source_scan"]["rejected_cross_source_traces"], 1)
+
+    def test_flat_remote_log_names_are_fuzzy_classified(self):
+        self.write("run_simout_tc134_node3_stdout.log",
+                   self.guest_lines(6, 3072))
+        offset = MODULE.stream_offset(3, 3072)
+        self.write("remote_ubio_tc134_n0_s0_stdout.log", [
+            f"[RESIDENT-FILL-ISSUED] tick=99 home=0 pa=0x{offset:x} "
+            "waiterDepth=1 opKind=0",
+        ])
+        self.write("remote_gem5_tc134_node3_stderr.log", [
+            f"[TRACE-PERF] 100|3|gem5|55|0x{offset:x}|SEND|ReadReq",
+        ])
+        self.write("remote_networksim_tc134_stdout.log", [
+            "[TRACE-PERF] 101|0|nsim|55|0x0|RECV|src=6 dst=0",
+        ])
+        report = MODULE.analyze(self.root)
+        plane6 = next(row for row in report["planes"] if row["plane"] == 6)
+        self.assertEqual(plane6["window_pressure_iter"], 3072)
+        self.assertEqual(report["source_scan"]["files"]["simout"], 1)
+        self.assertEqual(report["source_scan"]["files"]["ubio"], 1)
+        self.assertEqual(report["source_scan"]["files"]["gem5"], 1)
+        self.assertEqual(report["source_scan"]["files"]["nsim"], 1)
+        self.assertEqual(len(report["suspects"][0]["unresolved_fills"]), 1)
+
+    def test_supervisor_is_optional(self):
+        self.write("simout_tc134_node3.log", self.guest_lines(6, 1024))
+        report = MODULE.analyze(self.root)
+        self.assertNotIn("supervisor", report["source_scan"]["files"])
+        self.assertEqual(report["supervisor_tail"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

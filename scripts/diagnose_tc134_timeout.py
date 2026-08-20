@@ -31,6 +31,11 @@ FIELD_RE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)=([^\s,]+)")
 TICK_RE = re.compile(r"\btick=(\d+)")
 PA_RE = re.compile(r"\b(?:pa|victim)=0x([0-9a-fA-F]+)")
 REQID_RE = re.compile(r"\breqId=(\d+)")
+UBIO_PATH_RE = re.compile(
+    r"(?:^|[/_.-])ubio(?:[/_.-]|$).*?(?:[/_.-]n(?:ode)?\d+).*?"
+    r"(?:[/_.-]s(?:ocket)?\d+)", re.I)
+GEM5_PATH_RE = re.compile(
+    r"(?:^|[/_.-])gem5(?:[/_.-]|$).*?(?:[/_.-]node\d+)", re.I)
 
 FILL_ISSUED = "RESIDENT-FILL-ISSUED"
 FILL_DONE = "RESIDENT-FILL-DONE"
@@ -56,6 +61,29 @@ def log_files(root):
                 name.endswith((".log.gz", ".txt.gz")) or
                 name.startswith("simout")):
             yield path
+
+
+def log_source(path):
+    text = str(path).replace("\\", "/").lower()
+    name = path.name.lower()
+    stem = name[:-3] if name.endswith(".gz") else name
+    if "simout" in stem and ("tc134" in text or "node" in stem):
+        return "simout"
+    if UBIO_PATH_RE.search(text) or (
+            "ubio" in stem and re.search(r"(?:^|[_\-.])n(?:ode)?\d+", stem)
+            and re.search(r"(?:^|[_\-.])s(?:ocket)?\d+", stem)):
+        return "ubio"
+    if GEM5_PATH_RE.search(text) or (
+            "gem5" in stem and re.search(r"(?:^|[_\-.])node\d+", stem)) or \
+            "/m5out/" in text:
+        return "gem5"
+    if "nsim" in stem or "networksim" in stem:
+        return "nsim"
+    if "supervisor" in name:
+        return "supervisor"
+    if name.startswith("verify_tc134"):
+        return "verify"
+    return "other"
 
 
 def parse_int(value):
@@ -105,59 +133,72 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
     scanned_files = 0
     scanned_lines = 0
     tc134_evidence = 0
+    source_files = Counter()
+    source_lines = Counter()
+    rejected_cross_source_traces = 0
 
     paths = sorted(log_files(root))
     for path in paths:
         scanned_files += 1
+        source = log_source(path)
+        source_files[source] += 1
         with open_text(path) as stream:
             for line_number, line in enumerate(stream, 1):
                 scanned_lines += 1
-                if "test=TC134" in line or "window_share" in line or \
-                        "window_pressure" in line or "window_reuse" in line:
-                    tc134_evidence += 1
-                match = PHASE_RE.search(line)
-                if match:
-                    plane = int(match.group(1))
-                    phases[plane].add(match.group(2))
-                match = PROGRESS_RE.search(line)
-                if match:
-                    plane = int(match.group(1))
-                    phase = match.group(2)
-                    iteration = int(match.group(3))
-                    progress[plane][phase] = max(
-                        iteration, progress[plane].get(phase, 0))
+                source_lines[source] += 1
+                if source == "simout":
+                    if "test=TC134" in line or "window_share" in line or \
+                            "window_pressure" in line or "window_reuse" in line:
+                        tc134_evidence += 1
+                    match = PHASE_RE.search(line)
+                    if match:
+                        plane = int(match.group(1))
+                        phases[plane].add(match.group(2))
+                    match = PROGRESS_RE.search(line)
+                    if match:
+                        plane = int(match.group(1))
+                        phase = match.group(2)
+                        iteration = int(match.group(3))
+                        progress[plane][phase] = max(
+                            iteration, progress[plane].get(phase, 0))
 
                 match = TRACE_RE.search(line)
                 if match:
-                    timestamp = int(match.group(1))
-                    reqid = int(match.group(4))
-                    pa = int(match.group(5), 0)
-                    trace = event(
-                        path, line_number, line, timestamp=timestamp,
-                        actor=int(match.group(2)), component=match.group(3),
-                        reqid=reqid, pa=pa, stage=match.group(6),
-                        message_type=match.group(7))
-                    traces[reqid].append(trace)
-                    component_ticks[match.group(3)] = max(
-                        component_ticks[match.group(3)], timestamp)
+                    component = match.group(3)
+                    expected_source = {"ubio": "ubio", "gem5": "gem5",
+                                       "nsim": "nsim"}.get(component)
+                    if expected_source == source:
+                        timestamp = int(match.group(1))
+                        reqid = int(match.group(4))
+                        pa = int(match.group(5), 0)
+                        trace = event(
+                            path, line_number, line, timestamp=timestamp,
+                            actor=int(match.group(2)), component=component,
+                            reqid=reqid, pa=pa, stage=match.group(6),
+                            message_type=match.group(7))
+                        traces[reqid].append(trace)
+                        component_ticks[component] = max(
+                            component_ticks[component], timestamp)
+                    else:
+                        rejected_cross_source_traces += 1
 
                 tick_matches = list(TICK_RE.finditer(line))
                 if tick_matches:
-                    component = "networksim" if "NetworkSim" in line or "NSIM" in line else (
-                        "ubio" if "UBIO" in line or "UBCC" in line or
-                        "RESIDENT-" in line else "other")
-                    component_ticks[component] = max(
-                        component_ticks[component], int(tick_matches[-1].group(1)))
+                    if source in {"ubio", "nsim", "gem5"}:
+                        component_ticks[source] = max(
+                            component_ticks[source],
+                            int(tick_matches[-1].group(1)))
 
                 pa_match = PA_RE.search(line)
                 reqid_match = REQID_RE.search(line)
                 pa = int(pa_match.group(1), 16) if pa_match else None
                 reqid = int(reqid_match.group(1)) if reqid_match else None
-                if reqid is not None and pa is not None:
+                if source in {"ubio", "gem5", "nsim"} and \
+                        reqid is not None and pa is not None:
                     generic_by_reqid[reqid].append(
                         event(path, line_number, line, reqid=reqid, pa=pa))
 
-                if pa is not None:
+                if source == "ubio" and pa is not None:
                     if FILL_ISSUED in line:
                         fills[pa]["issued"].append(event(path, line_number, line))
                         marker_counts[FILL_ISSUED] += 1
@@ -180,8 +221,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
                         waiters[pa]["retire"].append(event(path, line_number, line))
                         marker_counts[WAITER_RETIRE] += 1
 
-                if "supervisor" in path.name or "progress_stall:" in line or \
-                        "outer_timeout" in line:
+                if source == "supervisor":
                     if "FAULT" in line or "timeout" in line.lower() or \
                             line.startswith("OK "):
                         supervisor.append(event(path, line_number, line))
@@ -192,6 +232,11 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
             "log_dir": str(root),
             "scanned_files": scanned_files,
             "scanned_lines": scanned_lines,
+            "source_scan": {
+                "files": dict(source_files),
+                "lines": dict(source_lines),
+                "rejected_cross_source_traces": rejected_cross_source_traces,
+            },
             "tc134_evidence": 0,
             "identity_note": (
                 "Guest marker node is a plane ID: plane=physical_node*2+socket. "
@@ -356,6 +401,11 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
         "log_dir": str(root),
         "scanned_files": scanned_files,
         "scanned_lines": scanned_lines,
+        "source_scan": {
+            "files": dict(source_files),
+            "lines": dict(source_lines),
+            "rejected_cross_source_traces": rejected_cross_source_traces,
+        },
         "tc134_evidence": tc134_evidence,
         "identity_note": (
             "Guest marker node is a plane ID: plane=physical_node*2+socket. "
@@ -381,6 +431,10 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
 def print_human(report):
     print(f"TC134 diagnosis: {report['summary_diagnosis']}")
     print(f"identity: {report['identity_note']}")
+    source_scan = report.get("source_scan", {})
+    print("sources: files={} lines={} rejected_cross_source_traces={}".format(
+        source_scan.get("files", {}), source_scan.get("lines", {}),
+        source_scan.get("rejected_cross_source_traces", 0)))
     if report["summary_diagnosis"] == "NO_TC134_EVIDENCE":
         print(f"next: {report['recommendation']}")
         return
