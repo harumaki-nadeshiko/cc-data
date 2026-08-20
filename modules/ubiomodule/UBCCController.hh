@@ -961,7 +961,7 @@ public:
     void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
     ResidentWaiterEnqueueResult enqueueResidentWaiterIfNew(
         uint64_t linePa, const PendingRequester &pr);
-    size_t retireCommittedResidentWaiters(const OutstandingRequest &ost);
+    size_t retireCommittedReadWaiters(const OutstandingRequest &ost);
     void replayResidentWaiters(uint64_t linePa);
     void refreshPinnedBit(uint64_t linePa);
     void scheduleH64LookupRetry(uint64_t linePa);

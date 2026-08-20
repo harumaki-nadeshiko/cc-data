@@ -734,32 +734,39 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
 }
 
 size_t
-UBCCController::retireCommittedResidentWaiters(const OutstandingRequest &ost)
+UBCCController::retireCommittedReadWaiters(const OutstandingRequest &ost)
 {
-    auto it = _residentWaiters.find(ost.linePa);
-    if (it == _residentWaiters.end()) {
-        return 0;
-    }
+    size_t retired = 0;
+    auto matches = [&](const PendingRequester &pr) {
+        return pr.opKind == ResidentOpKind::Read &&
+            pr.node == ost.requesterNode &&
+            pr.socket == ost.requesterSocket &&
+            pr.reqId == ost.reqId;
+    };
 
-    auto &q = it->second;
-    const size_t oldSize = q.size();
-    q.erase(std::remove_if(q.begin(), q.end(), [&](const PendingRequester &pr) {
-        if (pr.opKind != ResidentOpKind::Read ||
-            pr.node != ost.requesterNode ||
-            pr.socket != ost.requesterSocket ||
-            pr.reqId != ost.reqId) {
-            return false;
-        }
-        return ost.reqId != 0 || normalizeEpoch(pr.epoch) == ost.baseEpoch;
-    }), q.end());
+    auto retireFrom = [&](auto &table) {
+        auto it = table.find(ost.linePa);
+        if (it == table.end())
+            return static_cast<size_t>(0);
+        auto &queue = it->second;
+        const size_t oldSize = queue.size();
+        queue.erase(std::remove_if(queue.begin(), queue.end(), matches),
+                    queue.end());
+        const size_t removed = oldSize - queue.size();
+        if (queue.empty())
+            table.erase(it);
+        return removed;
+    };
 
-    const size_t retired = oldSize - q.size();
-    if (q.empty()) {
-        _residentWaiters.erase(it);
-    }
+    retired += retireFrom(_pendingRequesters);
+    retired += retireFrom(_residentWaiters);
+    const size_t persistenceRetired = retireFrom(_h64PersistenceWaiters);
+    retired += persistenceRetired;
+    _h64PersistenceWaitersTotal -= static_cast<int>(persistenceRetired);
+
     if (retired != 0) {
         framework::LogInfo("UBCC",
-                     "[RESIDENT-WAITER-RETIRE-COMMITTED] home={} pa=0x{:x} "
+                     "[COMMITTED-READ-WAITER-RETIRE] home={} pa=0x{:x} "
                      "node={} socket={} reqId={} count={}",
                      _nodeId, ost.linePa, ost.requesterNode,
                      ost.requesterSocket, ost.reqId, retired);
@@ -1465,6 +1472,14 @@ UBCCController::processOuterRequest(
     // HARD cap checks: per-PA limit, total limit, DSM pending set limit.
     if (_h64BloomAllMisses && _h64DsmPending.count(line_pa)) {
         auto& q = _h64PersistenceWaiters[line_pa];
+        for (const auto &existing : q) {
+            if (existing.opKind == ResidentOpKind::Read &&
+                existing.node == requesterNode &&
+                existing.socket == requesterSocket &&
+                existing.reqId == reqId) {
+                return static_cast<UBCC_OuterGrantType>(-1);
+            }
+        }
         // Per-PA hard cap
         if ((int)q.size() >= kMaxH64PersistenceWaitersPerPA) {
             if (_debugLog) framework::LogDebug("UBCC",
@@ -3892,7 +3907,7 @@ UBCCController::processClear(
             entry.sharersMask);
 
     // Retire GRANT_HANDSHAKE to tombstone(W) for duplicate Clear replay
-    retireCommittedResidentWaiters(*ost);
+    retireCommittedReadWaiters(*ost);
     retireToTombstone(*ost, true);
     removeOutstanding(line_pa);
     refreshPinnedBit(line_pa);

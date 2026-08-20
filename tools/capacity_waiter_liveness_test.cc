@@ -302,6 +302,47 @@ main()
     OutstandingRequest *afterClear = commitUbcc.findOutstanding(committedPa);
     assert(!afterClear || afterClear->reqId != committedReqId);
 
+    // A completed read tuple can be retained in both the normal pending queue
+    // and a resident waiter queue. Clear must retire every copy atomically;
+    // otherwise replay recreates an uncleared grant with the old reqId.
+    UBCCController multiQueueUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    multiQueueUbcc.setHost(&host);
+    constexpr uint64_t multiQueuePa = 0x10000340;
+    constexpr uint64_t multiQueueReqId = 1500;
+    constexpr uint64_t multiQueueNextReqId = 1502;
+    constexpr uint64_t multiQueueEpoch = 12;
+    assert(multiQueueUbcc.debugSeedResidentForTest(
+        multiQueuePa, static_cast<int>(MESIState::G_I), 0,
+        multiQueueEpoch, false));
+    uint64_t multiQueueClearEpoch = 0;
+    const auto multiQueueGrant = multiQueueUbcc.processOuterRequest(
+        multiQueuePa, UBCC_OuterReqType::GlobalReadUnique, true,
+        1, 0, multiQueueEpoch, multiQueueReqId,
+        nullptr, nullptr, nullptr, nullptr, nullptr,
+        &multiQueueClearEpoch, nullptr);
+    assert(static_cast<int>(multiQueueGrant) != -1);
+    assert(multiQueueUbcc.debugEnqueuePendingRequesterForTest(
+        multiQueuePa, 1, 0, false, multiQueueEpoch, multiQueueReqId));
+    assert(multiQueueUbcc.debugEnqueueResidentWaiterTupleForTest(
+        multiQueuePa, ResidentOpKind::Read, 1, 0, multiQueueEpoch,
+        multiQueueReqId,
+        static_cast<int>(UBCCController::ResidentWaitReason::Capacity)));
+    assert(multiQueueUbcc.processClear(
+        multiQueuePa, 1, multiQueueClearEpoch, multiQueueReqId));
+    multiQueueUbcc.debugReplayPendingRequestersForTest(multiQueuePa);
+    OutstandingRequest *multiQueueOutstanding =
+        multiQueueUbcc.findOutstanding(multiQueuePa);
+    assert(!multiQueueOutstanding ||
+           multiQueueOutstanding->reqId != multiQueueReqId);
+    const auto multiQueueSuccessor = multiQueueUbcc.processOuterRequest(
+        multiQueuePa, UBCC_OuterReqType::GlobalReadUnique, true,
+        1, 0, multiQueueClearEpoch + 1, multiQueueNextReqId);
+    assert(static_cast<int>(multiQueueSuccessor) != -1);
+    multiQueueOutstanding = multiQueueUbcc.findOutstanding(multiQueuePa);
+    assert(multiQueueOutstanding);
+    assert(multiQueueOutstanding->reqId == multiQueueNextReqId);
+
     // TC35: a second socket on the same requester node must not treat a new
     // reqId as an idempotent retry of an older WAITING_CLEAR grant. The exact
     // tuple may retry, while wrong-socket or wrong-reqId requests remain BUSY
