@@ -352,6 +352,55 @@ main()
     assert(tupleUbcc.processClear(
         tuplePa, 1, tupleClearEpoch, tupleReqId));
 
+    // A queued ReadReq keeps its requester reqId but is replayed against the
+    // post-Clear epoch. After that replay commits, a delayed copy of the
+    // original pre-rebase ReadReq must hit the accepted reqId tombstone. It
+    // must not recreate an uncleared GRANT_HANDSHAKE that blocks the next reqId.
+    UBCCController rebasedUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    rebasedUbcc.setHost(&host);
+    rebasedUbcc.setBatchRsEnabled(false);
+    constexpr uint64_t rebasedPa = 0x100003c0;
+    constexpr uint64_t headReqId = 2000;
+    constexpr uint64_t queuedReqId = 3000;
+    constexpr uint64_t successorReqId = 3002;
+    constexpr uint64_t initialEpoch = 10;
+    constexpr uint64_t queuedOriginalEpoch = 7;
+    assert(rebasedUbcc.debugSeedResidentForTest(
+        rebasedPa, static_cast<int>(MESIState::G_I), 0, initialEpoch, false));
+    uint64_t headClearEpoch = 0;
+    const auto headGrant = rebasedUbcc.processOuterRequest(
+        rebasedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        0, 0, initialEpoch, headReqId,
+        nullptr, nullptr, nullptr, nullptr, nullptr,
+        &headClearEpoch, nullptr);
+    assert(static_cast<int>(headGrant) != -1);
+    assert(static_cast<int>(rebasedUbcc.processOuterRequest(
+        rebasedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, queuedOriginalEpoch, queuedReqId)) == -1);
+    assert(rebasedUbcc.processClear(
+        rebasedPa, 0, headClearEpoch, headReqId));
+    OutstandingRequest *rebasedOutstanding =
+        rebasedUbcc.findOutstanding(rebasedPa);
+    assert(rebasedOutstanding);
+    assert(rebasedOutstanding->reqId == queuedReqId);
+    const uint64_t rebasedClearEpoch = rebasedOutstanding->baseEpoch;
+    assert(rebasedClearEpoch != queuedOriginalEpoch);
+    assert(rebasedUbcc.processClear(
+        rebasedPa, 1, rebasedClearEpoch, queuedReqId));
+    assert(!rebasedUbcc.findOutstanding(rebasedPa));
+    assert(static_cast<int>(rebasedUbcc.processOuterRequest(
+        rebasedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, queuedOriginalEpoch, queuedReqId)) == -1);
+    assert(!rebasedUbcc.findOutstanding(rebasedPa));
+    const auto successorGrant = rebasedUbcc.processOuterRequest(
+        rebasedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, rebasedClearEpoch + 1, successorReqId);
+    assert(static_cast<int>(successorGrant) != -1);
+    rebasedOutstanding = rebasedUbcc.findOutstanding(rebasedPa);
+    assert(rebasedOutstanding);
+    assert(rebasedOutstanding->reqId == successorReqId);
+
     // A normal dirty writeback can race a naive capacity recall after the
     // owner has already dropped its cache line. The matching data-bearing
     // writeback must complete the recall instead of being rejected as BUSY.

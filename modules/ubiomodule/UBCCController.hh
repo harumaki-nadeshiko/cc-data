@@ -1027,6 +1027,13 @@ public:
                         bool &outAccepted);
 
     /**
+     * Detect a delayed duplicate ReadReq after its rebased grant committed.
+     * ReadReq carries the pre-queue epoch, while the completed grant tombstone
+     * stores the replay-rebased epoch. reqId remains stable across that replay.
+     */
+    bool hasAcceptedGrantReqIdTombstone(uint64_t linePa, uint64_t reqId);
+
+    /**
      * Remove expired tombstones.
      */
     void cleanupTombstones();

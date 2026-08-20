@@ -1662,6 +1662,19 @@ UBCCController::processOuterRequest(
         if (outGrantEpoch) *outGrantEpoch = entry.epoch;
         return UBCC_OuterGrantType::GlobalGrantShared; // conservative
     }
+    if (hasAcceptedGrantReqIdTombstone(line_pa, reqId)) {
+        // A queued request is replayed against the newly committed epoch, but
+        // delayed wire duplicates still carry its original pre-queue epoch.
+        // The stable reqId proves this ReadReq already completed. Suppress it
+        // instead of creating a second GRANT_HANDSHAKE that the requester will
+        // never Clear.
+        framework::LogInfo("UBCC",
+                "[UBCC-READ-TOMBSTONE-REQID-HIT] home={} pa=0x{:x} "
+                "requester={}:{} incomingEpoch={} reqId={} action=drop_completed_duplicate",
+                _nodeId, line_pa, requesterNode, requesterSocket,
+                baseEpoch, reqId);
+        return static_cast<UBCC_OuterGrantType>(-1);
+    }
 
     // Record grant-visible tick
     Tick grantVisibleTick = curTick();
@@ -4195,6 +4208,22 @@ UBCCController::checkTombstone(uint64_t linePa, uint64_t epoch, uint64_t reqId,
                     "UBCC node_id={}: checkTombstone HIT PA=0x{:x} "
                     "epoch={} reqId={} accepted={}",
                     _nodeId, linePa, epoch, reqId, ts.accepted);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+UBCCController::hasAcceptedGrantReqIdTombstone(uint64_t linePa, uint64_t reqId)
+{
+    cleanupTombstones();
+    auto it = _tombstones.find(linePa);
+    if (it == _tombstones.end())
+        return false;
+    for (const auto &ts : it->second) {
+        if (ts.opType == OpType::GRANT_HANDSHAKE &&
+            ts.reqId == reqId && ts.accepted) {
             return true;
         }
     }
