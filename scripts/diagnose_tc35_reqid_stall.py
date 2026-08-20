@@ -488,6 +488,26 @@ def clear_resolution(mismatch, summaries):
     return "CLEAR_ACCEPTED_ORDER_UNKNOWN"
 
 
+def post_clear_recovery(old_summaries, new_summaries):
+    clear_accept = old_summaries["HC"].last
+    if clear_accept is None:
+        return "CLEAR_ACCEPT_NOT_LOCATED"
+
+    new_grant = new_summaries["HG"].last
+    if new_grant and new_grant.file == clear_accept.file:
+        if new_grant.line > clear_accept.line:
+            return "RECOVERED_WITH_NEW_GRANT_AFTER_CLEAR"
+        return "NEW_GRANT_ONLY_BEFORE_CLEAR"
+
+    new_request = new_summaries["HRR"].last
+    if new_request and new_request.file == clear_accept.file:
+        if new_request.line > clear_accept.line:
+            return "RETRIED_AFTER_CLEAR_WITHOUT_NEW_GRANT"
+        return "REQUESTER_DID_NOT_RETRY_AFTER_CLEAR"
+
+    return "POST_CLEAR_RECOVERY_ORDER_UNKNOWN"
+
+
 def scan(root, args):
     files = iter_logs(root, args.max_files)
     events_by_reqid = defaultdict(list)
@@ -570,6 +590,7 @@ def scan(root, args):
                                  mismatch.incoming_reqid),
             "likely_break": likely_break(old_chain),
             "clear_resolution": clear_resolution(mismatch, old_chain),
+            "post_clear_recovery": post_clear_recovery(old_chain, new_chain),
             "old_chain": {
                 "reqid": mismatch.outstanding_reqid,
                 "counts": chain_counts(old_chain),
@@ -676,11 +697,13 @@ def main():
             f"sameSocket={int(mismatch['incoming_socket'] == mismatch['outstanding_socket'])} "
             f"relation={item['relation']} break={item['likely_break']} "
             f"resolution={item['clear_resolution']} "
+            f"postClear={item['post_clear_recovery']} "
             f"homeAccept={old_summary['HC'].count} "
             f"homeReject={old_summary['HJ'].count} "
             f"cacheAccept={old_summary['CH'].count} "
             f"cacheReject={old_summary['CJ'].count} "
-            f"oldCounts={compact_counts(old_summary)}")
+            f"oldCounts={compact_counts(old_summary)} "
+            f"newCounts={compact_counts(new_summary)}")
         if args.verbose:
             for label, summary in (("old", old_summary), ("new", new_summary)):
                 for stage in STAGE_ORDER:

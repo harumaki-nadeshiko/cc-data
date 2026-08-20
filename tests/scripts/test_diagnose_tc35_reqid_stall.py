@@ -243,6 +243,41 @@ class DiagnoseTc35Test(unittest.TestCase):
             report["mismatches"][0]["clear_resolution"],
             "POST_ACCEPT_MISMATCH_RECREATED_OLD_TUPLE")
 
+    def test_new_grant_after_clear_is_recovered(self):
+        self.write("ubio_tc98_n0_s0/stdout.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+            "[HOME-CLEAR-RESULT] home=0 pa=0x100 reqId=41 accepted=1",
+            "[UBCC-OUTER-REQ] home=0 pa=0x100 requester=1 reqId=43",
+            "[UBCC-GRANT-READY] home=0 pa=0x100 requester=1 reqId=43",
+        ])
+        self.write("gem5_tc98_node1/stderr.log", [
+            "[CLEAR-SEND] node=1 pa=0x100 reqId=41",
+            "[CLR-CACHE-HIT] node=1 reqId=41 accepted=1",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["post_clear_recovery"],
+            "RECOVERED_WITH_NEW_GRANT_AFTER_CLEAR")
+
+    def test_new_request_after_clear_without_grant_is_still_blocked(self):
+        self.write("ubio_tc98_n0_s0/stdout.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+            "[HOME-CLEAR-RESULT] home=0 pa=0x100 reqId=41 accepted=1",
+            "[UBCC-OUTER-REQ] home=0 pa=0x100 requester=1 reqId=43",
+        ])
+        self.write("gem5_tc98_node1/stderr.log", [
+            "[CLEAR-SEND] node=1 pa=0x100 reqId=41",
+            "[CLR-CACHE-HIT] node=1 reqId=41 accepted=1",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["post_clear_recovery"],
+            "RETRIED_AFTER_CLEAR_WITHOUT_NEW_GRANT")
+
     def test_long_line_preserves_prefix_marker(self):
         marker = (
             "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
