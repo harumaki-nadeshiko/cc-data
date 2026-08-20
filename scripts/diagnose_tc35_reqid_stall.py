@@ -31,7 +31,7 @@ GEM5_PATH_RE = re.compile(r"gem5(?:_tc\d+)?_node(\d+)")
 STAGE_ORDER = (
     "HRR", "HG", "HUSN.RR", "NR.RR", "NF.RR", "RURN.RR",
     "RUSG.RR", "AR", "PG", "CS", "RURG.CQ", "RUSN.CQ",
-    "NR.CQ", "NF.CQ", "HURN.CQ", "HC", "HJ", "HUSN.CR", "NR.CR",
+    "NR.CQ", "NF.CQ", "HURN.CQ", "HI", "HC", "HJ", "HUSN.CR", "NR.CR",
     "NF.CR", "RURN.CR", "RUSG.CR", "CR", "CH", "CJ", "ESR",
 )
 
@@ -51,6 +51,7 @@ STAGE_DESCRIPTIONS = {
     "NR.CQ": "networksim received ClearReq",
     "NF.CQ": "networksim forwarded ClearReq",
     "HURN.CQ": "Home UBIO received ClearReq",
+    "HI": "Home Clear ingress marker (legacy COMMIT marker was pre-dispatch)",
     "HC": "Home accepted and committed Clear",
     "HJ": "Home rejected Clear",
     "HUSN.CR": "Home UBIO sent ClearResp to network",
@@ -304,6 +305,8 @@ def classify_text(path, line_number, text):
     if any(marker in text for marker in
            ("CLEAR-SEND", "CLR-CACHE-MISS", "CLR-TX")):
         stages.append("CS")
+    if "HOME-CLEAR-INGRESS" in text or "HOME-CLEAR-COMMIT" in text:
+        stages.append("HI")
     if (("HOME-CLEAR-RESULT" in text and "accepted=1" in text) or
             ("UBST" in text and "action=COMMIT" in text) or
             ("DEBUG-UBCC-CLEAR" in text and " accept " in text)):
@@ -460,6 +463,20 @@ def compact_counts(summaries):
     return ",".join(str(summaries[stage].count) for stage in STAGE_ORDER)
 
 
+def clear_resolution(mismatch, summaries):
+    if summaries["CJ"].count or summaries["HJ"].count:
+        return "CLEAR_REJECTED"
+    if not summaries["CH"].count and not summaries["HC"].count:
+        return "CLEAR_NOT_PROVEN_ACCEPTED"
+    ingress = summaries["HI"].first
+    if ingress and ingress.file == mismatch.last_file:
+        if mismatch.last_line < ingress.line:
+            return "TRANSIENT_RESOLVED_AFTER_MISMATCH"
+        if mismatch.last_line > ingress.line:
+            return "POST_CLEAR_INGRESS_MISMATCH_OR_REPLAY"
+    return "CLEAR_ACCEPTED_ORDER_UNKNOWN"
+
+
 def scan(root, args):
     files = iter_logs(root, args.max_files)
     events_by_reqid = defaultdict(list)
@@ -541,6 +558,7 @@ def scan(root, args):
             "relation": relation(mismatch.outstanding_reqid,
                                  mismatch.incoming_reqid),
             "likely_break": likely_break(old_chain),
+            "clear_resolution": clear_resolution(mismatch, old_chain),
             "old_chain": {
                 "reqid": mismatch.outstanding_reqid,
                 "counts": chain_counts(old_chain),
@@ -646,6 +664,7 @@ def main():
             f"new={mismatch['incoming_reqid']} "
             f"sameSocket={int(mismatch['incoming_socket'] == mismatch['outstanding_socket'])} "
             f"relation={item['relation']} break={item['likely_break']} "
+            f"resolution={item['clear_resolution']} "
             f"homeAccept={old_summary['HC'].count} "
             f"homeReject={old_summary['HJ'].count} "
             f"cacheAccept={old_summary['CH'].count} "
