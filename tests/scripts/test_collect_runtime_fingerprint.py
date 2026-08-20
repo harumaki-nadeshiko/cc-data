@@ -77,6 +77,18 @@ class FingerprintTests(unittest.TestCase):
             result = fingerprint.zmq_version("libzmq-test.so")
         self.assertEqual(result["version"], "4.3.5")
 
+    def test_git_info_falls_back_from_recursive_submodules(self):
+        responses = iter([
+            (0, "/repo"), (0, "abc"), (0, ""),
+            (1, "recursive failed"),
+            (0, " fee4f8f37e7862d7311c5c78555b337fd72ab492 gem5"),
+        ])
+        with mock.patch.object(fingerprint, "run", side_effect=lambda *a, **k: next(responses)):
+            result = fingerprint.git_info("/repo")
+        self.assertEqual(result["submodules"][0]["path"], "gem5")
+        self.assertEqual(result["submodules"][0]["head"],
+                         "fee4f8f37e7862d7311c5c78555b337fd72ab492")
+
     def test_main_compare_exit_codes(self):
         current = {"host": {"machine": "remote"}, "git": {"head": "same"}}
         with tempfile.TemporaryDirectory() as directory:

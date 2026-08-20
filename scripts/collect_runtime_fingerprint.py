@@ -121,6 +121,8 @@ def git_info(repo):
     status_rc, status = run(
         ["git", "status", "--porcelain=v1", "--untracked-files=no"], cwd=top)
     sub_rc, sub_text = run(["git", "submodule", "status", "--recursive"], cwd=top)
+    if sub_rc != 0:
+        sub_rc, sub_text = run(["git", "submodule", "status"], cwd=top)
     submodules = []
     if sub_rc == 0:
         for line in sub_text.splitlines():
