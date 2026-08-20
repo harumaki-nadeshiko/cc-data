@@ -118,6 +118,47 @@ case "${1:-}" in
     --2n1s)        TOPO_KIND="2n1s"; shift ;;
     --16n1s)       TOPO_KIND="16n1s"; shift ;;
 esac
+
+# Optional experiment contract flags. They are deliberately parsed by the
+# common runner so the audited command line and the effective process settings
+# cannot drift apart in wrapper scripts.
+E2E_FORMAL=0
+E2E_AUDIT_PROFILE="${EP_PERF_PROFILE:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --formal)
+            E2E_FORMAL=1
+            shift
+            ;;
+        --profile)
+            [ $# -ge 2 ] || { echo "FATAL: --profile requires naive, spill-noopt, or optimized" >&2; exit 2; }
+            E2E_AUDIT_PROFILE="$2"
+            shift 2
+            ;;
+        --profile=*)
+            E2E_AUDIT_PROFILE="${1#--profile=}"
+            shift
+            ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+if [ -n "$E2E_AUDIT_PROFILE" ]; then
+    case "$E2E_AUDIT_PROFILE" in
+        naive)       export EP_PERF_PROFILE=naive;       export UBCC_POLICY=naive ;;
+        spill-noopt) export EP_PERF_PROFILE=spill-noopt; export UBCC_POLICY=spill ;;
+        optimized)   export EP_PERF_PROFILE=optimized;   export UBCC_POLICY=spill ;;
+        *) echo "FATAL: --profile must be naive, spill-noopt, or optimized" >&2; exit 2 ;;
+    esac
+fi
+if [ "$E2E_FORMAL" = 1 ]; then
+    export EP_CPU_MODEL=o3
+    export EP_SEQUENCER_MAX_OUTSTANDING=16
+    export EP_SYNC_INTERVAL_PS=2500
+    export EP_LINK_LATENCY_PS=2500
+    export EP_PORT_HWM=8192
+    export EP_NSIM_MAX_PENDING=65536
+fi
 if [ -n "$GENERATED_TOPO_NODES" ]; then
     JSON="$RUN_DIR/process_topology.json"
     mkdir -p "$RUN_DIR"
@@ -424,6 +465,47 @@ export RUN_TOPO_JSON="$TOPO_JSON"
     echo "LOG_BASE=$LOG_BASE"
 } > "$LOG_BASE/launch_manifest.txt"
 
+# Record the exact final argv immediately before process launch.  Parsing is
+# performed by Python shlex rather than shell word-splitting, preserving token
+# order and duplicate options while avoiding eval of the command being audited.
+record_launch_command() {
+    local tc="$1" component="$2" node="$3" socket="$4" command="$5"
+    E2E_LAUNCH_TC="$tc" E2E_LAUNCH_COMPONENT="$component" \
+    E2E_LAUNCH_NODE="$node" E2E_LAUNCH_SOCKET="$socket" \
+    E2E_LAUNCH_TOPOLOGY="$TOPO_KIND" E2E_LAUNCH_COMMAND="$command" \
+    python3 - "$LOG_BASE/launch_commands_tc${tc}.jsonl" <<'PY'
+import json, os, shlex, sys
+path = sys.argv[1]
+command = os.environ["E2E_LAUNCH_COMMAND"]
+try:
+    argv = shlex.split(command, posix=True)
+except ValueError as exc:
+    raise SystemExit("cannot audit malformed launch command: %s" % exc)
+selected = {}
+for name in (
+    "E2E_RUN_ID", "EP_CPU_MODEL", "EP_SEQUENCER_MAX_OUTSTANDING",
+    "EP_SYNC_INTERVAL_PS", "EP_LINK_LATENCY_PS", "EP_PORT_HWM",
+    "EP_NSIM_MAX_PENDING", "EP_PERF_PROFILE", "UBCC_POLICY", "UBCC_OPTS",
+    "EP_GEM5_OPTS", "EP_HA_PROFILE", "OURCC_CLEAR_PROFILE",
+    "UBCC_METADATA_SIZE", "UBCC_IPC_DIR", "EP_TRACE_PERF"):
+    if name in os.environ:
+        selected[name] = os.environ[name]
+def nullable_int(value):
+    return None if value == "" else int(value)
+record = {
+    "component": os.environ["E2E_LAUNCH_COMPONENT"],
+    "node": nullable_int(os.environ["E2E_LAUNCH_NODE"]),
+    "socket": nullable_int(os.environ["E2E_LAUNCH_SOCKET"]),
+    "tc": int(os.environ["E2E_LAUNCH_TC"]),
+    "topology": os.environ["E2E_LAUNCH_TOPOLOGY"],
+    "argv": argv,
+    "env": selected,
+}
+with open(path, "a", encoding="utf-8") as output:
+    output.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
+PY
+}
+
 # Kill any leftover infra from a previous TC / abort.
 _kill_pid_tree() {
     # Commands are launched through a shell wrapper so killing only the wrapper
@@ -688,6 +770,8 @@ _supervisor_stop() {
 run_tc() {
     local tc=$1
     CURRENT_TC=$tc
+    export E2E_TC="$tc"
+    : >"$LOG_BASE/launch_commands_tc${tc}.jsonl"
     _kill_infra  # ensure clean state before each TC
 
     # TC98 fix: per-TC timeout override.  High-contention tests need much
@@ -735,6 +819,10 @@ run_tc() {
     if [ "${NSIM_TRACE_ALL_FORWARDED:-0}" = "1" ]; then
         nsim_extra_args+=(--trace-all-forwarded)
     fi
+    local nsim_cmd
+    printf -v nsim_cmd '%q ' "$NSIM_BIN" "$TOPO_JSON" "$NUM_NODES" "$NUM_SOCKETS" "${nsim_extra_args[@]}"
+    nsim_cmd="${nsim_cmd% }"
+    record_launch_command "$tc" networksim "" "" "$nsim_cmd"
     (
       set +e
       "$NSIM_BIN" "$TOPO_JSON" "$NUM_NODES" "$NUM_SOCKETS" \
@@ -804,6 +892,7 @@ run_tc() {
             fi
             local logdir="$LOG_BASE/ubio_tc${tc}_n${nid}_s${sid}"
             mkdir -p "$logdir"
+            record_launch_command "$tc" ubio "$nid" "$sid" "$cmd"
             ( set +e; eval "$cmd" 2>"$logdir/stderr.log" >"$logdir/stdout.log"; status=$?; \
               printf '%s\n' "$status" >"$child_status_dir/ubio_n${nid}_s${sid}.exit"; exit "$status" ) &
             UBIO_PIDS="$UBIO_PIDS $!"
@@ -900,6 +989,7 @@ run_tc() {
             cmd="$cmd --sequencer-max-outstanding=${EP_SEQUENCER_MAX_OUTSTANDING}"
         fi
         echo "[launch] gem5 node=$nid (outdir=$node_od)"
+        record_launch_command "$tc" gem5 "$nid" "" "$cmd"
         ( set +e; eval "$cmd" 2>"$gdir/stderr.log" >"$gdir/stdout.log"; status=$?; \
           printf '%s\n' "$status" >"$child_status_dir/gem5_node${nid}.exit"; exit "$status" ) &
         local pid=$!

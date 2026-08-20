@@ -21,6 +21,7 @@
 #include <sstream>
 #include <cstdlib>
 #include <stdexcept>
+#include <iostream>
 
 using namespace framework;
 using cc::glob::CFLAG_NETWORK_EXIT_ACK;
@@ -30,6 +31,36 @@ using cc::glob::coherenceMsgTypeName;
 
 namespace {
 volatile sig_atomic_t g_shutdownRequested = 0;
+
+std::string jsonQuote(const char *text) {
+    std::string out = "\"";
+    for (const unsigned char c : std::string(text ? text : "")) {
+        switch (c) {
+          case '\\': out += "\\\\"; break;
+          case '"': out += "\\\""; break;
+          case '\n': out += "\\n"; break;
+          case '\r': out += "\\r"; break;
+          case '\t': out += "\\t"; break;
+          default:
+            if (c < 0x20) {
+                char escaped[7];
+                std::snprintf(escaped, sizeof(escaped), "\\u%04x", c);
+                out += escaped;
+            } else out += static_cast<char>(c);
+        }
+    }
+    out += '"';
+    return out;
+}
+
+std::string argvJson(int argc, char **argv) {
+    std::string out = "[";
+    for (int i = 0; i < argc; ++i) {
+        if (i) out += ',';
+        out += jsonQuote(argv[i]);
+    }
+    return out + ']';
+}
 
 void
 requestShutdown(int)
@@ -97,6 +128,7 @@ public:
     void buildRoutes();
     void step();
     void run(int maxSteps = -1);
+    size_t maxPendingFwd() const { return _maxPendingFwd; }
 
 private:
     static int requiredModules(const std::vector<Link> &links);
@@ -541,6 +573,16 @@ int main(int argc, char** argv) {
     sigaction(SIGINT, &shutdownAction, nullptr);
     try {
         NetworkSim nsim(argv[1], numNodes, numSockets, traceAllForwarded);
+        std::cout << "[PROCESS-MANIFEST] {\"component\":\"networksim\","
+                  << "\"argv\":" << argvJson(argc, argv)
+                  << ",\"tc\":"
+                  << std::atoi(std::getenv("E2E_TC") ? std::getenv("E2E_TC") : "0")
+                  << ",\"topology\":" << jsonQuote(argv[1])
+                  << ",\"num_nodes\":" << numNodes
+                  << ",\"num_sockets\":" << numSockets
+                  << ",\"max_pending\":" << nsim.maxPendingFwd()
+                  << ",\"trace_all_forwarded\":"
+                  << (traceAllForwarded ? 1 : 0) << "}" << std::endl;
         nsim.run();
     } catch (const std::exception &error) {
         LogError("NetworkSim", "[NetworkSim] startup failed: {}", error.what());

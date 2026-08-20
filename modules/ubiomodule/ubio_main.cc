@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -42,6 +43,50 @@ using namespace cc::glob;
 
 namespace
 {
+
+std::string
+jsonQuote(const char *text)
+{
+    std::string out = "\"";
+    for (const unsigned char c : std::string(text ? text : "")) {
+        switch (c) {
+          case '\\': out += "\\\\"; break;
+          case '"': out += "\\\""; break;
+          case '\n': out += "\\n"; break;
+          case '\r': out += "\\r"; break;
+          case '\t': out += "\\t"; break;
+          default:
+            if (c < 0x20) {
+                char escaped[7];
+                std::snprintf(escaped, sizeof(escaped), "\\u%04x", c);
+                out += escaped;
+            } else {
+                out += static_cast<char>(c);
+            }
+        }
+    }
+    out += '"';
+    return out;
+}
+
+std::string
+argvJson(int argc, char **argv)
+{
+    std::string out = "[";
+    for (int i = 0; i < argc; ++i) {
+        if (i) out += ',';
+        out += jsonQuote(argv[i]);
+    }
+    out += ']';
+    return out;
+}
+
+const char *
+envOrEmpty(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value ? value : "";
+}
 
 bool
 isUbccIngress(CoherenceMessageType t)
@@ -3119,6 +3164,34 @@ main(int argc, char **argv)
         return 1;
     }
     for (const auto &rules : faultRuleArgs) parseFaultRules(rules, nid);
+
+    const char *overflowPolicy =
+        g_overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? "naive" : "spill";
+    std::cout << "[PROCESS-MANIFEST] {\"component\":\"ubio\",\"argv\":"
+              << argvJson(argc, argv)
+              << ",\"tc\":" << std::atoi(envOrEmpty("E2E_TC"))
+              << ",\"node\":" << nid << ",\"socket\":" << sid
+              << ",\"num_nodes\":" << g_numNodes
+              << ",\"num_sockets\":" << g_numSockets
+              << ",\"resident_dir\":{\"bloom_bytes\":" << g_rdcfg.bloom_bytes
+              << ",\"sram_bytes\":" << g_rdcfg.sram_bytes
+              << ",\"ways\":" << g_rdcfg.ways
+              << ",\"set_bits\":" << g_rdcfg.set_bits
+              << ",\"pa_bits\":" << g_rdcfg.pa_bits
+              << ",\"sharers_bits\":" << g_rdcfg.sharers_bits
+              << ",\"epoch_bits\":" << g_rdcfg.epoch_bits << "}"
+              << ",\"overflow_policy\":" << jsonQuote(overflowPolicy)
+              << ",\"batch_rs\":" << (g_batchRs ? 1 : 0)
+              << ",\"schema\":" << jsonQuote(backstoreSchemaModeName(g_schemaMode))
+              << ",\"metadata_dram_bytes\":" << g_metadataDramTotalBytes
+              << ",\"env\":{\"EP_SYNC_INTERVAL_PS\":"
+              << jsonQuote(envOrEmpty("EP_SYNC_INTERVAL_PS"))
+              << ",\"EP_LINK_LATENCY_PS\":"
+              << jsonQuote(envOrEmpty("EP_LINK_LATENCY_PS"))
+              << ",\"EP_PORT_HWM\":" << jsonQuote(envOrEmpty("EP_PORT_HWM"))
+              << ",\"EP_NSIM_MAX_PENDING\":"
+              << jsonQuote(envOrEmpty("EP_NSIM_MAX_PENDING")) << "}}"
+              << std::endl;
 
     // Socket-plane model: this ubio process is the home directory + router for
     // exactly one (node, socket) plane. num_sockets from --num-sockets arg.

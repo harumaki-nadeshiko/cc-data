@@ -3442,7 +3442,12 @@ def gem5_config_main():
     _parser.add_argument("--ep-wait-cap", type=int, default=-1)
     _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
     _parser.add_argument("--ubcc-batch-rs", type=int, default=-1)
-    _args, _ = _parser.parse_known_args()
+    _parser.add_argument("--ubcc-metadata-size", "--ubcc_metadata_size",
+                         dest="ubcc_metadata_size", type=int,
+                         default=128 * 1024 * 1024,
+                         help="UBCC metadata DRAM bytes (hyphenated spelling "
+                              "preferred; underscore alias retained)")
+    _args, _unknown = _parser.parse_known_args()
 
     # Phase 0.3: map script args to env vars for SimObject params
     # (precedes Ruby system creation so SimObjects see them in init)
@@ -3518,6 +3523,15 @@ def gem5_config_main():
         _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else DEFAULT_N
     except NameError:
         _cfg_num_nodes = _args.num_nodes if _args.num_nodes > 0 else 3
+
+    def _effective_toggle(requested, env_name, default):
+        if requested >= 0:
+            return requested
+        try:
+            return int(os.environ.get(env_name, default))
+        except ValueError:
+            return default
+
     # When this process owns a single node, only that node's UBAdapter binds
     # its Port (local_node = node id). -1 = all nodes (single-process mode).
 
@@ -3552,6 +3566,43 @@ def gem5_config_main():
     else:
         BUILD_NODES = [_local_node]
     TOTAL_CPUS = len(BUILD_NODES) * CPUS_PER_NODE
+    _manifest = {
+        "component": "gem5-config",
+        "argv": list(sys.argv),
+        "unknown_args": list(_unknown),
+        "tc": _args.tc or int(os.environ.get("E2E_TC", "0")),
+        "node": _local_node,
+        "num_nodes": _cfg_num_nodes,
+        "num_sockets": _cfg_num_sockets,
+        "build_nodes": BUILD_NODES,
+        "cpus_per_node": CPUS_PER_NODE,
+        "process_cpu_count": TOTAL_CPUS,
+        "cpu_model": _args.cpu_model,
+        "sequencer_max_outstanding": _args.sequencer_max_outstanding,
+        "ha_profile": _args.ha_profile,
+        "clear_profile": _args.clear_profile,
+        "silent_upgrade": {
+            "requested": _args.silent_upgrade,
+            "env": os.environ.get("EP_SILENT_UPGRADE"),
+            "effective": _effective_toggle(_args.silent_upgrade,
+                                            "EP_SILENT_UPGRADE", 0),
+        },
+        "direct_fwd": {
+            "requested": _args.direct_fwd,
+            "env": os.environ.get("EP_DIRECT_FWD"),
+            "effective": _effective_toggle(_args.direct_fwd,
+                                            "EP_DIRECT_FWD", 0),
+        },
+        "batch_rs": {
+            "requested": _args.ubcc_batch_rs,
+            "env": os.environ.get("UBCC_BATCH_RS"),
+            "effective": _effective_toggle(_args.ubcc_batch_rs,
+                                            "UBCC_BATCH_RS", 1),
+        },
+        "metadata_bytes": _args.ubcc_metadata_size,
+    }
+    print("[PROCESS-MANIFEST] " + json.dumps(_manifest, separators=(",", ":"),
+                                               sort_keys=True), flush=True)
     local_external_ranges = []
     for node_id in BUILD_NODES:
         node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
@@ -3703,6 +3754,7 @@ def gem5_config_main():
     options.ubcc_num_nodes = _cfg_num_nodes
     options.ubcc_num_sockets = _cfg_num_sockets
     options.ubcc_local_node = _local_node
+    options.ubcc_metadata_size = _args.ubcc_metadata_size
 
     # ── Patch v25.1: Skip config_filesystem proxy-triggering call ──
     import common.FileSystemConfig as _fsc
