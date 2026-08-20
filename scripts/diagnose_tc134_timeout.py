@@ -31,11 +31,9 @@ FIELD_RE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)=([^\s,]+)")
 TICK_RE = re.compile(r"\btick=(\d+)")
 PA_RE = re.compile(r"\b(?:pa|victim)=0x([0-9a-fA-F]+)")
 REQID_RE = re.compile(r"\breqId=(\d+)")
-UBIO_PATH_RE = re.compile(
-    r"(?:^|[/_.-])ubio(?:[/_.-]|$).*?(?:[/_.-]n(?:ode)?\d+).*?"
-    r"(?:[/_.-]s(?:ocket)?\d+)", re.I)
-GEM5_PATH_RE = re.compile(
-    r"(?:^|[/_.-])gem5(?:[/_.-]|$).*?(?:[/_.-]node\d+)", re.I)
+UBIO_DIR_RE = re.compile(
+    r"ubio(?:_tc\d+)?_n(?:ode)?\d+_s(?:ocket)?\d+", re.I)
+GEM5_DIR_RE = re.compile(r"gem5(?:_tc\d+)?_node\d+", re.I)
 
 FILL_ISSUED = "RESIDENT-FILL-ISSUED"
 FILL_DONE = "RESIDENT-FILL-DONE"
@@ -67,22 +65,35 @@ def log_source(path):
     text = str(path).replace("\\", "/").lower()
     name = path.name.lower()
     stem = name[:-3] if name.endswith(".gz") else name
-    if "simout" in stem and ("tc134" in text or "node" in stem):
+
+    def has_token(token):
+        return re.search(
+            rf"(?:^|[-_.]){re.escape(token)}(?:[-_.]|$)", stem) is not None
+
+    # Remote logs may be flattened under arbitrary directories. Component
+    # identity comes from the basename only; parent directory names are not
+    # evidence. Keep path-pattern fallbacks below for the local stdout.log /
+    # stderr.log layout where the basename intentionally lacks a component.
+    if has_token("simout"):
         return "simout"
-    if UBIO_PATH_RE.search(text) or (
-            "ubio" in stem and re.search(r"(?:^|[_\-.])n(?:ode)?\d+", stem)
-            and re.search(r"(?:^|[_\-.])s(?:ocket)?\d+", stem)):
+    if has_token("ubio"):
         return "ubio"
-    if GEM5_PATH_RE.search(text) or (
-            "gem5" in stem and re.search(r"(?:^|[_\-.])node\d+", stem)) or \
-            "/m5out/" in text:
+    if has_token("gem5"):
         return "gem5"
-    if "nsim" in stem or "networksim" in stem:
+    if has_token("nsim") or has_token("networksim"):
         return "nsim"
-    if "supervisor" in name:
+    if has_token("supervisor"):
         return "supervisor"
-    if name.startswith("verify_tc134"):
+    if has_token("verify") and "tc134" in stem:
         return "verify"
+    # Local runner fallback: stdout.log/stderr.log live immediately below a
+    # component-qualified directory. Match one directory atom in full; never
+    # combine arbitrary ancestor tokens such as /ubio/gem5/.../node2/.
+    for part in reversed(path.parts[:-1]):
+        if UBIO_DIR_RE.fullmatch(part):
+            return "ubio"
+        if GEM5_DIR_RE.fullmatch(part):
+            return "gem5"
     return "other"
 
 

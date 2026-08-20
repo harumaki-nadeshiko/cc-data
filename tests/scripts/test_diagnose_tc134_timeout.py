@@ -191,6 +191,46 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         report = MODULE.analyze(self.root, simout_root=self.root)
         self.assertEqual(report["source_scan"]["files"]["simout"], 1)
 
+    def test_user_supplied_remote_path_examples(self):
+        examples = {
+            "/tmp/tcrandom/wjsj/djskkw/node2/simout_n2": "simout",
+            "/home/logs/sjsjsjej/gem5-0.stdout.log": "gem5",
+            "/home/logs/38393847478/ubio-0-1.stderr.log": "ubio",
+            "/jdeiejejjeh/djdjdj/jsjdjdj/nsim-0.stdout.log": "nsim",
+        }
+        for path, expected in examples.items():
+            with self.subTest(path=path):
+                self.assertEqual(MODULE.log_source(pathlib.Path(path)), expected)
+
+    def test_random_parent_names_do_not_define_source(self):
+        self.assertEqual(
+            MODULE.log_source(pathlib.Path(
+                "/tmp/ubio/gem5/nsim/node2/unrelated.stdout.log")),
+            "other")
+
+    def test_user_flat_names_drive_separate_root_analysis(self):
+        protocol_root = self.root / "protocol" / "38393847478"
+        simout_root = self.root / "guest" / "node2"
+        simout = simout_root / "simout_n2"
+        simout.parent.mkdir(parents=True, exist_ok=True)
+        simout.write_text("\n".join(self.guest_lines(6, 5120)) + "\n")
+        offset = MODULE.stream_offset(3, 5120)
+        protocol_root.mkdir(parents=True, exist_ok=True)
+        (protocol_root / "ubio-0-1.stderr.log").write_text(
+            f"[RESIDENT-FILL-ISSUED] tick=99 home=0 pa=0x{offset:x} "
+            "waiterDepth=1 opKind=0\n")
+        (protocol_root / "gem5-0.stdout.log").write_text(
+            f"[TRACE-PERF] 100|3|gem5|55|0x{offset:x}|SEND|ReadReq\n")
+        (protocol_root / "nsim-0.stdout.log").write_text(
+            "[TRACE-PERF] 101|0|nsim|55|0x0|RECV|src=6 dst=0\n")
+        report = MODULE.analyze(protocol_root, simout_root=simout_root)
+        plane6 = next(row for row in report["planes"] if row["plane"] == 6)
+        self.assertEqual(plane6["window_pressure_iter"], 5120)
+        self.assertEqual(report["source_scan"]["files"]["simout"], 1)
+        self.assertEqual(report["source_scan"]["files"]["ubio"], 1)
+        self.assertEqual(report["source_scan"]["files"]["gem5"], 1)
+        self.assertEqual(report["source_scan"]["files"]["nsim"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
