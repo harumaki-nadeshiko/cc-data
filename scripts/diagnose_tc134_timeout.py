@@ -499,6 +499,46 @@ def print_human(report):
     print(f"next: {report['recommendation']}")
 
 
+def print_compact(report):
+    print(f"STATUS {report['summary_diagnosis']}")
+    scan = report.get("source_scan", {})
+    files = scan.get("files", {})
+    print("SOURCES " + " ".join(
+        f"{source}={files.get(source, 0)}"
+        for source in ("simout", "ubio", "gem5", "nsim", "other")) +
+        f" rejectedTrace={scan.get('rejected_cross_source_traces', 0)}")
+    if report["summary_diagnosis"] == "NO_TC134_EVIDENCE":
+        print(f"NEXT {report['recommendation']}")
+        return
+
+    writers = [row for row in report["planes"] if row["role"] == "writer"]
+    sharers = [row for row in report["planes"] if row["role"] == "sharer"]
+    print("WRITERS " + " ".join(
+        f"p{row['plane']}={row['window_pressure_iter']}/8192"
+        for row in writers))
+    print("SHARERS " + " ".join(
+        f"p{row['plane']}={'done' if row.get('share_complete') else 'missing'}"
+        for row in sharers))
+    for suspect in report["suspects"]:
+        print(
+            f"SUSPECT physicalNode={suspect['physical_node']} "
+            f"writerPlane={suspect['writer_plane']} "
+            f"pairedSharer={suspect['paired_sharer_plane']} "
+            f"shareDone={int(suspect['paired_sharer_share_complete'])} "
+            f"completed={suspect['completed_lines']} "
+            f"lines=[{suspect['suspect_line_begin']},"
+            f"{suspect['suspect_line_end_exclusive']}) "
+            f"offsets=[{suspect['suspect_offset_begin']},"
+            f"{suspect['suspect_offset_end_exclusive']}) "
+            f"diagnosis={suspect['diagnosis']}")
+        reqids = ",".join(str(item["reqid"])
+                          for item in suspect["matching_reqids"]) or "none"
+        print(
+            f"EVIDENCE fills={len(suspect['unresolved_fills'])} "
+            f"spills={len(suspect['unresolved_spills'])} "
+            f"waiters={len(suspect['unresolved_waiters'])} reqIds={reqids}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Diagnose an 8-node, 2-socket TC134 timeout")
@@ -510,6 +550,8 @@ def main():
     parser.add_argument("--progress-step", type=int, default=PROGRESS_STEP,
                         help="TC134_PROGRESS_STEP used to build the workload")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--compact", action="store_true",
+                        help="print a short shareable diagnosis")
     args = parser.parse_args()
     root = pathlib.Path(args.log_dir).resolve()
     if not root.is_dir():
@@ -524,6 +566,8 @@ def main():
     report = analyze(root, args.sample_limit, args.progress_step, simout_root)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
+    elif args.compact:
+        print_compact(report)
     else:
         print_human(report)
     return 0

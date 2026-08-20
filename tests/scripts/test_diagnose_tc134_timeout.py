@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import io
 import pathlib
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -230,6 +232,30 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         self.assertEqual(report["source_scan"]["files"]["ubio"], 1)
         self.assertEqual(report["source_scan"]["files"]["gem5"], 1)
         self.assertEqual(report["source_scan"]["files"]["nsim"], 1)
+
+    def test_compact_output_is_short_and_identifies_writer(self):
+        self.write("simout_n3", self.guest_lines(6, 2048))
+        report = MODULE.analyze(self.root)
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            MODULE.print_compact(report)
+        lines = stream.getvalue().splitlines()
+        self.assertLessEqual(len(lines), 7)
+        self.assertTrue(lines[0].startswith("STATUS "))
+        self.assertTrue(lines[1].startswith("SOURCES "))
+        self.assertIn("p6=2048/8192", lines[2])
+        self.assertTrue(any("physicalNode=3" in line and
+                            "writerPlane=6" in line for line in lines))
+
+    def test_compact_no_evidence_is_three_lines(self):
+        self.write("unrelated.log", ["nothing"])
+        report = MODULE.analyze(self.root)
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            MODULE.print_compact(report)
+        lines = stream.getvalue().splitlines()
+        self.assertEqual(len(lines), 3)
+        self.assertIn("NO_TC134_EVIDENCE", lines[0])
 
 
 if __name__ == "__main__":
