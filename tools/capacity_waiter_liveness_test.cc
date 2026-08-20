@@ -369,6 +369,7 @@ main()
     assert(tupleOutstanding->stage == OpStage::WAITING_CLEAR);
     assert(tupleOutstanding->requesterSocket == 0);
     assert(tupleOutstanding->reqId == tupleReqId);
+    assert(tupleUbcc.directory().pinned(tuplePa));
     const auto exactTupleRetry = tupleUbcc.processOuterRequest(
         tuplePa, UBCC_OuterReqType::GlobalReadShared, false,
         1, 0, tupleBaseEpoch, tupleReqId);
@@ -392,6 +393,32 @@ main()
     assert(tupleOutstanding->reqId == tupleReqId);
     assert(tupleUbcc.processClear(
         tuplePa, 1, tupleClearEpoch, tupleReqId));
+    assert(!tupleUbcc.directory().pinned(tuplePa));
+
+    // A live WAITING_CLEAR entry must not be selectable as a capacity victim.
+    UBCCController grantPinUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    grantPinUbcc.setHost(&host);
+    constexpr uint64_t pinnedPa = 0x10000360;
+    uint64_t otherPa = pinnedPa + 64;
+    while (!grantPinUbcc.directory().sameSet(pinnedPa, otherPa))
+        otherPa += 64;
+    assert(grantPinUbcc.debugSeedResidentForTest(
+        pinnedPa, static_cast<int>(MESIState::G_I), 0, 1, false));
+    assert(grantPinUbcc.debugSeedResidentForTest(
+        otherPa, static_cast<int>(MESIState::G_I), 0, 1, false));
+    OutstandingRequest *pinnedGrant = grantPinUbcc.createOutstanding(
+        pinnedPa, OpType::GRANT_HANDSHAKE, 1, -1, 0);
+    assert(pinnedGrant);
+    pinnedGrant->stage = OpStage::WAITING_CLEAR;
+    pinnedGrant->reqId = 1700;
+    assert(grantPinUbcc.directory().pinned(pinnedPa));
+    uint64_t pickedPa = 0;
+    DirEntry pickedEntry;
+    if (grantPinUbcc.directory().pickVictim(otherPa, pickedPa, pickedEntry))
+        assert(pickedPa != pinnedPa);
+    grantPinUbcc.removeOutstanding(pinnedPa);
+    assert(!grantPinUbcc.directory().pinned(pinnedPa));
 
     // A historical accepted tombstone must not mask a newly recreated exact
     // live grant tuple. The matching Clear commits the live WAITING_CLEAR

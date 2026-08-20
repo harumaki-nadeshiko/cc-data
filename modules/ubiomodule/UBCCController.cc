@@ -5151,6 +5151,11 @@ UBCCController::createOutstanding(uint64_t linePa, OpType opType,
     req.ackMask = 0;
     req.totalMask = 0;
     _outstandingReqs[linePa] = req;
+    // A live protocol object owns the resident metadata until it retires.
+    // Materialize the derived pin at creation time; otherwise a concurrent
+    // capacity victim selection can remove the directory entry while the
+    // grant is waiting for Clear, leaving processClear with an unknown PA.
+    refreshPinnedBit(linePa);
     return &_outstandingReqs[linePa];
 }
 
@@ -5158,6 +5163,7 @@ void
 UBCCController::removeOutstanding(uint64_t linePa)
 {
     _outstandingReqs.erase(linePa);
+    refreshPinnedBit(linePa);
 }
 
 bool
