@@ -4277,9 +4277,9 @@ UBCCController::recordCompletedReadIdentity(const OutstandingRequest &ost)
         _completedReadIdentityOrder.pop_front();
     }
     framework::LogInfo("UBCC",
-        "[UBCC-COMPLETED-READ-RECORD] home={} pa=0x{:x} requester={}:{} "
+        "[UBCC-COMPLETED-READ-RECORD] home={}:{} pa=0x{:x} requester={}:{} "
         "reqId={} cacheSize={}",
-        _nodeId, ost.linePa, ost.requesterNode, ost.requesterSocket,
+        _nodeId, _socketId, ost.linePa, ost.requesterNode, ost.requesterSocket,
         ost.reqId, _completedReadIdentityOrder.size());
 }
 

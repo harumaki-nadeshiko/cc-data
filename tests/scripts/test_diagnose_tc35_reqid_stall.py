@@ -249,6 +249,34 @@ class DiagnoseTc35Test(unittest.TestCase):
         self.assertEqual(identity["exact_clear_accepts"], 1)
         self.assertEqual(identity["home_plane_records"], 1)
 
+    def test_tombstone_replay_accept_does_not_require_new_record(self):
+        self.write("ubio-0-0.stdout.log", [
+            "[UBCC-COMPLETED-READ-RECORD] home=0:0 pa=0x200 "
+            "requester=2:0 reqId=99 cacheSize=1",
+            "UBCC node_id=0: checkTombstone HIT PA=0x100 epoch=7 "
+            "reqId=41 accepted=1",
+            "[HOME-CLEAR-RESULT] home=0:0 src=1:0 pa=0x100 "
+            "epoch=7 reqId=41 accepted=1",
+        ])
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"],
+                         "TOMBSTONE_REPLAY_ACCEPT_NO_NEW_RECORD")
+        self.assertEqual(identity["exact_tombstone_accepts"], 1)
+
+    def test_record_home_socket_field_overrides_filename_fallback(self):
+        event = MODULE.completed_identity_event(
+            pathlib.Path("/logs/ubio-0-0.stdout.log"), 1,
+            "[UBCC-COMPLETED-READ-RECORD] home=0:1 pa=0x100 "
+            "requester=2:1 reqId=99 cacheSize=1")
+        self.assertEqual(event["home"], 0)
+        self.assertEqual(event["home_socket"], 1)
+
     def test_same_reqid_clear_other_tuple_is_detected(self):
         self.write("ubio-0-0.stdout.log", [
             "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x200 "
