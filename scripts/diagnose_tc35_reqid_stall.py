@@ -224,7 +224,7 @@ def tombstone_hit_event(path, line_number, text):
     node, socket = process_identity(path)
     match = re.search(
         r"checkTombstone HIT PA=0x([0-9a-fA-F]+).*?epoch=(\d+).*?"
-        r"reqId=(\d+).*?accepted=(\d+)", text)
+        r"reqId=(\d+).*?accepted=(1|0|true|false)", text, re.I)
     if not match:
         return None
     return {
@@ -233,7 +233,29 @@ def tombstone_hit_event(path, line_number, text):
         "pa": int(match.group(1), 16),
         "epoch": int(match.group(2)),
         "reqid": int(match.group(3)),
-        "accepted": int(match.group(4)),
+        "accepted": 1 if match.group(4).lower() in {"1", "true"} else 0,
+        "file": str(path),
+        "line": line_number,
+        "text": text,
+    }
+
+
+def active_clear_commit_event(path, line_number, text):
+    if "commitIntendedResult" not in text or "path=Clear" not in text:
+        return None
+    node, socket = process_identity(path)
+    match = re.search(
+        r"commitIntendedResult PA=0x([0-9a-fA-F]+).*?path=Clear.*?"
+        r"requester=(\d+):(\d+).*?reqId=(\d+)", text)
+    if not match:
+        return None
+    return {
+        "home": node,
+        "home_socket": socket if socket is not None else -1,
+        "pa": int(match.group(1), 16),
+        "requester": int(match.group(2)),
+        "requester_socket": int(match.group(3)),
+        "reqid": int(match.group(4)),
         "file": str(path),
         "line": line_number,
         "text": text,
@@ -600,7 +622,7 @@ def post_clear_recovery(old_summaries, new_summaries):
 def identity_resolution(mismatch, events, clear_results, completed_record_total,
                         ubio_file_count, ubio_files_by_plane,
                         records_by_plane, start_markers_by_file,
-                        tombstone_hits):
+                        tombstone_hits, active_clear_commits):
     matching = [event for event in events
                 if event["home"] == mismatch.home and
                 event["pa"] == mismatch.pa and
@@ -639,6 +661,13 @@ def identity_resolution(mismatch, events, clear_results, completed_record_total,
                                event["home_socket"] == mismatch.home_socket and
                                event["pa"] == mismatch.pa and
                                event["reqid"] == mismatch.outstanding_reqid]
+    exact_active_commits = [event for event in active_clear_commits
+                            if event["home"] == mismatch.home and
+                            event["home_socket"] == mismatch.home_socket and
+                            event["pa"] == mismatch.pa and
+                            event["requester"] == mismatch.requester and
+                            event["requester_socket"] == mismatch.outstanding_socket and
+                            event["reqid"] == mismatch.outstanding_reqid]
     record_before = sum(
         1 for event in records
         if event["file"] == mismatch.file and event["line"] < mismatch.first_line)
@@ -664,10 +693,12 @@ def identity_resolution(mismatch, events, clear_results, completed_record_total,
             resolution = "MIXED_RUN_LOG"
         elif home_plane_records == 0:
             resolution = "HOME_PLANE_HAS_NO_FEATURE_MARKER"
-        elif exact_clear_accepts and exact_tombstone_accepts:
+        elif exact_clear_accepts and exact_tombstone_accepts and not exact_active_commits:
             resolution = "TOMBSTONE_REPLAY_ACCEPT_NO_NEW_RECORD"
+        elif exact_active_commits:
+            resolution = "ACTIVE_CLEAR_COMMIT_WITHOUT_RECORD"
         elif exact_clear_accepts:
-            resolution = "EXACT_CLEAR_ACCEPT_WITHOUT_RECORD"
+            resolution = "CLEAR_RESULT_WITHOUT_COMMIT_OR_TOMBSTONE"
         elif same_reqid_clear_accepts:
             resolution = "CLEAR_ACCEPT_TUPLE_DIFFERS"
         elif completed_record_total == 0:
@@ -699,6 +730,7 @@ def identity_resolution(mismatch, events, clear_results, completed_record_total,
         "exact_clear_accepts": len(exact_clear_accepts),
         "same_reqid_clear_accepts": len(same_reqid_clear_accepts),
         "exact_tombstone_accepts": len(exact_tombstone_accepts),
+        "exact_active_commits": len(exact_active_commits),
     }
 
 
@@ -711,6 +743,7 @@ def scan(root, args):
     completed_identity_events = []
     clear_result_events = []
     tombstone_hit_events = []
+    active_clear_commit_events = []
     ubio_files = set()
     ubio_files_by_plane = defaultdict(set)
     start_markers_by_file = defaultdict(int)
@@ -755,6 +788,9 @@ def scan(root, args):
                 tombstone_event = tombstone_hit_event(path, line_number, text)
                 if tombstone_event:
                     tombstone_hit_events.append(tombstone_event)
+                commit_event = active_clear_commit_event(path, line_number, text)
+                if commit_event:
+                    active_clear_commit_events.append(commit_event)
                 if UBIO_START_MARKER in text:
                     start_markers_by_file[str(path)] += 1
                 if "EPBACKEND-PROFILE" in text or "HA_PROFILE=" in text or \
@@ -810,7 +846,8 @@ def scan(root, args):
         identity = identity_resolution(
             mismatch, completed_identity_events, clear_result_events,
             completed_record_total, len(ubio_files), ubio_files_by_plane,
-            records_by_plane, start_markers_by_file, tombstone_hit_events)
+            records_by_plane, start_markers_by_file, tombstone_hit_events,
+            active_clear_commit_events)
         items.append({
             "mismatch": asdict(mismatch),
             "relation": relation(mismatch.outstanding_reqid,
@@ -948,6 +985,7 @@ def main():
             f"exactClearAccepts={item['completed_identity']['exact_clear_accepts']} "
             f"sameReqIdClearAccepts={item['completed_identity']['same_reqid_clear_accepts']} "
             f"tombstoneAccepts={item['completed_identity']['exact_tombstone_accepts']} "
+            f"activeClearCommits={item['completed_identity']['exact_active_commits']} "
             f"mixedRunFiles={item['completed_identity']['mixed_run_files']} "
             f"homeAccept={old_summary['HC'].count} "
             f"homeReject={old_summary['HJ'].count} "
