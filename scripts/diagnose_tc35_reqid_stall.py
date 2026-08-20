@@ -468,6 +468,17 @@ def clear_resolution(mismatch, summaries):
         return "CLEAR_REJECTED"
     if not summaries["CH"].count and not summaries["HC"].count:
         return "CLEAR_NOT_PROVEN_ACCEPTED"
+    clear_accept = summaries["HC"]
+    if clear_accept.count:
+        if (clear_accept.first and clear_accept.last and
+                clear_accept.first.file == mismatch.last_file and
+                clear_accept.last.file == mismatch.last_file):
+            if mismatch.last_line < clear_accept.first.line:
+                return "TRANSIENT_RESOLVED_AFTER_MISMATCH"
+            if mismatch.first_line > clear_accept.last.line:
+                return "POST_ACCEPT_MISMATCH_RECREATED_OLD_TUPLE"
+            return "MISMATCH_SPANS_CLEAR_ACCEPT"
+        return "CLEAR_ACCEPTED_ORDER_UNKNOWN"
     ingress = summaries["HI"].first
     if ingress and ingress.file == mismatch.last_file:
         if mismatch.last_line < ingress.line:

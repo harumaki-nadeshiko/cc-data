@@ -211,6 +211,38 @@ class DiagnoseTc35Test(unittest.TestCase):
             report["mismatches"][0]["clear_resolution"],
             "POST_CLEAR_INGRESS_MISMATCH_OR_REPLAY")
 
+    def test_true_accept_after_mismatch_marks_transient(self):
+        self.write("ubio_tc98_n0_s0/stdout.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+            "[HOME-CLEAR-RESULT] home=0 pa=0x100 reqId=41 accepted=1",
+        ])
+        self.write("gem5_tc98_node1/stderr.log", [
+            "[CLEAR-SEND] node=1 pa=0x100 reqId=41",
+            "[CLR-CACHE-HIT] node=1 reqId=41 accepted=1",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["clear_resolution"],
+            "TRANSIENT_RESOLVED_AFTER_MISMATCH")
+
+    def test_mismatch_after_true_accept_is_recreated_tuple(self):
+        self.write("ubio_tc98_n0_s0/stdout.log", [
+            "[HOME-CLEAR-RESULT] home=0 pa=0x100 reqId=41 accepted=1",
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        self.write("gem5_tc98_node1/stderr.log", [
+            "[CLEAR-SEND] node=1 pa=0x100 reqId=41",
+            "[CLR-CACHE-HIT] node=1 reqId=41 accepted=1",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["clear_resolution"],
+            "POST_ACCEPT_MISMATCH_RECREATED_OLD_TUPLE")
+
     def test_long_line_preserves_prefix_marker(self):
         marker = (
             "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
