@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 #include <string>
 #include <unordered_set>
 
@@ -805,6 +806,10 @@ class UBCCController
     // §7.4 / recall_done_fix.md: per-PA multi-entry deque so queued replay
     // doesn't clobber earlier tombstones within window W.
     std::map<uint64_t, std::deque<GrantHandshakeTombstone>> _tombstones;
+    using CompletedReadKey = std::tuple<uint64_t, int, int, uint64_t>;
+    static constexpr size_t kMaxCompletedReadIdentities = 65536;
+    std::set<CompletedReadKey> _completedReadIdentities;
+    std::deque<CompletedReadKey> _completedReadIdentityOrder;
 
     // ---- recall_done_fix.md: Pending requester queue per PA ----
     // Foreign requesters that arrive while a live outstanding exists for
@@ -1032,6 +1037,9 @@ public:
      * stores the replay-rebased epoch. reqId remains stable across that replay.
      */
     bool hasAcceptedGrantReqIdTombstone(uint64_t linePa, uint64_t reqId);
+    bool completedReadIdentityContains(uint64_t linePa, int requesterNode,
+                                       int requesterSocket, uint64_t reqId) const;
+    void recordCompletedReadIdentity(const OutstandingRequest &ost);
 
     /**
      * Remove expired tombstones.

@@ -1467,6 +1467,15 @@ UBCCController::processOuterRequest(
               _nodeId, requesterNode);
     }
 
+    if (completedReadIdentityContains(
+            line_pa, requesterNode, requesterSocket, reqId)) {
+        framework::LogWarn("UBCC",
+            "[UBCC-COMPLETED-READ-DUPLICATE] home={} pa=0x{:x} "
+            "requester={}:{} incomingEpoch={} reqId={} action=drop",
+            _nodeId, line_pa, requesterNode, requesterSocket, baseEpoch, reqId);
+        return static_cast<UBCC_OuterGrantType>(-1);
+    }
+
     // H64: if DSM persistence is pending for this PA, queue the requester.
     // The grant callback must not read stale HomeMemory before data is written.
     // HARD cap checks: per-PA limit, total limit, DSM pending set limit.
@@ -3908,6 +3917,7 @@ UBCCController::processClear(
 
     // Retire GRANT_HANDSHAKE to tombstone(W) for duplicate Clear replay
     retireCommittedReadWaiters(*ost);
+    recordCompletedReadIdentity(*ost);
     retireToTombstone(*ost, true);
     removeOutstanding(line_pa);
     refreshPinnedBit(line_pa);
@@ -4243,6 +4253,34 @@ UBCCController::hasAcceptedGrantReqIdTombstone(uint64_t linePa, uint64_t reqId)
         }
     }
     return false;
+}
+
+bool
+UBCCController::completedReadIdentityContains(
+    uint64_t linePa, int requesterNode, int requesterSocket,
+    uint64_t reqId) const
+{
+    return _completedReadIdentities.count(
+        CompletedReadKey{linePa, requesterNode, requesterSocket, reqId}) != 0;
+}
+
+void
+UBCCController::recordCompletedReadIdentity(const OutstandingRequest &ost)
+{
+    const CompletedReadKey key{
+        ost.linePa, ost.requesterNode, ost.requesterSocket, ost.reqId};
+    if (!_completedReadIdentities.insert(key).second)
+        return;
+    _completedReadIdentityOrder.push_back(key);
+    if (_completedReadIdentityOrder.size() > kMaxCompletedReadIdentities) {
+        _completedReadIdentities.erase(_completedReadIdentityOrder.front());
+        _completedReadIdentityOrder.pop_front();
+    }
+    framework::LogInfo("UBCC",
+        "[UBCC-COMPLETED-READ-RECORD] home={} pa=0x{:x} requester={}:{} "
+        "reqId={} cacheSize={}",
+        _nodeId, ost.linePa, ost.requesterNode, ost.requesterSocket,
+        ost.reqId, _completedReadIdentityOrder.size());
 }
 
 void

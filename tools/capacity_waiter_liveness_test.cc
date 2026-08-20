@@ -442,6 +442,17 @@ main()
     assert(rebasedOutstanding);
     assert(rebasedOutstanding->reqId == successorReqId);
 
+    // Clear-completed identity protection outlives the short ClearAck
+    // tombstone. A very late ReadReq duplicate must still be suppressed while
+    // a newer request for the same PA remains valid.
+    rebasedUbcc.wakeup();
+    assert(static_cast<int>(rebasedUbcc.processOuterRequest(
+        rebasedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, queuedOriginalEpoch, queuedReqId)) == -1);
+    rebasedOutstanding = rebasedUbcc.findOutstanding(rebasedPa);
+    assert(rebasedOutstanding);
+    assert(rebasedOutstanding->reqId == successorReqId);
+
     // A normal dirty writeback can race a naive capacity recall after the
     // owner has already dropped its cache line. The matching data-bearing
     // writeback must complete the recall instead of being rejected as BUSY.
