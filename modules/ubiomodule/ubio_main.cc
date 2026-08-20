@@ -621,6 +621,16 @@ sendCoh(Port *port, uint64_t tick, uint32_t srcModule, uint32_t dstModule,
     SetMessagePayload(buf, &msg, sizeof(msg));
     uint64_t sendTs = GetMessageTimestamp(buf);
     bool ok = SendMessage(port, buf);
+    if (msg.h.type == CoherenceMessageType::UpgradeReq ||
+        msg.h.type == CoherenceMessageType::UpgradeResp) {
+        LogInfo("UBIO", "[UPGRADE-FORENSIC] stage={} routeSrcGid={} "
+                "pa=0x{:x} type={} reqId={} epoch={} payloadSrc={}:{} "
+                "dst={}:{} targetGid={} simTs={} sendOk={}",
+                toNetwork ? "UBIO_NET_SEND" : "UBIO_GEM5_SEND",
+                srcModule, msg.h.homeLinePa, coherenceMsgTypeName(msg.h.type),
+                msg.h.reqId, msg.h.epoch, msg.h.srcNode, msg.h.srcSocket,
+                msg.h.dstNode, msg.h.dstSocket, dstModule, sendTs, ok ? 1 : 0);
+    }
     if (ok && TracePerfPolicy::get().shouldEmit("ubio")) {
         LogInfo("UBIO", "[TRACE-PERF] {}|{}|ubio|{}|0x{:x}|{}|{}",
                      sendTs, dstModule, msg.h.reqId, msg.h.homeLinePa,
@@ -2611,6 +2621,11 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
             msg.b.upgradeReq.desiredPerm,
             static_cast<UBCC_UpgradeCause>(msg.b.upgradeReq.cause),
             &notSharer, &deferred, msg.h.srcSocket);
+        LogInfo("UBIO", "[UPGRADE-FORENSIC] stage=HOME_REQ_RESULT home={}:{} "
+                "pa=0x{:x} reqId={} epoch={} requester={}:{} accepted={} "
+                "deferred={} notSharer={}", nid, sid, msg.h.homeLinePa,
+                msg.h.reqId, msg.h.epoch, msg.h.srcNode, msg.h.srcSocket,
+                accepted ? 1 : 0, deferred ? 1 : 0, notSharer ? 1 : 0);
         if (deferred) {
             // Confirm that Home consumed and queued this exact tuple. The
             // requester keeps the same reqId and does not count this as a
@@ -3594,6 +3609,19 @@ main(int argc, char **argv)
                              nid, GetMessagePayloadSize(m), GetMessageRequestId(m));
                 m = ReceiveMessage(port, tick, &st);
                 continue;
+            }
+            if (coh->h.type == CoherenceMessageType::UpgradeReq ||
+                coh->h.type == CoherenceMessageType::UpgradeResp) {
+                LogInfo("UBIO", "[UPGRADE-FORENSIC] stage={} local={}:{} "
+                        "pa=0x{:x} type={} reqId={} epoch={} src={}:{} dst={}:{} "
+                        "envelope={}:{} msgTs={} tick={}",
+                        fromNetwork ? "UBIO_NET_RECV" : "UBIO_GEM5_RECV",
+                        nid, sid, coh->h.homeLinePa,
+                        coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+                        coh->h.epoch, coh->h.srcNode, coh->h.srcSocket,
+                        coh->h.dstNode, coh->h.dstSocket,
+                        GetMessageSourceId(m), GetMessageTargetId(m),
+                        GetMessageTimestamp(m), tick);
             }
 
             if (gem5Done && coh->h.type != CoherenceMessageType::PeerExit &&

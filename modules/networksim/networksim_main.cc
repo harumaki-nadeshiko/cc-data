@@ -289,6 +289,20 @@ void NetworkSim::step() {
             const uint64_t requestId = GetMessageRequestId(m);
             const uint32_t sourceId = GetMessageSourceId(m);
             const uint32_t targetId = GetMessageTargetId(m);
+            if (GetMessageType(m) == MessageType::Payload &&
+                GetMessagePayloadSize(m) == sizeof(CoherenceMessage)) {
+                const auto *coh = static_cast<const CoherenceMessage *>(
+                    GetMessagePayloadData(m));
+                if (coh && (coh->h.type == CoherenceMessageType::UpgradeReq ||
+                            coh->h.type == CoherenceMessageType::UpgradeResp)) {
+                    LogInfo("NetworkSim", "[UPGRADE-FORENSIC] stage=NSIM_RECV "
+                            "port={} pa=0x{:x} reqId={} epoch={} type={} "
+                            "src={} dst={} msgTs={} tick={}", mod,
+                            coh->h.homeLinePa, coh->h.reqId, coh->h.epoch,
+                            coherenceMsgTypeName(coh->h.type), sourceId,
+                            targetId, timestamp, _tick);
+                }
+            }
             if (TracePerfPolicy::get().shouldEmit("nsim")) {
                 LogInfo("NetworkSim", "[TRACE-PERF] {}|{}|nsim|{}|0x0|RECV|src={} dst={}",
                         timestamp, mod, requestId, sourceId, targetId);
@@ -337,12 +351,19 @@ void NetworkSim::step() {
             const auto transportType = GetMessageType(pf.msg);
             const size_t payloadSize = GetMessagePayloadSize(pf.msg);
             const char *coherenceType = "n/a";
+            uint64_t coherencePa = 0;
+            bool upgradeForensic = false;
             if (transportType == MessageType::Payload &&
                 payloadSize == sizeof(CoherenceMessage)) {
                 const auto *coh = static_cast<const CoherenceMessage *>(
                     GetMessagePayloadData(pf.msg));
-                if (coh)
+                if (coh) {
                     coherenceType = coherenceMsgTypeName(coh->h.type);
+                    coherencePa = coh->h.homeLinePa;
+                    upgradeForensic =
+                        coh->h.type == CoherenceMessageType::UpgradeReq ||
+                        coh->h.type == CoherenceMessageType::UpgradeResp;
+                }
             }
             const bool sent = SendMessage(it->second, pf.msg);
             // SendMessage consumes pf.msg even on failure; never reuse it.
@@ -365,6 +386,13 @@ void NetworkSim::step() {
                         sourceId, targetId, requestId,
                         static_cast<unsigned>(transportType), payloadSize,
                         coherenceType);
+            }
+            if (upgradeForensic) {
+                LogInfo("NetworkSim", "[UPGRADE-FORENSIC] stage=NSIM_FWD "
+                        "pa=0x{:x} reqId={} type={} src={} dst={} sent={} "
+                        "readyTick={} tick={}", coherencePa, requestId,
+                        coherenceType, sourceId, targetId, sent ? 1 : 0,
+                        pf.readyTick, _tick);
             }
         } else {
             ReleaseMessage(pf.msg);
