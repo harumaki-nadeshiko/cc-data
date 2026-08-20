@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import io
 import pathlib
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -72,6 +74,38 @@ class DiagnoseUpgradeTerminalTest(unittest.TestCase):
         report = MODULE.diagnose(self.root, [str(reqid)])
         self.assertEqual(report["transactions"][0]["diagnosis"],
                          "RESPONSE_CONSUMED_CHECK_EPRNF_STATE_UPDATE")
+
+    def test_compact_report_omits_raw_samples(self):
+        reqid = 11
+        self.write("terminal.log", [
+            self.marker("GEM5_REQ_SEND", reqid),
+            "[EPRNF-UPGRADE-TERMINAL] node=4 pa=0x100 sourceSocket=0 "
+            "homeNode=0 epoch=5 reqId=11 reason=EXHAUSTED_NO_RESPONSE "
+            "resends=8 homeAccepted=0",
+        ])
+        compact = MODULE.compact_report(MODULE.diagnose(self.root))
+        self.assertNotIn("samples", compact["transactions"][0])
+        self.assertEqual(
+            compact["diagnosis_counts"],
+            {"REQUESTER_GEM5_TO_UBIO_BREAK": 1})
+        self.assertEqual(compact["transactions"][0]["last_present"],
+                         "GEM5_REQ_SEND")
+
+    def test_compact_human_is_two_lines_per_transaction(self):
+        reqid = 12
+        self.write("terminal.log", [
+            self.marker("GEM5_REQ_SEND", reqid),
+            "[EPRNF-UPGRADE-TERMINAL] node=4 pa=0x100 sourceSocket=0 "
+            "homeNode=0 epoch=5 reqId=12 reason=EXHAUSTED_NO_RESPONSE "
+            "resends=8 homeAccepted=0",
+        ])
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            MODULE.print_compact(MODULE.diagnose(self.root))
+        lines = stream.getvalue().splitlines()
+        self.assertEqual(len(lines), 5)
+        self.assertIn("diagnosis=REQUESTER_GEM5_TO_UBIO_BREAK", lines[3])
+        self.assertTrue(lines[4].startswith("CNT "))
 
 
 if __name__ == "__main__":

@@ -34,6 +34,23 @@ STAGES = (
     ("GEM5_RESP_CONSUME", "requester consumed cached UpgradeResp"),
 )
 
+STAGE_LABELS = {
+    "GEM5_REQ_SEND": "G_REQ_SEND",
+    "UBIO_GEM5_RECV:UpgradeReq": "U_REQ_RECV",
+    "UBIO_NET_SEND:UpgradeReq": "U_REQ_SEND",
+    "NSIM_RECV:UpgradeReq": "N_REQ_RECV",
+    "NSIM_FWD:UpgradeReq": "N_REQ_FWD",
+    "UBIO_NET_RECV:UpgradeReq": "H_REQ_RECV",
+    "HOME_REQ_RESULT": "H_REQ_RESULT",
+    "UBIO_NET_SEND:UpgradeResp": "H_RESP_SEND",
+    "NSIM_RECV:UpgradeResp": "N_RESP_RECV",
+    "NSIM_FWD:UpgradeResp": "N_RESP_FWD",
+    "UBIO_NET_RECV:UpgradeResp": "U_RESP_RECV",
+    "UBIO_GEM5_SEND:UpgradeResp": "U_RESP_SEND",
+    "GEM5_RESP_RECV": "G_RESP_RECV",
+    "GEM5_RESP_CONSUME": "G_RESP_USE",
+}
+
 
 def open_text(path):
     return (gzip.open(path, "rt", errors="replace") if path.suffix == ".gz"
@@ -187,17 +204,75 @@ def print_human(report):
                       f"{sample['text']}")
 
 
+def compact_report(report):
+    diagnosis_counts = Counter(
+        txn["diagnosis"] for txn in report["transactions"])
+    transactions = []
+    for txn in report["transactions"]:
+        terminal = txn.get("terminal") or {}
+        transactions.append({
+            "reqid": txn["reqid"],
+            "node": terminal.get("node"),
+            "source_socket": terminal.get("source_socket"),
+            "home_node": terminal.get("home_node"),
+            "pa": terminal.get("pa"),
+            "epoch": terminal.get("epoch"),
+            "reason": terminal.get("reason"),
+            "resends": terminal.get("resends"),
+            "home_accepted": terminal.get("home_accepted"),
+            "diagnosis": txn["diagnosis"],
+            "last_present": ((txn.get("last_present") or {}).get("stage")),
+            "first_missing": ((txn.get("first_missing") or {}).get("stage")),
+            "stage_counts": txn["stage_counts"],
+        })
+    return {
+        "schema_version": report["schema_version"],
+        "log_dir": report["log_dir"],
+        "scanned_files": report["scanned_files"],
+        "scanned_lines": report["scanned_lines"],
+        "terminal_count": report["terminal_count"],
+        "diagnosis_counts": dict(sorted(diagnosis_counts.items())),
+        "transactions": transactions,
+    }
+
+
+def print_compact(report):
+    compact = compact_report(report)
+    diagnoses = " ".join(
+        f"{name}={count}" for name, count in
+        compact["diagnosis_counts"].items()) or "none"
+    print(f"UPGRADE TERMINALS: {compact['terminal_count']}")
+    print(f"DIAGNOSES: {diagnoses}")
+    print("COUNT LEGEND: " + " ".join(
+        STAGE_LABELS[stage] for stage, _ in STAGES))
+    for txn in compact["transactions"]:
+        print(
+            f"REQ reqId={txn['reqid']} node={txn['node']} "
+            f"socket={txn['source_socket']} home={txn['home_node']} "
+            f"pa={txn['pa']} epoch={txn['epoch']} reason={txn['reason']} "
+            f"resends={txn['resends']} homeAccepted={txn['home_accepted']} "
+            f"diagnosis={txn['diagnosis']} last={txn['last_present']} "
+            f"missing={txn['first_missing']}")
+        print("CNT " + " ".join(
+            str(txn["stage_counts"][stage]) for stage, _ in STAGES))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("log_dir")
     parser.add_argument("--reqid", action="append", default=[])
     parser.add_argument("--sample-limit", type=int, default=2)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--compact", action="store_true",
+                        help="omit raw samples and print a shareable summary")
     args = parser.parse_args()
     report = diagnose(pathlib.Path(args.log_dir).resolve(), args.reqid,
                       args.sample_limit)
     if args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        output = compact_report(report) if args.compact else report
+        print(json.dumps(output, indent=2, sort_keys=True))
+    elif args.compact:
+        print_compact(report)
     else:
         print_human(report)
     return 0 if report["transactions"] else 1
