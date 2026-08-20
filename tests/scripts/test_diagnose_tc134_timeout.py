@@ -166,6 +166,31 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         self.assertNotIn("supervisor", report["source_scan"]["files"])
         self.assertEqual(report["supervisor_tail"], [])
 
+    def test_separate_simout_directory_matches_tc98_input_model(self):
+        protocol_root = self.root / "protocol"
+        simout_root = self.root / "guest"
+        simout = simout_root / "simout_tc134_node3.log"
+        simout.parent.mkdir(parents=True, exist_ok=True)
+        simout.write_text("\n".join(self.guest_lines(6, 4096)) + "\n")
+        offset = MODULE.stream_offset(3, 4096)
+        protocol = protocol_root / "remote_ubio_tc134_n0_s0_stdout.log"
+        protocol.parent.mkdir(parents=True, exist_ok=True)
+        protocol.write_text(
+            f"[RESIDENT-FILL-ISSUED] tick=99 home=0 pa=0x{offset:x} "
+            "waiterDepth=1 opKind=0\n")
+        report = MODULE.analyze(protocol_root, simout_root=simout_root)
+        plane6 = next(row for row in report["planes"] if row["plane"] == 6)
+        self.assertEqual(plane6["window_pressure_iter"], 4096)
+        self.assertEqual(report["log_dir"], str(protocol_root))
+        self.assertEqual(report["simout_dir"], str(simout_root))
+        self.assertEqual(report["source_scan"]["files"]["simout"], 1)
+        self.assertEqual(report["source_scan"]["files"]["ubio"], 1)
+
+    def test_overlapping_roots_do_not_double_count_files(self):
+        self.write("simout_tc134_node3.log", self.guest_lines(6, 1024))
+        report = MODULE.analyze(self.root, simout_root=self.root)
+        self.assertEqual(report["source_scan"]["files"]["simout"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

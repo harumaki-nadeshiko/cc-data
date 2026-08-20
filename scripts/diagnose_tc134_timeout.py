@@ -119,7 +119,8 @@ def event(path, line_number, line, **extra):
     return item
 
 
-def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
+def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
+            simout_root=None):
     phases = defaultdict(set)
     progress = defaultdict(dict)
     traces = defaultdict(list)
@@ -137,7 +138,15 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
     source_lines = Counter()
     rejected_cross_source_traces = 0
 
-    paths = sorted(log_files(root))
+    scan_roots = [root]
+    if simout_root is not None and simout_root != root:
+        scan_roots.append(simout_root)
+    unique_paths = {}
+    for scan_root in scan_roots:
+        if scan_root.is_dir():
+            for path in log_files(scan_root):
+                unique_paths[str(path.resolve())] = path
+    paths = sorted(unique_paths.values())
     for path in paths:
         scanned_files += 1
         source = log_source(path)
@@ -230,6 +239,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
         return {
             "schema_version": 1,
             "log_dir": str(root),
+            "simout_dir": str(simout_root) if simout_root is not None else str(root),
             "scanned_files": scanned_files,
             "scanned_lines": scanned_lines,
             "source_scan": {
@@ -399,6 +409,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP):
     return {
         "schema_version": 1,
         "log_dir": str(root),
+        "simout_dir": str(simout_root) if simout_root is not None else str(root),
         "scanned_files": scanned_files,
         "scanned_lines": scanned_lines,
         "source_scan": {
@@ -481,6 +492,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Diagnose an 8-node, 2-socket TC134 timeout")
     parser.add_argument("log_dir")
+    parser.add_argument(
+        "--simout-dir",
+        help="separate directory containing simout_n* or simout_tc134_node*.log")
     parser.add_argument("--sample-limit", type=int, default=8)
     parser.add_argument("--progress-step", type=int, default=PROGRESS_STEP,
                         help="TC134_PROGRESS_STEP used to build the workload")
@@ -489,9 +503,14 @@ def main():
     root = pathlib.Path(args.log_dir).resolve()
     if not root.is_dir():
         parser.error(f"not a directory: {root}")
+    simout_root = None
+    if args.simout_dir:
+        simout_root = pathlib.Path(args.simout_dir).resolve()
+        if not simout_root.is_dir():
+            parser.error(f"not a directory: {simout_root}")
     if args.progress_step <= 0:
         parser.error("--progress-step must be positive")
-    report = analyze(root, args.sample_limit, args.progress_step)
+    report = analyze(root, args.sample_limit, args.progress_step, simout_root)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
