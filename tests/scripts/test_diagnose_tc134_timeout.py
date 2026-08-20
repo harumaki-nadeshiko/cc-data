@@ -320,6 +320,49 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         self.assertIn("LAST reqId=88 stage=PROTOCOL_EVENT", output)
         self.assertIn("detail=blocked", output)
 
+    def test_clear_enter_without_commit_is_classified(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        self.write("ubio-0-0.stdout.log", [
+            f"UBCC node_id=0: processClear PA=0x{offset:x} srcNode=3 "
+            "epoch=4097 reqId=7905",
+        ])
+        report = MODULE.analyze(self.root)
+        req = next(item for item in report["suspects"][0]["matching_reqids"]
+                   if item["reqid"] == 7905)
+        self.assertEqual(req["clear_milestones"]["diagnosis"],
+                         "CLEAR_ENTERED_COMMIT_NOT_REACHED")
+
+    def test_clear_milestones_ignore_cross_file_scan_order(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        # Alphabetically, stderr is scanned before stdout. The classifier must
+        # use milestone presence, not whichever file happened to be scanned last.
+        self.write("ubio-0-0.stderr.log", [
+            f"[HOME-CLEAR-RESULT] home=0:0 src=3:0 pa=0x{offset:x} "
+            "epoch=4097 reqId=7905 accepted=1",
+        ])
+        self.write("ubio-0-0.stdout.log", [
+            f"UBCC node_id=0: processClear PA=0x{offset:x} srcNode=3 "
+            "epoch=4097 reqId=7905",
+            f"UBCC node_id=0: commitIntendedResult PA=0x{offset:x} path=Clear "
+            "requester=3:0 reqId=7905",
+            f"[UBCC-COMPLETED-READ-RECORD] home=0:0 pa=0x{offset:x} "
+            "requester=3:0 reqId=7905 cacheSize=1",
+            f"UBCC node_id=0: retireToTombstone PA=0x{offset:x} reqId=7905",
+        ])
+        self.write("gem5-3.stderr.log", [
+            f"[CLR-CACHE-HIT] node=3 keyPA=0x{offset:x} reqId=7905 accepted=1",
+        ])
+        report = MODULE.analyze(self.root)
+        req = next(item for item in report["suspects"][0]["matching_reqids"]
+                   if item["reqid"] == 7905)
+        clear = req["clear_milestones"]
+        self.assertEqual(clear["diagnosis"], "CLEAR_COMPLETED_AND_CONSUMED")
+        self.assertEqual(clear["committed"], 1)
+        self.assertEqual(clear["recorded"], 1)
+        self.assertEqual(clear["retired"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

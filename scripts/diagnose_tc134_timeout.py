@@ -159,6 +159,10 @@ def protocol_stage(line):
         ("sendReadReq", "REQUESTER_SEND_READ_REQ"),
         ("handleRemoteMiss", "REQUESTER_HANDLE_REMOTE_MISS"),
         ("processClear", "HOME_PROCESS_CLEAR"),
+        ("commitIntendedResult", "HOME_COMMIT_INTENDED_RESULT"),
+        ("UBCC-COMPLETED-READ-RECORD", "HOME_COMPLETED_READ_RECORD"),
+        ("retireToTombstone", "HOME_RETIRE_TOMBSTONE"),
+        ("CLR-CACHE-HIT", "REQUESTER_CLEAR_RESULT_CONSUME"),
         ("grant hit", "HOME_GRANT_RETRY_HIT"),
         ("existing outstanding", "HOME_EXISTING_OUTSTANDING_BUSY"),
         ("processRecallResponse", "HOME_PROCESS_RECALL_RESPONSE"),
@@ -173,6 +177,42 @@ def protocol_stage(line):
                 return stage + ("_ACCEPT" if "accepted=1" in line else "_REJECT")
             return stage
     return "PROTOCOL_EVENT"
+
+
+def clear_milestones(events):
+    counts = Counter(event.get("stage") for event in events)
+    entered = counts["HOME_PROCESS_CLEAR"]
+    committed = counts["HOME_COMMIT_INTENDED_RESULT"]
+    recorded = counts["HOME_COMPLETED_READ_RECORD"]
+    retired = counts["HOME_RETIRE_TOMBSTONE"]
+    accepted = counts["HOME_CLEAR_RESULT_ACCEPT"]
+    rejected = counts["HOME_CLEAR_RESULT_REJECT"]
+    consumed = counts["REQUESTER_CLEAR_RESULT_CONSUME"]
+
+    if not entered:
+        diagnosis = "CLEAR_NOT_ENTERED"
+    elif rejected:
+        diagnosis = "CLEAR_REJECTED"
+    elif accepted and consumed:
+        diagnosis = "CLEAR_COMPLETED_AND_CONSUMED"
+    elif accepted:
+        diagnosis = "CLEAR_ACCEPTED_RESPONSE_NOT_CONSUMED"
+    elif committed and retired:
+        diagnosis = "CLEAR_COMMITTED_BEFORE_RESULT_RETURN"
+    elif committed:
+        diagnosis = "CLEAR_COMMIT_REACHED_RETIRE_OR_REPLAY_STALLED"
+    else:
+        diagnosis = "CLEAR_ENTERED_COMMIT_NOT_REACHED"
+    return {
+        "diagnosis": diagnosis,
+        "entered": entered,
+        "committed": committed,
+        "recorded": recorded,
+        "retired": retired,
+        "accepted": accepted,
+        "rejected": rejected,
+        "consumed": consumed,
+    }
 
 
 def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
@@ -402,6 +442,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
                                                   item["line"]))
             req_generic = generic_by_reqid.get(reqid, [])
             last_generic = req_generic[-1] if req_generic else None
+            clear = clear_milestones(req_generic)
             req_summaries.append({
                 "reqid": reqid,
                 "trace_event_count": len(req_traces),
@@ -412,6 +453,7 @@ def analyze(root, sample_limit=8, progress_step=PROGRESS_STEP,
                 "generic_event_count": len(req_generic),
                 "last_protocol_stage": (last_generic or {}).get("stage"),
                 "last_generic": last_generic,
+                "clear_milestones": clear,
             })
 
         if writer["share_barrier_entered"] and not writer["window_pressure_started"]:
@@ -596,6 +638,14 @@ def print_compact(report):
                 f"LAST reqId={item['reqid']} "
                 f"stage={item.get('last_protocol_stage') or 'TRACE_ONLY'} "
                 f"at={location} text={last['text'][:240]}")
+            clear = item.get("clear_milestones", {})
+            if clear.get("entered"):
+                print(
+                    f"CLEAR reqId={item['reqid']} diagnosis={clear['diagnosis']} "
+                    f"enter={clear['entered']} commit={clear['committed']} "
+                    f"record={clear['recorded']} retire={clear['retired']} "
+                    f"accept={clear['accepted']} reject={clear['rejected']} "
+                    f"consume={clear['consumed']}")
 
 
 def main():
