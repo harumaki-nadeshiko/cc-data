@@ -150,6 +150,61 @@ class DiagnoseTc35Test(unittest.TestCase):
         report = MODULE.scan(self.root, self.args())
         self.assertEqual(report["mismatches"][0]["old_chain"]["counts"]["CH"], 0)
 
+    def test_flat_remote_component_identity(self):
+        self.assertEqual(
+            MODULE.process_identity(pathlib.Path("/logs/ubio-3-1.stderr.log")),
+            (3, 1))
+        self.assertEqual(
+            MODULE.process_identity(pathlib.Path("/logs/gem5-4.stdout.log")),
+            (4, None))
+
+    def test_record_before_mismatch_is_automatic(self):
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x100 "
+            "requester=1:0 reqId=41 cacheSize=1",
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"],
+                         "RECORD_BEFORE_ALL_MISMATCHES")
+        self.assertEqual(identity["record_count"], 1)
+        self.assertEqual(identity["record_before_mismatch"], 1)
+
+    def test_mismatches_span_record_is_automatic(self):
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x100 "
+            "requester=1:0 reqId=41 cacheSize=1",
+            "[UBCC-COMPLETED-READ-DUPLICATE] home=0 pa=0x100 "
+            "requester=1:0 incomingEpoch=7 reqId=41 action=drop",
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        identity = report["mismatches"][0]["completed_identity"]
+        self.assertEqual(identity["resolution"], "MISMATCHES_SPAN_RECORD")
+        self.assertEqual(identity["duplicate_drop_count"], 1)
+        self.assertEqual(identity["duplicate_after_record"], 1)
+
+    def test_other_reqid_record_does_not_match(self):
+        self.write("ubio-0-0.stderr.log", [
+            "[UBCC-COMPLETED-READ-RECORD] home=0 pa=0x100 "
+            "requester=1:0 reqId=42 cacheSize=1",
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["completed_identity"]["resolution"],
+            "NO_RECORD")
+
     def test_missing_clear_response_is_reported_after_home_commit(self):
         self.build_full_chain(repeats=1)
         for relative in (

@@ -25,7 +25,11 @@ NSIM_TRACE_RE = re.compile(
     r"\[TRACE-PERF\]\s+([0-9]+)\|([0-9]+)\|nsim\|([0-9]+)\|"
     r"0x0\|(RECV|FWD)\|(.+)$")
 UBIO_PATH_RE = re.compile(r"ubio(?:_tc\d+)?_n(\d+)_s(\d+)")
+UBIO_FLAT_RE = re.compile(r"(?:^|[-_.])ubio[-_.](\d+)[-_.](\d+)(?:[-_.]|$)")
 GEM5_PATH_RE = re.compile(r"gem5(?:_tc\d+)?_node(\d+)")
+GEM5_FLAT_RE = re.compile(r"(?:^|[-_.])gem5[-_.](\d+)(?:[-_.]|$)")
+COMPLETED_RECORD = "[UBCC-COMPLETED-READ-RECORD]"
+COMPLETED_DUPLICATE = "[UBCC-COMPLETED-READ-DUPLICATE]"
 
 
 STAGE_ORDER = (
@@ -145,10 +149,43 @@ def process_identity(path):
     match = UBIO_PATH_RE.search(text)
     if match:
         return int(match.group(1)), int(match.group(2))
+    match = UBIO_FLAT_RE.search(pathlib.Path(path).name)
+    if match:
+        return int(match.group(1)), int(match.group(2))
     match = GEM5_PATH_RE.search(text)
     if match:
         return int(match.group(1)), None
+    match = GEM5_FLAT_RE.search(pathlib.Path(path).name)
+    if match:
+        return int(match.group(1)), None
     return None, None
+
+
+def completed_identity_event(path, line_number, text):
+    if COMPLETED_RECORD not in text and COMPLETED_DUPLICATE not in text:
+        return None
+    fields = dict(FIELD_RE.findall(text))
+    required = ("home", "pa", "requester", "reqId")
+    if any(key not in fields for key in required):
+        return None
+    requester = fields["requester"].split(":", 1)
+    if len(requester) != 2:
+        return None
+    home = fields["home"].split(":", 1)[0]
+    process_node, process_socket = process_identity(path)
+    return {
+        "kind": "record" if COMPLETED_RECORD in text else "duplicate",
+        "home": parse_int(home),
+        "home_socket": process_socket if process_socket is not None else -1,
+        "pa": parse_int(fields["pa"]),
+        "requester": parse_int(requester[0]),
+        "requester_socket": parse_int(requester[1]),
+        "reqid": parse_int(fields["reqId"]),
+        "file": str(path),
+        "line": line_number,
+        "text": text,
+        "process_node": process_node,
+    }
 
 
 def open_binary(path):
@@ -508,12 +545,63 @@ def post_clear_recovery(old_summaries, new_summaries):
     return "POST_CLEAR_RECOVERY_ORDER_UNKNOWN"
 
 
+def identity_resolution(mismatch, events):
+    matching = [event for event in events
+                if event["home"] == mismatch.home and
+                event["pa"] == mismatch.pa and
+                event["requester"] == mismatch.requester and
+                event["requester_socket"] == mismatch.outstanding_socket and
+                event["reqid"] == mismatch.outstanding_reqid and
+                (event["home_socket"] < 0 or mismatch.home_socket < 0 or
+                 event["home_socket"] == mismatch.home_socket)]
+    records = [event for event in matching if event["kind"] == "record"]
+    duplicates = [event for event in matching if event["kind"] == "duplicate"]
+    record_before = sum(
+        1 for event in records
+        if event["file"] == mismatch.file and event["line"] < mismatch.first_line)
+    record_after = sum(
+        1 for event in records
+        if event["file"] == mismatch.last_file and event["line"] > mismatch.last_line)
+    record_between = sum(
+        1 for event in records
+        if event["file"] == mismatch.file == mismatch.last_file and
+        mismatch.first_line <= event["line"] <= mismatch.last_line)
+    duplicate_after_record = 0
+    for duplicate in duplicates:
+        if any(record["file"] == duplicate["file"] and
+               record["line"] < duplicate["line"] for record in records):
+            duplicate_after_record += 1
+
+    if not records:
+        resolution = "NO_RECORD"
+    elif record_before and not record_after and not record_between:
+        resolution = "RECORD_BEFORE_ALL_MISMATCHES"
+    elif record_after and not record_before and not record_between:
+        resolution = "RECORD_AFTER_ALL_MISMATCHES"
+    elif record_between or (record_before and record_after):
+        resolution = "MISMATCHES_SPAN_RECORD"
+    else:
+        resolution = "RECORD_ORDER_UNKNOWN"
+    if duplicate_after_record and resolution == "RECORD_AFTER_ALL_MISMATCHES":
+        resolution = "DUPLICATES_FILTERED_AFTER_RECORD"
+    return {
+        "resolution": resolution,
+        "record_count": len(records),
+        "duplicate_drop_count": len(duplicates),
+        "record_before_mismatch": record_before,
+        "record_within_mismatch_span": record_between,
+        "record_after_mismatch": record_after,
+        "duplicate_after_record": duplicate_after_record,
+    }
+
+
 def scan(root, args):
     files = iter_logs(root, args.max_files)
     events_by_reqid = defaultdict(list)
     mismatch_map = {}
     profiles = []
     progress = []
+    completed_identity_events = []
     file_errors = []
     lines_scanned = 0
     bytes_scanned = 0
@@ -540,6 +628,9 @@ def scan(root, args):
                         old.last_file = str(path)
                     elif len(mismatch_map) < args.max_mismatches:
                         mismatch_map[mismatch.key] = mismatch
+                identity_event = completed_identity_event(path, line_number, text)
+                if identity_event:
+                    completed_identity_events.append(identity_event)
                 if "EPBACKEND-PROFILE" in text or "HA_PROFILE=" in text or \
                         "OURCC_CLEAR_PROFILE=" in text:
                     if len(profiles) < args.sample_limit:
@@ -584,6 +675,7 @@ def scan(root, args):
                 mismatch.incoming_socket, num_sockets, args.sample_limit)
         old_chain = chain_cache[old_key]
         new_chain = chain_cache[new_key]
+        identity = identity_resolution(mismatch, completed_identity_events)
         items.append({
             "mismatch": asdict(mismatch),
             "relation": relation(mismatch.outstanding_reqid,
@@ -591,6 +683,7 @@ def scan(root, args):
             "likely_break": likely_break(old_chain),
             "clear_resolution": clear_resolution(mismatch, old_chain),
             "post_clear_recovery": post_clear_recovery(old_chain, new_chain),
+            "completed_identity": identity,
             "old_chain": {
                 "reqid": mismatch.outstanding_reqid,
                 "counts": chain_counts(old_chain),
@@ -698,6 +791,12 @@ def main():
             f"relation={item['relation']} break={item['likely_break']} "
             f"resolution={item['clear_resolution']} "
             f"postClear={item['post_clear_recovery']} "
+            f"identity={item['completed_identity']['resolution']} "
+            f"recordCount={item['completed_identity']['record_count']} "
+            f"duplicateDropCount={item['completed_identity']['duplicate_drop_count']} "
+            f"recordBeforeMismatch={item['completed_identity']['record_before_mismatch']} "
+            f"recordWithinMismatch={item['completed_identity']['record_within_mismatch_span']} "
+            f"recordAfterMismatch={item['completed_identity']['record_after_mismatch']} "
             f"homeAccept={old_summary['HC'].count} "
             f"homeReject={old_summary['HJ'].count} "
             f"cacheAccept={old_summary['CH'].count} "
