@@ -133,6 +133,18 @@ def event(path, line_number, line, **extra):
 
 
 def protocol_stage(line):
+    clear_rejects = (
+        ("no GRANT_HANDSHAKE outstanding", "HOME_CLEAR_REJECT_NO_GRANT"),
+        ("reqId mismatch", "HOME_CLEAR_REJECT_REQID"),
+        ("requesterNode mismatch", "HOME_CLEAR_REJECT_REQUESTER"),
+        ("stage mismatch", "HOME_CLEAR_REJECT_STAGE"),
+        ("epoch mismatch", "HOME_CLEAR_REJECT_EPOCH"),
+        ("stale Clear for unknown", "HOME_CLEAR_REJECT_UNKNOWN_LINE"),
+        ("UBCC-RESERVATION-SUPERSEDED", "HOME_CLEAR_REJECT_RESERVATION"),
+    )
+    for marker, stage in clear_rejects:
+        if marker in line:
+            return stage
     markers = (
         ("PENDING-READ-SAVE", "REQUESTER_PENDING_READ_SAVE"),
         ("PENDING-READ-HIT", "REQUESTER_PENDING_READ_RETRY"),
@@ -188,9 +200,15 @@ def clear_milestones(events):
     accepted = counts["HOME_CLEAR_RESULT_ACCEPT"]
     rejected = counts["HOME_CLEAR_RESULT_REJECT"]
     consumed = counts["REQUESTER_CLEAR_RESULT_CONSUME"]
+    reject_reasons = {
+        stage: count for stage, count in counts.items()
+        if stage and stage.startswith("HOME_CLEAR_REJECT_") and count
+    }
 
     if not entered:
         diagnosis = "CLEAR_NOT_ENTERED"
+    elif reject_reasons:
+        diagnosis = max(reject_reasons, key=reject_reasons.get)
     elif rejected:
         diagnosis = "CLEAR_REJECTED"
     elif accepted and consumed:
@@ -212,6 +230,7 @@ def clear_milestones(events):
         "accepted": accepted,
         "rejected": rejected,
         "consumed": consumed,
+        "reject_reasons": reject_reasons,
     }
 
 
@@ -646,6 +665,11 @@ def print_compact(report):
                     f"record={clear['recorded']} retire={clear['retired']} "
                     f"accept={clear['accepted']} reject={clear['rejected']} "
                     f"consume={clear['consumed']}")
+                if clear.get("reject_reasons"):
+                    print("CLEAR_REJECTS reqId={} {}".format(
+                        item["reqid"], " ".join(
+                            f"{stage}={count}" for stage, count in
+                            sorted(clear["reject_reasons"].items()))))
 
 
 def main():

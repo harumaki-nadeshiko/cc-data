@@ -363,6 +363,32 @@ class DiagnoseTc134TimeoutTest(unittest.TestCase):
         self.assertEqual(clear["recorded"], 1)
         self.assertEqual(clear["retired"], 1)
 
+    def test_legacy_clear_reject_warning_is_not_counted_as_entry(self):
+        line = ("WARN: UBCC node_id=0: processClear PA=0x11180000 "
+                "reqId mismatch: ost=7903 clear=7905 - dropped reqId=7905")
+        self.assertEqual(MODULE.protocol_stage(line),
+                         "HOME_CLEAR_REJECT_REQID")
+
+    def test_repeated_clear_reject_loop_is_classified(self):
+        self.write("simout_n3", self.guest_lines(6, 0))
+        offset = MODULE.stream_offset(3, 0)
+        lines = []
+        for _ in range(4):
+            lines.extend([
+                f"UBCC node_id=0: processClear PA=0x{offset:x} srcNode=3 "
+                "epoch=4097 reqId=7905",
+                f"WARN: UBCC node_id=0: processClear PA=0x{offset:x} "
+                "reqId mismatch: ost=7903 clear=7905 - dropped reqId=7905",
+            ])
+        self.write("ubio-0-0.stderr.log", lines)
+        report = MODULE.analyze(self.root)
+        req = next(item for item in report["suspects"][0]["matching_reqids"]
+                   if item["reqid"] == 7905)
+        clear = req["clear_milestones"]
+        self.assertEqual(clear["entered"], 4)
+        self.assertEqual(clear["diagnosis"], "HOME_CLEAR_REJECT_REQID")
+        self.assertEqual(clear["reject_reasons"]["HOME_CLEAR_REJECT_REQID"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()
