@@ -106,6 +106,26 @@ class DiagnoseTc35Test(unittest.TestCase):
         self.assertEqual(report["mismatches"], [])
         self.assertEqual(report["files_scanned"], 1)
 
+    def test_reqid_plus_two_identifies_intervening_transaction(self):
+        self.write("ubio_tc98_n0_s0/stdout.log", [
+            "[UBCC-GRANT-RETRY-TUPLE-MISMATCH] home=0 pa=0x100 requester=1 "
+            "incomingSocket=0 incomingReqId=43 outstandingSocket=0 "
+            "outstandingReqId=41",
+        ])
+        report = MODULE.scan(self.root, self.args())
+        self.assertEqual(
+            report["mismatches"][0]["relation"],
+            "new_reqid_after_one_intervening_txn")
+
+    def test_compact_counts_follow_stage_order(self):
+        summaries = {stage: MODULE.StageSummary() for stage in MODULE.STAGE_ORDER}
+        summaries["HRR"].count = 1
+        summaries["HC"].count = 2
+        values = MODULE.compact_counts(summaries).split(",")
+        self.assertEqual(len(values), len(MODULE.STAGE_ORDER))
+        self.assertEqual(values[0], "1")
+        self.assertEqual(values[MODULE.STAGE_ORDER.index("HC")], "2")
+
     def test_pa_filter_does_not_cross_contaminate(self):
         self.build_full_chain(repeats=1)
         with (self.root / "ubio_tc35_n0_s0/stdout.log").open("a") as stream:

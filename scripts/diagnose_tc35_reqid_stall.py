@@ -123,6 +123,8 @@ def relation(old, new):
         return "same_reqid_different_tuple"
     if new == old + 1:
         return "consecutive_new_reqid"
+    if new == old + 2:
+        return "new_reqid_after_one_intervening_txn"
     return "different_reqid"
 
 
@@ -442,6 +444,10 @@ def likely_break(summaries):
     return "through_clear_response_consumption"
 
 
+def compact_counts(summaries):
+    return ",".join(str(summaries[stage].count) for stage in STAGE_ORDER)
+
+
 def scan(root, args):
     files = iter_logs(root, args.max_files)
     events_by_reqid = defaultdict(list)
@@ -621,6 +627,14 @@ def main():
             f"new={mismatch['incoming_reqid']} rel={item['relation']} "
             f"break={item['likely_break']} | "
             f"{chain_line('O', old_summary)} | {chain_line('N', new_summary)}")
+        print(
+            "TC35COMPACT "
+            f"old={mismatch['outstanding_reqid']} "
+            f"middle={mismatch['outstanding_reqid'] + 1} "
+            f"new={mismatch['incoming_reqid']} "
+            f"sameSocket={int(mismatch['incoming_socket'] == mismatch['outstanding_socket'])} "
+            f"relation={item['relation']} break={item['likely_break']} "
+            f"oldCounts={compact_counts(old_summary)}")
         if args.verbose:
             for label, summary in (("old", old_summary), ("new", new_summary)):
                 for stage in STAGE_ORDER:
