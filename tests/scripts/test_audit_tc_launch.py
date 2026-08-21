@@ -33,6 +33,8 @@ def write_fixture(root, tc, profile="optimized"):
                      "env": env})
         manifests.append({"component": "gem5-config", "tc": tc,
                           "argv": gem5_config_argv,
+                          "config_argv": gem5_config_argv,
+                          "process_argv": ["gem5", "--outdir=x"] + gem5_config_argv,
                           "unknown_args": [], "node": node, "num_nodes": 8,
                            "num_sockets": 2, "cpu_model": "o3",
                            "ha_profile": "ubcc", "clear_profile": "ack",
@@ -55,13 +57,19 @@ def write_fixture(root, tc, profile="optimized"):
             rows.append({"component": "ubio", "node": node, "socket": socket,
                          "tc": tc, "topology": "8n2s", "argv": ubio_argv, "env": env})
             manifests.append({"component": "ubio", "argv": ubio_argv, "node": node,
-                              "tc": tc,
+                               "tc": tc,
                               "socket": socket, "num_nodes": 8, "num_sockets": 2,
-                              "resident_dir": {"bloom_bytes": bloom, "sram_bytes": 524288,
-                                               "ways": 1 if tc == 98 else 0, "set_bits": 0},
-                              "overflow_policy": policy, "batch_rs": 1 if tc == 98 else 0,
-                              "schema": "disabled" if policy == "naive" else "h64",
-                              "metadata_dram_bytes": 134217728})
+                               "resident_dir": {"bloom_bytes": bloom, "sram_bytes": 524288,
+                                                "ways": 1 if tc == 98 else 0, "set_bits": 0,
+                                                "pa_bits": 43, "sharers_bits": 8,
+                                                "epoch_bits": 24},
+                               "overflow_policy": policy, "batch_rs": 1 if tc == 98 else 0,
+                               "schema": "disabled" if policy == "naive" else "h64",
+                               "home_controller": "ubcc", "dram_delay_ps": 0,
+                               "fault_rule_args": 0, "blc_bytes": 0,
+                               "desc_scratch_bytes": 0,
+                               "metadata_dram_bytes": 134217728,
+                               "env": env})
     rows.append({"component": "networksim", "node": None, "socket": None,
                  "tc": tc, "topology": "8n2s", "argv": ["networksim"], "env": env})
     manifests.append({"component": "networksim", "argv": ["networksim"],
@@ -86,11 +94,20 @@ class AuditTcLaunchTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_tc98_formal_pass_preserves_duplicate_argv(self):
+    def test_tc98_remote_logs_pass_without_launcher_jsonl(self):
         write_fixture(self.root, 98)
+        (self.root / "launch_commands_tc98.jsonl").unlink()
         result = run_audit(self.root, "--tc", "98", "--formal")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(result.stdout.startswith("PASS TC98 formal"))
+        self.assertIn("remote process logs", result.stdout)
+
+    def test_optional_launcher_jsonl_is_cross_checked(self):
+        write_fixture(self.root, 98)
+        result = run_audit(
+            self.root, "--launch-jsonl", str(self.root / "launch_commands_tc98.jsonl"),
+            "--tc", "98", "--formal")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_tc134_profiles_pass(self):
         for profile in ("naive", "spill-noopt", "optimized"):
@@ -114,13 +131,19 @@ class AuditTcLaunchTest(unittest.TestCase):
 
     def test_rejects_fault_override(self):
         write_fixture(self.root, 98)
-        path = self.root / "launch_commands_tc98.jsonl"
-        rows = [json.loads(line) for line in path.read_text().splitlines()]
-        rows[1]["argv"].append("--fault-rules=x")
-        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        log = self.root / "remote_tc98_all_stdout.log"
+        rows = []
+        for line in log.read_text().splitlines():
+            row = json.loads(line.split("[PROCESS-MANIFEST] ", 1)[1])
+            if row["component"] == "ubio" and row["node"] == 0 and row["socket"] == 0:
+                row["argv"].append("--fault-rules=x")
+            rows.append(row)
+        log.write_text("".join("[PROCESS-MANIFEST] " + json.dumps(row) + "\n"
+                               for row in rows))
+        (self.root / "launch_commands_tc98.jsonl").unlink()
         result = run_audit(self.root, "--tc", "98")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("fault override present", result.stdout)
+        self.assertIn("fault rules present", result.stdout)
 
 
 if __name__ == "__main__":

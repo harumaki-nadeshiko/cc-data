@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "topology": {
+    "num_nodes": 8,
+    "num_sockets": 2,
+    "ubio_processes": 16,
+    "gem5_processes": 8,
+    "networksim_processes": 1,
+    "cpus_per_gem5_process": 4
+  },
+  "common": {
+    "metadata_bytes": 134217728,
+    "ha_profile": "ubcc",
+    "clear_profile": "ack",
+    "ubio_home_controller": "ubcc",
+    "ubio_dram_delay_ps": 0,
+    "ubio_fault_rule_args": 0,
+    "ubio_blc_bytes": 0,
+    "ubio_desc_scratch_bytes": 0,
+    "resident_pa_bits": 43,
+    "resident_sharers_bits": 8,
+    "resident_epoch_bits": 24,
+    "networksim_max_pending": 65536,
+    "networksim_trace_all_forwarded": 0,
+    "formal": {
+      "cpu_model": "o3",
+      "sequencer_max_outstanding": 16,
+      "link_latency_ps": "2500",
+      "sync_interval_ps": "2500",
+      "port_hwm": "8192"
+    }
+  },
+  "tc98": {
+    "ubio": {
+      "bloom_bytes": 61440,
+      "sram_bytes": 524288,
+      "ways": 1,
+      "set_bits": 0,
+      "overflow_policy": "spill",
+      "schema": "h64",
+      "batch_rs": 1
+    },
+    "gem5": {
+      "silent_upgrade": 0,
+      "direct_fwd": 0,
+      "batch_rs": 1
+    }
+  },
+  "tc134": {
+    "naive": {
+      "ubio": {"bloom_bytes": 0, "sram_bytes": 524288, "ways": 0, "set_bits": 0, "overflow_policy": "naive", "schema": "disabled", "batch_rs": 0},
+      "gem5": {"silent_upgrade": 0, "direct_fwd": 0, "batch_rs": 0}
+    },
+    "spill-noopt": {
+      "ubio": {"bloom_bytes": 61440, "sram_bytes": 524288, "ways": 0, "set_bits": 0, "overflow_policy": "spill", "schema": "h64", "batch_rs": 0},
+      "gem5": {"silent_upgrade": 0, "direct_fwd": 0, "batch_rs": 0}
+    },
+    "optimized": {
+      "ubio": {"bloom_bytes": 61440, "sram_bytes": 524288, "ways": 0, "set_bits": 0, "overflow_policy": "spill", "schema": "h64", "batch_rs": 0},
+      "gem5": {"silent_upgrade": 1, "direct_fwd": 0, "batch_rs": 1}
+    }
+  }
+}

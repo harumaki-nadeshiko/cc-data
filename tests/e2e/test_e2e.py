@@ -3566,9 +3566,17 @@ def gem5_config_main():
     else:
         BUILD_NODES = [_local_node]
     TOTAL_CPUS = len(BUILD_NODES) * CPUS_PER_NODE
+    try:
+        with open("/proc/self/cmdline", "rb") as _cmdline:
+            _process_argv = [item.decode(errors="replace")
+                             for item in _cmdline.read().split(b"\0") if item]
+    except OSError:
+        _process_argv = list(sys.argv)
     _manifest = {
         "component": "gem5-config",
         "argv": list(sys.argv),
+        "config_argv": list(sys.argv),
+        "process_argv": _process_argv,
         "unknown_args": list(_unknown),
         "tc": _args.tc or int(os.environ.get("E2E_TC", "0")),
         "node": _local_node,

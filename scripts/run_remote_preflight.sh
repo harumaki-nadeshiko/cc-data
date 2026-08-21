@@ -74,6 +74,7 @@ bash "$ROOT/scripts/generate_runtime_fingerprint_baseline.sh" "$REPORT" \
     --artifact /workspace/tests/e2e/run_multi.sh \
     --artifact /workspace/tests/e2e/test_e2e.py \
     --artifact /workspace/configs/topo_8n2s.json \
+    --artifact /workspace/configs/tc98_tc134_process_contracts.json \
     --artifact /workspace/scripts/audit_tc_launch.py \
     --artifact "$BACKEND_CONTAINER"
 fingerprint_rc=0
@@ -103,7 +104,7 @@ if [ -n "$tc" ]; then
         audit+=(--formal)
     else
         [ -n "$profile" ] || { echo "ERROR: TC134 requires --profile" >&2; exit 2; }
-        audit+=(--profile "$profile")
+        audit+=(--formal --profile "$profile")
     fi
     "${audit[@]}"
 fi

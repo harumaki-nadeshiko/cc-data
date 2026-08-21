@@ -1,6 +1,10 @@
 # 远端上机前置检查
 
-正式测试前运行：
+该脚本只执行环境比较、framework独立压力测试和可选的**既有日志**审计，不启动
+TC98/TC134。远端正式测试仍由远端既有启动和进程回收机制组织；远端没有本仓库的
+supervisor，也不要求执行`run_multi.sh`。
+
+正式测试前可运行：
 
 ```bash
 bash scripts/run_remote_preflight.sh
@@ -35,29 +39,18 @@ FRAMEWORK_LINK_LIBZMQ=1 \
 bash scripts/run_remote_preflight.sh
 ```
 
-已有 TC98 日志时同时审计启动参数：
+远端运行结束或卡死、日志已收集后，可同时审计TC98进程参数：
 
 ```bash
 bash scripts/run_remote_preflight.sh --tc 98 --log-root /path/to/LOG_BASE
 ```
 
-TC134：
+TC134已有日志：
 
 ```bash
 bash scripts/run_remote_preflight.sh \
   --tc 134 --profile optimized --log-root /path/to/LOG_BASE
 ```
 
-正式启动命令：
-
-```bash
-env E2E_RUN_ID=tc98_formal LOG_BASE=/path/to/logs \
-  EP_TRACE_PERF=off TIMEOUT_SEC=21600 \
-  bash tests/e2e/run_multi.sh --8n2s --formal 98
-
-env E2E_RUN_ID=tc134_opt LOG_BASE=/path/to/logs \
-  EP_TRACE_PERF=off TIMEOUT_SEC=10800 \
-  bash tests/e2e/run_multi.sh --8n2s --formal --profile optimized 134
-```
-
-注意参数顺序固定为：拓扑、`--formal`/`--profile`、TC 编号。
+这里的`--tc/--profile`只告诉审计器选择哪份本机合同，不会启动任何模拟器，也不
+假设远端存在supervisor、`LOG_BASE`或本机runner目录结构。

@@ -3183,6 +3183,12 @@ main(int argc, char **argv)
               << ",\"overflow_policy\":" << jsonQuote(overflowPolicy)
               << ",\"batch_rs\":" << (g_batchRs ? 1 : 0)
               << ",\"schema\":" << jsonQuote(backstoreSchemaModeName(g_schemaMode))
+              << ",\"home_controller\":"
+              << jsonQuote(g_homeControllerMode == HomeControllerMode::Ubcc ? "ubcc" : "ha-vi")
+              << ",\"dram_delay_ps\":" << g_dramDelayPs
+              << ",\"fault_rule_args\":" << faultRuleArgs.size()
+              << ",\"blc_bytes\":" << g_rdcfg.blc_bytes
+              << ",\"desc_scratch_bytes\":" << g_rdcfg.desc_scratch_bytes
               << ",\"metadata_dram_bytes\":" << g_metadataDramTotalBytes
               << ",\"env\":{\"EP_SYNC_INTERVAL_PS\":"
               << jsonQuote(envOrEmpty("EP_SYNC_INTERVAL_PS"))

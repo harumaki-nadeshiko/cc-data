@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit TC98/TC134 launch argv and process-effective manifests."""
+"""Compare remote TC98/TC134 process logs with the local parameter contract."""
 
 import argparse
 import json
@@ -8,6 +8,8 @@ import re
 import sys
 
 MARKER = "[PROCESS-MANIFEST]"
+DEFAULT_CONTRACT = (pathlib.Path(__file__).resolve().parents[1] /
+                    "configs/tc98_tc134_process_contracts.json")
 
 
 def load_jsonl(path):
@@ -104,29 +106,45 @@ def audit(args):
     root = pathlib.Path(args.log_root)
     if not root.is_dir():
         raise ValueError(f"log root is not a directory: {root}")
-    launches = discover_launch(root, args.tc, args.launch_jsonl)
+    launches = load_jsonl(args.launch_jsonl) if args.launch_jsonl else []
     manifests = load_process_manifests(root, args.tc)
+    try:
+        contract = json.loads(pathlib.Path(args.contract).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read process contract {args.contract}: {exc}") from exc
+    if contract.get("schema_version") != 1:
+        raise ValueError("process contract schema_version must be 1")
+    topology = contract["topology"]
+    common = contract["common"]
     check = Audit()
 
-    check.expect(bool(launches), "missing launch command JSONL")
     check.expect(bool(manifests), "missing [PROCESS-MANIFEST] records")
     by_launch = {kind: [r for r in launches if r.get("component") == kind]
                  for kind in ("ubio", "gem5", "networksim")}
     by_process = {kind: [r for r in manifests if r.get("component") == kind]
                   for kind in ("ubio", "gem5-config", "networksim")}
-    for kind, expected in (("ubio", 16), ("gem5", 8), ("networksim", 1)):
-        check.equal(len(by_launch[kind]), expected, f"launch count {kind}")
-    for kind, expected in (("ubio", 16), ("gem5-config", 8), ("networksim", 1)):
+    if launches:
+        for kind, expected in (("ubio", topology["ubio_processes"]),
+                               ("gem5", topology["gem5_processes"]),
+                               ("networksim", topology["networksim_processes"])):
+            check.equal(len(by_launch[kind]), expected, f"optional launch count {kind}")
+    for kind, expected in (("ubio", topology["ubio_processes"]),
+                           ("gem5-config", topology["gem5_processes"]),
+                           ("networksim", topology["networksim_processes"])):
         check.equal(len(by_process[kind]), expected, f"process count {kind}")
 
-    expected_planes = {(node, socket) for node in range(8) for socket in range(2)}
-    check.equal({(r.get("node"), r.get("socket")) for r in by_launch["ubio"]},
-                expected_planes, "UBIO launch identities")
+    expected_planes = {(node, socket) for node in range(topology["num_nodes"])
+                       for socket in range(topology["num_sockets"])}
+    if launches:
+        check.equal({(r.get("node"), r.get("socket")) for r in by_launch["ubio"]},
+                    expected_planes, "optional UBIO launch identities")
     check.equal({(r.get("node"), r.get("socket")) for r in by_process["ubio"]},
                 expected_planes, "UBIO effective identities")
-    check.equal({r.get("node") for r in by_launch["gem5"]}, set(range(8)),
-                "gem5 launch nodes")
-    check.equal({r.get("node") for r in by_process["gem5-config"]}, set(range(8)),
+    if launches:
+        check.equal({r.get("node") for r in by_launch["gem5"]},
+                    set(range(topology["num_nodes"])), "optional gem5 launch nodes")
+    check.equal({r.get("node") for r in by_process["gem5-config"]},
+                set(range(topology["num_nodes"])),
                 "gem5 effective nodes")
 
     ubio_launch_by_id = {(r.get("node"), r.get("socket")): r
@@ -151,7 +169,7 @@ def audit(args):
         check.expect(config_index is not None,
                      f"gem5 node {record.get('node')} launch lacks test_e2e.py")
         if config_index is not None:
-            check.equal(record.get("argv"), argv[config_index:],
+            check.equal(record.get("config_argv", record.get("argv")), argv[config_index:],
                         f"gem5 config actual argv node {record.get('node')}")
 
     for record in launches:
@@ -161,26 +179,51 @@ def audit(args):
         check.expect(not option_values(argv, "--fault-rules"),
                      f"fault override present in {record.get('component')} argv")
     for record in by_process["ubio"]:
-        check.equal(record.get("num_nodes"), 8, "UBIO num_nodes")
-        check.equal(record.get("num_sockets"), 2, "UBIO num_sockets")
+        check.equal(record.get("num_nodes"), topology["num_nodes"], "UBIO num_nodes")
+        check.equal(record.get("num_sockets"), topology["num_sockets"], "UBIO num_sockets")
+        argv = record.get("argv", [])
+        check.expect(not option_values(argv, "--fault-rules"),
+                     f"fault rules present in UBIO {record.get('node')}:{record.get('socket')} argv")
+        check.equal(record.get("home_controller"), common["ubio_home_controller"],
+                    "UBIO home controller")
+        check.equal(record.get("dram_delay_ps"), common["ubio_dram_delay_ps"],
+                    "UBIO DRAM delay")
+        check.equal(record.get("fault_rule_args"), common["ubio_fault_rule_args"],
+                    "UBIO fault rule count")
+        check.equal(record.get("blc_bytes"), common["ubio_blc_bytes"],
+                    "UBIO BLC bytes")
+        check.equal(record.get("desc_scratch_bytes"), common["ubio_desc_scratch_bytes"],
+                    "UBIO descriptor scratch bytes")
+        rd = record.get("resident_dir", {})
+        check.equal(rd.get("pa_bits"), common["resident_pa_bits"], "UBIO PA bits")
+        check.equal(rd.get("sharers_bits"), common["resident_sharers_bits"],
+                    "UBIO sharers bits")
+        check.equal(rd.get("epoch_bits"), common["resident_epoch_bits"],
+                    "UBIO epoch bits")
     for record in by_process["gem5-config"]:
-        check.equal(record.get("num_nodes"), 8, "gem5 num_nodes")
-        check.equal(record.get("num_sockets"), 2, "gem5 num_sockets")
+        check.expect(bool(record.get("process_argv")), "gem5 full process argv missing")
+        check.expect(bool(record.get("config_argv")), "gem5 config argv missing")
+        check.equal(record.get("num_nodes"), topology["num_nodes"], "gem5 num_nodes")
+        check.equal(record.get("num_sockets"), topology["num_sockets"], "gem5 num_sockets")
         check.equal(record.get("build_nodes"), [record.get("node")],
                     "gem5 split build_nodes")
-        check.equal(record.get("cpus_per_node"), 4, "gem5 cores per node")
-        check.equal(record.get("process_cpu_count"), 4, "gem5 process CPU count")
+        check.equal(record.get("cpus_per_node"), topology["cpus_per_gem5_process"],
+                    "gem5 cores per node")
+        check.equal(record.get("process_cpu_count"), topology["cpus_per_gem5_process"],
+                    "gem5 process CPU count")
         check.equal(record.get("unknown_args"), [], "gem5 unknown args")
-        check.equal(record.get("ha_profile"), "ubcc", "gem5 HA profile")
-        check.equal(record.get("clear_profile"), "ack", "gem5 Clear profile")
+        check.equal(record.get("ha_profile"), common["ha_profile"], "gem5 HA profile")
+        check.equal(record.get("clear_profile"), common["clear_profile"], "gem5 Clear profile")
     for record in by_process["networksim"]:
-        check.equal(record.get("num_nodes"), 8, "networksim num_nodes")
-        check.equal(record.get("num_sockets"), 2, "networksim num_sockets")
-        check.equal(record.get("max_pending"), 65536, "networksim max_pending")
-        check.equal(record.get("trace_all_forwarded"), 0,
+        check.equal(record.get("num_nodes"), topology["num_nodes"], "networksim num_nodes")
+        check.equal(record.get("num_sockets"), topology["num_sockets"], "networksim num_sockets")
+        check.equal(record.get("max_pending"), common["networksim_max_pending"],
+                    "networksim max_pending")
+        check.equal(record.get("trace_all_forwarded"),
+                    common["networksim_trace_all_forwarded"],
                     "networksim trace_all_forwarded")
 
-    metadata = args.metadata_bytes
+    metadata = args.metadata_bytes if args.metadata_bytes is not None else common["metadata_bytes"]
     for record in by_process["ubio"]:
         check.equal(record.get("metadata_dram_bytes"), metadata, "UBIO metadata bytes")
     for record in by_process["gem5-config"]:
@@ -193,70 +236,75 @@ def audit(args):
                      "EP_GEM5_OPTS must be empty for audited runs")
 
     if args.formal:
+        formal = common["formal"]
         for record in by_process["gem5-config"]:
-            check.equal(record.get("cpu_model"), "o3", "formal CPU")
-            check.equal(record.get("sequencer_max_outstanding"), 16,
+            check.equal(record.get("cpu_model"), formal["cpu_model"], "formal CPU")
+            check.equal(record.get("sequencer_max_outstanding"),
+                        formal["sequencer_max_outstanding"],
                         "formal sequencer")
-        for record in launches:
+        for record in by_process["ubio"]:
             env = record.get("env", {})
-            check.equal(env.get("EP_LINK_LATENCY_PS"), "2500", "formal link latency")
-            check.equal(env.get("EP_SYNC_INTERVAL_PS"), "2500", "formal sync interval")
-            check.equal(env.get("EP_PORT_HWM"), "8192", "formal port HWM")
-            check.equal(env.get("EP_NSIM_MAX_PENDING"), "65536", "formal nsim HWM")
-            check.equal(env.get("EP_TRACE_PERF"), "off", "formal trace mode")
+            check.equal(env.get("EP_LINK_LATENCY_PS"), formal["link_latency_ps"],
+                        "formal link latency")
+            check.equal(env.get("EP_SYNC_INTERVAL_PS"), formal["sync_interval_ps"],
+                        "formal sync interval")
+            check.equal(env.get("EP_PORT_HWM"), formal["port_hwm"],
+                        "formal port HWM")
 
     if args.tc == 98:
+        expected_tc = contract["tc98"]
         for record in by_process["ubio"]:
             rd = record.get("resident_dir", {})
-            check.equal(rd.get("ways"), 1, "TC98 UBIO ways")
-            check.equal(rd.get("bloom_bytes"), 61440, "TC98 UBIO default bloom_bytes")
-            check.equal(rd.get("sram_bytes"), 524288, "TC98 UBIO default sram_bytes")
-            check.equal(rd.get("set_bits"), 0, "TC98 UBIO default set_bits")
-            check.equal(record.get("overflow_policy"), "spill", "TC98 overflow policy")
-            check.equal(str(record.get("schema", "")).lower(), "h64", "TC98 schema")
-            check.equal(record.get("batch_rs"), 1, "TC98 default batch_rs")
+            for field in ("ways", "bloom_bytes", "sram_bytes", "set_bits"):
+                check.equal(rd.get(field), expected_tc["ubio"][field], f"TC98 UBIO {field}")
+            for field in ("overflow_policy", "batch_rs"):
+                check.equal(record.get(field), expected_tc["ubio"][field], f"TC98 UBIO {field}")
+            check.equal(str(record.get("schema", "")).lower(),
+                        expected_tc["ubio"]["schema"], "TC98 schema")
         for record in by_process["gem5-config"]:
-            check.equal(record.get("silent_upgrade", {}).get("effective"), 0,
+            check.equal(record.get("silent_upgrade", {}).get("effective"),
+                        expected_tc["gem5"]["silent_upgrade"],
                         "TC98 gem5 silent_upgrade")
-            check.equal(record.get("direct_fwd", {}).get("effective"), 0,
+            check.equal(record.get("direct_fwd", {}).get("effective"),
+                        expected_tc["gem5"]["direct_fwd"],
                         "TC98 gem5 direct_fwd")
-            check.equal(record.get("batch_rs", {}).get("effective"), 1,
+            check.equal(record.get("batch_rs", {}).get("effective"),
+                        expected_tc["gem5"]["batch_rs"],
                         "TC98 gem5 batch_rs")
     else:
         profile = args.profile
-        expected = {
-            "naive": (0, "naive", 0, 0, 0),
-            "spill-noopt": (61440, "spill", 0, 0, 0),
-            "optimized": (61440, "spill", 1, 0, 1),
-        }[profile]
-        bloom, policy, silent, direct, gem_batch = expected
+        expected_tc = contract["tc134"][profile]
         for record in by_process["ubio"]:
             rd = record.get("resident_dir", {})
-            check.equal(rd.get("bloom_bytes"), bloom, "TC134 UBIO bloom_bytes")
-            check.equal(rd.get("sram_bytes"), 524288, "TC134 UBIO sram_bytes")
-            check.equal(rd.get("ways"), 0, "TC134 UBIO ways")
-            check.equal(rd.get("set_bits"), 0, "TC134 UBIO set_bits")
-            check.equal(record.get("overflow_policy"), policy, "TC134 UBIO policy")
-            check.equal(record.get("batch_rs"), 0, "TC134 UBIO batch_rs")
-            expected_schema = "disabled" if policy == "naive" else "h64"
-            check.equal(str(record.get("schema", "")).lower(), expected_schema,
+            for field in ("bloom_bytes", "sram_bytes", "ways", "set_bits"):
+                check.equal(rd.get(field), expected_tc["ubio"][field],
+                            f"TC134 UBIO {field}")
+            check.equal(record.get("overflow_policy"),
+                        expected_tc["ubio"]["overflow_policy"], "TC134 UBIO policy")
+            check.equal(record.get("batch_rs"), expected_tc["ubio"]["batch_rs"],
+                        "TC134 UBIO batch_rs")
+            check.equal(str(record.get("schema", "")).lower(),
+                        expected_tc["ubio"]["schema"],
                         "TC134 UBIO schema")
         for record in by_process["gem5-config"]:
-            check.equal(record.get("silent_upgrade", {}).get("effective"), silent,
+            check.equal(record.get("silent_upgrade", {}).get("effective"),
+                        expected_tc["gem5"]["silent_upgrade"],
                         "TC134 gem5 silent_upgrade")
-            check.equal(record.get("direct_fwd", {}).get("effective"), direct,
+            check.equal(record.get("direct_fwd", {}).get("effective"),
+                        expected_tc["gem5"]["direct_fwd"],
                         "TC134 gem5 direct_fwd")
-            check.equal(record.get("batch_rs", {}).get("effective"), gem_batch,
+            check.equal(record.get("batch_rs", {}).get("effective"),
+                        expected_tc["gem5"]["batch_rs"],
                         "TC134 gem5 batch_rs")
 
-        for record in by_launch["ubio"]:
+        for record in by_process["ubio"]:
             argv = record.get("argv", [])
             for option in ("--bloom-bytes", "--sram-bytes", "--ways", "--set-bits",
                            "--dir-overflow-policy", "--batch-rs",
                            "--metadata-dram-bytes"):
                 check.equal(len(option_values(argv, option)), 1,
                             f"TC134 unique UBIO option {option}")
-        for record in by_launch["gem5"]:
+        for record in by_process["gem5-config"]:
             argv = record.get("argv", [])
             for option in ("--silent-upgrade", "--direct-fwd", "--ubcc-batch-rs"):
                 check.equal(len(option_values(argv, option)), 1,
@@ -269,12 +317,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log_root", help="protocol LOG_BASE (nested or flat collection)")
     parser.add_argument("--launch-jsonl", help="optional explicit launch command JSONL")
+    parser.add_argument("--contract", default=str(DEFAULT_CONTRACT),
+                        help="local process-parameter contract JSON")
     parser.add_argument("--tc", type=int, choices=(98, 134), required=True)
     parser.add_argument("--formal", action="store_true",
                         help="enforce TC98 formal O3/PDES/HWM contract")
     parser.add_argument("--profile", choices=("naive", "spill-noopt", "optimized"),
                         help="required for TC134")
-    parser.add_argument("--metadata-bytes", type=int, default=128 * 1024 * 1024)
+    parser.add_argument("--metadata-bytes", type=int,
+                        help="override metadata bytes from the local contract")
     args = parser.parse_args(argv)
     if args.tc == 134 and not args.profile:
         parser.error("TC134 requires --profile")
@@ -289,7 +340,9 @@ def main(argv=None):
             print(f"- {error}")
         return 1
     suffix = f" profile={args.profile}" if args.profile else (" formal" if args.formal else "")
-    print(f"PASS TC{args.tc}{suffix}: launch/process manifests match 8n2s contract")
+    evidence = ("remote process logs + explicit launcher evidence"
+                if args.launch_jsonl else "remote process logs")
+    print(f"PASS TC{args.tc}{suffix}: {evidence} match local 8n2s contract")
     return 0
 
 
