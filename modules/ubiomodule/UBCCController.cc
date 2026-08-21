@@ -115,10 +115,10 @@ UBCCController::UBCCController(int node_id, int socket_id,
     framework::LogInfo("UBCC", "UBCC node_id={} socket={}: C3 batch RS {}",
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
     framework::LogInfo("UBCC",
-            "[UBCC-PROTOCOL-BUILD] revision=20260821-batch-rs-completion-v1 "
+            "[UBCC-PROTOCOL-BUILD] revision=20260821-writeback-wakeup-v1 "
             "home={}:{} liveOutstandingPin=1 staleEvictionEpoch=1 "
             "completedReadIdentity=1 batchRsCompletionIdentity=1 "
-            "liveClearPriority=1",
+            "ordinaryWritebackWakeup=1 liveClearPriority=1",
             _nodeId, _socketId);
 
     registerInstance(node_id, socket_id, this);
@@ -4676,6 +4676,29 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa, uint64_t snapshotEpoch)
     }
     auto eviction = _evictionPendingRemoval.find(linePa);
     if (eviction == _evictionPendingRemoval.end()) {
+        // A normal spill-policy writeback is neither a resident eviction nor
+        // an async sweep. Its H64 durable ack still owns wbPending and must
+        // release readers retained behind metadata persistence. Previously
+        // this branch returned with wbPending set forever, stranding every
+        // requester of the line (TC134 share-phase retry storm).
+        if (_directory.wbPending(linePa)) {
+            const bool snapshotMatched = snapshotEpoch == 0 ||
+                normalizeEpoch(e.epoch) == normalizeEpoch(snapshotEpoch);
+            if (snapshotMatched) {
+                e.residentDirty = false;
+                _directory.update(linePa, e);
+            }
+            _directory.setWbPending(linePa, false);
+            framework::LogInfo("UBCC",
+                "[UBCC-ORDINARY-WB-ACK] home={} pa=0x{:x} "
+                "snapshotEpoch={} currentEpoch={} matched={} action=release_waiters",
+                _nodeId, linePa, snapshotEpoch, e.epoch,
+                snapshotMatched ? 1 : 0);
+            refreshPinnedBit(linePa);
+            replayResidentWaiters(linePa);
+            replayResidentWaitersForCapacity(linePa);
+            return;
+        }
         refreshPinnedBit(linePa);
         return;
     }

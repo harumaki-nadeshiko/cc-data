@@ -555,6 +555,42 @@ main()
         batchCompletedPa, batchAfterDuplicate));
     assert(batchAfterDuplicate.epoch == batchEpochAfterCommit);
 
+    // TC134 regression: a normal spill-policy writeback is neither an
+    // eviction nor an async directory sweep. Its durable ack must still clear
+    // wbPending and replay readers retained behind metadata persistence.
+    UBCCController ordinaryWritebackUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    ordinaryWritebackUbcc.setHost(&host);
+    CaptureOutbound ordinaryWritebackOutbound;
+    ordinaryWritebackUbcc.setOutbound(&ordinaryWritebackOutbound);
+    ordinaryWritebackUbcc.setResidentOverflowPolicy(
+        ResidentOverflowPolicy::Spill);
+    constexpr uint64_t ordinaryWritebackPa = 0x100003b0;
+    constexpr uint64_t ordinaryWritebackEpoch = 41;
+    constexpr uint64_t ordinaryReadReqId = 1770;
+    assert(ordinaryWritebackUbcc.debugSeedResidentForTest(
+        ordinaryWritebackPa, static_cast<int>(MESIState::G_M), 1ULL << 0,
+        ordinaryWritebackEpoch, false));
+    uint8_t ordinaryPayload[64];
+    std::memset(ordinaryPayload, 0xa5, sizeof(ordinaryPayload));
+    assert(ordinaryWritebackUbcc.processWritebackWithData(
+        ordinaryWritebackPa, 0, ordinaryWritebackEpoch, false,
+        ordinaryPayload));
+    assert(ordinaryWritebackUbcc.directory().wbPending(ordinaryWritebackPa));
+    assert(static_cast<int>(ordinaryWritebackUbcc.processOuterRequest(
+        ordinaryWritebackPa, UBCC_OuterReqType::GlobalReadShared, false,
+        1, 0, ordinaryWritebackEpoch + 1, ordinaryReadReqId)) == -1);
+    assert(ordinaryWritebackOutbound.grants.empty());
+    ordinaryWritebackUbcc.onBackstoreWriteAck(
+        ordinaryWritebackPa, ordinaryWritebackEpoch);
+    assert(!ordinaryWritebackUbcc.directory().wbPending(ordinaryWritebackPa));
+    OutstandingRequest *ordinaryRead =
+        ordinaryWritebackUbcc.findOutstanding(ordinaryWritebackPa);
+    assert(ordinaryRead);
+    assert(ordinaryRead->reqId == ordinaryReadReqId);
+    assert(ordinaryRead->stage == OpStage::WAITING_CLEAR);
+    assert(ordinaryWritebackOutbound.grants.size() == 1);
+
     // A queued ReadReq keeps its requester reqId but is replayed against the
     // post-Clear epoch. After that replay commits, a delayed copy of the
     // original pre-rebase ReadReq must hit the accepted reqId tombstone. It
