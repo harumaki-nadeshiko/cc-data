@@ -9,6 +9,7 @@ bash scripts/run_remote_preflight.sh
 它依次完成：
 
 1. 收集远端架构、内核、libc、编译器、libzmq、Git/submodule、三类二进制 SHA-256 与 `ldd`；
+   同时单独记录实际 framework backend archive 的 SHA-256；
 2. 与 `configs/runtime_fingerprint_local.json` 比较；
 3. 使用待测 framework backend 执行 100,000 消息/方向的公共接口压力测试；
 4. 即使环境比较失败也继续完成压力测试和日志审计，最后统一输出
@@ -21,6 +22,9 @@ LIBZMQ_PATH=/path/libzmq.so.5 \
 LIBZMQ_HOST_LIB_DIR=/path/to/lib \
 bash scripts/run_remote_preflight.sh
 ```
+
+`LIBZMQ_HOST_LIB_DIR`是必填项，目录会只读挂载进测试容器；`LIBZMQ_PATH`
+只在实际文件名不是`libzmq.so`时需要设置。
 
 若使用远端 backend archive：
 

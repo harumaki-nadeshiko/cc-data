@@ -12,6 +12,26 @@ GEM5_BIN="${GEM5_BIN:-$ROOT/gem5/build/ARM/gem5.opt}"
 if [ ! -f "$GEM5_BIN" ] && [ -f "$ROOT/gem5/gem5/build/ARM/gem5.opt" ]; then
     GEM5_BIN="$ROOT/gem5/gem5/build/ARM/gem5.opt"
 fi
+BACKEND_LIB="${FRAMEWORK_BACKEND_LIB:-build/framework/lib/libframework_local.a}"
+case "$BACKEND_LIB" in
+    /workspace/*)
+        BACKEND_CONTAINER="$BACKEND_LIB"
+        BACKEND_HOST="$ROOT/${BACKEND_LIB#/workspace/}"
+        ;;
+    "$ROOT"/*)
+        BACKEND_HOST="$BACKEND_LIB"
+        BACKEND_CONTAINER="/workspace/${BACKEND_LIB#"$ROOT"/}"
+        ;;
+    /*)
+        echo "ERROR: FRAMEWORK_BACKEND_LIB must be inside the checkout" >&2
+        exit 2
+        ;;
+    *)
+        BACKEND_HOST="$ROOT/$BACKEND_LIB"
+        BACKEND_CONTAINER="/workspace/$BACKEND_LIB"
+        ;;
+esac
+[[ -f "$BACKEND_HOST" ]] || { echo "ERROR: backend archive missing: $BACKEND_HOST" >&2; exit 2; }
 
 usage() {
     cat <<'EOF'
@@ -39,27 +59,28 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-fingerprint_args=(--label remote --repo "$ROOT"
-    --binary "$ROOT/build/bin/ubio"
-    --binary "$ROOT/build/bin/networksim"
-    --binary "$GEM5_BIN"
-    --artifact "$ROOT/tests/e2e/run_multi.sh"
-    --artifact "$ROOT/tests/e2e/test_e2e.py"
-    --artifact "$ROOT/configs/topo_8n2s.json"
-    --artifact "$ROOT/scripts/audit_tc_launch.py")
-[ -n "$LIBZMQ" ] && fingerprint_args+=(--libzmq "$LIBZMQ")
-if [ -z "$IMAGE_ID" ] && command -v docker >/dev/null 2>&1; then
-    IMAGE_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+if [ -z "${LIBZMQ_HOST_LIB_DIR:-}" ]; then
+    echo "ERROR: set LIBZMQ_HOST_LIB_DIR to the directory containing the tested libzmq" >&2
+    exit 2
 fi
-[ -n "$IMAGE_ID" ] && fingerprint_args+=(--container-image-id "$IMAGE_ID")
-python3 "$ROOT/scripts/collect_runtime_fingerprint.py" \
-    "${fingerprint_args[@]}" >"$REPORT"
+GEM5_SOURCE_DIR="$(cd "$(dirname "$GEM5_BIN")/../.." && pwd)" \
+LIBZMQ_HOST_LIB_DIR="$LIBZMQ_HOST_LIB_DIR" \
+bash "$ROOT/scripts/generate_runtime_fingerprint_baseline.sh" "$REPORT" \
+    --label remote-docker --repo /workspace \
+    --libzmq /workspace/.fingerprint-lib/$(basename "${LIBZMQ:-libzmq.so}") \
+    --binary /workspace/build/bin/ubio \
+    --binary /workspace/build/bin/networksim \
+    --binary /workspace/gem5/build/ARM/gem5.opt \
+    --artifact /workspace/tests/e2e/run_multi.sh \
+    --artifact /workspace/tests/e2e/test_e2e.py \
+    --artifact /workspace/configs/topo_8n2s.json \
+    --artifact /workspace/scripts/audit_tc_launch.py \
+    --artifact "$BACKEND_CONTAINER"
 fingerprint_rc=0
 if [ -f "$BASELINE" ]; then
     set +e
     python3 "$ROOT/scripts/collect_runtime_fingerprint.py" \
-        "${fingerprint_args[@]}" --compare "$BASELINE" \
-        --ignore-field label --ignore-field host --ignore-field environment
+        --input "$REPORT" --compare "$BASELINE"
     fingerprint_rc=$?
     set -e
 else
@@ -67,6 +88,7 @@ else
     fingerprint_rc=1
 fi
 
+FRAMEWORK_BACKEND_LIB="$BACKEND_CONTAINER" \
 bash "$ROOT/scripts/run_framework_stress.sh" \
     --messages 100000 --payload-bytes 256 --timeout-ms 120000
 

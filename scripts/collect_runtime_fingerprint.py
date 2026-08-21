@@ -318,12 +318,22 @@ def main(argv=None):
     parser.add_argument("--submodule", action="append", default=[], metavar="PATH=HEAD",
                         help="orchestrator-supplied submodule revision")
     parser.add_argument("--compare", metavar="BASELINE.json")
+    parser.add_argument("--input", metavar="CURRENT.json",
+                        help="compare an already collected fingerprint instead of recollecting")
     parser.add_argument("--ignore-field", action="append", default=[], metavar="GLOB",
                         help="ignore dotted field/glob during comparison (repeatable)")
     parser.add_argument("--strict-host", action="store_true",
                         help="make normally informational host fields required")
     args = parser.parse_args(argv)
-    current = collect(args)
+    if args.input:
+        try:
+            with open(args.input, encoding="utf-8") as stream:
+                current = json.load(stream)
+        except (OSError, ValueError) as exc:
+            print("cannot read current fingerprint: %s" % exc, file=sys.stderr)
+            return 2
+    else:
+        current = collect(args)
     if not args.compare:
         json.dump(current, sys.stdout, sort_keys=True, indent=2, ensure_ascii=True)
         sys.stdout.write("\n")
