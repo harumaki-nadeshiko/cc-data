@@ -7,13 +7,18 @@
     },
     {
       "exists": true,
+      "path": "/workspace/configs/tc98_tc134_process_contracts.json",
+      "sha256": "fcc75b3f1db80b20737cdbeb054833cf96d661ab401aeac52f8630fb8a4240bf"
+    },
+    {
+      "exists": true,
       "path": "/workspace/configs/topo_8n2s.json",
       "sha256": "9a81cccbe27e911f37649ce2eb2defde11f9ad1bcbe375861aa78fe4e0e62ed7"
     },
     {
       "exists": true,
       "path": "/workspace/scripts/audit_tc_launch.py",
-      "sha256": "7957949b5610b7b58f121cda874ee9395322ed69216c2ea6886e95640ae9705c"
+      "sha256": "eb98784a46e1e9ff2e1b650144f150bb0e74c35864a0a2acb6fb2360195cf00f"
     },
     {
       "exists": true,
@@ -23,7 +28,7 @@
     {
       "exists": true,
       "path": "/workspace/tests/e2e/test_e2e.py",
-      "sha256": "66b27c8009bf77ad566aea6415a8426441439fa8dedbf7476d4bfa89a56362b9"
+      "sha256": "4c3be828b1a0bf30e5904f82e1c6a669a2c79e7dc38ab4fe2032a0fd4f43699a"
     }
   ],
   "binaries": [
@@ -129,7 +134,7 @@
         "missing": []
       },
       "path": "/workspace/build/bin/ubio",
-      "sha256": "56de4be1c4dcc412ea355478139656127b1c7218c17155ccaecce3b01564ad75"
+      "sha256": "b6f39443438a2ebab5a0ce08e83952c95b27bc48ee72f98faf0f20a2c59f32e4"
     },
     {
       "exists": true,
@@ -254,8 +259,8 @@
   },
   "git": {
     "available": true,
-    "dirty": false,
-    "head": "c1520b1c2f55f4bcaeaacdc8a23e67b879c16545",
+    "dirty": true,
+    "head": "62cdbc575310892a2797b64312dd2a7ff6671a5d",
     "submodules": [
       {
         "head": "fee4f8f37e17ecb8cee282d7bb6e43cce4a3d480",
@@ -290,7 +295,7 @@
     },
     "uname": {
       "machine": "x86_64",
-      "node": "d10a154e0ef2",
+      "node": "1e515b09683e",
       "release": "5.15.0-58-generic",
       "system": "Linux",
       "version": "#64~20.04.1-Ubuntu SMP Fri Jan 6 16:42:31 UTC 2023"
