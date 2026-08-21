@@ -92,6 +92,10 @@ FRAMEWORK_BACKEND_LIB="$BACKEND_CONTAINER" \
 bash "$ROOT/scripts/run_framework_stress.sh" \
     --messages 100000 --payload-bytes 256 --timeout-ms 120000
 
+docker run --rm --network none \
+    -v "$ROOT:/workspace" -w /workspace "$IMAGE" \
+    python3 scripts/audit_protocol_state_capacity.py
+
 if [ -n "$tc" ]; then
     [ -n "$log_root" ] || { echo "ERROR: --tc requires --log-root" >&2; exit 2; }
     audit=(python3 "$ROOT/scripts/audit_tc_launch.py" "$log_root" --tc "$tc")
