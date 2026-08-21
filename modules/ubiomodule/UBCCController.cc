@@ -115,9 +115,10 @@ UBCCController::UBCCController(int node_id, int socket_id,
     framework::LogInfo("UBCC", "UBCC node_id={} socket={}: C3 batch RS {}",
             _nodeId, _socketId, _batchRsEnabled ? "ENABLED" : "DISABLED");
     framework::LogInfo("UBCC",
-            "[UBCC-PROTOCOL-BUILD] revision=20260820-clear-eviction-v1 "
+            "[UBCC-PROTOCOL-BUILD] revision=20260821-batch-rs-completion-v1 "
             "home={}:{} liveOutstandingPin=1 staleEvictionEpoch=1 "
-            "completedReadIdentity=1 liveClearPriority=1",
+            "completedReadIdentity=1 batchRsCompletionIdentity=1 "
+            "liveClearPriority=1",
             _nodeId, _socketId);
 
     registerInstance(node_id, socket_id, this);
@@ -5118,6 +5119,12 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             }
             _directory.update(linePa, entry);
             validateSharersCanonical(linePa);
+            // Batch-RS commits the read immediately, so it must perform the
+            // same completed-identity retirement as the normal Clear path.
+            // Otherwise a delayed duplicate can queue behind another owner,
+            // outlive this tombstone, and resurrect as a second live grant.
+            retireCommittedReadWaiters(tempOst);
+            recordCompletedReadIdentity(tempOst);
             retireToTombstone(tempOst, true);
             refreshPinnedBit(linePa);
 

@@ -506,6 +506,55 @@ main()
         liveOverTombstoneReqId));
     assert(!liveOverTombstoneUbcc.findOutstanding(liveOverTombstonePa));
 
+    // TC98 Timing regression: Batch-RS commits a queued read immediately.
+    // A delayed duplicate of that completed tuple must not enter the pending
+    // queue while another requester owns the PA, then resurrect after the
+    // blocker retires as a second grant that the requester will never Clear.
+    UBCCController batchCompletedIdentityUbcc(
+        0, 0, nullptr, 64, commitCfg.bloom_bytes, 0, 1, 3, &commitCfg);
+    batchCompletedIdentityUbcc.setHost(&host);
+    CaptureOutbound batchCompletedOutbound;
+    batchCompletedIdentityUbcc.setOutbound(&batchCompletedOutbound);
+    batchCompletedIdentityUbcc.setBatchRsEnabled(true);
+    constexpr uint64_t batchCompletedPa = 0x100003a0;
+    constexpr uint64_t batchCompletedReqId = 1760;
+    constexpr uint64_t batchOriginalEpoch = 4;
+    constexpr uint64_t batchCommittedEpoch = 20;
+    assert(batchCompletedIdentityUbcc.debugSeedResidentForTest(
+        batchCompletedPa, static_cast<int>(MESIState::G_S), 1ULL << 0,
+        batchCommittedEpoch, false));
+    assert(batchCompletedIdentityUbcc.debugEnqueuePendingRequesterForTest(
+        batchCompletedPa, 2, 0, true,
+        batchOriginalEpoch, batchCompletedReqId));
+    batchCompletedIdentityUbcc.debugReplayPendingRequestersForTest(
+        batchCompletedPa);
+    assert(batchCompletedOutbound.grants.size() == 1);
+    assert(batchCompletedOutbound.grants[0].h.reqId == batchCompletedReqId);
+    assert(!batchCompletedIdentityUbcc.findOutstanding(batchCompletedPa));
+    DirEntry batchAfterCommit;
+    assert(batchCompletedIdentityUbcc.directory().lookup(
+        batchCompletedPa, batchAfterCommit));
+    const uint64_t batchEpochAfterCommit = batchAfterCommit.epoch;
+
+    OutstandingRequest *batchBlocker =
+        batchCompletedIdentityUbcc.createOutstanding(
+            batchCompletedPa, OpType::INVALIDATE, 3, -1, 1);
+    assert(batchBlocker);
+    batchBlocker->stage = OpStage::WAITING_TARGET_RESP;
+    assert(static_cast<int>(batchCompletedIdentityUbcc.processOuterRequest(
+        batchCompletedPa, UBCC_OuterReqType::GlobalReadShared, false,
+        2, 0, batchOriginalEpoch, batchCompletedReqId)) == -1);
+
+    batchCompletedIdentityUbcc.removeOutstanding(batchCompletedPa);
+    batchCompletedIdentityUbcc.debugReplayPendingRequestersForTest(
+        batchCompletedPa);
+    assert(batchCompletedOutbound.grants.size() == 1);
+    assert(!batchCompletedIdentityUbcc.findOutstanding(batchCompletedPa));
+    DirEntry batchAfterDuplicate;
+    assert(batchCompletedIdentityUbcc.directory().lookup(
+        batchCompletedPa, batchAfterDuplicate));
+    assert(batchAfterDuplicate.epoch == batchEpochAfterCommit);
+
     // A queued ReadReq keeps its requester reqId but is replayed against the
     // post-Clear epoch. After that replay commits, a delayed copy of the
     // original pre-rebase ReadReq must hit the accepted reqId tombstone. It
