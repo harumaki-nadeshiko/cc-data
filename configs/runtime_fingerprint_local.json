@@ -1,0 +1,341 @@
+{
+  "artifacts": [
+    {
+      "exists": true,
+      "path": "/workspace/build/framework/lib/libframework_local.a",
+      "sha256": "64a66ac85f9eb61345e7e0ea6fc721b153ebe3a0174dc23069aaa169c248e60d"
+    },
+    {
+      "exists": true,
+      "path": "/workspace/configs/topo_8n2s.json",
+      "sha256": "9a81cccbe27e911f37649ce2eb2defde11f9ad1bcbe375861aa78fe4e0e62ed7"
+    },
+    {
+      "exists": true,
+      "path": "/workspace/scripts/audit_tc_launch.py",
+      "sha256": "7957949b5610b7b58f121cda874ee9395322ed69216c2ea6886e95640ae9705c"
+    },
+    {
+      "exists": true,
+      "path": "/workspace/tests/e2e/run_multi.sh",
+      "sha256": "4e35bf96f9d8531d4302a96d337e40abf655cc45ae85791676983c8614f16c37"
+    },
+    {
+      "exists": true,
+      "path": "/workspace/tests/e2e/test_e2e.py",
+      "sha256": "66b27c8009bf77ad566aea6415a8426441439fa8dedbf7476d4bfa89a56362b9"
+    }
+  ],
+  "binaries": [
+    {
+      "exists": true,
+      "ldd": {
+        "available": true,
+        "dependencies": [
+          {
+            "missing": false,
+            "name": "/lib64/ld-linux-x86-64.so.2",
+            "resolved": "/lib64/ld-linux-x86-64.so.2"
+          },
+          {
+            "missing": false,
+            "name": "libc.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libc.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libgcc_s.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libgcc_s.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libm.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libm.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libpthread.so.0",
+            "resolved": "/lib/x86_64-linux-gnu/libpthread.so.0"
+          },
+          {
+            "missing": false,
+            "name": "libstdc++.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libstdc++.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libzmq.so.5",
+            "resolved": "/workspace/.fingerprint-lib/libzmq.so.5"
+          },
+          {
+            "missing": false,
+            "name": "linux-vdso.so.1",
+            "resolved": null
+          }
+        ],
+        "exit_code": 0,
+        "missing": []
+      },
+      "path": "/workspace/build/bin/networksim",
+      "sha256": "b122e302c590f980ed21982bf724a0c571255204e0ee83075c29c474c139ae6c"
+    },
+    {
+      "exists": true,
+      "ldd": {
+        "available": true,
+        "dependencies": [
+          {
+            "missing": false,
+            "name": "/lib64/ld-linux-x86-64.so.2",
+            "resolved": "/lib64/ld-linux-x86-64.so.2"
+          },
+          {
+            "missing": false,
+            "name": "libc.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libc.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libgcc_s.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libgcc_s.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libm.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libm.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libpthread.so.0",
+            "resolved": "/lib/x86_64-linux-gnu/libpthread.so.0"
+          },
+          {
+            "missing": false,
+            "name": "libstdc++.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libstdc++.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libzmq.so.5",
+            "resolved": "/workspace/.fingerprint-lib/libzmq.so.5"
+          },
+          {
+            "missing": false,
+            "name": "linux-vdso.so.1",
+            "resolved": null
+          }
+        ],
+        "exit_code": 0,
+        "missing": []
+      },
+      "path": "/workspace/build/bin/ubio",
+      "sha256": "56de4be1c4dcc412ea355478139656127b1c7218c17155ccaecce3b01564ad75"
+    },
+    {
+      "exists": true,
+      "ldd": {
+        "available": true,
+        "dependencies": [
+          {
+            "missing": false,
+            "name": "/lib64/ld-linux-x86-64.so.2",
+            "resolved": "/lib64/ld-linux-x86-64.so.2"
+          },
+          {
+            "missing": false,
+            "name": "libaec.so.0",
+            "resolved": "/lib/x86_64-linux-gnu/libaec.so.0"
+          },
+          {
+            "missing": false,
+            "name": "libc.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libc.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libdl.so.2",
+            "resolved": "/lib/x86_64-linux-gnu/libdl.so.2"
+          },
+          {
+            "missing": false,
+            "name": "libexpat.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libexpat.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libgcc_s.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libgcc_s.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libhdf5_cpp.so.103",
+            "resolved": "/lib/x86_64-linux-gnu/libhdf5_cpp.so.103"
+          },
+          {
+            "missing": false,
+            "name": "libhdf5_serial.so.103",
+            "resolved": "/lib/x86_64-linux-gnu/libhdf5_serial.so.103"
+          },
+          {
+            "missing": false,
+            "name": "libm.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libm.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libpng16.so.16",
+            "resolved": "/lib/x86_64-linux-gnu/libpng16.so.16"
+          },
+          {
+            "missing": false,
+            "name": "libprotobuf.so.17",
+            "resolved": "/lib/x86_64-linux-gnu/libprotobuf.so.17"
+          },
+          {
+            "missing": false,
+            "name": "libpthread.so.0",
+            "resolved": "/lib/x86_64-linux-gnu/libpthread.so.0"
+          },
+          {
+            "missing": false,
+            "name": "libpython3.8.so.1.0",
+            "resolved": "/lib/x86_64-linux-gnu/libpython3.8.so.1.0"
+          },
+          {
+            "missing": false,
+            "name": "librt.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/librt.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libstdc++.so.6",
+            "resolved": "/lib/x86_64-linux-gnu/libstdc++.so.6"
+          },
+          {
+            "missing": false,
+            "name": "libsz.so.2",
+            "resolved": "/lib/x86_64-linux-gnu/libsz.so.2"
+          },
+          {
+            "missing": false,
+            "name": "libtcmalloc_minimal.so.4",
+            "resolved": "/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4"
+          },
+          {
+            "missing": false,
+            "name": "libutil.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libutil.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libz.so.1",
+            "resolved": "/lib/x86_64-linux-gnu/libz.so.1"
+          },
+          {
+            "missing": false,
+            "name": "libzmq.so.5",
+            "resolved": "/workspace/.fingerprint-lib/libzmq.so.5"
+          },
+          {
+            "missing": false,
+            "name": "linux-vdso.so.1",
+            "resolved": null
+          }
+        ],
+        "exit_code": 0,
+        "missing": []
+      },
+      "path": "/workspace/gem5/build/ARM/gem5.opt",
+      "sha256": "ce675a24534ce3856335cab1a48c34f676f7ac05bc741cdcdd5e35838f9d9782"
+    }
+  ],
+  "environment": {
+    "LD_LIBRARY_PATH": "/workspace/.fingerprint-lib"
+  },
+  "git": {
+    "available": true,
+    "dirty": false,
+    "head": "c1520b1c2f55f4bcaeaacdc8a23e67b879c16545",
+    "submodules": [
+      {
+        "head": "fee4f8f37e17ecb8cee282d7bb6e43cce4a3d480",
+        "path": "gem5",
+        "state": " "
+      }
+    ]
+  },
+  "host": {
+    "cpu": {
+      "count": 32,
+      "model": "AMD Ryzen 9 5950X 16-Core Processor"
+    },
+    "libc": {
+      "name": "glibc",
+      "version": "2.31"
+    },
+    "machine": "x86_64",
+    "os_release": {
+      "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+      "HOME_URL": "https://www.ubuntu.com/",
+      "ID": "ubuntu",
+      "ID_LIKE": "debian",
+      "NAME": "Ubuntu",
+      "PRETTY_NAME": "Ubuntu 20.04.6 LTS",
+      "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+      "SUPPORT_URL": "https://help.ubuntu.com/",
+      "UBUNTU_CODENAME": "focal",
+      "VERSION": "20.04.6 LTS (Focal Fossa)",
+      "VERSION_CODENAME": "focal",
+      "VERSION_ID": "20.04"
+    },
+    "uname": {
+      "machine": "x86_64",
+      "node": "d10a154e0ef2",
+      "release": "5.15.0-58-generic",
+      "system": "Linux",
+      "version": "#64~20.04.1-Ubuntu SMP Fri Jan 6 16:42:31 UTC 2023"
+    }
+  },
+  "label": "local-docker",
+  "runtime": {
+    "container_image_id": "sha256:d16aec7a25204218bf21103e6daaf0032db62e37e5fe1c504df66b236ee46ea6",
+    "python": {
+      "compiler": "GCC 9.4.0",
+      "executable": "/usr/bin/python3.8",
+      "implementation": "CPython",
+      "version": "3.8.10"
+    },
+    "tools": {
+      "c++": {
+        "exit_code": 0,
+        "path": "/usr/bin/x86_64-linux-gnu-g++-9",
+        "version": "c++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "cc": {
+        "exit_code": 0,
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-9",
+        "version": "cc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "g++": {
+        "exit_code": 0,
+        "path": "/usr/bin/ccache",
+        "version": "g++ (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "gcc": {
+        "exit_code": 0,
+        "path": "/usr/bin/ccache",
+        "version": "gcc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0"
+      },
+      "ld": {
+        "exit_code": 0,
+        "path": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+        "version": "mold 2.34.0 (ed7cc1b85aed2ba14fdcf868228e2f704d45ae6c; compatible with GNU ld)"
+      }
+    },
+    "zeromq": {
+      "library": "/workspace/.fingerprint-lib/libzmq.so.5.2.5",
+      "version": "4.3.5"
+    }
+  },
+  "schema_version": 1
+}
