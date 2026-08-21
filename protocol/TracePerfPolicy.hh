@@ -70,6 +70,15 @@ public:
         const char* firstStr = std::getenv("EP_TRACE_PERF_FIRST_N");
         if (firstStr) _firstN = static_cast<uint64_t>(std::atol(firstStr));
 
+        const char* modeName =
+            _mode == Mode::Full ? "full" :
+            _mode == Mode::Off ? "off" : "sample";
+        std::fprintf(stderr,
+            "[TRACE-PERF-MANIFEST] mode=%s firstN=%lu everyK=%lu max=%lu "
+            "maxExplicit=%d\n",
+            modeName, _firstN, _everyK, _maxRecords,
+            _maxExplicit ? 1 : 0);
+
         // Register atexit handler once per process – prints summary at exit.
         // guarded by the CAS above so only the first caller wires it.
         std::atexit(+[]() {

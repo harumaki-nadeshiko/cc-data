@@ -1438,16 +1438,6 @@ UBCCController::processOuterRequest(
 {
     baseEpoch = normalizeEpoch(baseEpoch);
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: processOuterRequest PA=0x{:x} req={} write={} "
-            "requesterNode={} requesterSocket={} baseEpoch={} reqId={}",
-            _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
-            requesterNode, requesterSocket, baseEpoch, reqId);
-    framework::LogInfo("UBCC","[UBCC-OUTER-REQ] home={} pa=0x{:x} req={} write={} requester={} "
-           "sock={} baseEpoch={} reqId={}",
-           _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
-           requesterNode, requesterSocket, baseEpoch, reqId);
-
     // Initialize M6 recall outputs and F3 dataSource output
     if (outRecallNeeded)   *outRecallNeeded = false;
     if (outRecallOwnerNode) *outRecallOwnerNode = -1;
@@ -1537,10 +1527,10 @@ UBCCController::processOuterRequest(
     prCtx.reqId = reqId;
     ResidentAccessResult r = ensureResidentForAccess(
         line_pa, prCtx, entry);
-    framework::LogInfo("UBCC","[UBCC-OUTER-REQ] home={} pa=0x{:x} residentResult={} state={} "
-           "sharers=0x{:x} epoch={}",
-           _nodeId, line_pa, static_cast<int>(r), mesiStateName(entry.state),
-           entry.sharersMask, entry.epoch);
+    if (_verboseLog) framework::LogDebug("UBCC",
+           "[DEBUG-UBCC-OUTER-RESIDENT] home={} pa=0x{:x} residentResult={} state={} "
+           "sharers=0x{:x} epoch={}", _nodeId, line_pa, static_cast<int>(r),
+           mesiStateName(entry.state), entry.sharersMask, entry.epoch);
     if (r != ResidentAccessResult::Ready) {
         return static_cast<UBCC_OuterGrantType>(-1);
     }
@@ -1766,6 +1756,15 @@ UBCCController::processOuterRequest(
                 baseEpoch, reqId);
         return static_cast<UBCC_OuterGrantType>(-1);
     }
+
+    // Emit one structured marker only when this call reaches a new grant
+    // decision. Polling retries return through the existing outstanding/queue
+    // paths above and must not dominate long-run logs.
+    framework::LogInfo("UBCC",
+        "[UBCC-OUTER-REQ] home={} pa=0x{:x} req={} write={} requester={} "
+        "sock={} baseEpoch={} reqId={}",
+        _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
+        requesterNode, requesterSocket, baseEpoch, reqId);
 
     // Record grant-visible tick
     Tick grantVisibleTick = curTick();
@@ -3303,7 +3302,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
             if (ckOff < 0x80000ULL && (off % 64 == 0)) {
                 uint64_t w0;
                 std::memcpy(&w0, data, 8);
-                framework::LogInfo("UBCC",
+                framework::LogDebug("UBCC",
                     "[C4-PERSIST] home={} pa=0x{:x} off=0x{:x} w0=0x{:x}",
                     _nodeId, line_pa, off, w0);
             }

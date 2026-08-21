@@ -887,7 +887,6 @@ public:
     bool _debugLog = false;       // [DEBUG-H64-*] gate
     bool _debugClearTrace = false; // [DEBUG-TC5-CLEAR-TRACE], [DEBUG-UBCC-CLEAR] gate
     bool _verboseLog = false;      // Phase 4: general debug/diagnostic gate (§I14)
-
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
     uint64_t _bloomReconstructCounter = 0;
