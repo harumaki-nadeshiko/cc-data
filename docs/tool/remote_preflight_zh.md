@@ -1,5 +1,9 @@
 # 远端上机前置检查
 
+> `scripts/run_remote_preflight.sh` 是有现成 Docker 镜像环境的辅助入口，不适用于
+> 当前无法使用镜像的远端。当前远端请使用裸机
+> `scripts/run_framework_stress_bare.sh` 和 `scripts/remote_phone_report.py`。
+
 该脚本只执行环境比较、framework独立压力测试和可选的**既有日志**审计，不启动
 TC98/TC134。远端正式测试仍由远端既有启动和进程回收机制组织；远端没有本仓库的
 supervisor，也不要求执行`run_multi.sh`。

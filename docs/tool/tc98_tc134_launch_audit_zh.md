@@ -71,6 +71,9 @@ python3 scripts/audit_tc_launch.py /path/to/remote_tc98_logs \
 - UBIO和gem5 metadata bytes均为134217728；
 - gem5没有未知参数，HA/Clear profile为`ubcc/ack`。
 
+`sequencer_max_outstanding=0`在manifest中表示“未显式覆盖”，审计器按当前本机
+RubySequencer模型默认值16计算effective值，不把0误当成实际容量。
+
 ## TC134
 
 按远端实际运行的profile指定：
@@ -107,3 +110,12 @@ python3 scripts/audit_tc_launch.py /path/to/local_logs \
 
 成功输出一行 `PASS`；失败逐项列出远端实际值与本机合同期望值。该工具不判断远端
 timeout、supervisor或进程回收策略，也不代替TC98/TC134协议进度分析器。
+
+只有手机文字信道时增加：
+
+```bash
+python3 scripts/audit_tc_launch.py /path/to/remote_logs \
+  --tc 98 --formal --compact-phone
+```
+
+成功严格一行；失败最多四行，只需把这些行手打到对话中。

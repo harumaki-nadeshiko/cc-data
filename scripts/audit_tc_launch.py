@@ -239,7 +239,12 @@ def audit(args):
         formal = common["formal"]
         for record in by_process["gem5-config"]:
             check.equal(record.get("cpu_model"), formal["cpu_model"], "formal CPU")
-            check.equal(record.get("sequencer_max_outstanding"),
+            requested_seq = record.get("sequencer_max_outstanding")
+            effective_seq = record.get("sequencer_max_outstanding_effective")
+            if effective_seq is None:
+                effective_seq = (formal["sequencer_model_default"]
+                                 if requested_seq in (0, None) else requested_seq)
+            check.equal(effective_seq,
                         formal["sequencer_max_outstanding"],
                         "formal sequencer")
         for record in by_process["ubio"]:
@@ -326,6 +331,8 @@ def main(argv=None):
                         help="required for TC134")
     parser.add_argument("--metadata-bytes", type=int,
                         help="override metadata bytes from the local contract")
+    parser.add_argument("--compact-phone", action="store_true",
+                        help="emit at most four short lines for manual transcription")
     args = parser.parse_args(argv)
     if args.tc == 134 and not args.profile:
         parser.error("TC134 requires --profile")
@@ -335,6 +342,13 @@ def main(argv=None):
         print(f"FAIL TC{args.tc}: {exc}")
         return 1
     if errors:
+        if args.compact_phone:
+            print(f"AUDIT FAIL tc={args.tc} mismatches={len(errors)}")
+            unique_errors = list(dict.fromkeys(errors))
+            for index, error in enumerate(unique_errors[:3], 1):
+                compact = " ".join(error.split())
+                print(f"A{index} {compact[:180]}")
+            return 1
         print(f"FAIL TC{args.tc}: {len(errors)} mismatch(es)")
         for error in errors:
             print(f"- {error}")
@@ -342,6 +356,10 @@ def main(argv=None):
     suffix = f" profile={args.profile}" if args.profile else (" formal" if args.formal else "")
     evidence = ("remote process logs + explicit launcher evidence"
                 if args.launch_jsonl else "remote process logs")
+    if args.compact_phone:
+        profile = args.profile or "default"
+        print(f"AUDIT PASS tc={args.tc} profile={profile} source=process_logs")
+        return 0
     print(f"PASS TC{args.tc}{suffix}: {evidence} match local 8n2s contract")
     return 0
 

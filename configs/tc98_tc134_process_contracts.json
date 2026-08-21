@@ -25,6 +25,7 @@
     "formal": {
       "cpu_model": "o3",
       "sequencer_max_outstanding": 16,
+      "sequencer_model_default": 16,
       "link_latency_ps": "2500",
       "sync_interval_ps": "2500",
       "port_hwm": "8192"

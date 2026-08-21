@@ -129,6 +129,33 @@ class AuditTcLaunchTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("TC134 gem5 batch_rs", result.stdout)
 
+    def test_phone_output_is_at_most_four_lines(self):
+        write_fixture(self.root, 134, "optimized")
+        log = self.root / "remote_tc134_all_stdout.log"
+        text = log.read_text().replace('"effective": 1', '"effective": 9')
+        log.write_text(text)
+        result = run_audit(self.root, "--tc", "134", "--profile", "optimized",
+                           "--compact-phone")
+        self.assertEqual(result.returncode, 1)
+        self.assertLessEqual(len(result.stdout.splitlines()), 4)
+        self.assertTrue(result.stdout.startswith("AUDIT FAIL tc=134"))
+
+    def test_phone_pass_is_one_line(self):
+        write_fixture(self.root, 98)
+        result = run_audit(self.root, "--tc", "98", "--formal", "--compact-phone")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(result.stdout.splitlines()), 1)
+        self.assertTrue(result.stdout.startswith("AUDIT PASS tc=98"))
+
+    def test_default_sequencer_is_compared_as_model_default(self):
+        write_fixture(self.root, 98)
+        log = self.root / "remote_tc98_all_stdout.log"
+        text = log.read_text().replace('"sequencer_max_outstanding": 16',
+                                       '"sequencer_max_outstanding": 0')
+        log.write_text(text)
+        result = run_audit(self.root, "--tc", "98", "--formal", "--compact-phone")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_rejects_fault_override(self):
         write_fixture(self.root, 98)
         log = self.root / "remote_tc98_all_stdout.log"
