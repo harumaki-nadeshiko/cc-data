@@ -17,6 +17,7 @@ def build_matrix():
     ):
         for count in (2, 3):
             q2.append({
+                "tc_id": tc,
                 "numnodes": 3,
                 "numsockets": 1,
                 "label": f"q2-{label}-drop{count}",
@@ -29,6 +30,7 @@ def build_matrix():
 
     q3 = [
         {
+            "tc_id": 149,
             "numnodes": 3,
             "numsockets": 1,
             "label": "q3-upgrade-response-ack",
@@ -39,6 +41,7 @@ def build_matrix():
             ),
         },
         {
+            "tc_id": 149,
             "numnodes": 3,
             "numsockets": 1,
             "label": "q3-invalidate-request-ack",
@@ -49,6 +52,7 @@ def build_matrix():
             ),
         },
         {
+            "tc_id": 153,
             "numnodes": 3,
             "numsockets": 1,
             "label": "q3-recall-request-response",
@@ -59,6 +63,7 @@ def build_matrix():
             ),
         },
         {
+            "tc_id": 148,
             "numnodes": 3,
             "numsockets": 1,
             "label": "q3-clear-request-response",
@@ -83,22 +88,28 @@ def build_matrix():
             index += 1
 
     q4 = [
-        {"numnodes": 3, "numsockets": 1, "label": "q4-tc148-32pa",
+        {"tc_id": 148, "numnodes": 3, "numsockets": 1,
+         "label": "q4-tc148-32pa",
          "timeout_sec": timeout_3n1s,
          "fault_rule": ";".join(tc148_rules)},
-        {"numnodes": 3, "numsockets": 1, "label": "q4-clear-burst-2",
+        {"tc_id": 148, "numnodes": 3, "numsockets": 1,
+         "label": "q4-clear-burst-2",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc148_q4_clear_burst2:ClearReq:0:1:0:drop::2"},
-        {"numnodes": 3, "numsockets": 1, "label": "q4-clear-burst-3",
+        {"tc_id": 148, "numnodes": 3, "numsockets": 1,
+         "label": "q4-clear-burst-3",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc148_q4_clear_burst3:ClearReq:0:1:0:drop::3"},
-        {"numnodes": 3, "numsockets": 1, "label": "q4-partial-ack-n1",
+        {"tc_id": 149, "numnodes": 3, "numsockets": 1,
+         "label": "q4-partial-ack-n1",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc149_q4_partial_ack_n1:InvalidateAck:1:1:0:drop::4"},
-        {"numnodes": 3, "numsockets": 1, "label": "q4-partial-ack-n2",
+        {"tc_id": 149, "numnodes": 3, "numsockets": 1,
+         "label": "q4-partial-ack-n2",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc149_q4_partial_ack_n2:InvalidateAck:2:1:0:delay:20000:4"},
         {
+            "tc_id": 149,
             "numnodes": 3,
             "numsockets": 1,
             "label": "q4-multi-source-acks",
@@ -108,11 +119,11 @@ def build_matrix():
                 "tc149_q4_ack_n2:InvalidateAck:2:1:0:drop::2"
             ),
         },
-        {"numnodes": 3, "numsockets": 1,
+        {"tc_id": 149, "numnodes": 3, "numsockets": 1,
          "label": "q4-near-outstanding-upgrade",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc149_q4_upgrade_near:UpgradeReq:0:1:0:drop::3"},
-        {"numnodes": 3, "numsockets": 1,
+        {"tc_id": 153, "numnodes": 3, "numsockets": 1,
          "label": "q4-near-outstanding-recall",
          "timeout_sec": timeout_3n1s,
          "fault_rule": "tc153_q4_recall_near:RecallResp:0:1:0:delay:20000:8"},
@@ -151,6 +162,7 @@ def build_matrix():
                     f"{message}:{src}:{dst}:{address}:{fault}:{delay}:{count}"
                 )
             q5.append({
+                "tc_id": 230,
                 "numnodes": numnodes,
                 "numsockets": numsockets,
                 "label": f"q5-{topology}-{action}",
