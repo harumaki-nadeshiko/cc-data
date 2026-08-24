@@ -1,232 +1,250 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"
-     viewBox="0 0 1600 1000" role="img"
-     aria-labelledby="title description">
-  <title id="title">Single gem5 Instance: Ruby Controller Relationships</title>
-  <desc id="description">
-    Ruby CHI controller relationships for one split-mode gem5 instance. The
-    diagram distinguishes logical downstream routing, four-virtual-network
-    Ruby message transport, and non-CHI EPBackend bindings. Derived from
-    CHI_ubcc_framework.py, CHI_basic_framework_config.py, and CHI_config.py.
-  </desc>
-  <defs>
-    <marker id="arrow-navy" markerWidth="10" markerHeight="10" refX="9" refY="5"
-            orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L10,5 L0,10 z" fill="#17365d"/>
-    </marker>
-    <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="9" refY="5"
-            orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L10,5 L0,10 z" fill="#6b4c9a"/>
-    </marker>
-    <marker id="arrow-teal" markerWidth="8" markerHeight="8" refX="7" refY="4"
-            orient="auto-start-reverse" markerUnits="strokeWidth">
-      <path d="M0,0 L10,5 L0,10 z" fill="#168795"/>
-    </marker>
-    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="9" refY="5"
-            orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L10,5 L0,10 z" fill="#858b92"/>
-    </marker>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#17365d"
-                    flood-opacity="0.12"/>
-    </filter>
-    <style>
-      .title { font: 700 30px Inter, "Noto Sans", Arial, sans-serif; fill: #17365d; }
-      .subtitle { font: 400 15px Inter, "Noto Sans", Arial, sans-serif; fill: #526273; }
-      .section { font: 700 18px Inter, "Noto Sans", Arial, sans-serif; fill: #17365d; }
-      .box-title { font: 700 16px Inter, "Noto Sans", Arial, sans-serif; fill: #17365d; }
-      .box-text { font: 400 13px Inter, "Noto Sans", Arial, sans-serif; fill: #34495e; }
-      .small { font: 400 12px Inter, "Noto Sans", Arial, sans-serif; fill: #526273; }
-      .tiny { font: 400 11px Inter, "Noto Sans", Arial, sans-serif; fill: #526273; }
-      .white-title { font: 700 16px Inter, "Noto Sans", Arial, sans-serif; fill: white; }
-      .white-text { font: 400 12px Inter, "Noto Sans", Arial, sans-serif; fill: white; }
-      .logical { fill: none; stroke: #17365d; stroke-width: 2.2; marker-end: url(#arrow-navy); }
-      .binding { fill: none; stroke: #6b4c9a; stroke-width: 2.1; stroke-dasharray: 8 6; marker-end: url(#arrow-purple); }
-      .network { fill: none; stroke: #168795; stroke-width: 1.8; stroke-dasharray: 3 5; marker-start: url(#arrow-teal); marker-end: url(#arrow-teal); }
-      .legacy { fill: none; stroke: #858b92; stroke-width: 2; stroke-dasharray: 8 6; marker-end: url(#arrow-gray); }
-    </style>
-  </defs>
-
-  <rect width="1600" height="1000" fill="#f7f9fc"/>
-  <text x="800" y="44" text-anchor="middle" class="title">Single gem5 Instance: Ruby Controller Relationships</text>
-  <text x="800" y="69" text-anchor="middle" class="subtitle">
-    Split-mode scope: one local node per process; multiplicity scales with num_sockets
-  </text>
-
-  <rect x="28" y="91" width="1544" height="810" rx="18" fill="white"
-        stroke="#17365d" stroke-width="2.5"/>
-  <text x="52" y="122" class="section">gem5 process boundary</text>
-
-  <!-- Legend -->
-  <g transform="translate(1020 108)">
-    <rect width="520" height="76" rx="10" fill="#f8fafc" stroke="#c9d3df"/>
-    <path d="M20 20 H78" class="logical"/>
-    <text x="90" y="25" class="small">logical request routing (downstream_destinations)</text>
-    <path d="M20 42 H78" class="network"/>
-    <text x="90" y="47" class="small">Ruby CHI MessageBuffer attachment (bidirectional transport)</text>
-    <path d="M20 64 H78" class="binding"/>
-    <text x="90" y="69" class="small">non-CHI SimObject/backend binding</text>
-  </g>
-
-  <!-- CPU-side controllers -->
-  <g filter="url(#shadow)">
-    <rect x="65" y="155" width="410" height="520" rx="16" fill="#f2f7fb"
-          stroke="#4f81bd" stroke-width="2"/>
-  </g>
-  <text x="85" y="187" class="section">CPU-side CHI RN-F clusters</text>
-  <text x="85" y="210" class="small">Default: 2 clusters × 2 CPUs; stack below is per CPU (×4)</text>
-
-  <rect x="105" y="235" width="330" height="58" rx="10" fill="#d9eaf7" stroke="#4f81bd"/>
-  <text x="270" y="258" text-anchor="middle" class="box-title">CPU[k]</text>
-  <text x="270" y="279" text-anchor="middle" class="box-text">instruction port + data port</text>
-
-  <rect x="95" y="325" width="165" height="62" rx="9" fill="#eaf2f8" stroke="#4f81bd"/>
-  <text x="177" y="350" text-anchor="middle" class="box-title">Inst RubySequencer</text>
-  <text x="177" y="371" text-anchor="middle" class="tiny">CPU request endpoint</text>
-  <rect x="280" y="325" width="165" height="62" rx="9" fill="#eaf2f8" stroke="#4f81bd"/>
-  <text x="362" y="350" text-anchor="middle" class="box-title">Data RubySequencer</text>
-  <text x="362" y="371" text-anchor="middle" class="tiny">ha_ep_backend binding</text>
-
-  <rect x="105" y="425" width="145" height="72" rx="9" fill="#d9ead3" stroke="#57965c"/>
-  <text x="177" y="451" text-anchor="middle" class="box-title">CHI L1I Controller</text>
-  <text x="177" y="473" text-anchor="middle" class="box-text">32 KiB instruction cache</text>
-  <rect x="290" y="425" width="145" height="72" rx="9" fill="#d9ead3" stroke="#57965c"/>
-  <text x="362" y="451" text-anchor="middle" class="box-title">CHI L1D Controller</text>
-  <text x="362" y="473" text-anchor="middle" class="box-text">32 KiB data cache</text>
-
-  <rect x="170" y="550" width="200" height="88" rx="11" fill="#b7dfe3" stroke="#168795" stroke-width="1.8"/>
-  <text x="270" y="580" text-anchor="middle" class="box-title">Private CHI L2 Controller</text>
-  <text x="270" y="603" text-anchor="middle" class="box-text">256 KiB per CPU</text>
-  <text x="270" y="622" text-anchor="middle" class="tiny">last-level controller in ClusterCHI_RNF</text>
-
-  <path d="M205 293 V316 H177 V325" class="logical"/>
-  <path d="M335 293 V316 H362 V325" class="logical"/>
-  <path d="M177 387 V425" class="logical"/>
-  <path d="M362 387 V425" class="logical"/>
-  <path d="M177 497 V525 H245 V550" class="logical"/>
-  <path d="M362 497 V525 H295 V550" class="logical"/>
-  <text x="270" y="527" text-anchor="middle" class="tiny">L1 downstream = private L2</text>
-
-  <!-- Ruby network -->
-  <g filter="url(#shadow)">
-    <rect x="535" y="155" width="385" height="190" rx="16" fill="#17365d" stroke="#102945" stroke-width="2"/>
-  </g>
-  <text x="727" y="185" text-anchor="middle" class="white-title">Ruby CHI Network</text>
-  <text x="727" y="205" text-anchor="middle" class="white-text">Every Ruby controller uses req/rsp/snp/dat In + Out MessageBuffers</text>
-  <rect x="565" y="222" width="325" height="25" rx="6" fill="#168795"/>
-  <text x="727" y="240" text-anchor="middle" class="white-text">VN0 · Request</text>
-  <rect x="565" y="253" width="325" height="25" rx="6" fill="#d97706"/>
-  <text x="727" y="271" text-anchor="middle" class="white-text">VN1 · Snoop</text>
-  <rect x="565" y="284" width="325" height="25" rx="6" fill="#2878b5"/>
-  <text x="727" y="302" text-anchor="middle" class="white-text">VN2 · Response</text>
-  <rect x="565" y="315" width="325" height="20" rx="6" fill="#7e4a9b"/>
-  <text x="727" y="330" text-anchor="middle" class="white-text">VN3 · Data</text>
-
-  <!-- Home controller -->
-  <g filter="url(#shadow)">
-    <rect x="575" y="415" width="305" height="120" rx="14" fill="#d9eaf7" stroke="#4f81bd" stroke-width="2"/>
-  </g>
-  <text x="727" y="447" text-anchor="middle" class="box-title">HN-F Controller[s] + L3</text>
-  <text x="727" y="470" text-anchor="middle" class="box-text">one per socket · cache + directory/home state</text>
-  <text x="727" y="493" text-anchor="middle" class="box-text">L2 downstream target; EP-RNF/Meta-RNF target</text>
-  <text x="727" y="516" text-anchor="middle" class="tiny">same-socket EP-SNF selected for every DSM range</text>
-
-  <!-- Main request route and network attachments -->
-  <path d="M370 594 H500 V475 H575" class="logical"/>
-  <text x="477" y="463" text-anchor="middle" class="small">L2 downstream = all local HN-F[s]</text>
-  <path d="M475 390 H510 V250 H535" class="network"/>
-  <text x="493" y="375" transform="rotate(-90 493 375)" class="tiny">L1/L2 network ports</text>
-  <path d="M727 415 V345" class="network"/>
-
-  <!-- HN-F downstream service nodes -->
-  <rect x="505" y="615" width="245" height="105" rx="12" fill="#d9ead3" stroke="#57965c" stroke-width="1.8"/>
-  <text x="627" y="645" text-anchor="middle" class="box-title">L-SNF (CHI Memory Controller)</text>
-  <text x="627" y="668" text-anchor="middle" class="box-text">one per node</text>
-  <text x="627" y="689" text-anchor="middle" class="tiny">local private + routing + metadata backstore ranges</text>
-  <rect x="505" y="758" width="245" height="76" rx="11" fill="#eef5e9" stroke="#57965c"/>
-  <text x="627" y="787" text-anchor="middle" class="box-title">Local MemCtrl / DDR4</text>
-  <text x="627" y="810" text-anchor="middle" class="box-text">l_memctrl</text>
-
-  <rect x="785" y="615" width="245" height="105" rx="12" fill="#fce4d6" stroke="#c55a11" stroke-width="1.8"/>
-  <text x="907" y="645" text-anchor="middle" class="box-title">EP-SNF[s]</text>
-  <text x="907" y="668" text-anchor="middle" class="box-text">one per socket · DSM home-service endpoint</text>
-  <text x="907" y="689" text-anchor="middle" class="tiny">all DSM home-node ranges for this socket plane</text>
-
-  <path d="M675 535 V580 H627 V615" class="logical"/>
-  <text x="594" y="577" text-anchor="middle" class="tiny">local/private/meta</text>
-  <path d="M780 535 V580 H907 V615" class="logical"/>
-  <text x="877" y="577" text-anchor="middle" class="tiny">DSM</text>
-  <path d="M627 720 V758" class="logical"/>
-  <path d="M585 615 H550 V365 H690 V345" class="network"/>
-  <path d="M950 615 V365 H765 V345" class="network"/>
-
-  <!-- Endpoint requester controllers -->
-  <rect x="1035" y="250" width="235" height="98" rx="12" fill="#fff2cc" stroke="#bf9000" stroke-width="1.8"/>
-  <text x="1152" y="280" text-anchor="middle" class="box-title">EP-RNF</text>
-  <text x="1152" y="303" text-anchor="middle" class="box-text">one per node · DSM endpoint cache participant</text>
-  <text x="1152" y="324" text-anchor="middle" class="tiny">downstream = all local HN-F[s]</text>
-
-  <rect x="1035" y="390" width="235" height="98" rx="12" fill="#fff2cc" stroke="#bf9000" stroke-width="1.8"/>
-  <text x="1152" y="420" text-anchor="middle" class="box-title">Meta-RNF[s]</text>
-  <text x="1152" y="443" text-anchor="middle" class="box-text">one per socket · async metadata requests</text>
-  <text x="1152" y="464" text-anchor="middle" class="tiny">downstream = same-socket HN-F</text>
-
-  <path d="M1035 299 H955 V448 H880" class="logical"/>
-  <path d="M1035 439 H930 V482 H880" class="logical"/>
-  <path d="M1035 274 H960 V220 H920" class="network"/>
-  <path d="M1035 414 H980 V235 H920" class="network"/>
-
-  <!-- Backend and adapter -->
-  <g filter="url(#shadow)">
-    <rect x="1320" y="300" width="205" height="170" rx="14" fill="#e8def5" stroke="#6b4c9a" stroke-width="2"/>
-  </g>
-  <text x="1422" y="333" text-anchor="middle" class="box-title">EPBackend</text>
-  <text x="1422" y="357" text-anchor="middle" class="box-text">shared per node</text>
-  <text x="1422" y="383" text-anchor="middle" class="tiny">protocol coordination · retry state</text>
-  <text x="1422" y="404" text-anchor="middle" class="tiny">HA store facade · endpoint callbacks</text>
-  <text x="1422" y="425" text-anchor="middle" class="tiny">owns per-socket UBAdapter references</text>
-  <text x="1422" y="446" text-anchor="middle" class="tiny">not a Ruby controller</text>
-
-  <rect x="1320" y="570" width="205" height="95" rx="12" fill="#e8def5" stroke="#6b4c9a" stroke-width="1.8"/>
-  <text x="1422" y="601" text-anchor="middle" class="box-title">UBAdapter[s]</text>
-  <text x="1422" y="624" text-anchor="middle" class="box-text">one per socket</text>
-  <text x="1422" y="645" text-anchor="middle" class="tiny">message path to external ubio</text>
-
-  <path d="M1270 299 H1295 V345 H1320" class="binding"/>
-  <text x="1292" y="286" text-anchor="middle" class="tiny">ep_backend</text>
-  <path d="M1270 439 H1320" class="binding"/>
-  <text x="1295" y="430" text-anchor="middle" class="tiny">runtime registration</text>
-  <path d="M1030 667 H1280 V505 H1360 V470" class="binding"/>
-  <text x="1165" y="689" text-anchor="middle" class="tiny">ep_backend</text>
-  <path d="M445 356 H485 V887 H1288 V520 H1395 V470" class="binding"/>
-  <text x="900" y="880" text-anchor="middle" class="tiny">Data RubySequencer → EPBackend for HA stores</text>
-  <path d="M1422 470 V570" class="binding"/>
-
-  <!-- Legacy DL-SNF path -->
-  <rect x="1045" y="710" width="225" height="72" rx="11" fill="#f0f1f2" stroke="#858b92" stroke-width="1.8" stroke-dasharray="7 5"/>
-  <text x="1157" y="739" text-anchor="middle" class="box-title" fill="#666">DL-SNF</text>
-  <text x="1157" y="761" text-anchor="middle" class="tiny">instantiated Ruby node; not in HN-F downstream list</text>
-  <rect x="1045" y="806" width="225" height="56" rx="10" fill="#f7f7f7" stroke="#9aa0a6"/>
-  <text x="1157" y="840" text-anchor="middle" class="box-text">DL MemCtrl / DDR4</text>
-  <path d="M1157 782 V806" class="legacy"/>
-  <path d="M1270 746 H1550 V190 H920" class="legacy"/>
-  <text x="1360" y="738" text-anchor="middle" class="tiny">network only</text>
-
-  <!-- Notes -->
-  <rect x="70" y="715" width="395" height="135" rx="12" fill="#fffdf5" stroke="#d6c27a"/>
-  <text x="90" y="744" class="box-title">Multiplicity and current routing</text>
-  <text x="90" y="770" class="small">• Per CPU: 1 L1I, 1 L1D, 1 private L2</text>
-  <text x="90" y="793" class="small">• Per socket: 1 HN-F, 1 EP-SNF, 1 Meta-RNF, 1 UBAdapter</text>
-  <text x="90" y="816" class="small">• Per node: 1 EP-RNF, 1 L-SNF, 1 DL-SNF, 1 EPBackend</text>
-  <text x="90" y="839" class="small">• F1 rule: all DSM requests use EP-SNF, never DL-SNF</text>
-
-  <!-- Outside gem5 -->
-  <rect x="1300" y="918" width="245" height="58" rx="11" fill="#fff4ec" stroke="#c55a11" stroke-width="2"/>
-  <text x="1422" y="943" text-anchor="middle" class="box-title">UBIOModule / UBCC</text>
-  <text x="1422" y="963" text-anchor="middle" class="box-text">outside this gem5 process</text>
-  <path d="M1422 665 V918" class="binding"/>
-  <text x="1440" y="878" class="tiny">socket-qualified Port</text>
-
-  <text x="55" y="912" class="tiny">Source of truth: gem5/configs/ruby/CHI_ubcc_framework.py and CHI_basic_framework_config.py</text>
-  <text x="55" y="932" class="tiny">Solid arrows show request-direction selection; responses, snoops, and data return over the Ruby CHI network.</text>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 2.43.0 (0)
+ -->
+<!-- Title: RubyControllers Pages: 1 -->
+<svg width="2060pt" height="728pt"
+ viewBox="3.60 3.60 2055.98 724.48" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(41.04 687.04)">
+<title>RubyControllers</title>
+<polygon fill="#f7f9fc" stroke="transparent" points="-37.44,37.44 -37.44,-683.44 2014.94,-683.44 2014.94,37.44 -37.44,37.44"/>
+<text text-anchor="middle" x="988.75" y="-624.4" font-family="DejaVu Sans" font-size="22.00">Single gem5 Instance: Ruby Controller Relationships</text>
+<text text-anchor="middle" x="988.75" y="-600.4" font-family="DejaVu Sans" font-size="22.00">Strict CHI path only; one local node in split mode</text>
+<g id="clust1" class="cluster">
+<title>cluster_gem5</title>
+<path fill="#ffffff" stroke="#17365d" stroke-width="2" d="M20,-128C20,-128 1880,-128 1880,-128 1886,-128 1892,-134 1892,-140 1892,-140 1892,-570 1892,-570 1892,-576 1886,-582 1880,-582 1880,-582 20,-582 20,-582 14,-582 8,-576 8,-570 8,-570 8,-140 8,-140 8,-134 14,-128 20,-128"/>
+<text text-anchor="middle" x="150" y="-560.4" font-family="DejaVu Sans" font-size="22.00">gem5 process boundary</text>
+</g>
+<!-- cpu -->
+<g id="node1" class="node">
+<title>cpu</title>
+<path fill="#d9eaf7" stroke="#4f81bd" stroke-width="1.5" d="M813.5,-486C813.5,-486 654.5,-486 654.5,-486 648.5,-486 642.5,-480 642.5,-474 642.5,-474 642.5,-456 642.5,-456 642.5,-450 648.5,-444 654.5,-444 654.5,-444 813.5,-444 813.5,-444 819.5,-444 825.5,-450 825.5,-456 825.5,-456 825.5,-474 825.5,-474 825.5,-480 819.5,-486 813.5,-486"/>
+<text text-anchor="middle" x="734" y="-468.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">CPU[k]</text>
+<text text-anchor="middle" x="734" y="-454.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">per CPU (×4 by default)</text>
+</g>
+<!-- seq -->
+<g id="node2" class="node">
+<title>seq</title>
+<path fill="#d9eaf7" stroke="#4f81bd" stroke-width="1.5" d="M1032,-486C1032,-486 922,-486 922,-486 916,-486 910,-480 910,-474 910,-474 910,-456 910,-456 910,-450 916,-444 922,-444 922,-444 1032,-444 1032,-444 1038,-444 1044,-450 1044,-456 1044,-456 1044,-474 1044,-474 1044,-480 1038,-486 1032,-486"/>
+<text text-anchor="middle" x="977" y="-468.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Inst + Data</text>
+<text text-anchor="middle" x="977" y="-454.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">RubySequencers</text>
+</g>
+<!-- cpu&#45;&gt;seq -->
+<g id="edge1" class="edge">
+<title>cpu&#45;&gt;seq</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M825.52,-465C850.88,-465 878.1,-465 902.37,-465"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="902.6,-467.52 909.8,-465 902.6,-462.48 902.6,-467.52"/>
+<text text-anchor="middle" x="867.75" y="-471.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">CPU ports</text>
+</g>
+<!-- l1 -->
+<g id="node3" class="node">
+<title>l1</title>
+<path fill="#d9ead3" stroke="#57965c" stroke-width="1.5" d="M1287.5,-493C1287.5,-493 1194.5,-493 1194.5,-493 1188.5,-493 1182.5,-487 1182.5,-481 1182.5,-481 1182.5,-449 1182.5,-449 1182.5,-443 1188.5,-437 1194.5,-437 1194.5,-437 1287.5,-437 1287.5,-437 1293.5,-437 1299.5,-443 1299.5,-449 1299.5,-449 1299.5,-481 1299.5,-481 1299.5,-487 1293.5,-493 1287.5,-493"/>
+<text text-anchor="middle" x="1241" y="-475.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">CHI L1I + L1D</text>
+<text text-anchor="middle" x="1241" y="-461.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Controllers</text>
+<text text-anchor="middle" x="1241" y="-447.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">32 KiB each</text>
+</g>
+<!-- seq&#45;&gt;l1 -->
+<g id="edge2" class="edge">
+<title>seq&#45;&gt;l1</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1044.3,-465C1084.43,-465 1135.15,-465 1175.03,-465"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1175.15,-467.52 1182.35,-465 1175.15,-462.48 1175.15,-467.52"/>
+<text text-anchor="middle" x="1113.25" y="-471.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">sequencer requests</text>
+</g>
+<!-- l2 -->
+<g id="node4" class="node">
+<title>l2</title>
+<path fill="#b7dfe3" stroke="#168795" stroke-width="1.5" d="M1534,-493C1534,-493 1426,-493 1426,-493 1420,-493 1414,-487 1414,-481 1414,-481 1414,-449 1414,-449 1414,-443 1420,-437 1426,-437 1426,-437 1534,-437 1534,-437 1540,-437 1546,-443 1546,-449 1546,-449 1546,-481 1546,-481 1546,-487 1540,-493 1534,-493"/>
+<text text-anchor="middle" x="1480" y="-475.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Private CHI L2</text>
+<text text-anchor="middle" x="1480" y="-461.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Controller</text>
+<text text-anchor="middle" x="1480" y="-447.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">256 KiB per CPU</text>
+</g>
+<!-- l1&#45;&gt;l2 -->
+<g id="edge3" class="edge">
+<title>l1&#45;&gt;l2</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1299.77,-465C1332.03,-465 1372.33,-465 1406.64,-465"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1406.66,-467.52 1413.86,-465 1406.66,-462.48 1406.66,-467.52"/>
+<text text-anchor="middle" x="1356.75" y="-471.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">L1 downstream</text>
+</g>
+<!-- hnf -->
+<g id="node5" class="node">
+<title>hnf</title>
+<path fill="#d9eaf7" stroke="#4f81bd" stroke-width="2" d="M1856.5,-493C1856.5,-493 1675.5,-493 1675.5,-493 1669.5,-493 1663.5,-487 1663.5,-481 1663.5,-481 1663.5,-449 1663.5,-449 1663.5,-443 1669.5,-437 1675.5,-437 1675.5,-437 1856.5,-437 1856.5,-437 1862.5,-437 1868.5,-443 1868.5,-449 1868.5,-449 1868.5,-481 1868.5,-481 1868.5,-487 1862.5,-493 1856.5,-493"/>
+<text text-anchor="middle" x="1766" y="-475.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">HN&#45;F[s] + L3</text>
+<text text-anchor="middle" x="1766" y="-461.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Home / directory controller</text>
+<text text-anchor="middle" x="1766" y="-447.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per socket</text>
+</g>
+<!-- l2&#45;&gt;hnf -->
+<g id="edge4" class="edge">
+<title>l2&#45;&gt;hnf</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1546.33,-465C1578.9,-465 1618.99,-465 1655.98,-465"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1656.13,-467.52 1663.33,-465 1656.13,-462.48 1656.13,-467.52"/>
+<text text-anchor="middle" x="1604.75" y="-471.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">all local HN&#45;F[s]</text>
+</g>
+<!-- lsnf -->
+<g id="node8" class="node">
+<title>lsnf</title>
+<path fill="#d9ead3" stroke="#57965c" stroke-width="1.5" d="M1158.5,-328C1158.5,-328 1007.5,-328 1007.5,-328 1001.5,-328 995.5,-322 995.5,-316 995.5,-316 995.5,-284 995.5,-284 995.5,-278 1001.5,-272 1007.5,-272 1007.5,-272 1158.5,-272 1158.5,-272 1164.5,-272 1170.5,-278 1170.5,-284 1170.5,-284 1170.5,-316 1170.5,-316 1170.5,-322 1164.5,-328 1158.5,-328"/>
+<text text-anchor="middle" x="1083" y="-310.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">L&#45;SNF</text>
+<text text-anchor="middle" x="1083" y="-296.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">CHI Memory Controller</text>
+<text text-anchor="middle" x="1083" y="-282.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per node</text>
+</g>
+<!-- hnf&#45;&gt;lsnf -->
+<g id="edge7" class="edge">
+<title>hnf&#45;&gt;lsnf</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1673.69,-436.98C1619.28,-421.06 1561,-404 1561,-404 1561,-404 1310,-378 1310,-378 1310,-378 1233.78,-352.14 1169.67,-330.4"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1170.34,-327.97 1162.71,-328.04 1168.72,-332.74 1170.34,-327.97"/>
+<text text-anchor="middle" x="1380.5" y="-363.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">local / private / metadata</text>
+</g>
+<!-- epsnf -->
+<g id="node9" class="node">
+<title>epsnf</title>
+<path fill="#fce4d6" stroke="#c55a11" stroke-width="1.5" d="M1399.5,-328C1399.5,-328 1212.5,-328 1212.5,-328 1206.5,-328 1200.5,-322 1200.5,-316 1200.5,-316 1200.5,-284 1200.5,-284 1200.5,-278 1206.5,-272 1212.5,-272 1212.5,-272 1399.5,-272 1399.5,-272 1405.5,-272 1411.5,-278 1411.5,-284 1411.5,-284 1411.5,-316 1411.5,-316 1411.5,-322 1405.5,-328 1399.5,-328"/>
+<text text-anchor="middle" x="1306" y="-310.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">EP&#45;SNF[s]</text>
+<text text-anchor="middle" x="1306" y="-296.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">DSM home&#45;service endpoint</text>
+<text text-anchor="middle" x="1306" y="-282.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per socket</text>
+</g>
+<!-- hnf&#45;&gt;epsnf -->
+<g id="edge8" class="edge">
+<title>hnf&#45;&gt;epsnf</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1689.13,-436.91C1617.61,-411.7 1522,-378 1522,-378 1522,-378 1449.76,-352.25 1388.84,-330.53"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1389.48,-328.08 1381.85,-328.04 1387.79,-332.83 1389.48,-328.08"/>
+<text text-anchor="middle" x="1574" y="-369.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">all DSM requests</text>
+<text text-anchor="middle" x="1574" y="-357.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">same socket plane</text>
+</g>
+<!-- eprnf -->
+<g id="node6" class="node">
+<title>eprnf</title>
+<path fill="#fff2cc" stroke="#bf9000" stroke-width="1.5" d="M1668,-328C1668,-328 1454,-328 1454,-328 1448,-328 1442,-322 1442,-316 1442,-316 1442,-284 1442,-284 1442,-278 1448,-272 1454,-272 1454,-272 1668,-272 1668,-272 1674,-272 1680,-278 1680,-284 1680,-284 1680,-316 1680,-316 1680,-322 1674,-328 1668,-328"/>
+<text text-anchor="middle" x="1561" y="-310.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">EP&#45;RNF</text>
+<text text-anchor="middle" x="1561" y="-296.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">DSM endpoint cache participant</text>
+<text text-anchor="middle" x="1561" y="-282.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per node</text>
+</g>
+<!-- eprnf&#45;&gt;hnf -->
+<g id="edge5" class="edge">
+<title>eprnf&#45;&gt;hnf</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1595.08,-328.1C1631.02,-356.68 1687.62,-401.68 1725.73,-431.98"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1724.48,-434.21 1731.69,-436.72 1727.62,-430.26 1724.48,-434.21"/>
+<text text-anchor="middle" x="1701" y="-363.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">all local HN&#45;F[s]</text>
+</g>
+<!-- metarnf -->
+<g id="node7" class="node">
+<title>metarnf</title>
+<path fill="#fff2cc" stroke="#bf9000" stroke-width="1.5" d="M1855.5,-328C1855.5,-328 1722.5,-328 1722.5,-328 1716.5,-328 1710.5,-322 1710.5,-316 1710.5,-316 1710.5,-284 1710.5,-284 1710.5,-278 1716.5,-272 1722.5,-272 1722.5,-272 1855.5,-272 1855.5,-272 1861.5,-272 1867.5,-278 1867.5,-284 1867.5,-284 1867.5,-316 1867.5,-316 1867.5,-322 1861.5,-328 1855.5,-328"/>
+<text text-anchor="middle" x="1789" y="-310.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Meta&#45;RNF[s]</text>
+<text text-anchor="middle" x="1789" y="-296.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">metadata requester</text>
+<text text-anchor="middle" x="1789" y="-282.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per socket</text>
+</g>
+<!-- metarnf&#45;&gt;hnf -->
+<g id="edge6" class="edge">
+<title>metarnf&#45;&gt;hnf</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1785.18,-328.1C1781.26,-355.85 1775.16,-399.1 1770.89,-429.33"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1768.36,-429.24 1769.85,-436.72 1773.35,-429.94 1768.36,-429.24"/>
+<text text-anchor="middle" x="1830" y="-363.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">same&#45;socket HN&#45;F</text>
+</g>
+<!-- mem -->
+<g id="node10" class="node">
+<title>mem</title>
+<path fill="#eef5e9" stroke="#57965c" stroke-width="1.5" d="M1130.5,-201C1130.5,-201 1035.5,-201 1035.5,-201 1029.5,-201 1023.5,-195 1023.5,-189 1023.5,-189 1023.5,-171 1023.5,-171 1023.5,-165 1029.5,-159 1035.5,-159 1035.5,-159 1130.5,-159 1130.5,-159 1136.5,-159 1142.5,-165 1142.5,-171 1142.5,-171 1142.5,-189 1142.5,-189 1142.5,-195 1136.5,-201 1130.5,-201"/>
+<text text-anchor="middle" x="1083" y="-183.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">Local MemCtrl</text>
+<text text-anchor="middle" x="1083" y="-169.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">DDR4</text>
+</g>
+<!-- lsnf&#45;&gt;mem -->
+<g id="edge9" class="edge">
+<title>lsnf&#45;&gt;mem</title>
+<path fill="none" stroke="#17365d" stroke-width="1.7" d="M1083,-271.93C1083,-252.95 1083,-227.66 1083,-208.57"/>
+<polygon fill="#17365d" stroke="#17365d" stroke-width="1.7" points="1085.52,-208.52 1083,-201.32 1080.48,-208.52 1085.52,-208.52"/>
+<text text-anchor="middle" x="1119.5" y="-237.2" font-family="DejaVu Sans" font-size="11.00" fill="#34495e">memory port</text>
+</g>
+<!-- backend -->
+<g id="node11" class="node">
+<title>backend</title>
+<path fill="#e8def5" stroke="#6b4c9a" stroke-width="1.5" d="M1377.5,-208C1377.5,-208 1234.5,-208 1234.5,-208 1228.5,-208 1222.5,-202 1222.5,-196 1222.5,-196 1222.5,-164 1222.5,-164 1222.5,-158 1228.5,-152 1234.5,-152 1234.5,-152 1377.5,-152 1377.5,-152 1383.5,-152 1389.5,-158 1389.5,-164 1389.5,-164 1389.5,-196 1389.5,-196 1389.5,-202 1383.5,-208 1377.5,-208"/>
+<text text-anchor="middle" x="1306" y="-190.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">EPBackend</text>
+<text text-anchor="middle" x="1306" y="-176.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">protocol coordination</text>
+<text text-anchor="middle" x="1306" y="-162.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">not a Ruby controller</text>
+</g>
+<!-- epsnf&#45;&gt;backend -->
+<g id="edge10" class="edge">
+<title>epsnf&#45;&gt;backend</title>
+<path fill="none" stroke="#6b4c9a" stroke-width="1.7" stroke-dasharray="5,2" d="M1306,-271.93C1306,-255.26 1306,-233.72 1306,-215.79"/>
+<polygon fill="#6b4c9a" stroke="#6b4c9a" stroke-width="1.7" points="1308.52,-215.55 1306,-208.35 1303.48,-215.55 1308.52,-215.55"/>
+<text text-anchor="middle" x="1352" y="-237.2" font-family="DejaVu Sans" font-size="11.00" fill="#6b4c9a">endpoint service</text>
+</g>
+<!-- adapter -->
+<g id="node12" class="node">
+<title>adapter</title>
+<path fill="#e8def5" stroke="#6b4c9a" stroke-width="1.5" d="M1621.5,-201C1621.5,-201 1522.5,-201 1522.5,-201 1516.5,-201 1510.5,-195 1510.5,-189 1510.5,-189 1510.5,-171 1510.5,-171 1510.5,-165 1516.5,-159 1522.5,-159 1522.5,-159 1621.5,-159 1621.5,-159 1627.5,-159 1633.5,-165 1633.5,-171 1633.5,-171 1633.5,-189 1633.5,-189 1633.5,-195 1627.5,-201 1621.5,-201"/>
+<text text-anchor="middle" x="1572" y="-183.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">UBAdapter[s]</text>
+<text text-anchor="middle" x="1572" y="-169.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">one per socket</text>
+</g>
+<!-- backend&#45;&gt;adapter -->
+<g id="edge11" class="edge">
+<title>backend&#45;&gt;adapter</title>
+<path fill="none" stroke="#6b4c9a" stroke-width="1.7" stroke-dasharray="5,2" d="M1389.8,-180C1426.2,-180 1468.31,-180 1502.88,-180"/>
+<polygon fill="#6b4c9a" stroke="#6b4c9a" stroke-width="1.7" points="1502.94,-182.52 1510.14,-180 1502.94,-177.48 1502.94,-182.52"/>
+<text text-anchor="middle" x="1450" y="-186.2" font-family="DejaVu Sans" font-size="11.00" fill="#6b4c9a">message facade</text>
+</g>
+<!-- ubio -->
+<g id="node14" class="node">
+<title>ubio</title>
+<path fill="#fff4ec" stroke="#c55a11" stroke-width="1.8" d="M1638,-62C1638,-62 1506,-62 1506,-62 1500,-62 1494,-56 1494,-50 1494,-50 1494,-32 1494,-32 1494,-26 1500,-20 1506,-20 1506,-20 1638,-20 1638,-20 1644,-20 1650,-26 1650,-32 1650,-32 1650,-50 1650,-50 1650,-56 1644,-62 1638,-62"/>
+<text text-anchor="middle" x="1572" y="-44.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">UBIOModule / UBCC</text>
+<text text-anchor="middle" x="1572" y="-30.6" font-family="DejaVu Sans" font-size="13.00" fill="#17365d">external process</text>
+</g>
+<!-- adapter&#45;&gt;ubio -->
+<g id="edge12" class="edge">
+<title>adapter&#45;&gt;ubio</title>
+<path fill="none" stroke="#6b4c9a" stroke-width="1.8" stroke-dasharray="5,2" d="M1572,-158.79C1572,-135.21 1572,-96.11 1572,-69.72"/>
+<polygon fill="#6b4c9a" stroke="#6b4c9a" stroke-width="1.8" points="1574.52,-69.5 1572,-62.3 1569.48,-69.5 1574.52,-69.5"/>
+<text text-anchor="middle" x="1628" y="-111.2" font-family="DejaVu Sans" font-size="11.00" fill="#6b4c9a">socket&#45;qualified Port</text>
+</g>
+<!-- ruby_net -->
+<g id="node13" class="node">
+<title>ruby_net</title>
+<path fill="#eef5fb" stroke="transparent" stroke-width="1.5" d="M600,-526C600,-526 44,-526 44,-526 38,-526 32,-520 32,-514 32,-514 32,-416 32,-416 32,-410 38,-404 44,-404 44,-404 600,-404 600,-404 606,-404 612,-410 612,-416 612,-416 612,-514 612,-514 612,-520 606,-526 600,-526"/>
+<polygon fill="#17365d" stroke="transparent" points="32,-404 32,-526 612,-526 612,-404 32,-404"/>
+<polygon fill="none" stroke="#102945" points="33,-495 33,-525 169,-525 169,-495 33,-495"/>
+<text text-anchor="start" x="93" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">L1</text>
+<polygon fill="none" stroke="#102945" points="169,-495 169,-525 253,-525 253,-495 169,-495"/>
+<text text-anchor="start" x="203" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">L2</text>
+<polygon fill="none" stroke="#102945" points="253,-495 253,-525 342,-525 342,-495 253,-495"/>
+<text text-anchor="start" x="274" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">EP&#45;RNF</text>
+<polygon fill="none" stroke="#102945" points="342,-495 342,-525 403,-525 403,-495 342,-495"/>
+<text text-anchor="start" x="356.5" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">HN&#45;F</text>
+<polygon fill="none" stroke="#102945" points="403,-495 403,-525 489,-525 489,-495 403,-495"/>
+<text text-anchor="start" x="414" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">Meta&#45;RNF</text>
+<polygon fill="none" stroke="#102945" points="489,-495 489,-525 545,-525 545,-495 489,-495"/>
+<text text-anchor="start" x="498.5" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">L&#45;SNF</text>
+<polygon fill="none" stroke="#102945" points="545,-495 545,-525 611,-525 611,-495 545,-495"/>
+<text text-anchor="start" x="555" y="-506.6" font-family="DejaVu Sans" font-size="13.00" fill="white">EP&#45;SNF</text>
+<polygon fill="none" stroke="#102945" points="33,-465 33,-495 611,-495 611,-465 33,-465"/>
+<text text-anchor="start" x="255" y="-477.6" font-family="DejaVu Sans" font-weight="bold" font-size="13.00" fill="white">Ruby CHI Network</text>
+<polygon fill="none" stroke="#102945" points="33,-435 33,-465 611,-465 611,-435 33,-435"/>
+<text text-anchor="start" x="144" y="-446.6" font-family="DejaVu Sans" font-size="13.00" fill="white">VN0 Request · VN1 Snoop · VN2 Response · VN3 Data</text>
+<polygon fill="none" stroke="#102945" points="33,-405 33,-435 611,-435 611,-405 33,-405"/>
+<text text-anchor="start" x="41" y="-416.6" font-family="DejaVu Sans" font-size="13.00" fill="white">Every listed controller has bidirectional req / rsp / snp / dat In + Out MessageBuffers</text>
+<polygon fill="none" stroke="#102945" points="32,-404 32,-526 612,-526 612,-404 32,-404"/>
+</g>
+<!-- legend -->
+<g id="node15" class="node">
+<title>legend</title>
+<path fill="#eef5fb" stroke="transparent" stroke-width="1.5" d="M1965.5,-82C1965.5,-82 1692.5,-82 1692.5,-82 1686.5,-82 1680.5,-76 1680.5,-70 1680.5,-70 1680.5,-12 1680.5,-12 1680.5,-6 1686.5,0 1692.5,0 1692.5,0 1965.5,0 1965.5,0 1971.5,0 1977.5,-6 1977.5,-12 1977.5,-12 1977.5,-70 1977.5,-70 1977.5,-76 1971.5,-82 1965.5,-82"/>
+<polygon fill="#f8fafc" stroke="transparent" points="1681,-54 1681,-82 1753,-82 1753,-54 1681,-54"/>
+<polygon fill="none" stroke="#c9d3df" points="1681,-54 1681,-82 1753,-82 1753,-54 1681,-54"/>
+<text text-anchor="start" x="1701.5" y="-65.6" font-family="DejaVu Sans" font-weight="bold" font-size="13.00" fill="#17365d">Line</text>
+<polygon fill="#f8fafc" stroke="transparent" points="1753,-54 1753,-82 1978,-82 1978,-54 1753,-54"/>
+<polygon fill="none" stroke="#c9d3df" points="1753,-54 1753,-82 1978,-82 1978,-54 1753,-54"/>
+<text text-anchor="start" x="1834" y="-65.6" font-family="DejaVu Sans" font-weight="bold" font-size="13.00" fill="#17365d">Meaning</text>
+<polygon fill="none" stroke="#c9d3df" points="1681,-27 1681,-54 1753,-54 1753,-27 1681,-27"/>
+<text text-anchor="start" x="1696.5" y="-37.4" font-family="DejaVu Sans" font-size="12.00" fill="#17365d">solid →</text>
+<polygon fill="none" stroke="#c9d3df" points="1753,-27 1753,-54 1978,-54 1978,-27 1753,-27"/>
+<text text-anchor="start" x="1760" y="-37.4" font-family="DejaVu Sans" font-size="12.00" fill="#17365d">logical CHI request routing</text>
+<polygon fill="none" stroke="#c9d3df" points="1681,0 1681,-27 1753,-27 1753,0 1681,0"/>
+<text text-anchor="start" x="1688" y="-10.4" font-family="DejaVu Sans" font-size="12.00" fill="#6b4c9a">dashed →</text>
+<polygon fill="none" stroke="#c9d3df" points="1753,0 1753,-27 1978,-27 1978,0 1753,0"/>
+<text text-anchor="start" x="1760" y="-10.4" font-family="DejaVu Sans" font-size="12.00" fill="#17365d">non&#45;CHI backend / external binding</text>
+</g>
+</g>
 </svg>
