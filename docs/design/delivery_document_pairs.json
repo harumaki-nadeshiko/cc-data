@@ -1,0 +1,26 @@
+{
+  "pairs": [
+    {
+      "docx": "docs/design/cc_ep_protocol_overview.docx",
+      "docx_sha256": "84a973c757173234c6db290d1d01e1cf456a4af4875ed33991d5c463a9f5d5ce",
+      "embedded_source_sha256": "41f56778f3bdd596c01d3b3dcecbae97f28787fe971c9ece32f85b2e25588a3e",
+      "markdown": "docs/design/cc_ep_protocol_overview.md",
+      "markdown_sha256": "41f56778f3bdd596c01d3b3dcecbae97f28787fe971c9ece32f85b2e25588a3e"
+    },
+    {
+      "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
+      "docx_sha256": "a0115ad656b400242ebb0e6a5238593fb52bf3e34e91116bd2d43a82fef8e4c9",
+      "embedded_source_sha256": "eefb900d58914d2b484553a24fbf9068524b2369810e4857784577e685a19e54",
+      "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
+      "markdown_sha256": "eefb900d58914d2b484553a24fbf9068524b2369810e4857784577e685a19e54"
+    },
+    {
+      "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
+      "docx_sha256": "fc4618044682a4b6a374c92974bd8f09107f7f23f88a7540ab5884da45c01082",
+      "embedded_source_sha256": "546754912e807f20c308ae9c7ff39b291a5d2f436e094def52211851d9dd0243",
+      "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
+      "markdown_sha256": "546754912e807f20c308ae9c7ff39b291a5d2f436e094def52211851d9dd0243"
+    }
+  ],
+  "schema_version": 1
+}

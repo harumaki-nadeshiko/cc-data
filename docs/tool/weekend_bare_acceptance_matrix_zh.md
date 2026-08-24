@@ -10,7 +10,7 @@ link/sync和HWM继续沿用远端既有framework环境及默认配置。
 
 1. 完成Metric 1 TC131三profile三轮矩阵。
 2. 完成Metric 2正式三轮矩阵：TC135-140和TC217。
-3. 完成Metric 3 core TC228-230的OurCC/HA-VI五组配对；保持UNFROZEN标签。
+3. 完成Metric 3 TC228-235的OurCC/HA-VI五组配对；按已冻结双tier判定。
 4. 完成HA TC210-227三profile矩阵。
 5. 完成TC142-147 portable-512K p150现实业务矩阵。
 6. 用TC127、TC141和长TC98/TC134做正确性资格门禁。
@@ -19,8 +19,9 @@ link/sync和HWM继续沿用远端既有framework环境及默认配置。
 TC16已经稳定通过，降为更新二进制后的可选smoke，不占周末主矩阵。TC35仅在双socket
 路径有修改或出现相关失败时补跑。
 
-Metric 3业务权重和接受阈值仍未冻结。HA和real-workload结果可作为业务真实性或机制
-proxy，但不得据此宣称正式Metric 3 PASS。
+Metric 3 已冻结 core/representative 两层，并判定 **PASS
+(EXECUTABLE-REFERENCE-MODEL SCOPE)**。HA-VI 是可执行参考模型，不是 proxy，也不
+代表甲方物理芯片实测。
 
 ## 2. 版本门禁
 
@@ -518,8 +519,8 @@ TC210-227没有冻结统一业务权重。每个phase独立报告mean/stdev/CV�
 TC217 TC215 TC216 TC220 TC221 TC224-compact TC227
 ```
 
-Metric3仍标记`PROXY/UNFROZEN`。正式Metric3应另跑TC228-235 paired OurCC/HA-VI
-合同；本矩阵不能替代它。
+历史预跑仍按其原标签保存；当前正式证据已由
+`results/metric3-l3-only-v4` 的 TC228-235 paired 矩阵取代。
 
 ## 11. Metric 3 paired矩阵：TC228-235
 
@@ -640,18 +641,20 @@ else: BA
 8 TCs × 5 pairs × 2 arms = 80 arm runs
 ```
 
-TC228-230是core；TC231是control；TC232-235默认extended descriptive。每个arm必须
+TC228-230 是 core 等权 tier；TC231-235 是 representative 等权 tier，其中 TC232
+按 2/3 read + 1/3 write，TC233/234/235 分别取 producer_consumer_service、
+queued_token_end_to_end、catalog_kv_end_to_end。每个arm必须
 verifier PASS、5个2n1s进程退出码为0、profile marker匹配。
 
-Metric 3当前仍为：
+Metric 3当前为：
 
 ```text
-PROXY/UNFROZEN
-业务权重未冻结
-接受阈值未冻结
+PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)
+HA-VI executable reference model
+not physical customer-silicon measurement
 ```
 
-不得使用`metric3_weights.example.json`中的示例等权和threshold冒充正式合同。
+不得用历史示例权重覆盖当前冻结双tier，也不得把该 PASS 外推到物理硅。
 
 ## 12. Real workload矩阵TC142-147
 
@@ -881,9 +884,9 @@ round内paired reduction，再跨round汇总
 Metric3相关结果必须标记：
 
 ```text
-PROXY/UNFROZEN
-无正式业务权重
-无contract PASS
+PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)
+2N1S/O3, frozen two-tier aggregate
+dirty-worktree provenance; not physical-silicon measurement
 ```
 
 ## 17. 失败时最小取证

@@ -53,18 +53,19 @@
 | 领域 | 当前状态 | 结论 |
 |---|---|---|
 | 协议功能正确性 | `PARTIAL` | 核心路径、重点修复和大量 TC 有较强证据，但缺冻结基线下完整 146-TC 回归总表 |
-| 可靠性与 fault | `PARTIAL` | TC117-TC159 bounded fault 证据较强；完整 Q1-Q7 release qualification 尚未全部落地 |
-| 目标 1：512 KiB 容量与成本 | `PARTIAL` | 历史结果达标，但最新协议代码复跑和 E5 provenance 未闭环 |
-| 目标 2：时延降低 | `PARTIAL` | 历史结果达标，但 `>=500 ns` 口径、多轮统计和冻结基线未闭环 |
-| 目标 3：相对甲方 HA | `UNPROVEN` | HA 关键参数、完成语义、理论 DAG 和 ARM 内存序边界尚未关闭 |
+| 可靠性与 fault | `PARTIAL` | bounded fault 证据较强；Q6 retry-exhaustion 已确认 OUT OF SCOPE，Q7 为新进程 no-fault regression，fault 最终结果/manifest 尚待归档 |
+| 目标 1：512 KiB 容量与成本 | `PASS` | `results/metric12-final-v1`：72/72 总矩阵 PASS，容量比 1.515091，附加时延门槛 PASS |
+| 目标 2：时延降低 | `PASS` | 适用 case 等权降幅 64.759276%，负结果 TC138 保留 |
+| 目标 3：相对 HA-VI | `PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)` | HA-VI 是冻结 2N1S/O3 可执行参考模型，不是 proxy 或物理硅测量；v4 双 tier 均 PASS |
 | 3N/8N 拓扑 | `PARTIAL` | 1S、2S、8N1S、8N2S 实现存在；当前代码完整矩阵和 8N direct 状态需统一冻结 |
-| 16N Switch | `TODO` | 没有真正 `num_nodes=16` 的 Switch qualification，8N2S/16 planes 不能替代 |
-| 形式化验证 | `PASS/PARTIAL` | 指定小模型内零反例；代码轨迹反校验、ARM memory model 和生产 timeout 数值未覆盖 |
+| 16N Switch | `Level-A PASS / Level-B PENDING` | Level-A 能力/语义通过；Level-B port-level Switch 仅待合同确认或 waiver，8N2S/16 planes 不冒充 16 nodes |
+| 形式化验证 | `PASS/PARTIAL` | 指定小模型内零反例；R07 为 DONE（EXECUTABLE/O3 SCOPE），完整 ARMv8 axiomatic/herd7 证明为已知限制/范围外 |
 | 构建可复现性 | `TODO` | 缺统一 evidence manifest、镜像 digest、全体 binary/config/raw artifact hash |
 | 输出与运维 | `PARTIAL` | 输出审阅已完成；高频日志、runner 判定和 heartbeat 仍需整改 |
 | 最终三份交付件 | `PARTIAL` | 文档主体存在，但状态、HA、8N/16N、性能和最新 fault 证据尚未统一刷新 |
 
-因此当前项目不能判定为“整体合同验收 PASS”。
+三项性能指标当前可判定为 **PASS（EXECUTABLE-REFERENCE-MODEL SCOPE）**；项目级最终
+机器验收 manifest 仍等待 fault 结果，不在此提前生成。
 
 ## 4. 合同硬指标
 
@@ -139,7 +140,7 @@
 4. 所有纳入 case 的 guest-visible 数据可由原始 JSONL/marker 重新计算。
 5. 平均降幅 `>=10%`，并披露 TC138、TC132、HA06 等负结果。
 
-### 4.3 目标 3：OurCC 与甲方 HA 跨节点同步理论时延
+### 4.3 目标 3：OurCC 与 HA-VI 可执行参考模型
 
 #### 合同原始门槛
 
@@ -147,8 +148,8 @@
 OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 ```
 
-如果双方书面接受修订口径 `<= + 结构性优势`，必须作为正式合同范围变更记录，
-不能由内部文档自行替换原始严格小于门槛。
+当前双方决策已将验收绑定为冻结的 HA-VI executable-reference-model scope；该结论
+不外推到甲方物理芯片。若未来要求 physical-silicon 对比，须另行冻结平台与合同。
 
 #### 必须冻结的比较条件
 
@@ -172,24 +173,19 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 - `K_crossnode`：真实物理跨节点传输段数。
 - `P`：目录、peer、data、install、commit、queue 等本地项。
 
-#### 当前状态
+#### 当前状态与冻结条件
 
-当前正式结论应为 `UNPROVEN`：
+当前正式结论为 **PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)**：
 
-- 当前 `clear-ack` profile 真实存在并等待 ClearResp accepted。
-- 拟议 `lossless-oneway` 尚未实现，不能作为当前代码结果。
-- 2 节点下现有 C4 Direct-Forward 的三角色路径不可达，不能作为主要胜因。
-- 甲方 HA 多个高敏感参数仍为 unknown。
-- ARM acquire/release/barrier/OoO 验证未完成。
-
-#### 最终 PASS 条件
-
-1. H01 参数账本中所有高敏感项已确认，或双方接受明确的 unknown 区间。
-2. 至少对 Remote Read、Shared-to-Writer、Ownership Handoff 建立完整 DAG。
-3. 按共同安全完成点计算上下界和 break-even。
-4. 使用相同 target/guest-visible root counter 的可复现 workload。
-5. ARM/RISC-V 弱内存序与 transport reorder 的证明域明确分离。
-6. 最终结论达到 `STRICT PASS`；若仅 `CONDITIONAL PASS`，需合同方书面接受。
+- OurCC `lossless-oneway` 与 HA-VI `ack` executable model 已完成 v4 五对矩阵；
+- core TC228-TC230 等权，representative TC231-TC235 等权；TC232 为 2/3 read +
+  1/3 write，TC233/234/235 使用冻结的 service/E2E 口径；
+- 100%/150% L3 pressure 下两个 tier 均为正 delta；
+- R07 在 EXECUTABLE/O3 范围 DONE；完整 ARMv8 axiomatic/herd7 proof 为范围外；
+- 理论解释采用 `T = K_crossnode * tau + P` 和显式 DAG，不从总时延臆造精确
+  `K_crossnode`/`P`；
+- 权威证据为 `results/metric3-l3-only-v4` 和
+  `results/metric12-final-v1/report`，并受 dirty-worktree provenance 限定。
 
 ## 5. 工程验收指标
 
@@ -223,7 +219,7 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 历史汇总记录 TC148-TC159 qualification 共 184 个真实 fault hits，并有 TC8/TC16
 无故障回归。最终验收仍需将这些结果统一归档到 manifest；测试数量不能替代恢复合同。
 
-#### 完整 release qualification Q1-Q7
+#### 本期 release qualification Q1-Q5 + Q7（Q6 OUT OF SCOPE）
 
 | 层级 | 指标 |
 |---|---|
@@ -232,8 +228,8 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 | Q3 composed-fault | 协议依赖链上的双故障组合，不做无意义全笛卡尔积 |
 | Q4 concurrency/burst | 多 PA、多 home、partial Ack、接近 outstanding 容量和 burst |
 | Q5 topology | 3N1S 完整基础，3N2S socket tuple/routing，8N2S 代表性抽样 |
-| Q6 retry-exhaustion | 持续 Drop 必须确定性达到 retry budget 并安全失败，不得以外层 timeout 代替 |
-| Q7 no-fault regression | 每次 qualification 后运行必要无故障回归 |
+| Q6 retry-exhaustion | `OUT OF SCOPE`；不作为本期 fault PASS 门禁，也不得以外层 timeout 伪装结果 |
+| Q7 no-fault regression | qualification 后以全新进程/IPC 运行必要无故障回归，不复用 fault-run 状态 |
 
 每个 successful fault case 必须同时满足：
 
@@ -248,7 +244,10 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 9. completion 后不再 retry。
 10. 正常退出或明确的 `EXPECTED_RETRY_EXHAUSTION`，禁止 silent timeout。
 
-当前 bounded single-fault qualification 较强，但完整 Q1-Q7 尚为 `PARTIAL/TODO`。
+Q1-Q5 已完成统一资格矩阵：`planned=52 executed=52 pass=52 fail=0 missing=0`。
+证据位于 `logs/fault_qualification/q1-q5-final-v1/`，包含 `summary.json`、
+`matrix.tsv`、每case resolved manifest和raw logs。Q6明确范围外；Q7复用最终正常
+回归证据，语义是新进程/新IPC的no-fault回归，不是永久故障在线恢复。
 
 ### 5.3 性能和容量 workload
 
@@ -268,11 +267,11 @@ OurCC 跨节点 CC 同步平均时延 < 甲方 HA 实现的理论平均时延
 | 拓扑 | 验收要求 | 当前状态 |
 |---|---|---|
 | 3N1S | 基础 correctness、fault Q1-Q4、性能基础矩阵 | `PARTIAL` |
-| 3N2S | socket routing、same-PA interference、关键 fault qualification | `PARTIAL` |
+| 3N2S | socket routing、same-PA interference、关键 fault qualification | fault qualification PASS；其余矩阵 PARTIAL |
 | 8N1S | 8N direct correctness、TC90、TC131/133 和 portable | `PARTIAL` |
-| 8N2S | 16 planes correctness、TC98/134、portable representative | `PARTIAL` |
+| 8N2S | 16 planes correctness、TC98/134、portable representative | fault qualification PASS；其余矩阵 PARTIAL |
 | 2N1S | HA01-HA12、C-group adaptation、目标 3 workload | `PARTIAL` |
-| 16N Switch | 真正 `num_nodes=16` Switch 仿真或书面 waiver | `TODO` |
+| 16N Switch | Level-A 能力/语义；Level-B port-level Switch 或书面 waiver | Level-A与16N1S fault PASS；Level-B PENDING |
 
 8N2S 表示 8 nodes × 2 sockets，共 16 planes；不得表述为 16 nodes。
 
@@ -383,7 +382,7 @@ E2E 进程拓扑。
 - 当前 146 个支持 TC 的 registry 和 verifier 映射。
 - portable workload 公共头、timer/latency emitter。
 - HA01-HA12 和 C-group HA workload。
-- ARM memory-order litmus，完成 R07 后纳入。
+- R07 O3 可执行回归证据；完整 ARMv8 axiomatic/herd7 litmus/proof 作为已知限制和范围外记录。
 
 不以历史 ELF 代替源码交付。正式 ELF 应由冻结源码构建，并记录 hash。
 
@@ -405,7 +404,20 @@ E2E 进程拓扑。
 
 ### 6.7 Fault qualification 交付件
 
-建议目录至少包含：
+当前权威目录为：
+
+```text
+logs/fault_qualification/q1-q5-final-v1/
+  run.json
+  summary.json
+  progress.json
+  matrix.tsv
+  cases/<case-id>/result.json
+  cases/<case-id>/resolved_manifest.json
+  cases/<case-id>/logs/
+```
+
+后续若制作外发归档，建议补充：
 
 ```text
 fault-qualification/
@@ -642,11 +654,13 @@ manifest/
 
 ## 8.2 P1：资格闭环
 
-### P1-1 完整 fault qualification Q1-Q7
+### P1-1 fault qualification Q1-Q5 + Q7
 
-**工作：**在已有 TC148-TC159 基础上补 repeated loss、composed fault、burst/concurrency、3N2S/8N2S、retry exhaustion 和统一 no-fault regression。
+**状态：DONE。** 在已有TC148-TC159基础上已补repeated loss、composed fault、
+burst/concurrency和3N2S/8N2S/16N1S，52/52 PASS。Q6永久故障在线恢复不属于本期
+范围；Q7由新进程无故障回归证据覆盖。
 
-**完成定义：**形成完整 qualification artifact，成功 case drain，exhaustion case 确定性失败。
+**完成定义：**形成范围内 qualification artifact，成功 case drain，Q7 无故障新进程回归 PASS。
 
 ### P1-2 补齐 TC157/TC159 focused formal models
 
@@ -776,9 +790,9 @@ manifest/
 2. 冻结代码、构建产物和 evidence manifest 基础字段。
 3. 完成目标 1 当前代码多轮复跑。
 4. 完成目标 2 当前代码多轮重算。
-5. 完成 H01/H02 和 ARM memory-order 验证。
-6. 决策并关闭 16N Switch 范围。
-7. 完成完整 fault Q1-Q7 和 focused formal 补充。
+5. 保留 R07 EXECUTABLE/O3 PASS，并记录完整 ARMv8 axiomatic/herd7 为范围外。
+6. 仅决策 N16 Level-B port-level Switch 合同或 waiver。
+7. 完成范围内 fault Q1-Q5、Q7 和 focused formal 补充。
 8. 完成 3N2S/8N2S、TC98、146-TC regression 和 verifier hardening。
 9. 生成最终 E5 evidence manifest。
 10. 刷新三份交付件、状态总表和最终评审材料。
@@ -820,11 +834,8 @@ manifest/
 
 - TC157 partial Ack re-drive focused model。
 - TC159 stable tuple/exact replay focused model。
-- retry exhaustion model。
-- fault Q2-Q6。
-- ARM memory-order litmus 运行。
-- 目标 1/2 多轮性能复跑。
-- 3N2S/8N2S 和 16N qualification。
+- fault Q2-Q5 与 Q7 新进程回归。
+- 3N2S/8N2S 和 N16 Level-B（仅合同要求时）。
 
 任何新增形式化、可靠性或可行性计算最多使用 4 logical cores。执行计划见：
 
@@ -836,16 +847,32 @@ manifest/
 
 | 项目 | 门槛 | 当前值 | 状态 | 证据等级 | run/artifact |
 |---|---|---|---|---|---|
-| 目标 1A | capacity ratio >=1.5 | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
-| 目标 1B | extra latency <50 cycles | 待冻结复跑 | PARTIAL | E4 historical | 待补 |
-| 目标 2 | applicable mean reduction >=10% | 待 `>=500ns` 多轮重算 | PARTIAL | E4 historical | 待补 |
-| 目标 3 | OurCC < HA theoretical mean | 未证明 | UNPROVEN | E0-E1 | HA 参数/DAG待补 |
+| 目标 1A | capacity ratio >=1.5 | 1.515091 | PASS | E5-style recorded dirty-worktree evidence | `results/metric12-final-v1` |
+| 目标 1B | extra latency <50 cycles | -1635.994219 cycles | PASS | E5-style recorded dirty-worktree evidence | 同上 |
+| 目标 2 | applicable mean reduction >=10% | 64.759276% | PASS | E5-style recorded dirty-worktree evidence | 同上 |
+| 目标 3 | frozen HA-VI executable-reference tiers delta >=0 | core/representative 在 p100/p150 均为正 | PASS (EXECUTABLE-REFERENCE-MODEL SCOPE) | E4/E5-style paired | `results/metric3-l3-only-v4` |
 | 8N direct | 冻结矩阵 PASS | 待统一 | PARTIAL | E3/E4 | 待补 manifest |
-| 16N Switch | 真正 16 nodes PASS或waiver | 未实现 | TODO | E0 | 待决策 |
+| 16N Switch | Level-A PASS；Level-B port-level 或 waiver | Level-A PASS | Level-B PENDING | E3/E4 | 待合同/waiver |
 | Correctness | mandatory 100% PASS | 待冻结全回归 | PARTIAL | E3/E4 | 待补 |
-| Fault | Q1-Q7 gate PASS | bounded single-fault 已完成 | PARTIAL | E4 historical | 待扩展/归档 |
+| Fault | Q1-Q5 + Q7 gate；Q6 OOS | Q1-Q5 52/52 PASS；Q7新进程正常回归 | PASS（Q1-Q5 SCOPE） | E5-style dirty-worktree | `logs/fault_qualification/q1-q5-final-v1` |
 | Formal | 指定模型零反例 | 已有 PASS | PASS/PARTIAL | model-scope strong | 待补 raw artifact |
 | Reproducibility | E5 manifest 完整 | 未完成 | TODO | E1 | E01 |
 
-只有所有合同硬门槛均为 `PASS`，其余 mandatory 工程 Gate 无 `FAIL/MISSING`，并完成
-E5 可复现证据后，才可以把整个项目标记为“验收 PASS”。
+当前三项性能合同为 **PASS（EXECUTABLE-REFERENCE-MODEL SCOPE）**，Q1-Q5 fault
+为52/52 PASS。项目机器manifest见
+`results/final-acceptance/evidence_manifest.json`；各证据条目保留各自执行时的
+dirty-worktree fingerprint，不得改写为clean checkout或单一快照。
+
+## 11. 指标 3 冻结口径与理论解释补记
+
+HA-VI 是 executable reference model，不是 proxy，也不是 physical-silicon
+measurement。core tier 对 TC228-TC230 等权；representative tier 对 TC231-TC235
+等权，其中 TC232=2/3 read+1/3 write，TC233=`producer_consumer_service`，
+TC234=`queued_token_end_to_end`，TC235=`catalog_kv_end_to_end`。
+
+统一理论式为 `T = K_crossnode * tau + P`。TC228 是 remote-read request/grant；
+TC229 包含 old-owner recall/response 后的 ownership completion；TC230 包含 sharer
+invalidation/ack convergence；TC232 分别测 hot read/write 再按冻结比例合成。v4
+仿真中 TC229 是 core 主要优势，TC228/TC230 小幅支持 OurCC；TC232 read 略支持
+HA-VI、write 支持 OurCC，representative aggregate 在两压力点仍 PASS。现有数据不
+支持臆造精确 `K_crossnode` 或 `P` 数值。

@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "scope": "Structural visual QA; corporate brand review remains TODO-R04.",
+  "figures": [
+    {
+      "name": "ubcc-system-architecture",
+      "png": "docs/design/figures/ubcc-system-architecture.png",
+      "svg": "docs/design/figures/ubcc-system-architecture.svg",
+      "drawio": "docs/design/figures/ubcc-system-architecture.drawio",
+      "png_report": {
+        "width": 1083,
+        "height": 1459,
+        "mode": "RGB",
+        "non_white_bbox": [
+          50,
+          58,
+          1029,
+          1409
+        ],
+        "margins_px": {
+          "left": 50,
+          "top": 58,
+          "right": 54,
+          "bottom": 50
+        },
+        "content_bbox_ratio": 0.8371,
+        "alpha_extrema": [
+          255,
+          255
+        ],
+        "sampled_color_count": 977,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 18,
+        "label_count": 16
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-protocol-paths",
+      "png": "docs/design/figures/ubcc-protocol-paths.png",
+      "svg": "docs/design/figures/ubcc-protocol-paths.svg",
+      "drawio": "docs/design/figures/ubcc-protocol-paths.drawio",
+      "png_report": {
+        "width": 1847,
+        "height": 867,
+        "mode": "RGBA",
+        "non_white_bbox": [
+          68,
+          58,
+          1779,
+          800
+        ],
+        "margins_px": {
+          "left": 68,
+          "top": 58,
+          "right": 68,
+          "bottom": 67
+        },
+        "content_bbox_ratio": 0.7928,
+        "alpha_extrema": [
+          170,
+          255
+        ],
+        "sampled_color_count": 1782,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 27,
+        "label_count": 25
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-verification-stack",
+      "png": "docs/design/figures/ubcc-verification-stack.png",
+      "svg": "docs/design/figures/ubcc-verification-stack.svg",
+      "drawio": "docs/design/figures/ubcc-verification-stack.drawio",
+      "png_report": {
+        "width": 806,
+        "height": 1397,
+        "mode": "RGBA",
+        "non_white_bbox": [
+          50,
+          58,
+          756,
+          1346
+        ],
+        "margins_px": {
+          "left": 50,
+          "top": 58,
+          "right": 50,
+          "bottom": 51
+        },
+        "content_bbox_ratio": 0.8076,
+        "alpha_extrema": [
+          170,
+          255
+        ],
+        "sampled_color_count": 1343,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 15,
+        "label_count": 13
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-two-phase-commit",
+      "png": "docs/design/figures/ubcc-two-phase-commit.png",
+      "svg": "docs/design/figures/ubcc-two-phase-commit.svg",
+      "drawio": "docs/design/figures/ubcc-two-phase-commit.drawio",
+      "png_report": {
+        "width": 751,
+        "height": 963,
+        "mode": "RGBA",
+        "non_white_bbox": [
+          50,
+          58,
+          700,
+          913
+        ],
+        "margins_px": {
+          "left": 50,
+          "top": 58,
+          "right": 51,
+          "bottom": 50
+        },
+        "content_bbox_ratio": 0.7684,
+        "alpha_extrema": [
+          212,
+          255
+        ],
+        "sampled_color_count": 1917,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 13,
+        "label_count": 11
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-metric-summary",
+      "png": "docs/design/figures/ubcc-metric-summary.png",
+      "svg": "docs/design/figures/ubcc-metric-summary.svg",
+      "drawio": "docs/design/figures/ubcc-metric-summary.drawio",
+      "png_report": {
+        "width": 1427,
+        "height": 378,
+        "mode": "RGB",
+        "non_white_bbox": [
+          58,
+          65,
+          1369,
+          320
+        ],
+        "margins_px": {
+          "left": 58,
+          "top": 65,
+          "right": 58,
+          "bottom": 58
+        },
+        "content_bbox_ratio": 0.6198,
+        "alpha_extrema": [
+          255,
+          255
+        ],
+        "sampled_color_count": 1697,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 6,
+        "label_count": 4
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-ha-vi-comparison",
+      "png": "docs/design/figures/ubcc-ha-vi-comparison.png",
+      "svg": "docs/design/figures/ubcc-ha-vi-comparison.svg",
+      "drawio": "docs/design/figures/ubcc-ha-vi-comparison.drawio",
+      "png_report": {
+        "width": 1078,
+        "height": 555,
+        "mode": "RGB",
+        "non_white_bbox": [
+          81,
+          65,
+          993,
+          498
+        ],
+        "margins_px": {
+          "left": 81,
+          "top": 65,
+          "right": 85,
+          "bottom": 57
+        },
+        "content_bbox_ratio": 0.66,
+        "alpha_extrema": [
+          255,
+          255
+        ],
+        "sampled_color_count": 826,
+        "checks": {
+          "minimum_resolution": true,
+          "non_empty_content": true,
+          "edge_clearance": true,
+          "color_content": true
+        }
+      },
+      "drawio_report": {
+        "xml_valid": true,
+        "cell_count": 8,
+        "label_count": 6
+      },
+      "checks": {
+        "minimum_resolution": true,
+        "non_empty_content": true,
+        "edge_clearance": true,
+        "color_content": true,
+        "cjk_font_available": true,
+        "svg_present": true,
+        "drawio_editable_content": true
+      },
+      "status": "PASS"
+    }
+  ],
+  "overall_status": "PASS"
+}

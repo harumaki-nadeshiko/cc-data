@@ -2,6 +2,12 @@
 
 版本 0.3（分阶段执行方案）— 2026-07-16
 
+> 文档同步规则：三份正式交付件必须同时维护同名 Markdown 与 DOCX。
+> 每次修改 Markdown 后，必须在标准 Docker 镜像内运行
+> `python3 scripts/sync_delivery_documents.py`，并使用
+> `python3 scripts/sync_delivery_documents.py --check` 校验 DOCX 内嵌的源文件
+> SHA-256。禁止只更新一种格式。
+
 ---
 
 ## 0. 分阶段执行总览（Phase Execution Plan）

@@ -649,7 +649,7 @@ HN-F 采用：**baseline unique-flow prefix + special completion scrub**。
 - `G4`：必须同时清空 **directory metadata** 与 **cache array footprint**；不能只做 `dataValid=false`。
 - `G5`：证明范围是 coherence correctness + authorization correctness + no-loss；**不**承诺 message-level trace equivalence。
 
-#### 4.5.5 sole-EP-RNF 的唯一规范 fallback（H3）
+#### 4.5.5 sole-EP-RNF fallback（H3，含无数据例外）
 
 依据 `docs/recovery/entry_document.md`：
 
@@ -657,14 +657,21 @@ HN-F 采用：**baseline unique-flow prefix + special completion scrub**。
 - §6.1 validated decision：**“DCT disabled when EP-RNF is only sharer; non-DCT path works correctly.”**
 - §6.2 reverted decisions：已否定用其他非 CHI 正统路径替代 snoop 的做法。
 
-**因此，本方案唯一规范 fallback 是：强制 `use_DCT=false`，继续走 baseline non-DCT snoop path；绝不改走所谓 “DMT-disabled ReadNoSnp path”。**
+上述结论只在HN-F或真实RN-F仍有权威data source时成立。L3容量替换可合法留下
+`RSC + dir_sharers={EP-RNF}`，而EP-RNF是metadata-only sentinel，不持有data。此时继续
+non-DCT `SnpUnique`只会得到无数据`SnpResp_I`，不能满足`SendCompData`。
+
+因此新增严格例外：当`ReadUnique`满足HN-F本地无data、无owner、sole sharer为EP-RNF时，
+删除该metadata sentinel并转为HN-F authoritative downstream refill；真实data到达后才允许
+`SendCompData`。普通有data的sole-EP路径仍按原non-DCT规则执行。
 
 具体化：
 
 | initiator 原意图 | sole-EP-RNF 时唯一允许 fallback |
 |---|---|
 | `ReadShared` / `ReadOnce` 无 owner | `Send_SnpOnce` |
-| `ReadUnique` | `Send_SnpUnique` 或 `Send_SnpUnique_RetToSrc`（按 baseline `retToSrc` 判定） |
+| `ReadUnique`，仍有权威data source | `Send_SnpUnique` 或 `Send_SnpUnique_RetToSrc`（按 baseline `retToSrc` 判定） |
+| `ReadUnique`，HN-F无data/无owner且sole sharer=EP-RNF | 删除metadata sentinel，走`ReadNoSnp`/DMT authoritative refill，data valid后`SendCompData` |
 | `SnpSharedFwd` / `SnpOnceFwd` / `SnpUniqueFwd` | 先关 DCT，再降到上表 non-DCT 变体 |
 
 ### 4.6 协议状态转移矩阵（实施摘要）
