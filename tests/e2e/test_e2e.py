@@ -1101,6 +1101,46 @@ def _fault_counts_for_prefix(events, prefix):
             if name.startswith(prefix)}
 
 
+def _fault_manifest_from_rules(tc_id, text):
+    """Build verifier expectations from the exact rules passed to UBIO."""
+    action_names = {"drop": "Drop", "dup": "Duplicate",
+                    "delay": "Delay", "reorder": "Reorder"}
+    rules = []
+    for raw in text.split(";"):
+        if not raw:
+            continue
+        fields = raw.split(":")
+        if len(fields) != 8:
+            raise ValueError(f"fault rule must have 8 fields: {raw!r}")
+        name, message, src, dst, pa, action, delay, count = fields
+        if action not in action_names:
+            raise ValueError(f"unknown fault action {action!r} in {raw!r}")
+        count = int(count)
+        if count < 1:
+            raise ValueError(f"fault trigger count must be positive in {raw!r}")
+        rules.append({
+            "name": name,
+            "message": message,
+            "action": action_names[action],
+            "trigger_count": count,
+            "delivery_count": count if action in ("delay", "reorder") else 0,
+        })
+    if not rules:
+        raise ValueError("effective fault-rule string is empty")
+    names = [item["name"] for item in rules]
+    if len(names) != len(set(names)):
+        raise ValueError("effective fault-rule string contains duplicate names")
+    return {
+        "schema": 1,
+        "tc": tc_id,
+        "rules": rules,
+        "checks": {
+            "stable_reqid_per_rule": any("_q2_" in name for name in names),
+            "no_duplicate_commit": any("_q4_" in name for name in names),
+        },
+    }
+
+
 def _verify_fault_events(tc_id, lines, expected_actions, delivery_rules=()):
     """Verify exact trigger/action sets and buffered deliveries.
 
@@ -1117,6 +1157,14 @@ def _verify_fault_events(tc_id, lines, expected_actions, delivery_rules=()):
                 manifest = candidate
         except (OSError, ValueError) as exc:
             return False, f"TC{tc_id} FAILED: invalid fault manifest: {exc}"
+    if manifest is None:
+        effective_rules = (os.environ.get("E2E_EFFECTIVE_FAULT_RULES", "") or
+                           os.environ.get("E2E_FAULT_RULES_OVERRIDE", ""))
+        if effective_rules:
+            try:
+                manifest = _fault_manifest_from_rules(tc_id, effective_rules)
+            except (TypeError, ValueError) as exc:
+                return False, f"TC{tc_id} FAILED: invalid effective fault rules: {exc}"
     expected_counts = {name: 1 for name in expected_actions}
     delivery_counts = {name: 1 for name in delivery_rules}
     if manifest is not None:

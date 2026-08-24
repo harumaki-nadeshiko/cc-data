@@ -1380,8 +1380,14 @@ run_tc() {
         faultlogs+=("$fault_evidence")
     fi
     local vlog="$LOG_BASE/verify_tc${tc}.log"
-    python3 "$ROOT_DIR/tests/e2e/verify.py" --tc=$tc \
-        --simout "${simouts[@]}" --fault-log "${faultlogs[@]}" 2>&1 | tee "$vlog"
+    local effective_fault_rules
+    effective_fault_rules="$(fault_rules_for_tc "$tc")"
+    local verify_cmd=(python3 "$ROOT_DIR/tests/e2e/verify.py" "--tc=$tc"
+                      --simout "${simouts[@]}" --fault-log "${faultlogs[@]}")
+    if [ -n "$effective_fault_rules" ]; then
+        verify_cmd+=(--fault-rules "$effective_fault_rules")
+    fi
+    "${verify_cmd[@]}" 2>&1 | tee "$vlog"
     # Last sentinel line decides
     if tail -n1 "$vlog" 2>/dev/null | grep -q ">>> TC${tc} PASSED <<<"; then
         if ! python3 "$ROOT_DIR/scripts/verify_peer_exit_logs.py" \

@@ -34,7 +34,11 @@ def main():
                    help="per-node simout files to aggregate")
     p.add_argument("--fault-log", nargs="*", default=[],
                    help="ubio stdout logs containing mirrored UBFAULT events")
+    p.add_argument("--fault-rules", default="",
+                   help="exact semicolon-separated UBIO rules used by this run")
     args = p.parse_args()
+    if args.fault_rules:
+        os.environ["E2E_EFFECTIVE_FAULT_RULES"] = args.fault_rules
 
     raw_lines = []
     found = 0
