@@ -1,0 +1,40 @@
+{
+  "schema_version": 2,
+  "status": "FROZEN",
+  "contract_authoritative": true,
+  "reference_model_scope": "HA-VI executable reference model paired with OurCC for the frozen 2N1S O3 one-way-completion Metric 3 L3-pressure contract; not a claim of physical customer-silicon measurement",
+  "aggregates": [
+    {
+      "name": "core_equal_weight",
+      "scope": "core",
+      "threshold_ticks": 0.0,
+      "comparison": "GT",
+      "weights": {
+        "TC228_remote_read": 0.3333333333333333,
+        "TC229_ownership_handoff": 0.3333333333333333,
+        "TC230_shared_to_writer": 0.3333333333333334
+      }
+    },
+    {
+      "name": "representative_equal_weight",
+      "scope": "representative",
+      "threshold_ticks": 0.0,
+      "comparison": "GT",
+      "weights": {
+        "TC231_clean_shared_control": 0.2,
+        "TC232_hot_key_read": 0.13333333333333333,
+        "TC232_hot_key_write": 0.06666666666666667,
+        "TC233_producer_consumer_service": 0.2,
+        "TC234_queued_token_end_to_end": 0.2,
+        "TC235_catalog_kv_end_to_end": 0.2
+      }
+    }
+  ],
+  "primary_value_definitions": {
+    "TC231": "clean_shared_control",
+    "TC232": "2/3 * hot_key_read + 1/3 * hot_key_write",
+    "TC233": "producer_consumer_service",
+    "TC234": "queued_token_end_to_end",
+    "TC235": "catalog_kv_end_to_end"
+  }
+}

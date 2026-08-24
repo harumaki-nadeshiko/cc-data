@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "experiment_id": "metric3-explicit-example",
+  "expected_repeats": 1,
+  "testcases": [228, 229, 230, 231, 232, 233, 234, 235],
+  "fingerprint": {
+    "main_commit": "replace-with-frozen-commit"
+  },
+  "samples": [
+    {
+      "sample_id": "r01_tc228",
+      "pair_id": "r01_tc228",
+      "pair": 1,
+      "tc": 228,
+      "order": "AB",
+      "arms": {
+        "ourcc": {
+          "result": "evidence/cases/r01_tc228/ourcc/result.json",
+          "log_dir": "evidence/cases/r01_tc228/ourcc"
+        },
+        "ha-vi": {
+          "result": "evidence/cases/r01_tc228/ha-vi/result.json",
+          "log_dir": "evidence/cases/r01_tc228/ha-vi"
+        }
+      }
+    }
+  ]
+}

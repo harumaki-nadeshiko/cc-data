@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
         emit_event("BEFORE_BARRIER CALLER", node_id);
 
         /* mask 0b111 = popcount 3, expecting 3 caller threads */
-        syscall1(SYS_SYNC_WAIT, 0b111);
+        syscall3(SYS_SYNC_WAIT, 0b111, 1, 0);
 
         emit_event("AFTER_BARRIER CALLER", node_id);
     } else {

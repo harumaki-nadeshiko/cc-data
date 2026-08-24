@@ -320,6 +320,7 @@ system = System(mem_mode="atomic", cache_line_size=64)
 system.clk_domain = SrcClockDomain(clock=SYS_CLOCK)
 system.clk_domain.voltage_domain = VoltageDomain()
 system.membus = SystemXBar()
+system.system_port = system.membus.cpu_side_ports
 
 mem = SimpleMemory(range=AddrRange(0, size="512MB"))
 mem.port = system.membus.mem_side_ports
@@ -378,6 +379,7 @@ system = System(mem_mode="atomic", cache_line_size=64)
 system.clk_domain = SrcClockDomain(clock=SYS_CLOCK)
 system.clk_domain.voltage_domain = VoltageDomain()
 system.membus = SystemXBar()
+system.system_port = system.membus.cpu_side_ports
 
 mem = SimpleMemory(range=AddrRange(0, size="512MB"))
 mem.port = system.membus.mem_side_ports
@@ -490,6 +492,7 @@ system = System(mem_mode="atomic", cache_line_size=64)
 system.clk_domain = SrcClockDomain(clock=SYS_CLOCK)
 system.clk_domain.voltage_domain = VoltageDomain()
 system.membus = SystemXBar()
+system.system_port = system.membus.cpu_side_ports
 
 mem = SimpleMemory(range=AddrRange(0, size="512MB"))
 mem.port = system.membus.mem_side_ports

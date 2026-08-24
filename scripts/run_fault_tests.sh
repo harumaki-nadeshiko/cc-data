@@ -8,6 +8,12 @@ CPU_SET="${FAULT_CPU_SET:-6-9}"
 RUN_STAMP="${FAULT_RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 
 case "$MODE" in
+    q1)
+        exec python3 "$ROOT_DIR/scripts/run_fault_qualification.py" --qualification Q1
+        ;;
+    expanded|q1-q5)
+        exec python3 "$ROOT_DIR/scripts/run_fault_qualification.py"
+        ;;
     legacy)
         TC_LIST="47 48 49 110 111"
         RUN_NAME="fault_legacy_${RUN_STAMP}"
@@ -33,7 +39,7 @@ case "$MODE" in
         RUN_NAME="fault_all_${RUN_STAMP}"
         ;;
     *)
-        echo "usage: $0 {legacy|smoke|qualification|level2|loss|all}" >&2
+        echo "usage: $0 {q1|expanded|q1-q5|legacy|smoke|qualification|level2|loss|all}" >&2
         exit 2
         ;;
 esac

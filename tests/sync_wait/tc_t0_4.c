@@ -70,12 +70,12 @@ int main(int argc, char **argv) {
 
     /* Round 1 */
     emit_event("BEFORE_BARRIER_R1", node_id);
-    syscall1(SYS_SYNC_WAIT, mask);
+    syscall3(SYS_SYNC_WAIT, mask, 1, 0);
     emit_event("AFTER_BARRIER_R1", node_id);
 
     /* Round 2 - same barrier, must not be affected by round 1 state */
     emit_event("BEFORE_BARRIER_R2", node_id);
-    syscall1(SYS_SYNC_WAIT, mask);
+    syscall3(SYS_SYNC_WAIT, mask, 1, 0);
     emit_event("AFTER_BARRIER_R2", node_id);
 
     syscall1(SYS_EXIT, 0);

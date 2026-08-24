@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     /* mask with bit 33 set (0x1_0000_0001).
      * The high 32 bits (0x1) should trigger -EINVAL. */
     long mask = 0x100000001LL;
-    long ret = syscall1(SYS_SYNC_WAIT, mask);
+    long ret = syscall3(SYS_SYNC_WAIT, mask, 1, 0);
 
     emit_line("TC_T0_6_MASK_HI32=1\n");
 

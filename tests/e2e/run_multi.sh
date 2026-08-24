@@ -45,6 +45,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GEM5_BIN="$ROOT_DIR/gem5/build/ARM/gem5.opt"
+if [ ! -x "$GEM5_BIN" ] && [ -x "$ROOT_DIR/gem5/gem5/build/ARM/gem5.opt" ]; then
+    GEM5_BIN="$ROOT_DIR/gem5/gem5/build/ARM/gem5.opt"
+fi
 UBIO_BIN="$ROOT_DIR/build/bin/ubio"
 NSIM_BIN="$ROOT_DIR/build/bin/networksim"
 TEST_E2E="$ROOT_DIR/tests/e2e/test_e2e.py"
@@ -80,6 +83,85 @@ export EP_PORT_HWM="${EP_PORT_HWM:-8192}"
 export EP_NSIM_MAX_PENDING="${EP_NSIM_MAX_PENDING:-65536}"
 export EP_CPU_MODEL="${EP_CPU_MODEL:-timing}"
 export EP_SEQUENCER_MAX_OUTSTANDING="${EP_SEQUENCER_MAX_OUTSTANDING:-0}"
+export EP_L3_SIZE="${EP_L3_SIZE:-256kB}"
+export EP_L3_ASSOC="${EP_L3_ASSOC:-16}"
+export L3_PRESSURE_LEVEL="${L3_PRESSURE_LEVEL:-0}"
+export L3_PRESSURE_TARGET_LINES="${L3_PRESSURE_TARGET_LINES:-}"
+export METRIC3_L3_SEED="${METRIC3_L3_SEED:-0}"
+export METRIC3_L3_EXPERIMENT_MODE="${METRIC3_L3_EXPERIMENT_MODE:-l3-only}"
+export L3_DIRECTORY_PRESSURE_LINES="${L3_DIRECTORY_PRESSURE_LINES:-0}"
+export EP_TRACK_L3_OCCUPANCY="${EP_TRACK_L3_OCCUPANCY:-0}"
+case "$L3_PRESSURE_LEVEL" in 0|100|150) ;; *) echo "FATAL: L3_PRESSURE_LEVEL must be 0, 100, or 150" >&2; exit 2 ;; esac
+if [ -n "$L3_PRESSURE_TARGET_LINES" ] && \
+   ! [[ "$L3_PRESSURE_TARGET_LINES" =~ ^[0-9]+$ ]]; then
+    echo "FATAL: L3_PRESSURE_TARGET_LINES must be empty or a non-negative integer" >&2
+    exit 2
+fi
+if [ -n "$L3_PRESSURE_TARGET_LINES" ] && [ "$L3_PRESSURE_LEVEL" != 0 ]; then
+    echo "FATAL: absolute L3 pressure requires L3_PRESSURE_LEVEL=0" >&2
+    exit 2
+fi
+case "$METRIC3_L3_EXPERIMENT_MODE" in
+    l3-only)
+        [ "$L3_DIRECTORY_PRESSURE_LINES" -eq 0 ] || {
+            echo "FATAL: l3-only requires L3_DIRECTORY_PRESSURE_LINES=0" >&2
+            exit 2
+        }
+        ;;
+    l3-offload)
+        [ "$L3_DIRECTORY_PRESSURE_LINES" -gt 57344 ] || {
+            echo "FATAL: l3-offload requires more than 57344 directory pressure lines" >&2
+            exit 2
+        }
+        ;;
+    *) echo "FATAL: METRIC3_L3_EXPERIMENT_MODE must be l3-only or l3-offload" >&2; exit 2 ;;
+esac
+if ! [[ "$EP_L3_ASSOC" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FATAL: EP_L3_ASSOC must be a positive integer" >&2
+    exit 2
+fi
+case "$EP_L3_SIZE" in
+    *KiB) EP_L3_VALUE=${EP_L3_SIZE%KiB}; EP_L3_MULTIPLIER=1024 ;;
+    *kB)  EP_L3_VALUE=${EP_L3_SIZE%kB};  EP_L3_MULTIPLIER=1024 ;;
+    *MiB) EP_L3_VALUE=${EP_L3_SIZE%MiB}; EP_L3_MULTIPLIER=$((1024 * 1024)) ;;
+    *MB)  EP_L3_VALUE=${EP_L3_SIZE%MB};  EP_L3_MULTIPLIER=$((1024 * 1024)) ;;
+    *B)   EP_L3_VALUE=${EP_L3_SIZE%B};   EP_L3_MULTIPLIER=1 ;;
+    *) echo "FATAL: EP_L3_SIZE must use B, kB/KiB, or MB/MiB" >&2; exit 2 ;;
+esac
+if ! [[ "$EP_L3_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FATAL: EP_L3_SIZE must have a positive integer magnitude" >&2
+    exit 2
+fi
+EP_L3_BYTES=$((EP_L3_VALUE * EP_L3_MULTIPLIER))
+if ! [[ "$EP_L3_BYTES" =~ ^[1-9][0-9]*$ ]] || \
+   [ $((EP_L3_BYTES % (64 * EP_L3_ASSOC))) -ne 0 ]; then
+    echo "FATAL: EP_L3_SIZE must be a positive multiple of 64*EP_L3_ASSOC" >&2
+    exit 2
+fi
+export EP_L3_CACHE_LINES=$((EP_L3_BYTES / 64))
+export EP_L3_SETS=$((EP_L3_CACHE_LINES / EP_L3_ASSOC))
+if [ $((EP_L3_SETS & (EP_L3_SETS - 1))) -ne 0 ]; then
+    echo "FATAL: EP_L3_SIZE/(64*EP_L3_ASSOC) must be a power of two" >&2
+    exit 2
+fi
+if [ -n "$L3_PRESSURE_TARGET_LINES" ]; then
+    EP_L3_PRESSURE_TARGET_LINES="$L3_PRESSURE_TARGET_LINES"
+else
+    EP_L3_PRESSURE_TARGET_LINES=$((EP_L3_CACHE_LINES * L3_PRESSURE_LEVEL / 100))
+fi
+export EP_L3_PRESSURE_TARGET_LINES
+if [ "$EP_L3_PRESSURE_TARGET_LINES" -gt 0 ] && \
+   [ $((0x2000000 + 5 * 0x100000 + \
+          EP_L3_PRESSURE_TARGET_LINES * 64)) \
+      -ge $((0x8000000)) ]; then
+    echo "FATAL: L3 pressure region exceeds the 128 MiB DSM segment" >&2
+    exit 2
+fi
+if [ "$L3_DIRECTORY_PRESSURE_LINES" -gt 0 ] && \
+   [ $((0x4000000 + L3_DIRECTORY_PRESSURE_LINES * 64)) -ge $((0x7800000)) ]; then
+    echo "FATAL: directory pressure region exceeds its reserved DSM range" >&2
+    exit 2
+fi
 # PeerExit tolerates bounded transient loss/delay by retrying Notify while the
 # receiver remains in this bounded quiesce responder window. These defaults
 # fit comfortably inside the runner's 15-second shutdown grace period.
@@ -108,6 +190,7 @@ GENERATED_TOPO_SOCKETS=""
 case "${1:-}" in
     --1s)          TOPO_KIND="1s"; shift ;;
     --3n1s)        TOPO_KIND="3n1s"; GENERATED_TOPO_NODES=3; GENERATED_TOPO_SOCKETS=1; shift ;;
+    --3n2s)        TOPO_KIND="3n2s"; GENERATED_TOPO_NODES=3; GENERATED_TOPO_SOCKETS=2; shift ;;
     --4n1s)        TOPO_KIND="4n1s"; GENERATED_TOPO_NODES=4; GENERATED_TOPO_SOCKETS=1; shift ;;
     --1s-tinydir)  TOPO_KIND="1s_tinydir"; shift ;;
     --2s)          TOPO_KIND="2s"; shift ;;
@@ -396,6 +479,10 @@ ubio_extra_args_for_tc() {
             esac
             ;;
         228|229|230|231|232|233|234|235)
+            if [ "$L3_PRESSURE_LEVEL" != 0 ] || [ -n "$L3_PRESSURE_TARGET_LINES" ]; then
+                echo "--bloom-bytes=61440 --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}"
+                return
+            fi
             echo "${UBCC_OPTS:-}"
             ;;
         98)  echo "--ways=1" ;;
@@ -419,7 +506,7 @@ if not mod:
     sys.exit(2)
 def r(s):
     s = s.replace("{root}", ROOT)
-    s = s.replace("{gem5_bin}", os.path.join(ROOT,"gem5/build/ARM/gem5.opt"))
+    s = s.replace("{gem5_bin}", os.environ["RUN_GEM5_BIN"])
     s = s.replace("{ubio_bin}", os.path.join(ROOT,"build/bin/ubio"))
     s = s.replace("{nsim_bin}", os.path.join(ROOT,"build/bin/networksim"))
     s = s.replace("{test_e2e}", os.path.join(ROOT,"tests/e2e/test_e2e.py"))
@@ -441,6 +528,7 @@ mkdir -p "$LOG_BASE" "$RUN_DIR" "$IPC_DIR"
 export UBCC_IPC_DIR="$IPC_DIR"
 export RUN_WORKLOAD="$WORKLOAD"
 export RUN_TOPO_JSON="$TOPO_JSON"
+export RUN_GEM5_BIN="$GEM5_BIN"
 {
     echo "RUN_ID=$RUN_ID"
     echo "DOCKER_CPUSET=${EP_DOCKER_CPUSET:-unknown}"
@@ -455,6 +543,17 @@ export RUN_TOPO_JSON="$TOPO_JSON"
     echo "EP_GEM5_OPTS=${EP_GEM5_OPTS:-}"
     echo "EP_CPU_MODEL=$EP_CPU_MODEL"
     echo "EP_SEQUENCER_MAX_OUTSTANDING=$EP_SEQUENCER_MAX_OUTSTANDING"
+    echo "EP_L3_SIZE=$EP_L3_SIZE"
+    echo "EP_L3_ASSOC=$EP_L3_ASSOC"
+    echo "EP_L3_CACHE_LINES=$EP_L3_CACHE_LINES"
+    echo "EP_L3_SETS=$EP_L3_SETS"
+    echo "L3_PRESSURE_LEVEL=$L3_PRESSURE_LEVEL"
+    echo "L3_PRESSURE_TARGET_LINES=$L3_PRESSURE_TARGET_LINES"
+    echo "EP_L3_PRESSURE_TARGET_LINES=$EP_L3_PRESSURE_TARGET_LINES"
+    echo "METRIC3_L3_SEED=$METRIC3_L3_SEED"
+    echo "METRIC3_L3_EXPERIMENT_MODE=$METRIC3_L3_EXPERIMENT_MODE"
+    echo "L3_DIRECTORY_PRESSURE_LINES=$L3_DIRECTORY_PRESSURE_LINES"
+    echo "EP_TRACK_L3_OCCUPANCY=$EP_TRACK_L3_OCCUPANCY"
     echo "EP_SYNC_INTERVAL_PS=$EP_SYNC_INTERVAL_PS"
     echo "EP_LINK_LATENCY_PS=$EP_LINK_LATENCY_PS"
     echo "UBCC_METADATA_SIZE=$UBCC_METADATA_SIZE"
@@ -486,7 +585,12 @@ for name in (
     "E2E_RUN_ID", "EP_CPU_MODEL", "EP_SEQUENCER_MAX_OUTSTANDING",
     "EP_SYNC_INTERVAL_PS", "EP_LINK_LATENCY_PS", "EP_PORT_HWM",
     "EP_NSIM_MAX_PENDING", "EP_PERF_PROFILE", "UBCC_POLICY", "UBCC_OPTS",
-    "EP_GEM5_OPTS", "EP_HA_PROFILE", "OURCC_CLEAR_PROFILE",
+    "EP_GEM5_OPTS", "EP_HA_PROFILE", "OURCC_CLEAR_PROFILE", "EP_L3_SIZE",
+    "EP_L3_ASSOC", "EP_L3_CACHE_LINES", "EP_L3_SETS",
+    "L3_PRESSURE_LEVEL", "L3_PRESSURE_TARGET_LINES",
+    "EP_L3_PRESSURE_TARGET_LINES", "METRIC3_L3_SEED",
+    "METRIC3_L3_EXPERIMENT_MODE", "L3_DIRECTORY_PRESSURE_LINES",
+    "EP_TRACK_L3_OCCUPANCY",
     "UBCC_METADATA_SIZE", "UBCC_IPC_DIR", "EP_TRACE_PERF"):
     if name in os.environ:
         selected[name] = os.environ[name]
@@ -801,7 +905,16 @@ run_tc() {
     echo "=== TC${tc} (topo=$TOPO_KIND, ${NUM_NODES}nodes x ${NUM_SOCKETS}sockets) ==="
 
     # 1. Compile workload into this run's private ELF path.
-    NUM_NODES="$NUM_NODES" NUM_SOCKETS="$NUM_SOCKETS" \
+    local pressure_cflags="${WORKLOAD_CFLAGS:-}"
+    if [ "$EP_L3_PRESSURE_TARGET_LINES" -gt 0 ] && [ "$tc" -ge 228 ] && [ "$tc" -le 235 ]; then
+        pressure_cflags="$pressure_cflags -DL3_PRESSURE_LEVEL=$L3_PRESSURE_LEVEL"
+        pressure_cflags="$pressure_cflags -DL3_PRESSURE_TARGET_LINES_OVERRIDE=$EP_L3_PRESSURE_TARGET_LINES"
+        pressure_cflags="$pressure_cflags -DL3_PRESSURE_CACHE_LINES=$EP_L3_CACHE_LINES"
+        pressure_cflags="$pressure_cflags -DL3_PRESSURE_SETS=$EP_L3_SETS"
+        pressure_cflags="$pressure_cflags -DL3_PRESSURE_SEED=$METRIC3_L3_SEED"
+        pressure_cflags="$pressure_cflags -DL3_DIRECTORY_PRESSURE_LINES=$L3_DIRECTORY_PRESSURE_LINES"
+    fi
+    NUM_NODES="$NUM_NODES" NUM_SOCKETS="$NUM_SOCKETS" WORKLOAD_CFLAGS="$pressure_cflags" \
         WORKLOAD_OUT="$WORKLOAD" bash "$ROOT_DIR/scripts/compile_workload.sh" "$tc" >/dev/null 2>&1 \
         || { echo "  TC${tc} COMPILE FAILED"; return 1; }
 
@@ -937,6 +1050,7 @@ run_tc() {
         mkdir -p "$gdir" "$node_od"
         local cmd
         cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
+        cmd="$cmd --l3-size=$EP_L3_SIZE --l3-assoc=$EP_L3_ASSOC"
         # Optional per-node gem5 tracing for long-running E2E diagnosis.
         # Keep the debug stream separate from stderr so runner diagnostics stay usable.
         if [ -n "${GEM5_DEBUG_FLAGS:-}" ]; then
@@ -1054,6 +1168,19 @@ run_tc() {
             fi
         done
         [ $any -eq 0 ] && break
+        # TC9 is complete as soon as node0 proves the expected non-DSM page
+        # fault. Peers intentionally remain blocked at their barrier, so
+        # waiting for the generic testcase timeout only wastes runtime.
+        if [ "$tc" -eq 9 ]; then
+            local crash_log="$LOG_BASE/gem5_tc${tc}_node0/stderr.log"
+            if grep -q "Page table fault when accessing virtual address 0xfffff8000000" \
+                "$crash_log" 2>/dev/null; then
+                echo "  TC${tc} PASSED (expected crash detected)"
+                _supervisor_stop
+                _kill_infra
+                return 0
+            fi
+        fi
         sleep 1; waited=$((waited + 1))
         if [ "$progress_watchdog" -gt 0 ] 2>/dev/null; then
             local current_size=0

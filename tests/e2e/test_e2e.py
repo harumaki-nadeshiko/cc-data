@@ -194,6 +194,12 @@ _RE_PORTABLE_PRESSURE = re.compile(
     r"total_unique_lines=(\d+)\s+naive_capacity_lines=(\d+)\s+"
     r"target_footprint_lines=(\d+)\s+pressure_level_pct=(\d+)\s+"
     r"batches=(\d+)")
+_RE_L3_PRESSURE = re.compile(
+    r"\[L3-PRESSURE\]\s+node=(\d+)\s+level_pct=(\d+)\s+"
+    r"target_lines_per_hnf=(\d+)\s+generated_lines=(\d+)\s+"
+    r"private_cache_lines=(\d+)\s+source=(\S+)\s+"
+    r"cache_lines_per_hnf=(\d+)\s+sets=(\d+)\s+seed=(\d+)\s+"
+    r"phase=(\S+)\s+progress=(\d+)")
 _RE_GUEST_TIMER = re.compile(
     r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+"
     r"counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+"
@@ -1072,6 +1078,9 @@ _FAULT_TRIGGER_RE = re.compile(
     r"\[UBFAULT-TRIGGER\].*?rule='([^']+)'.*?action=(Drop|Duplicate|Delay|Reorder)\b")
 _FAULT_DELIVER_RE = re.compile(
     r"\[UBFAULT-DELIVER\].*?rule='([^']+)'.*?action=(Drop|Duplicate|Delay|Reorder)\b")
+_FAULT_TRIGGER_DETAIL_RE = re.compile(
+    r"\[UBFAULT-TRIGGER\].*?rule='([^']+)'.*?action=(Drop|Duplicate|Delay|Reorder)\b"
+    r".*?reqId=(\d+).*?firedCount=(\d+)")
 
 
 def _fault_events(lines, marker_re):
@@ -1098,25 +1107,50 @@ def _verify_fault_events(tc_id, lines, expected_actions, delivery_rules=()):
     Drop has no delivery. Duplicate verifies the duplication decision because
     existing logs do not separately identify both emitted copies.
     """
+    manifest_path = os.environ.get("E2E_FAULT_MANIFEST", "")
+    manifest = None
+    if manifest_path:
+        try:
+            with open(manifest_path, encoding="utf-8") as manifest_file:
+                candidate = json.load(manifest_file)
+            if candidate.get("tc") == tc_id:
+                manifest = candidate
+        except (OSError, ValueError) as exc:
+            return False, f"TC{tc_id} FAILED: invalid fault manifest: {exc}"
+    expected_counts = {name: 1 for name in expected_actions}
+    delivery_counts = {name: 1 for name in delivery_rules}
+    if manifest is not None:
+        expected_actions = {item["name"]: item["action"]
+                            for item in manifest.get("rules", [])}
+        expected_counts = {item["name"]: int(item.get("trigger_count", 1))
+                           for item in manifest.get("rules", [])}
+        delivery_counts = {item["name"]: int(item.get("delivery_count", 0))
+                           for item in manifest.get("rules", [])
+                           if int(item.get("delivery_count", 0)) > 0}
+        delivery_rules = set(delivery_counts)
     prefix = f"tc{tc_id}_"
-    triggers = _fault_counts_for_prefix(
-        _fault_events(lines, _FAULT_TRIGGER_RE), prefix)
-    deliveries = _fault_counts_for_prefix(
-        _fault_events(lines, _FAULT_DELIVER_RE), prefix)
+    all_triggers = _fault_events(lines, _FAULT_TRIGGER_RE)
+    all_deliveries = _fault_events(lines, _FAULT_DELIVER_RE)
+    triggers = (all_triggers if manifest is not None else
+                _fault_counts_for_prefix(all_triggers, prefix))
+    deliveries = (all_deliveries if manifest is not None else
+                  _fault_counts_for_prefix(all_deliveries, prefix))
     delivery_names = set(delivery_rules)
     trigger_errors = {name: triggers.get(name, {})
                       for name, action in expected_actions.items()
-                      if triggers.get(name, {}) != {action: 1}}
+                      if triggers.get(name, {}) != {action: expected_counts[name]}}
     delivery_errors = {name: deliveries.get(name, {})
                        for name in delivery_names
                        if deliveries.get(name, {}) !=
-                       {expected_actions[name]: 1}}
+                       {expected_actions[name]: delivery_counts[name]}}
     unexpected_triggers = sorted(set(triggers) - set(expected_actions))
     unexpected_deliveries = sorted(set(deliveries) - delivery_names)
     trigger_total = sum(sum(actions.values()) for actions in triggers.values())
     delivery_total = sum(sum(actions.values()) for actions in deliveries.values())
-    counts = (f"trigger_count={trigger_total}/{len(expected_actions)} "
-              f"delivery_count={delivery_total}/{len(delivery_names)}")
+    expected_trigger_total = sum(expected_counts.values())
+    expected_delivery_total = sum(delivery_counts.values())
+    counts = (f"trigger_count={trigger_total}/{expected_trigger_total} "
+              f"delivery_count={delivery_total}/{expected_delivery_total}")
     if (trigger_errors or delivery_errors or unexpected_triggers or
             unexpected_deliveries):
         return False, (f"TC{tc_id} FAILED: strict fault verification {counts}; "
@@ -1124,6 +1158,32 @@ def _verify_fault_events(tc_id, lines, expected_actions, delivery_rules=()):
                        f"unexpected_triggers={unexpected_triggers} "
                        f"delivery_errors={delivery_errors} "
                        f"unexpected_deliveries={unexpected_deliveries}")
+    if manifest is not None and manifest.get("checks", {}).get(
+            "stable_reqid_per_rule"):
+        details = {}
+        for line in lines:
+            match = _FAULT_TRIGGER_DETAIL_RE.search(line)
+            if match and match.group(1) in expected_actions:
+                details.setdefault(match.group(1), []).append(
+                    (int(match.group(3)), int(match.group(4))))
+        unstable = {name: values for name, values in details.items()
+                    if len({req_id for req_id, _ in values}) != 1 or
+                    sorted(fired for _, fired in values) !=
+                    list(range(1, expected_counts[name] + 1))}
+        missing_details = sorted(set(expected_actions) - set(details))
+        if unstable or missing_details:
+            return False, (f"TC{tc_id} FAILED: repeated-loss request identity "
+                           f"unstable={unstable} missing={missing_details}")
+    if manifest is not None and manifest.get("checks", {}).get(
+            "no_duplicate_commit"):
+        commits = Counter()
+        for line in lines:
+            match = re.search(r"\[UBCC-UPGRADE-COMMIT\]\s+pa=(0x[0-9a-fA-F]+)", line)
+            if match:
+                commits[match.group(1)] += 1
+        duplicate_commits = {pa: count for pa, count in commits.items() if count > 1}
+        if duplicate_commits:
+            return False, f"TC{tc_id} FAILED: duplicate upgrade commits {duplicate_commits}"
     return True, counts
 
 
@@ -2925,6 +2985,9 @@ def verify_ha_topology(reads, lines, scenario, timer_phase, timer_count):
     if marker_planes != set(range(planes)):
         return False, (f"{scenario} FAILED: topology participants "
                        f"{sorted(marker_planes)} expected 0..{planes - 1}"), []
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok:
+        return False, f"{scenario} FAILED: {reason}", []
 
     validations = []
     for line in lines:
@@ -2992,6 +3055,9 @@ def verify_ha_extended_base(reads, lines, scenario, expected_reads):
     if Counter(int(match.group(1)) for match in topology) != Counter(
             {plane: 1 for plane in range(planes)}):
         return False, f"{scenario} FAILED: invalid topology participants", [], 0
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok:
+        return False, f"{scenario} FAILED: {reason}", [], 0
     validations = []
     for line in lines:
         if not line.startswith('{'):
@@ -3028,6 +3094,61 @@ def latency_records(lines, phase):
             if record and record.group(2) == phase]
 
 
+def validate_l3_pressure(lines, planes, enabled):
+    records = [match for line in lines for match in [_RE_L3_PRESSURE.search(line)]
+               if match]
+    if not enabled:
+        return not records, "unexpected [L3-PRESSURE] markers in default mode"
+    configs = {}
+    for match in records:
+        (node, level, target, generated, private_lines, source,
+         capacity, sets, seed,
+         phase, progress) = (
+            int(match.group(1)), int(match.group(2)), int(match.group(3)),
+            int(match.group(4)), int(match.group(5)), match.group(6),
+            int(match.group(7)), int(match.group(8)), int(match.group(9)),
+            match.group(10), int(match.group(11)))
+        absolute_target = os.environ.get("L3_PRESSURE_TARGET_LINES", "")
+        expected_target = (int(absolute_target) if absolute_target != "" else
+                           capacity * level // 100)
+        expected_level = (expected_target * 100 // capacity
+                          if absolute_target != "" else level)
+        if capacity <= 0 or sets <= 1 or target != expected_target or \
+                level != expected_level or \
+                generated != private_lines + target or \
+                source != "local_private_writeback":
+            return False, "invalid [L3-PRESSURE] configuration"
+        configs.setdefault(node, set()).add(
+            (level, target, generated, private_lines, source, capacity,
+             sets, seed,
+             phase, progress))
+    if set(configs) != set(range(planes)):
+        return False, "missing per-plane [L3-PRESSURE] markers"
+    for values in configs.values():
+        identities = {(level, target, generated, private_lines, source,
+                       capacity, sets, seed)
+                      for level, target, generated, private_lines, source,
+                      capacity, sets, seed, _, _ in values}
+        if len(identities) != 1:
+            return False, "inconsistent [L3-PRESSURE] identity"
+        if not any(phase == "fill_begin" and progress == 0
+                   for _, _, _, _, _, _, _, _, phase, progress in values) or not any(
+                        phase == "fill_done" and progress == generated
+                        for _, _, generated, _, _, _, _, _, phase, progress in values):
+            return False, "incomplete [L3-PRESSURE] phase markers"
+    return True, ""
+
+
+def pressure_mode(lines):
+    return any(_RE_L3_PRESSURE.search(line) for line in lines)
+
+
+def expected_l3_pressure_mode():
+    absolute_target = os.environ.get("L3_PRESSURE_TARGET_LINES", "")
+    return (int(absolute_target) > 0 if absolute_target != "" else
+            int(os.environ.get("L3_PRESSURE_LEVEL", "0")) != 0)
+
+
 def valid_timer_set(records, expected_nodes, expected_operations):
     return (Counter(int(record.group(1)) for record in records) ==
             Counter(expected_nodes) and
@@ -3053,6 +3174,8 @@ def verify_tc231(reads, lines):
         reads, lines, "HAE01", lambda p: p)
     if not passed:
         return passed, message, failures
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok: return False, f"TC231 FAILED: {reason}", []
     timers = timer_records(lines, "clean_shared_read_service")
     latency = latency_records(lines, "clean_shared_first_sweep")
     if not valid_timer_set(timers, range(planes), 256):
@@ -3067,6 +3190,8 @@ def verify_tc232(reads, lines):
         reads, lines, "HAE02", lambda p: p * 16)
     if not passed:
         return passed, message, failures
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok: return False, f"TC232 FAILED: {reason}", []
     reads_t = timer_records(lines, "hot_key_read_service")
     writes_t = timer_records(lines, "hot_key_write_service")
     if not valid_timer_set(reads_t, range(planes), 16):
@@ -3113,6 +3238,8 @@ def verify_tc234(reads, lines):
         reads, lines, "HAE04", lambda p: p)
     if not passed:
         return passed, message, failures
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok: return False, f"TC234 FAILED: {reason}", []
     stores = timer_records(lines, "queued_token_store")
     end_to_end = timer_records(lines, "queued_token_end_to_end")
     if not valid_timer_set(stores, range(planes), 8):
@@ -3130,6 +3257,8 @@ def verify_tc235(reads, lines):
         reads, lines, "HAE05", lambda p: p * 9)
     if not passed:
         return passed, message, failures
+    ok, reason = validate_l3_pressure(lines, planes, expected_l3_pressure_mode())
+    if not ok: return False, f"TC235 FAILED: {reason}", []
     service = timer_records(lines, "catalog_kv_service")
     end_to_end = timer_records(lines, "catalog_kv_end_to_end")
     latency = latency_records(lines, "catalog_kv_batch_64ops")
@@ -3419,7 +3548,12 @@ def gem5_config_main():
                          default="timing")
     _parser.add_argument("--sequencer-max-outstanding", type=int, default=0,
                          help="Override Ruby Sequencer outstanding limit; "
-                              "0 keeps the model default")
+                               "0 keeps the model default")
+    _parser.add_argument("--l3-size", default=os.environ.get("EP_L3_SIZE", "256kB"),
+                         help="HN-F L3 size (default: EP_L3_SIZE or 256kB)")
+    _parser.add_argument("--l3-assoc", type=int,
+                         default=int(os.environ.get("EP_L3_ASSOC", "16")),
+                         help="HN-F L3 associativity (default: EP_L3_ASSOC or 16)")
     _parser.add_argument("--ha-profile", choices=("ubcc", "ha-vi", "ha"),
                          default=os.environ.get("EP_HA_PROFILE", "ubcc"),
                          help="EP home-controller profile")
@@ -3587,6 +3721,9 @@ def gem5_config_main():
         "process_cpu_count": TOTAL_CPUS,
         "cpu_model": _args.cpu_model,
         "sequencer_max_outstanding": _args.sequencer_max_outstanding,
+        "l3_size": _args.l3_size,
+        "l3_assoc": _args.l3_assoc,
+        "l3_pressure_level": int(os.environ.get("L3_PRESSURE_LEVEL", "0")),
         "ha_profile": _args.ha_profile,
         "clear_profile": _args.clear_profile,
         "silent_upgrade": {
@@ -3727,8 +3864,8 @@ def gem5_config_main():
     options.num_cpus = TOTAL_CPUS
     options.num_dirs = 1
     options.num_l3caches = NODES
-    options.l3_size = "256kB"
-    options.l3_assoc = 16
+    options.l3_size = _args.l3_size
+    options.l3_assoc = _args.l3_assoc
     options.cacheline_size = 64
     options.topology = "Crossbar"
     options.network = "simple"
@@ -3912,9 +4049,10 @@ def gem5_config_main():
     # ── Map local_private_range for workloads that need direct
     #     local-memory access (TC112 TBE interference, etc.).
     #     VA 0x01000000 maps to the node's local_private physical base.
-    #     Map 16 MB (4096 pages) — enough for any cache-line striding.
+    #     Map 64 MB so explicit L3-pressure experiments can use a disjoint
+    #     local-private window at offset 32 MB without touching program data.
     _local_va_base = 0x01000000   # 16 MB — well below mmap_end=0x40000000
-    _local_map_bytes = 16 * 1024 * 1024  # 16 MB
+    _local_map_bytes = 64 * 1024 * 1024
     _local_pages = 0
     for _cpu_idx, _cpu in enumerate(cpus):
         _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]

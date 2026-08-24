@@ -1,11 +1,11 @@
-/* TC-T0-7: mask with bits beyond N=3 -> syscall returns negative (error)
+/* TC-T0-7: mask beyond MAX_NODE_COUNT=16 -> negative error
  *
- * The current topology has N=3 nodes (bits 0, 1, 2 valid).
- * Setting bit 3 or any higher bit must return -EINVAL without blocking.
+ * SyncWaitManager supports node bits 0..15. Bit 16 must return -EINVAL
+ * without blocking.
  *
  * Outputs:
  *   TC_T0_7_START
- *   TC_T0_7_MASK_BIT3=1
+ *   TC_T0_7_MASK_BIT16=1
  *   SYNC_WAIT_RET=<val>      (machine-parseable return value)
  *   TC_T0_7_RET=<val>        (human-readable log)
  *   TC_T0_7_PASS_ERROR_RETURNED  or  TC_T0_7_FAIL_NO_ERROR
@@ -65,10 +65,10 @@ static void emit_tag_int(const char *prefix, int val) {
 int main(int argc, char **argv) {
     emit_line("TC_T0_7_START\n");
 
-    /* mask = 0b1000 = bit 3 set, which is beyond N=3 (bits 0-2) */
-    long ret = syscall1(SYS_SYNC_WAIT, 8 /* bit 3 */);
+    /* Bit 16 is beyond SyncWaitManager::MAX_NODE_COUNT=16. */
+    long ret = syscall3(SYS_SYNC_WAIT, 1L << 16, 1, 0);
 
-    emit_line("TC_T0_7_MASK_BIT3=1\n");
+    emit_line("TC_T0_7_MASK_BIT16=1\n");
 
     /* Machine-parseable return value (for test script) */
     emit_tag_int("SYNC_WAIT_RET", (int)ret);

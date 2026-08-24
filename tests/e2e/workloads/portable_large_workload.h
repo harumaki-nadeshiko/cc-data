@@ -7,6 +7,117 @@
 #define PORTABLE_PLANES (NUM_NODES * NUM_SOCKETS)
 #define PORTABLE_ALL_MASK ((1u << PORTABLE_PLANES) - 1u)
 
+#ifndef L3_PRESSURE_LEVEL
+#define L3_PRESSURE_LEVEL 0
+#endif
+#ifndef L3_PRESSURE_CACHE_LINES
+#define L3_PRESSURE_CACHE_LINES 4096
+#endif
+#ifndef L3_PRESSURE_SETS
+#define L3_PRESSURE_SETS 256
+#endif
+#ifndef L3_PRESSURE_SEED
+#define L3_PRESSURE_SEED 0
+#endif
+#ifndef L3_PRESSURE_TARGET_LINES_OVERRIDE
+#define L3_PRESSURE_TARGET_LINES_OVERRIDE -1
+#endif
+#if L3_PRESSURE_TARGET_LINES_OVERRIDE >= 0
+#define L3_PRESSURE_TARGET_LINES L3_PRESSURE_TARGET_LINES_OVERRIDE
+#define L3_PRESSURE_EFFECTIVE_PCT \
+    ((L3_PRESSURE_TARGET_LINES * 100) / L3_PRESSURE_CACHE_LINES)
+#else
+#define L3_PRESSURE_TARGET_LINES \
+    ((L3_PRESSURE_CACHE_LINES * L3_PRESSURE_LEVEL) / 100)
+#define L3_PRESSURE_EFFECTIVE_PCT L3_PRESSURE_LEVEL
+#endif
+#define L3_PRESSURE_PRIVATE_CACHE_LINES 4096
+#define L3_PRESSURE_LINES \
+    (L3_PRESSURE_PRIVATE_CACHE_LINES + L3_PRESSURE_TARGET_LINES)
+#define L3_PRESSURE_BASE 0x2000000u
+#ifndef L3_DIRECTORY_PRESSURE_LINES
+#define L3_DIRECTORY_PRESSURE_LINES 0
+#endif
+#define L3_DIRECTORY_PRESSURE_BASE 0x4000000u
+
+static inline void l3_pressure_marker(int plane, const char *phase, int done)
+{
+    char b[224]; int p = 0; const char *s;
+#define L3_APPEND_TEXT(text) do { s = (text); while (*s) b[p++] = *s++; } while (0)
+#define L3_APPEND_INT(value) do { p = fmt_int(b, p, (int)(value)); } while (0)
+    L3_APPEND_TEXT("[L3-PRESSURE] node="); L3_APPEND_INT(plane);
+    L3_APPEND_TEXT(" level_pct="); L3_APPEND_INT(L3_PRESSURE_EFFECTIVE_PCT);
+    L3_APPEND_TEXT(" target_lines_per_hnf=");
+    L3_APPEND_INT(L3_PRESSURE_TARGET_LINES);
+    L3_APPEND_TEXT(" generated_lines="); L3_APPEND_INT(L3_PRESSURE_LINES);
+    L3_APPEND_TEXT(" private_cache_lines=");
+    L3_APPEND_INT(L3_PRESSURE_PRIVATE_CACHE_LINES);
+    L3_APPEND_TEXT(" source=local_private_writeback");
+    L3_APPEND_TEXT(" cache_lines_per_hnf="); L3_APPEND_INT(L3_PRESSURE_CACHE_LINES);
+    L3_APPEND_TEXT(" sets="); L3_APPEND_INT(L3_PRESSURE_SETS);
+    L3_APPEND_TEXT(" seed="); L3_APPEND_INT(L3_PRESSURE_SEED);
+    L3_APPEND_TEXT(" phase="); L3_APPEND_TEXT(phase);
+    L3_APPEND_TEXT(" progress="); L3_APPEND_INT(done);
+    b[p++] = '\n'; _raw_write(b, p);
+#undef L3_APPEND_INT
+#undef L3_APPEND_TEXT
+}
+
+static inline int l3_pressure_fill(int node, int socket, int plane,
+                                   uint32_t base, int disjoint_tag)
+{
+#if L3_PRESSURE_TARGET_LINES > 0
+    const uint32_t start = base + (uint32_t)disjoint_tag * 0x100000u;
+    l3_pressure_marker(plane, "fill_begin", 0);
+    for (int line = 0; line < L3_PRESSURE_LINES; ++line) {
+        const uint32_t tag = (uint32_t)line / L3_PRESSURE_SETS;
+        const uint32_t set = ((uint32_t)line + (uint32_t)L3_PRESSURE_SEED) %
+            L3_PRESSURE_SETS;
+        const uint32_t pressure_line = tag * L3_PRESSURE_SETS + set;
+        local_dram_store(start + pressure_line * 64u,
+                         0xD3000000u ^ ((uint32_t)plane << 16) ^
+                         pressure_line);
+        if ((line & 1023) == 1023)
+            l3_pressure_marker(plane, "local_write", line + 1);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+    l3_pressure_marker(plane, "fill_done", L3_PRESSURE_LINES);
+    return 0;
+#else
+    (void)node; (void)socket; (void)plane; (void)base; (void)disjoint_tag;
+    return 0;
+#endif
+}
+
+static inline void l3_directory_pressure_fill(int node, int socket, int plane)
+{
+#if L3_DIRECTORY_PRESSURE_LINES > 0
+    l3_pressure_marker(plane, "directory_begin", 0);
+    for (int line = 0; line < L3_DIRECTORY_PRESSURE_LINES; ++line) {
+        dsm_store_plane(node, socket,
+                        L3_DIRECTORY_PRESSURE_BASE + (uint32_t)line * 64u,
+                        0xD4000000u ^ ((uint32_t)plane << 16) ^
+                        (uint32_t)line);
+        if ((line & 4095) == 4095)
+            l3_pressure_marker(plane, "directory", line + 1);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+    l3_pressure_marker(plane, "directory_done",
+                       L3_DIRECTORY_PRESSURE_LINES);
+#else
+    (void)node; (void)socket; (void)plane;
+#endif
+}
+
+static inline int l3_prepare_pressure(int node, int socket, int plane,
+                                      uint32_t base, int disjoint_tag)
+{
+    l3_directory_pressure_fill(node, socket, plane);
+    if (L3_DIRECTORY_PRESSURE_LINES > 0)
+        sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
+    return l3_pressure_fill(node, socket, plane, base, disjoint_tag);
+}
+
 #ifndef PORTABLE_BATCHES
 #define PORTABLE_BATCHES 32
 #endif

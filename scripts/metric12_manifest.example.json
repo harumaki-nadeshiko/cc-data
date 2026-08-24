@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "requirements": {
+    "metric1": {"repetitions": ["m1-a", "m1-c", "m1-f"]},
+    "metric2": {"repetitions": [10, 20, 40]}
+  },
+  "policy": {"allow_reuse": false},
+  "runs": [
+    {
+      "id": "physical-result-001",
+      "simulator_log_dir": "../evidence/result-001/logs",
+      "workload_output_dir": "../evidence/result-001/m5out"
+    }
+  ],
+  "uses": [
+    {
+      "id": "metric1-a-naive",
+      "physical_run_id": "physical-result-001",
+      "metric": "metric1",
+      "repetition": "m1-a",
+      "profile": "naive"
+    }
+  ]
+}

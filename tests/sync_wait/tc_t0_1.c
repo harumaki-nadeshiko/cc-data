@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
     emit_event("BEFORE_BARRIER", node_id);
 
     /* Call Sync_Wait(mask) */
-    syscall1(SYS_SYNC_WAIT, mask);
+    syscall3(SYS_SYNC_WAIT, mask, 1, 0);
 
     emit_event("AFTER_BARRIER", node_id);
 

@@ -2219,6 +2219,15 @@ struct HomeVIAdapter {
                 }
                 std::memcpy(payload.bytes.data(), msg.b.recallResp.data, 64);
                 payload.valid = true;
+                if (TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
+                    uint64_t w0 = 0;
+                    std::memcpy(&w0, msg.b.recallResp.data, sizeof(w0));
+                    LogInfo("UBIO", "[HA-DATA] phase=owner_receive pa=0x{:x} "
+                        "internalId={} source={}:{} sharers=0x{:x} w0=0x{:x}",
+                        msg.h.homeLinePa, internalId, msg.h.srcNode,
+                        msg.h.srcSocket, ha.directory().sharers(msg.h.homeLinePa),
+                        w0);
+                }
             }
             if (!payload.valid) {
                 ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
@@ -2264,6 +2273,16 @@ struct HomeVIAdapter {
             if (msg.b.writebackReq.hasData) {
                 std::memcpy(payload.bytes.data(), msg.b.writebackReq.data, 64);
                 payload.valid = true;
+                if (TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
+                    uint64_t w0 = 0;
+                    std::memcpy(&w0, msg.b.writebackReq.data, sizeof(w0));
+                    LogInfo("UBIO", "[HA-DATA] phase=writeback_receive pa=0x{:x} "
+                        "source={}:{} sharers=0x{:x} keep={} w0=0x{:x}",
+                        msg.h.homeLinePa, msg.h.srcNode, msg.h.srcSocket,
+                        ha.directory().sharers(msg.h.homeLinePa),
+                        (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) ? 1 : 0,
+                        w0);
+                }
             }
             if (!payload.valid) {
                 CoherenceMessage response;
@@ -2287,6 +2306,11 @@ struct HomeVIAdapter {
             return true;
           }
           case CoherenceMessageType::EvictReq: {
+            if (TracePerfPolicy::get().shouldEmit("ubio-ha-data"))
+                LogInfo("UBIO", "[HA-DATA] phase=evict_receive pa=0x{:x} "
+                    "source={}:{} sharers_before=0x{:x}", msg.h.homeLinePa,
+                    msg.h.srcNode, msg.h.srcSocket,
+                    ha.directory().sharers(msg.h.homeLinePa));
             ha.accept({EventKind::Evict, msg.h.homeLinePa, sourceParticipant,
                        msg.h.reqId, {}, false, false});
             CoherenceMessage response;
@@ -2335,6 +2359,16 @@ struct HomeVIAdapter {
                             payload.bytes.fill(0);
                             payload.valid = true;
                         }
+                        if (TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
+                            uint64_t w0 = 0;
+                            if (payload.valid)
+                                std::memcpy(&w0, payload.bytes.data(), sizeof(w0));
+                            LogInfo("UBIO", "[HA-DATA] phase=memory_fetch pa=0x{:x} "
+                                "internalId={} status={} sharers=0x{:x} w0=0x{:x}",
+                                action.address, action.requestId,
+                                static_cast<int>(status),
+                                ha.directory().sharers(action.address), w0);
+                        }
                         ha.accept({payload.valid
                                        ? cc::ha::HAController::EventKind::OwnerData
                                        : cc::ha::HAController::EventKind::Unavailable,
@@ -2368,6 +2402,14 @@ struct HomeVIAdapter {
                 panic_if(!action.data.valid,
                          "HA persistence action lacks data reqId={}", action.requestId);
                 const auto payload = action.data;
+                if (TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
+                    uint64_t w0 = 0;
+                    std::memcpy(&w0, payload.bytes.data(), sizeof(w0));
+                    LogInfo("UBIO", "[HA-DATA] phase=persist_submit pa=0x{:x} "
+                        "internalId={} source={} sharers=0x{:x} w0=0x{:x}",
+                        action.address, action.requestId, action.source,
+                        ha.directory().sharers(action.address), w0);
+                }
                 if (contextIt != requests.end()) {
                     const auto &context = contextIt->second;
                     if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
@@ -2487,6 +2529,16 @@ struct HomeVIAdapter {
                     out.b.haPermissionResp.hasData = 1;
                     std::memcpy(out.b.haPermissionResp.data,
                                 action.data.bytes.data(), 64);
+                }
+                if (action.kind == ActionKind::GrantRead &&
+                    TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
+                    uint64_t w0 = 0;
+                    std::memcpy(&w0, out.b.haPermissionResp.data, sizeof(w0));
+                    LogInfo("UBIO", "[HA-DATA] phase=grant_read pa=0x{:x} "
+                        "internalId={} requester={}:{} sharers=0x{:x} w0=0x{:x}",
+                        action.address, action.requestId, context.requesterNode,
+                        context.requesterSocket,
+                        ha.directory().sharers(action.address), w0);
                 }
                 panic_if(action.kind == ActionKind::GrantRead &&
                          !out.b.haPermissionResp.hasData,

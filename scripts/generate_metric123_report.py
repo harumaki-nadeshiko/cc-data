@@ -138,57 +138,58 @@ def parse_metric3(path):
     if path is None:
         return {
             "status": "UNPROVEN",
-            "model_supplied": False,
-            "reason": "No executable theoretical-model JSON was supplied.",
-            "sensitivity_rows": [],
+            "reference_result_supplied": False,
+            "contract_authoritative": False,
+            "reason": "No executable-reference-model result was supplied.",
+            "levels": [],
         }
     data = load_json(path)
-    model = data.get("model", {})
-    weighted = data.get("caller_weighted_results", [])
-    grouped = {}
-    for row in weighted:
-        key = (int(row["nodes"]), row["scale_scheme"])
-        grouped.setdefault(key, {})[row["protocol"]] = row
-    comparisons = []
-    for (nodes, scheme), protocols in sorted(grouped.items()):
-        ha = protocols.get("ha")
-        if not ha:
-            continue
-        for protocol, candidate in sorted(protocols.items()):
-            if not protocol.startswith("ourcc"):
-                continue
-            comparisons.append({
-                "nodes": nodes,
-                "scale_scheme": scheme,
-                "ourcc_protocol": protocol,
-                "ha_mean_t_resp_ns": float(ha["mean_t_resp_ns"]),
-                "ourcc_mean_t_resp_ns": float(candidate["mean_t_resp_ns"]),
-                "ha_minus_ourcc_resp_ns": (
-                    float(ha["mean_t_resp_ns"]) - float(candidate["mean_t_resp_ns"])),
-                "ha_mean_t_release_ns": float(ha["mean_t_release_ns"]),
-                "ourcc_mean_t_release_ns": float(candidate["mean_t_release_ns"]),
-                "ha_minus_ourcc_release_ns": (
-                    float(ha["mean_t_release_ns"]) - float(candidate["mean_t_release_ns"])),
-                "caller_supplied_operations": int(ha["caller_supplied_operations"]),
-            })
+    expected = "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)"
+    if data.get("experiment") != "metric3_l3_pressure":
+        raise InputError("Metric 3 JSON is not a combined L3-pressure result")
+    levels = []
+    for pressure in (100, 150):
+        item = data.get("levels", {}).get(str(pressure))
+        if not item:
+            raise InputError(f"Metric 3 result is missing pressure level {pressure}")
+        aggregates = item.get("aggregates", [])
+        by_name = {row.get("name"): row for row in aggregates}
+        if set(by_name) != {"core_equal_weight", "representative_equal_weight"}:
+            raise InputError(f"Metric 3 level {pressure} lacks the two frozen tiers")
+        levels.append({
+            "pressure_level": pressure,
+            "status": item.get("status"),
+            "core_equal_weight": by_name["core_equal_weight"],
+            "representative_equal_weight": by_name["representative_equal_weight"],
+            "report": item.get("report"),
+        })
+    authoritative = data.get("contract_authoritative") is True
+    passed = authoritative and data.get("overall_status") == expected and all(
+        row["status"] == expected for row in levels)
     return {
-        "status": "UNPROVEN",
-        "model_supplied": True,
+        "status": expected if passed else data.get("overall_status", "UNPROVEN"),
+        "reference_result_supplied": True,
+        "contract_authoritative": authoritative,
+        "reference_model_scope": data.get("reference_model_scope"),
         "source": str(path),
         "source_sha256": sha256(path),
-        "model_final_weights_frozen": bool(model.get("final_weights_frozen", False)),
-        "tau_ns": model.get("tau_ns"),
         "reason": (
-            "The model is sensitivity analysis only. Contract HA profile, completion "
-            "boundary, placement, local P terms, and final weights are not all frozen."),
-        "sensitivity_rows": comparisons,
+            "Authoritative within the frozen HA-VI executable-reference-model scope; "
+            "not a claim of physical customer-silicon measurement."),
+        "levels": levels,
     }
 
 
 def build_report(target12_path, metric3_path, label):
     parsed = parse_target12(load_json(target12_path), target12_path)
+    metric3 = parse_metric3(metric3_path)
+    metric12_pass = (parsed["metric1"]["status"] == "PASS" and
+                     parsed["metric2"]["status"] == "PASS")
+    metric3_pass = (metric3["status"] ==
+                    "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" and
+                    metric3["contract_authoritative"])
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "label": label,
         "metric12_source": parsed["source"],
         "metric12_source_sha256": parsed["source_sha256"],
@@ -197,12 +198,12 @@ def build_report(target12_path, metric3_path, label):
         "correctness_gate_status": parsed["correctness_gate_status"],
         "metric1": parsed["metric1"],
         "metric2": parsed["metric2"],
-        "metric3": parse_metric3(metric3_path),
-        "metric12_overall_pass": (
-            parsed["metric1"]["status"] == "PASS" and
-            parsed["metric2"]["status"] == "PASS"),
-        "metric123_contract_pass": False,
-        "metric123_contract_status": "UNPROVEN_DUE_TO_METRIC3",
+        "metric3": metric3,
+        "metric12_overall_pass": metric12_pass,
+        "metric123_contract_pass": metric12_pass and metric3_pass,
+        "metric123_contract_status": (
+            "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)"
+            if metric12_pass and metric3_pass else "NOT_FULLY_SUPPORTED"),
     }
 
 
@@ -222,8 +223,8 @@ def render_markdown(report):
         f"- 指标 3：**{m3['status']}**",
         f"- Correctness 门禁：**{report['correctness_gate_status']}**",
         f"- 三指标合同总状态：**{report['metric123_contract_status']}**", "",
-        "> 指标 1/2 的 PASS 不包含指标 3。指标 3 的模型输出仅为参数敏感性分析，",
-        "> 不能把正的 `HA - OurCC` 示例差值直接写成合同 PASS。", "",
+        "> 指标 3 的 PASS 绑定冻结的 HA-VI 可执行理论参考模型、2N1S/O3、",
+        "> one-way completion 和当前 L3 压力合同，不外推为甲方物理芯片实测。", "",
         "> 若 Correctness 门禁显示 `NOT_EMBEDDED...`，还必须人工核对 verifier、数据 oracle、",
         "> phase 和全部受管 child exit，不能只依据性能解析结果签收。", "",
         "## 指标 1", "",
@@ -251,23 +252,19 @@ def render_markdown(report):
             f"{row['reduction_cv_pct']:.6f}% |")
     lines.extend(["", "## 指标 3", "",
                   f"- 状态：**{m3['status']}**",
-                  f"- 原因：{m3['reason']}"])
-    if m3["model_supplied"]:
-        lines.extend([
-            f"- 模型最终权重已冻结：`{m3['model_final_weights_frozen']}`",
-            f"- 模型 `tau`：{m3['tau_ns']} ns", "",
-        ])
-        if m3["sensitivity_rows"]:
-            lines.extend([
-                "| Nodes | Scheme | OurCC profile | HA resp ns | OurCC resp ns | HA-OurCC ns |",
-                "|---:|---|---|---:|---:|---:|",
-            ])
-            for row in m3["sensitivity_rows"]:
-                lines.append(
-                    f"| {row['nodes']} | {row['scale_scheme']} | "
-                    f"{row['ourcc_protocol']} | {row['ha_mean_t_resp_ns']:.3f} | "
-                    f"{row['ourcc_mean_t_resp_ns']:.3f} | "
-                    f"{row['ha_minus_ourcc_resp_ns']:.3f} |")
+                  f"- Contract authoritative：`{m3['contract_authoritative']}`",
+                  f"- 范围：{m3.get('reference_model_scope') or 'N/A'}",
+                  f"- 说明：{m3['reason']}", "",
+                  "| Pressure | Tier | OurCC ticks/op | HA-VI ticks/op | Delta | Reduction |",
+                  "|---:|---|---:|---:|---:|---:|"])
+    for level in m3.get("levels", []):
+        for name in ("core_equal_weight", "representative_equal_weight"):
+            row = level[name]
+            lines.append(
+                f"| {level['pressure_level']}% | {name} | "
+                f"{row['ourcc_ticks_per_operation']:.6f} | "
+                f"{row['ha_vi_ticks_per_operation']:.6f} | "
+                f"{row['delta_ticks']:.6f} | {row['ourcc_reduction_pct']:.6f}% |")
     lines.extend(["", "## 输入", "",
                   f"- 指标 1/2 JSON：`{report['metric12_source']}`",
                   f"- SHA-256：`{report['metric12_source_sha256']}`"])
@@ -287,7 +284,7 @@ def compact_text(report):
         f"metric2={m2['status']} applicable={','.join(m2['applicable_cases'])} "
         f"equal_weight_reduction={m2['equal_weight_mean_reduction_pct']:.3f}% "
         f"cv={m2['cross_round_cv_pct']:.3f}%",
-        f"metric3={m3['status']} model_supplied={str(m3['model_supplied']).lower()}",
+        f"metric3={m3['status']} authoritative={str(m3['contract_authoritative']).lower()}",
         f"correctness_gate={report['correctness_gate_status']}",
         f"metric123_contract={report['metric123_contract_status']}",
     ]) + "\n"
@@ -307,7 +304,12 @@ def tsv_rows(report):
     for row in m2["cases"]:
         rows.append(["metric2", f"{row['case']}_optimized_reduction",
                      row["optimized_reduction_pct"], "pct",
-                     "APPLICABLE" if row["applicable"] else "NOT_APPLICABLE"])
+                      "APPLICABLE" if row["applicable"] else "NOT_APPLICABLE"])
+    for level in m3.get("levels", []):
+        for name in ("core_equal_weight", "representative_equal_weight"):
+            row = level[name]
+            rows.append(["metric3", f"p{level['pressure_level']}_{name}_reduction",
+                         row["ourcc_reduction_pct"], "pct", row["verdict"]])
     return rows
 
 
@@ -329,14 +331,14 @@ def main():
         description="Generate compact metric 1/2/3 reports from structured JSON")
     parser.add_argument("--target12-json", required=True,
                         help="performance_comparison.json or final summary.json")
-    parser.add_argument("--metric3-model-json",
-                        help="optional output from ha_vi_bitmap_baseline.py")
+    parser.add_argument("--metric3-v4-json",
+                        help="combined Metric 3 v4 L3-pressure report")
     parser.add_argument("--label", default="manual-log-extraction")
     parser.add_argument("--out-dir", required=True)
     args = parser.parse_args()
     target12_path = pathlib.Path(args.target12_json).expanduser().resolve()
-    metric3_path = (pathlib.Path(args.metric3_model_json).expanduser().resolve()
-                    if args.metric3_model_json else None)
+    metric3_path = (pathlib.Path(args.metric3_v4_json).expanduser().resolve()
+                    if args.metric3_v4_json else None)
     try:
         report = build_report(target12_path, metric3_path, args.label)
         out_dir = pathlib.Path(args.out_dir).expanduser().resolve()
@@ -346,7 +348,7 @@ def main():
         return 2
     print(compact_text(report), end="")
     print(f"out_dir={out_dir}")
-    return 0 if report["metric12_overall_pass"] else 1
+    return 0 if report["metric123_contract_pass"] else 1
 
 
 if __name__ == "__main__":

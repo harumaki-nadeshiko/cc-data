@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
 
     emit_event_mask("BEFORE_BARRIER", node_id, mask);
 
-    syscall1(SYS_SYNC_WAIT, mask);
+    syscall3(SYS_SYNC_WAIT, mask, 1, 0);
 
     emit_event_mask("AFTER_BARRIER", node_id, mask);
 

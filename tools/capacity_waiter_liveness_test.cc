@@ -686,6 +686,40 @@ main()
     assert(mergedState.find("\"resident_present\":false") !=
            std::string::npos);
 
+    // The same race exists for a normal demand-read recall. A matching dirty
+    // writeback is the recall payload and must produce a RecallBuffer grant,
+    // not be rejected as BUSY and later replaced with zero-filled HomeMemory.
+    UBCCController demandMergeUbcc(
+        0, 0, nullptr, 64, 0, 0, 1, 3, &mergeCfg);
+    CaptureOutbound demandOutbound;
+    demandMergeUbcc.setOutbound(&demandOutbound);
+    constexpr uint64_t demandMergePa = 0x100004c0;
+    constexpr uint64_t demandMergeEpoch = 11;
+    constexpr uint64_t demandMergeReqId = 1234;
+    assert(demandMergeUbcc.debugSeedResidentForTest(
+        demandMergePa, static_cast<int>(MESIState::G_M), 1ULL << 1,
+        demandMergeEpoch, true));
+    assert(static_cast<int>(demandMergeUbcc.processOuterRequest(
+        demandMergePa, UBCC_OuterReqType::GlobalReadShared, false,
+        2, 0, 1, demandMergeReqId)) == -1);
+    assert(demandOutbound.recallCount == 1);
+    uint8_t demandPayload[64];
+    std::memset(demandPayload, 0x6b, sizeof(demandPayload));
+    assert(demandMergeUbcc.processWritebackWithData(
+        demandMergePa, 1, demandMergeEpoch, false, demandPayload));
+    assert(demandOutbound.grants.size() == 1);
+    const CoherenceMessage &demandGrant = demandOutbound.grants.front();
+    assert((demandGrant.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0);
+    assert(demandGrant.b.readResp.dataSource ==
+           static_cast<int8_t>(GrantDataSource::RecallBuffer));
+    assert(std::memcmp(demandGrant.b.readResp.grantData, demandPayload,
+                       sizeof(demandPayload)) == 0);
+    const OutstandingRequest *demandOutstanding =
+        demandMergeUbcc.findOutstanding(demandMergePa);
+    assert(demandOutstanding);
+    assert(demandOutstanding->opType == OpType::GRANT_HANDSHAKE);
+    assert(demandOutstanding->dataValid);
+
     // A naive dirty-victim recall can release only one way for several
     // different PAs waiting on the same set. The first replayed PA installs a
     // grant-handshake entry and pins that way. Its Clear must wake the next

@@ -68,7 +68,7 @@ static void emit_tag_int(const char *prefix, int val) {
 int main(int argc, char **argv) {
     emit_line("TC_T0_5_START\n");
 
-    long ret = syscall1(SYS_SYNC_WAIT, 0 /* mask=0, invalid */);
+    long ret = syscall3(SYS_SYNC_WAIT, 0 /* mask=0, invalid */, 1, 0);
 
     /* Machine-parseable return value (for test script) */
     emit_tag_int("SYNC_WAIT_RET", (int)ret);

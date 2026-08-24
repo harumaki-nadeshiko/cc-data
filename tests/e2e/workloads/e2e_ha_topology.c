@@ -69,6 +69,11 @@ int main(int argc, char **argv)
                 node, portable_socket(cpu), plane_line(plane, operation),
                 seed_value(plane, operation));
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, portable_socket(cpu), plane,
+                                      L3_PRESSURE_BASE, 0);
+        portable_barrier();
+#endif
 
         const int home_node = (node + NUM_NODES - 1) % NUM_NODES;
         const int home = home_node * NUM_SOCKETS + portable_socket(cpu);
@@ -94,6 +99,11 @@ int main(int argc, char **argv)
                 node, portable_socket(cpu), plane_line(plane, operation),
                 seed_value(plane, operation));
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, portable_socket(cpu), plane,
+                                      L3_PRESSURE_BASE, 0);
+        portable_barrier();
+#endif
 
         const int owner_node = (node + NUM_NODES - 1) % NUM_NODES;
         const int owner = owner_node * NUM_SOCKETS + portable_socket(cpu);
@@ -138,6 +148,11 @@ int main(int argc, char **argv)
             errors += shared != (0xB3000000u | (uint32_t)operation);
         }
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, portable_socket(cpu), plane,
+                                      L3_PRESSURE_BASE, 0);
+        portable_barrier();
+#endif
 
         const int writer = PORTABLE_PLANES - 1;
         uint64_t samples[ACCEPTANCE_OPS];

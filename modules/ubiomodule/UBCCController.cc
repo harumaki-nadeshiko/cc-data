@@ -3130,21 +3130,21 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         return false;
     }
 
-    // A dirty owner may begin its normal writeback just before a naive
-    // capacity recall reaches it. If the writeback carries the exact owner,
-    // epoch, and payload required by that recall, it is the authoritative
-    // recall completion. Rejecting it as BUSY leaves an already-invalidated
-    // owner able to answer subsequent recalls only with no data.
+    // A dirty owner may begin its normal writeback just before any recall
+    // reaches it. If the writeback carries the exact owner, epoch, and payload
+    // required by that recall, it is the authoritative recall completion.
+    // Rejecting it as BUSY leaves an already-invalidated owner able to answer a
+    // later retry only with no data. This applies to both demand-read recalls
+    // and naive-capacity invalidation recalls.
     OutstandingRequest *active = findOutstanding(line_pa);
-    if (active && active->opType == OpType::RECALL &&
-        active->reqType == UBCC_OuterReqType::GlobalInvalidate) {
+    if (active && active->opType == OpType::RECALL) {
         const bool stageMatch = active->stage == OpStage::WAITING_TARGET_RESP;
         const bool ownerMatch = active->targetNode == requesterNode;
-        const bool epochMatch = normalizeEpoch(active->baseEpoch) == epochVal;
+        const bool epochMatch = normalizeEpoch(entry.epoch) == epochVal;
         const bool payloadMatch = data != nullptr;
         const bool dirtyRelease = !keepAsClean;
         framework::LogInfo("UBCC",
-                     "[UBCC-NAIVE-DIRTY-RECALL-WB-CHECK] home={} socket={} "
+                     "[UBCC-DIRTY-RECALL-WB-CHECK] home={} socket={} "
                      "pa=0x{:x} requester={} target={} state={} "
                      "sharers=0x{:x} residentDirty={} wbEpoch={} "
                      "entryEpoch={} baseEpoch={} reservedEpoch={} "
@@ -3162,10 +3162,9 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
                      payloadMatch ? 1 : 0, dirtyRelease ? 1 : 0);
     }
     if (active && active->opType == OpType::RECALL &&
-        active->reqType == UBCC_OuterReqType::GlobalInvalidate &&
         active->stage == OpStage::WAITING_TARGET_RESP &&
         active->targetNode == requesterNode &&
-        normalizeEpoch(active->baseEpoch) == epochVal &&
+        normalizeEpoch(entry.epoch) == epochVal &&
         data && !keepAsClean) {
         DataBlock payload(64);
         payload.setData(data, 0, 64);
@@ -3174,7 +3173,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
         if (accepted) {
             ++_writebackCount;
             framework::LogInfo("UBCC",
-                         "[UBCC-NAIVE-DIRTY-RECALL-WB-MERGE] home={} "
+                         "[UBCC-DIRTY-RECALL-WB-MERGE] home={} "
                          "pa=0x{:x} owner={} epoch={}",
                          _nodeId, line_pa, requesterNode, epochVal);
         }

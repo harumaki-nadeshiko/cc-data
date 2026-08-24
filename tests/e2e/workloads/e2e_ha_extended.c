@@ -55,9 +55,17 @@ int main(int argc, char **argv)
             errors += dsm_load_plane(0, 0, ext_line(EXT_BASE, line)) !=
                 (0xC1000000u | (uint32_t)line);
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, socket, plane, L3_PRESSURE_BASE, 0);
+        portable_barrier();
+#endif
 
         uint64_t first_sweep[EXT_LINES];
         uint64_t total_ticks = 0;
+        int first_bad_sweep = -1;
+        int first_bad_line = -1;
+        uint32_t first_bad_expected = 0;
+        uint32_t first_bad_actual = 0;
         for (int sweep = 0; sweep < 8; ++sweep) {
             for (int line = 0; line < EXT_LINES; ++line) {
                 const uint64_t start = read_counter_serialized();
@@ -66,8 +74,21 @@ int main(int argc, char **argv)
                 const uint64_t ticks = read_counter_serialized() - start;
                 total_ticks += ticks;
                 if (sweep == 0) first_sweep[line] = ticks;
-                errors += value != (0xC1000000u | (uint32_t)line);
+                const uint32_t expected = 0xC1000000u | (uint32_t)line;
+                if (value != expected && first_bad_sweep < 0) {
+                    first_bad_sweep = sweep;
+                    first_bad_line = line;
+                    first_bad_expected = expected;
+                    first_bad_actual = value;
+                }
+                errors += value != expected;
             }
+        }
+        if (first_bad_sweep >= 0) {
+            printf("[HA-MISMATCH] plane=%d scenario=1 sweep=%d line=%d "
+                   "expected=%x actual=%x\n", plane, first_bad_sweep,
+                   first_bad_line, first_bad_expected, first_bad_actual);
+            fflush(stdout);
         }
         emit_guest_timer(plane, "clean_shared_read_service", 256, total_ticks);
         emit_latency_summary(plane, "clean_shared_first_sweep", first_sweep,
@@ -81,12 +102,20 @@ int main(int argc, char **argv)
                                           0xC2000000u | (uint32_t)key);
         }
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, socket, plane, L3_PRESSURE_BASE,
+                                      HA_EXT_SCENARIO);
+        portable_barrier();
+#endif
 
         uint64_t read_samples[EXT_ROUNDS];
         uint64_t write_samples[EXT_ROUNDS];
         uint32_t write_count = 0;
         uint64_t read_ticks = 0;
         uint64_t write_ticks = 0;
+        /* Publish a complete batch, synchronize once, then consume a complete
+         * predecessor batch. This measures producer/consumer service rather
+         * than sixteen per-line barriers. */
         for (int round = 0; round < EXT_ROUNDS; ++round) {
             const int writer = round % PORTABLE_PLANES;
             const int key = round & 7;
@@ -114,14 +143,44 @@ int main(int argc, char **argv)
     } else if (HA_EXT_SCENARIO == 3) {
         uint64_t load_samples[EXT_ROUNDS];
         uint64_t service_ticks = 0;
+        uint64_t start;
         const int predecessor_node = (node + NUM_NODES - 1) % NUM_NODES;
         const int predecessor = predecessor_node * NUM_SOCKETS + socket;
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, socket, plane, L3_PRESSURE_BASE,
+                                      HA_EXT_SCENARIO);
+        portable_barrier();
         for (int round = 0; round < EXT_ROUNDS; ++round) {
             const uint32_t offset = ext_line(
                 ext_plane_base(EXT_BASE, plane), round);
             const uint32_t value = 0xC3000000u |
                 ((uint32_t)plane << 8) | (uint32_t)round;
-            uint64_t start = read_counter_serialized();
+            start = read_counter_serialized();
+            perf_store_complete_plane(node, socket, offset, value);
+            service_ticks += read_counter_serialized() - start;
+        }
+        portable_barrier();
+        for (int round = 0; round < EXT_ROUNDS; ++round) {
+            const uint32_t predecessor_offset = ext_line(
+                ext_plane_base(EXT_BASE, predecessor), round);
+            const uint32_t expected = 0xC3000000u |
+                ((uint32_t)predecessor << 8) | (uint32_t)round;
+            start = read_counter_serialized();
+            const uint32_t actual = dsm_load_plane(
+                predecessor_node, socket, predecessor_offset);
+            load_samples[round] = read_counter_serialized() - start;
+            service_ticks += load_samples[round];
+            emit_read_val(plane, predecessor, expected, actual, actual == expected);
+            errors += actual != expected;
+        }
+        portable_barrier();
+#else
+        for (int round = 0; round < EXT_ROUNDS; ++round) {
+            const uint32_t offset = ext_line(
+                ext_plane_base(EXT_BASE, plane), round);
+            const uint32_t value = 0xC3000000u |
+                ((uint32_t)plane << 8) | (uint32_t)round;
+            start = read_counter_serialized();
             perf_store_complete_plane(node, socket, offset, value);
             service_ticks += read_counter_serialized() - start;
             portable_barrier();
@@ -139,6 +198,7 @@ int main(int argc, char **argv)
             errors += actual != expected;
             portable_barrier();
         }
+#endif
         emit_guest_timer(plane, "producer_consumer_service",
                          EXT_ROUNDS * 2, service_ticks);
         emit_latency_summary(plane, "producer_consumer_load", load_samples,
@@ -148,6 +208,11 @@ int main(int argc, char **argv)
         const uint32_t slots = EXT_BASE + 0x10000u;
         if (plane == 0) perf_store_complete_plane(0, 0, token, 0);
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, socket, plane, L3_PRESSURE_BASE,
+                                      HA_EXT_SCENARIO);
+        portable_barrier();
+#endif
         uint64_t samples[8];
         uint64_t total_ticks = 0;
         const uint64_t end_to_end_start = read_counter_serialized();
@@ -199,6 +264,11 @@ int main(int argc, char **argv)
             errors += dsm_load_plane(0, 0, ext_line(catalog, line)) !=
                 (0xC5000000u | (uint32_t)line);
         portable_barrier();
+#if L3_PRESSURE_TARGET_LINES > 0
+        errors += l3_prepare_pressure(node, socket, plane, L3_PRESSURE_BASE,
+                                      HA_EXT_SCENARIO);
+        portable_barrier();
+#endif
 
         uint64_t samples[EXT_ROUNDS];
         uint64_t service_ticks = 0;
