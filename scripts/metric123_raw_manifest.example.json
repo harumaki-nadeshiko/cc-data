@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "correctness_policy": "required",
+  "requirements": {
+    "metric1": {"repetitions": ["r1"]},
+    "metric2": {"repetitions": ["r1"], "testcases": [135, 136, 137, 138, 139, 140, 217]},
+    "metric3": {"pairs": ["p1"], "testcases": [228, 229, 230, 231, 232, 233, 234, 235]}
+  },
+  "runs": [
+    {
+      "id": "m1-r1-naive", "metric": 1, "tc": 131, "repetition": "r1",
+      "topology": "8n1s", "profile": "naive",
+      "simulator_log_dir": "raw/m1/r1/naive/simulator",
+      "simout_dir": "raw/m1/r1/naive/simout"
+    },
+    {
+      "id": "m2-r1-tc135-optimized", "metric": 2, "tc": 135, "repetition": "r1",
+      "topology": "3n1s", "profile": "optimized",
+      "simulator_log_dir": "raw/m2/r1/tc135/optimized/simulator",
+      "simout_dir": "raw/m2/r1/tc135/optimized/simout"
+    },
+    {
+      "id": "m3-p1-tc228-ourcc", "metric": 3, "tc": 228, "repetition": "r1",
+      "topology": "2n1s", "arm": "ourcc", "pair": "p1", "order": "AB",
+      "simulator_log_dir": "raw/m3/p1/tc228/ourcc/simulator",
+      "simout_dir": "raw/m3/p1/tc228/ourcc/simout"
+    }
+  ]
+}

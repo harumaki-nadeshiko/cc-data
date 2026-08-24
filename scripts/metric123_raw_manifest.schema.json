@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "metric123_raw_manifest.schema.json",
+  "title": "Metric1/2/3 explicit raw-log manifest",
+  "type": "object",
+  "required": ["schema_version", "runs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "correctness_policy": {"enum": ["strict", "required", "optional"]},
+    "requirements": {"type": "object"},
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "metric": {"enum": [1, 2, 3]},
+          "tc": {"type": "integer"},
+          "repetition": {"type": ["string", "integer"]},
+          "topology": {"type": "string", "pattern": "^[0-9]+n[0-9]+s$"},
+          "simulator_log_dir": {"type": "string"},
+          "simout_dir": {"type": "string"},
+          "profile": {"enum": ["naive", "spill", "spill-noopt", "optimized"]},
+          "arm": {"enum": ["ourcc", "ha-vi"]},
+          "pair": {"type": ["string", "integer"]},
+          "order": {"enum": ["AB", "BA"]},
+          "home_node": {"type": "integer", "minimum": 0},
+          "home_socket": {"type": "integer", "minimum": 0},
+          "timer_nodes": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true}
+        }
+      }
+    }
+  }
+}
