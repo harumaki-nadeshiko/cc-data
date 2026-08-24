@@ -12,7 +12,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"],
+        "required": ["metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "metric": {"enum": [1, 2, 3]},
@@ -27,7 +27,22 @@
           "order": {"enum": ["AB", "BA"]},
           "home_node": {"type": "integer", "minimum": 0},
           "home_socket": {"type": "integer", "minimum": 0},
-          "timer_nodes": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true}
+          "timer_nodes": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true},
+          "phase": {"type": "string", "minLength": 1},
+          "expected_node": {"type": "integer", "minimum": 0},
+          "expected_samples": {"type": "integer", "minimum": 1},
+          "metric_specs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["kind", "phase", "reduction"],
+              "properties": {
+                "kind": {"enum": ["timer", "latency"]},
+                "phase": {"type": "string", "minLength": 1},
+                "reduction": {"enum": ["aggregate", "max"]}
+              }
+            }
+          }
         }
       }
     }

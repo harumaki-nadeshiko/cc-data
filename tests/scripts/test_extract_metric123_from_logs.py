@@ -166,7 +166,210 @@ class ExtractMetric123Test(unittest.TestCase):
         self.write(out / f"simout_n{node}", self.latency(node, phase, samples, mean))
         return {"id": run_id, "metric": 2, "tc": 135, "repetition": repetition,
                 "topology": topology, "profile": profile,
+                 "simulator_log_dir": str(sim), "simout_dir": str(out)}
+
+    def make_m1_run(self, run_id, layout="recognized", tc=131, topology="8n1s",
+                    profile="naive", repetition="r1", capacity=100, policy="naive"):
+        sim, out = self.root / run_id / "sim", self.root / run_id / "out"
+        self.correctness(sim, tc, topology)
+        for node in (1, 2):
+            self.write(out / f"simout_tc{tc}_node{node}.log",
+                       self.timer(node, "post_pressure_catalog_reuse"))
+        text = f"[UBCC-STATE] capacity={capacity} policy={policy}\n"
+        if policy != "naive":
+            text += f'[UBCC-STATS] {{"residentCapacity":{capacity},"h64ExactLiveKnown":1,"h64ExactLiveCount":{capacity + 50}}}\n'
+        if layout == "recognized":
+            target = sim / f"ubio_tc{tc}_n0_s0/stdout.log"
+        elif layout == "manifest":
+            text = ("[PROCESS-MANIFEST] " + json.dumps(
+                {"component": "ubio", "tc": tc, "node": 0, "socket": 0}) + "\n" + text)
+            target = sim / "arbitrary/process-A/console.txt"
+        else:
+            target = sim / "capacity.log"
+        self.write(target, text)
+        return {"id": run_id, "metric": 1, "tc": tc, "repetition": repetition,
+                "topology": topology, "profile": profile,
                 "simulator_log_dir": str(sim), "simout_dir": str(out)}
+
+    def test_metric1_manifest_and_capacity_fallback_discovery(self):
+        for layout, code in (("manifest", "HOME_UBIO_FALLBACK"),
+                             ("fallback", "HOME_UBIO_FALLBACK")):
+            matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+            result = matrix.add(self.make_m1_run(layout, layout=layout))
+            self.assertEqual(result["status"], "ADDED")
+            final = matrix.finalize()
+            self.assertTrue(any(x["code"] == code for x in final["issues"]))
+            self.assertEqual(final["resolved_runs"][0]["contract_class"], "standard")
+
+    def test_metric1_identical_fallback_sources_warn_but_conflicting_rejects(self):
+        identical = self.make_m1_run("identical", layout="fallback")
+        sim = pathlib.Path(identical["simulator_log_dir"])
+        self.write(sim / "second.log", "[UBCC-STATE] capacity=100 policy=naive\n")
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(matrix.add(identical)["status"], "ADDED")
+        self.assertTrue(any(x["code"] == "HOME_UBIO_IDENTICAL_MULTIPLE"
+                            for x in matrix.finalize()["issues"]))
+
+        conflict = self.make_m1_run("conflict", layout="fallback")
+        self.write(pathlib.Path(conflict["simulator_log_dir"]) / "second.log",
+                   "[UBCC-STATE] capacity=200 policy=naive\n")
+        rejected = MOD.Metric123RawLogMatrix(base_dir=self.root).add(conflict)
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("disagree", rejected["issue"]["message"])
+
+    def test_missing_and_duplicate_ids_are_stably_resolved(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        missing = self.make_m2_run("source-a", profile="naive")
+        del missing["id"]
+        first = matrix.add(missing)
+        second = matrix.add(self.make_m2_run("same", profile="optimized"))
+        duplicate = self.make_m2_run("same-other", profile="spill-noopt")
+        duplicate["id"] = "same"
+        third = matrix.add(duplicate)
+        self.assertEqual(first["run_id"], "run-000001")
+        self.assertEqual(second["run_id"], "same")
+        self.assertEqual(third["status"], "ADDED")
+        self.assertEqual(third["requested_id"], "same")
+        self.assertEqual(third["run_id"], "same-2")
+        self.assertEqual(matrix.finalize()["report"]["ingestion"]["added"], 3)
+
+    def test_nonstandard_metric1_is_extension_with_descriptive_view(self):
+        run = self.make_m1_run("m1-ext", tc=999, topology="4n1s")
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(matrix.add(run)["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["metric1"]["status"], "NOT_REQUESTED")
+        self.assertEqual(len(result["matrices"]["standard"]), 0)
+        self.assertEqual(len(result["matrices"]["all"]), 1)
+        self.assertEqual(len(result["matrices"]["extension"]), 1)
+        self.assertEqual(result["resolved_runs"][0]["contract_class"], "extension")
+
+    def test_standard_formal_result_unchanged_when_extension_is_added(self):
+        requirements = {"metric1": {"repetitions": []},
+                        "metric2": {"repetitions": ["r1"], "testcases": [135]},
+                        "metric3": {"pairs": [], "testcases": []}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for profile, mean in (("naive", 1000), ("spill-noopt", 900), ("optimized", 800)):
+            matrix.add(self.make_m2_run("official-" + profile, profile=profile, mean=mean))
+        before = matrix.finalize()
+        sim, out = self.root / "extra/sim", self.root / "extra/out"
+        self.correctness(sim, 999, "1n1s")
+        self.write(out / "simout_n0", self.latency(0, "extension_phase", 3, 700))
+        matrix.add(metric=2, tc=999, repetition="rx", topology="1n1s", profile="naive",
+                   phase="extension_phase", simulator_log_dir=str(sim), simout_dir=str(out))
+        after = matrix.finalize()
+        self.assertEqual(after["report"]["metric2"], before["report"]["metric2"])
+        self.assertGreater(after["report"]["views"]["all"]["runs"],
+                           before["report"]["views"]["all"]["runs"])
+        self.assertEqual(after["report"]["views"]["extension"]["runs"], 1)
+
+    def test_standard_and_extension_same_tc_profile_do_not_conflict(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        standard = self.make_m1_run("standard", tc=131, topology="8n1s")
+        extension = self.make_m1_run("extension", tc=131, topology="4n1s")
+        self.assertEqual(matrix.add(standard)["status"], "ADDED")
+        self.assertEqual(matrix.add(extension)["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["views"]["standard"]["runs"], 1)
+        self.assertEqual(result["report"]["views"]["extension"]["runs"], 1)
+        self.assertFalse(any(x["code"] == "DUPLICATE_SLOT" for x in result["issues"]))
+
+    def test_flat_manifest_without_capacity_falls_back_to_capacity_file(self):
+        sim, out = self.root / "flat/sim", self.root / "flat/out"
+        sim.mkdir(parents=True)
+        self.write(sim / "identity.log",
+                   '[PROCESS-MANIFEST] {"component":"ubio","tc":131,'
+                   '"node":0,"socket":0,"overflow_policy":"naive"}\n')
+        self.write(sim / "capacity.log",
+                   "[UBCC-STATE] capacity=100 policy=naive\n")
+        for node in (1, 2):
+            self.write(out / f"simout_n{node}",
+                       self.timer(node, "post_pressure_catalog_reuse"))
+        matrix = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        added = matrix.add(metric=1, tc=131, repetition="r1", topology="8n1s",
+                           profile="naive", simulator_log_dir=str(sim), simout_dir=str(out))
+        self.assertEqual(added["status"], "ADDED")
+        self.assertTrue(any(x["code"] == "HOME_UBIO_FALLBACK"
+                            for x in matrix.finalize()["issues"]))
+
+    def test_invalid_extension_does_not_invalidate_standard_view(self):
+        requirements = {"metric1": {"repetitions": []},
+                        "metric2": {"repetitions": ["r1"], "testcases": [135]},
+                        "metric3": {"pairs": [], "testcases": []}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for profile, mean in (("naive", 1000), ("spill-noopt", 900), ("optimized", 800)):
+            matrix.add(self.make_m2_run("official-valid-" + profile,
+                                        profile=profile, mean=mean))
+        bad = self.make_m2_run("bad-extension", profile="naive")
+        bad.update(tc=999, topology="1n1s", phase="missing-phase")
+        self.assertEqual(matrix.add(bad)["status"], "REJECTED")
+        report = matrix.finalize()["report"]
+        self.assertNotEqual(report["overall_status"], "INVALID")
+        self.assertTrue(any(x.get("contract_class") == "extension" and
+                            x["severity"] == "ERROR" for x in report["issues"]))
+
+    def test_nonstandard_metric2_phase_and_metric3_topology_parse_as_extensions(self):
+        sim2, out2 = self.root / "m2ext/sim", self.root / "m2ext/out"
+        sim2.mkdir(parents=True)
+        self.write(out2 / "simout_n4", self.latency(4, "custom_phase", 7))
+        m2 = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        added = m2.add(metric=2, tc=999, repetition="r1", topology="5n1s", profile="naive",
+                       phase="custom_phase", expected_node=4, expected_samples=7,
+                       simulator_log_dir=str(sim2), simout_dir=str(out2))
+        self.assertEqual(added["status"], "ADDED")
+        self.assertEqual(m2.finalize()["resolved_runs"][0]["contract_class"], "extension")
+
+        sim3, out3 = self.root / "m3ext/sim", self.root / "m3ext/out"
+        self.correctness(sim3, 228, "3n1s")
+        self.write(out3 / "simout_n0", self.timer(0, "topology_remote_read"))
+        m3 = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(m3.add(metric=3, tc=228, repetition="r1", topology="3n1s",
+                                arm="ourcc", pair="p", order="AB",
+                                simulator_log_dir=str(sim3), simout_dir=str(out3))["status"], "ADDED")
+        self.assertEqual(m3.finalize()["resolved_runs"][0]["contract_class"], "extension")
+
+    def test_unknown_metric3_requires_specs_and_can_parse_with_specs(self):
+        sim, out = self.root / "m3spec/sim", self.root / "m3spec/out"
+        sim.mkdir(parents=True)
+        self.write(out / "simout_n0", self.timer(0, "custom_timer"))
+        base = {"metric": 3, "tc": 999, "repetition": "r1", "topology": "1n1s",
+                "arm": "ourcc", "pair": "p", "order": "AB",
+                "simulator_log_dir": str(sim), "simout_dir": str(out)}
+        missing = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        rejected = missing.add(base)
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("PARSER_SPEC_REQUIRED", rejected["issue"]["message"])
+        supplied = dict(base, metric_specs={"custom": {
+            "kind": "timer", "phase": "custom_timer", "reduction": "aggregate"}})
+        accepted = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        self.assertEqual(accepted.add(supplied)["status"], "ADDED")
+        self.assertEqual(accepted.finalize()["resolved_runs"][0]["metrics"]["custom"]
+                         ["ticks_per_operation"], 100)
+
+    def test_matrix_addition_is_snapshot_only_and_unions_requirements(self):
+        left = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": []}, "metric2": {"repetitions": ["r1"], "testcases": [135]},
+             "metric3": {"pairs": [], "testcases": []}},
+            correctness_policy="optional", base_dir=self.root)
+        right = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": []}, "metric2": {"repetitions": ["r2"], "testcases": [135]},
+             "metric3": {"pairs": [], "testcases": []}},
+            correctness_policy="strict", base_dir=self.root)
+        run_left = self.make_m2_run("merge-left", profile="naive", repetition="r1")
+        run_right = self.make_m2_run("merge-right", profile="naive", repetition="r2")
+        run_left["id"] = run_right["id"] = "collision"
+        left.add(run_left); right.add(run_right)
+        left_before, right_before = left.finalize(), right.finalize()
+        merged = left + right
+        shutil.rmtree(self.root / "merge-left"); shutil.rmtree(self.root / "merge-right")
+        with mock.patch.object(MOD, "open_text", side_effect=AssertionError("reopened input")):
+            result = merged.finalize()
+        self.assertEqual(left.finalize(), left_before)
+        self.assertEqual(right.finalize(), right_before)
+        self.assertEqual(merged.correctness_policy, "strict")
+        self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"], ["r1", "r2"])
+        self.assertEqual({r["id"] for r in result["resolved_runs"]}, {"collision", "collision-2"})
+        self.assertTrue(any(x["code"] == "DUPLICATE_RUN_ID_RENAMED" for x in result["issues"]))
 
     def test_incremental_finalize_uses_only_memory_after_add(self):
         run = self.make_m2_run("memory")
@@ -179,6 +382,9 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(len(result["resolved_runs"]), 1)
         self.assertTrue((self.root / "report/report.json").is_file())
         self.assertTrue((self.root / "report/metric_matrix.tsv").is_file())
+        self.assertTrue((self.root / "report/metric_matrix_standard.tsv").is_file())
+        self.assertTrue((self.root / "report/metric_matrix_all.tsv").is_file())
+        self.assertTrue((self.root / "report/metric_matrix_extension.tsv").is_file())
 
     def test_incremental_incomplete_requirements_lists_missing_slots(self):
         requirements = {"metric1": {"repetitions": []},

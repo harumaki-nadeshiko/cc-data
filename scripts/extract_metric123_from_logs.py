@@ -6,6 +6,7 @@ tool deliberately emits no confidence interval, t-test, or p-value.
 """
 
 import argparse
+import copy
 import csv
 import gzip
 import json
@@ -69,6 +70,7 @@ M3_AGGREGATES = {
                                     (235, "catalog_kv_end_to_end"): 1 / 5},
 }
 STATE_RE = re.compile(r"\[UBCC-STATE\].*capacity=(\d+).*policy=([A-Za-z0-9_-]+)")
+POLICY_RE = re.compile(r"\[UBIO-POLICY\].*?effective=([A-Za-z0-9_-]+)")
 TIMER_RE = re.compile(r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+source=(\S+)\s+unit=(\S+)")
 LAT_RE = re.compile(r"\[PERF-LATENCY\]\s+node=(\d+)\s+phase=(\S+)\s+samples=(\d+)\s+min=(\d+)\s+p50=(\d+)\s+p95=(\d+)\s+p99=(\d+)\s+max=(\d+)\s+mean=(\d+)\s+counter_frequency_hz=(\d+)\s+source=(\S+)\s+unit=(\S+)")
 SIMOUT_PATTERNS = (
@@ -76,6 +78,7 @@ SIMOUT_PATTERNS = (
     re.compile(r"simout_n(\d+)(?:\.log)?(?:\.gz)?$"),
 )
 UBIO_DIR_RE = re.compile(r"ubio(?:_tc(\d+))?_n(\d+)_s(\d+)$")
+PROCESS_MANIFEST = "[PROCESS-MANIFEST]"
 
 
 class ExtractError(Exception):
@@ -140,7 +143,38 @@ def all_log_files(root):
              if path.is_file() and (path.suffix in (".log", ".out", ".txt", ".gz") or path.name in ("stdout", "stderr"))]
 
 
-def discover_home_ubio_logs(root, tc, node=0, socket=0):
+def warning(code, run_id, message):
+    return {"severity": "WARNING", "code": code, "run_id": str(run_id),
+            "message": message}
+
+
+def process_manifests(path):
+    rows = []
+    with open_text(path) as stream:
+        for line in stream:
+            if PROCESS_MANIFEST not in line:
+                continue
+            try:
+                rows.append(json.loads(line.split(PROCESS_MANIFEST, 1)[1].strip()))
+            except (ValueError, TypeError):
+                continue
+    return rows
+
+
+def _logical_logs(root, evidence_file):
+    """Return all streams belonging to a directory process, or one root stream."""
+    if evidence_file.parent == root:
+        return [evidence_file.resolve()]
+    return [p.resolve() for p in all_log_files(evidence_file.parent)]
+
+
+def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id=""):
+    """Discover home UBIO evidence and return ``(logs, warnings)``.
+
+    Directory identity is preferred, then PROCESS-MANIFEST identity, and finally
+    capacity-bearing streams.  Multiple stdout/stderr files in one process
+    directory are one logical source rather than duplicate UBIO processes.
+    """
     current, legacy = set(), set()
     for path in root.rglob("ubio*_n*_s*"):
         if not path.is_dir():
@@ -156,14 +190,92 @@ def discover_home_ubio_logs(root, tc, node=0, socket=0):
         elif int(tc_text) == tc:
             current.add(path.resolve())
     candidates = current or legacy
-    if len(candidates) != 1:
-        raise ExtractError(
-            f"Metric1 requires exactly one home UBIO directory for TC{tc} "
-            f"n{node}s{socket}, found {sorted(map(str, candidates))}")
-    logs = all_log_files(next(iter(candidates)))
-    if not logs:
-        raise ExtractError("Metric1 home UBIO directory contains no readable logs")
-    return logs
+    if len(candidates) == 1:
+        logs = all_log_files(next(iter(candidates)))
+        if logs:
+            try:
+                parse_capacity(logs)
+                return logs, []
+            except (ExtractError, OSError, ValueError, TypeError):
+                pass
+    if len(candidates) > 1:
+        recognized = {}
+        for directory in sorted(candidates):
+            logs = all_log_files(directory)
+            try:
+                parsed = parse_capacity(logs)
+            except (ExtractError, OSError, ValueError, TypeError) as error:
+                raise ExtractError(f"recognized home UBIO source {directory} invalid: {error}")
+            recognized[str(directory)] = ((parsed["resident_capacity"], parsed["policy"],
+                                           parsed["effective_unique"]), logs)
+        if len({item[0] for item in recognized.values()}) > 1:
+            raise ExtractError("ambiguous recognized home UBIO directories disagree: " +
+                               ", ".join(f"{key}={item[0]}" for key, item in recognized.items()))
+        logs = sorted({path for item in recognized.values() for path in item[1]})
+        return logs, [warning("HOME_UBIO_IDENTICAL_MULTIPLE", run_id,
+                              "multiple recognized home UBIO directories are identical; "
+                              "deterministic union used: " + ", ".join(recognized))]
+
+    files = all_log_files(root)
+    manifest_sources = {}
+    for path in files:
+        for row in process_manifests(path):
+            row_tc = row.get("tc")
+            if (row.get("component") == "ubio" and int(row.get("node", -1)) == node and
+                    int(row.get("socket", -1)) == socket and
+                    (row_tc is None or int(row_tc) == tc)):
+                key = str(path.parent.resolve()) if path.parent != root else str(path.resolve())
+                manifest_sources[key] = _logical_logs(root, path)
+    if manifest_sources:
+        parsed_sources = {}
+        for key, logs in manifest_sources.items():
+            try:
+                item = parse_capacity(logs)
+                parsed_sources[key] = (item["resident_capacity"], item["policy"],
+                                       item["effective_unique"])
+            except (ExtractError, OSError, ValueError, TypeError):
+                parsed_sources[key] = None
+        usable = {key: value for key, value in parsed_sources.items() if value is not None}
+        if len(usable) > 1 and len(set(usable.values())) > 1:
+            raise ExtractError("ambiguous PROCESS-MANIFEST home UBIO sources disagree: " +
+                                ", ".join(f"{k}={v}" for k, v in sorted(parsed_sources.items())))
+        if usable:
+            logs = sorted({p for key, group in manifest_sources.items()
+                           if key in usable for p in group})
+            code = "HOME_UBIO_IDENTICAL_MULTIPLE" if len(usable) > 1 else "HOME_UBIO_FALLBACK"
+            return logs, [warning(code, run_id,
+                                  "home UBIO selected by PROCESS-MANIFEST: " +
+                                  ", ".join(sorted(usable)))]
+
+    capacity_sources = {}
+    for path in files:
+        try:
+            parsed = parse_capacity([path])
+        except (ExtractError, OSError, ValueError, TypeError):
+            continue
+        key = str(path.parent.resolve()) if path.parent != root else str(path.resolve())
+        capacity_sources.setdefault(key, {"logs": _logical_logs(root, path), "values": []})
+        capacity_sources[key]["values"].append(parsed)
+    normalized = {}
+    for key, source in capacity_sources.items():
+        try:
+            parsed = parse_capacity(source["logs"])
+        except (ExtractError, OSError, ValueError, TypeError):
+            parsed = source["values"][0]
+        normalized[key] = (parsed["resident_capacity"], parsed["policy"],
+                           parsed["effective_unique"])
+    if not normalized:
+        raise ExtractError(f"Metric1 found no home UBIO identity or capacity-bearing source below {root}")
+    values = set(normalized.values())
+    details = ", ".join(f"{key}={value}" for key, value in sorted(normalized.items()))
+    if len(values) > 1:
+        raise ExtractError("ambiguous capacity-bearing UBIO sources disagree: " + details)
+    logs = sorted({p for source in capacity_sources.values() for p in source["logs"]})
+    code = "HOME_UBIO_IDENTICAL_MULTIPLE" if len(capacity_sources) > 1 else "HOME_UBIO_FALLBACK"
+    message = ("multiple unidentified capacity sources are identical; deterministic union used: "
+               if len(capacity_sources) > 1 else
+               "only capacity-bearing source used without home identity: ") + details
+    return logs, [warning(code, run_id, message)]
 
 
 def marker_rows(paths, kind, phase):
@@ -226,7 +338,7 @@ def correctness(run, simulator_dir, policy):
 
 
 def parse_capacity(paths):
-    capacity, exact, policies = 0, None, set()
+    capacity, exact, policies, fallback_policies = 0, None, set(), set()
     sources = []
     for path in paths:
         with open_text(path) as stream:
@@ -236,6 +348,18 @@ def parse_capacity(paths):
                     capacity = max(capacity, int(match.group(1)))
                     policies.add(match.group(2))
                     sources.append(f"{path}:{line_no}")
+                policy_match = POLICY_RE.search(line)
+                if policy_match:
+                    policies.add(policy_match.group(1))
+                if PROCESS_MANIFEST in line:
+                    try:
+                        payload = json.loads(line.split(PROCESS_MANIFEST, 1)[1].strip())
+                    except (TypeError, ValueError):
+                        payload = {}
+                    if payload.get("component") == "ubio":
+                        manifest_policy = payload.get("overflow_policy")
+                        if manifest_policy:
+                            fallback_policies.add(str(manifest_policy))
                 if "[UBCC-STATS]" not in line or "{" not in line:
                     continue
                 try:
@@ -246,6 +370,8 @@ def parse_capacity(paths):
                     capacity = max(capacity, int(payload["residentCapacity"]))
                 if int(payload.get("h64ExactLiveKnown", 0)) == 1:
                     exact = max(exact or 0, int(payload.get("h64ExactLiveCount", 0)))
+    if not policies:
+        policies = fallback_policies
     if not capacity or len(policies) != 1:
         raise ExtractError(f"UBCC capacity/policy invalid: capacity={capacity} policies={sorted(policies)}")
     policy = next(iter(policies))
@@ -257,11 +383,13 @@ def parse_capacity(paths):
 
 
 def extract_run(run, base, policy):
-    required = {"id", "metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"}
+    required = {"metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"}
     missing = required - set(run)
     if missing:
         raise ExtractError(f"missing fields {sorted(missing)}")
     out = dict(run)
+    if "id" not in run:
+        raise ExtractError("internal run id was not assigned")
     out["id"], out["metric"], out["tc"] = str(run["id"]), int(run["metric"]), int(run["tc"])
     out["repetition"], out["topology"] = str(run["repetition"]), str(run["topology"]).lower()
     if out["metric"] not in (1, 2, 3):
@@ -274,12 +402,12 @@ def extract_run(run, base, policy):
     out["simout_by_node"] = {str(k): str(v) for k, v in discover_simouts(simout, out["tc"]).items()}
     paths = [pathlib.Path(p) for p in out["simout_by_node"].values()]
     out["correctness"] = correctness(out, simulator, policy)
+    out["contract_warnings"] = list(run.get("_contract_warnings", []))
     if out["metric"] in (1, 2):
         out["profile"] = norm_profile(run.get("profile"))
     if out["metric"] == 1:
-        if out["tc"] != 131 or out["topology"] != "8n1s":
-            raise ExtractError("Metric1 requires TC131 topology 8n1s")
-        rows = marker_rows(paths, "timer", "post_pressure_catalog_reuse")
+        phase = str(run.get("phase", "post_pressure_catalog_reuse"))
+        rows = marker_rows(paths, "timer", phase)
         by_node = defaultdict(list)
         for row in rows:
             by_node[row["node"]].append(row)
@@ -292,40 +420,73 @@ def extract_run(run, base, policy):
                   "ns_per_operation": row["ticks"] * 1e9 / row["frequency_hz"] / row["count"]} for row in rows]
         home_node = int(run.get("home_node", 0))
         home_socket = int(run.get("home_socket", 0))
-        capacity_logs = discover_home_ubio_logs(
-            simulator, out["tc"], home_node, home_socket)
+        capacity_logs, discovery_warnings = discover_home_ubio_logs(
+            simulator, out["tc"], home_node, home_socket, out["id"])
+        out["contract_warnings"].extend(discovery_warnings)
         out["home_ubio_logs"] = [str(path) for path in capacity_logs]
-        out["metrics"] = {"capacity": parse_capacity(capacity_logs), "timers": timer,
+        out["metrics"] = {"capacity": parse_capacity(capacity_logs), "timers": timer, "phase": phase,
                            "mean_ns_per_operation": statistics.mean(x["ns_per_operation"] for x in timer)}
         expected_policy = "naive" if out["profile"] == "naive" else "spill"
-        if out["metrics"]["capacity"]["policy"] != expected_policy:
-            raise ExtractError(f"Metric1 profile {out['profile']} requires UBCC policy {expected_policy}, "
-                               f"got {out['metrics']['capacity']['policy']}")
+        standard = (out["tc"] == 131 and out["topology"] == "8n1s" and
+                    phase == "post_pressure_catalog_reuse" and expected_nodes == (1, 2) and
+                    home_node == 0 and home_socket == 0 and
+                    out["metrics"]["capacity"]["policy"] == expected_policy)
+        if not standard:
+            out["contract_warnings"].append(warning(
+                "NONSTANDARD_CONTRACT", out["id"],
+                f"Metric1 descriptive extension tc={out['tc']} topology={out['topology']} "
+                f"phase={phase} timer_nodes={list(expected_nodes)} home={home_node}/{home_socket} "
+                f"policy={out['metrics']['capacity']['policy']} expected_policy={expected_policy}"))
     elif out["metric"] == 2:
-        if out["tc"] not in M2:
-            raise ExtractError(f"Metric2 unsupported TC{out['tc']}")
-        phase, topology, node, samples = M2[out["tc"]]
-        if out["topology"] != topology:
-            raise ExtractError(f"TC{out['tc']} requires topology {topology}")
+        registered = out["tc"] in M2
+        if registered:
+            default_phase, official_topology, default_node, default_samples = M2[out["tc"]]
+            phase = str(run.get("phase", default_phase))
+            node = int(run.get("expected_node", default_node))
+            samples = int(run.get("expected_samples", default_samples))
+        else:
+            if "phase" not in run:
+                raise ExtractError("Metric2 unknown TC requires explicit phase")
+            phase, official_topology = str(run["phase"]), None
+            node = int(run["expected_node"]) if "expected_node" in run else None
+            samples = int(run["expected_samples"]) if "expected_samples" in run else None
         rows = marker_rows(paths, "latency", phase)
         if len(rows) != 1:
             raise ExtractError(f"Metric2 expected exactly one phase={phase}, got {len(rows)}")
         row = rows[0]
+        node = row["node"] if node is None else node
+        samples = row["count"] if samples is None else samples
         if row["node"] != node or row["count"] != samples:
             raise ExtractError(f"TC{out['tc']} marker contract requires node={node} samples={samples}, got node={row['node']} samples={row['count']}")
         out["metrics"] = {"phase": phase, "node": node, "samples": samples,
                           "mean_ticks": row["ticks"], "frequency_hz": row["frequency_hz"],
-                          "mean_ns": row["ticks"] * 1e9 / row["frequency_hz"], "source": row}
+                           "mean_ns": row["ticks"] * 1e9 / row["frequency_hz"], "source": row}
+        standard = (registered and out["topology"] == official_topology and phase == default_phase and
+                    node == default_node and samples == default_samples)
+        if not standard:
+            out["contract_warnings"].append(warning(
+                "NONSTANDARD_CONTRACT", out["id"],
+                f"Metric2 descriptive extension tc={out['tc']} topology={out['topology']} "
+                f"phase={phase} node={node} samples={samples}"))
     else:
-        if out["tc"] not in M3 or run.get("arm") not in ("ourcc", "ha-vi"):
-            raise ExtractError("Metric3 requires TC228-235 and arm ourcc/ha-vi")
-        if out["topology"] != "2n1s":
-            raise ExtractError("Metric3 TC228-235 frozen contract requires topology 2n1s")
+        if run.get("arm") not in ("ourcc", "ha-vi"):
+            raise ExtractError("Metric3 requires arm ourcc/ha-vi")
         if "pair" not in run or run.get("order") not in ("AB", "BA"):
             raise ExtractError("Metric3 requires explicit pair and order=AB/BA")
         out["arm"], out["pair"], out["order"] = run["arm"], str(run["pair"]), run["order"]
+        registered = out["tc"] in M3
+        specs = M3.get(out["tc"])
+        if specs is None:
+            raw_specs = run.get("metric_specs")
+            if not isinstance(raw_specs, dict) or not raw_specs:
+                raise ExtractError("PARSER_SPEC_REQUIRED: unknown Metric3 TC requires metric_specs")
+            specs = {}
+            for name, spec in raw_specs.items():
+                if not isinstance(spec, dict) or spec.get("kind") not in ("timer", "latency") or not spec.get("phase") or spec.get("reduction") not in ("aggregate", "max"):
+                    raise ExtractError(f"PARSER_SPEC_REQUIRED: invalid metric_specs[{name!r}]")
+                specs[str(name)] = (spec["kind"], str(spec["phase"]), spec["reduction"])
         metrics = {}
-        for name, (kind, phase, reduction) in M3[out["tc"]].items():
+        for name, (kind, phase, reduction) in specs.items():
             rows = marker_rows(paths, kind, phase)
             if not rows:
                 raise ExtractError(f"Metric3 missing {kind} phase={phase}")
@@ -343,13 +504,97 @@ def extract_run(run, base, policy):
             metrics[name] = {"ticks_per_operation": value, "counter_frequency_hz": frequency,
                              "ns_per_operation": value * 1e9 / frequency, "sources": rows}
         out["metrics"] = metrics
+        standard = registered and out["topology"] == "2n1s"
+        if not standard:
+            out["contract_warnings"].append(warning(
+                "NONSTANDARD_CONTRACT", out["id"],
+                f"Metric3 descriptive extension tc={out['tc']} topology={out['topology']}"))
+    out["standard_contract"] = bool(standard)
+    out["contract_class"] = "standard" if standard else "extension"
     out["status"] = "VALID"
     return out
+
+
+def logical_slot(run):
+    """Identity of one experiment coordinate, including extension dimensions."""
+    if run["metric"] == 1:
+        return (1, run["repetition"], run["tc"], run["topology"], run["profile"],
+                run["metrics"].get("phase"),
+                tuple(item["node"] for item in run["metrics"].get("timers", [])),
+                int(run.get("home_node", 0)), int(run.get("home_socket", 0)))
+    if run["metric"] == 2:
+        return (2, run["repetition"], run["tc"], run["topology"], run["profile"],
+                run["metrics"].get("phase"), run["metrics"].get("node"),
+                run["metrics"].get("samples"))
+    specs = tuple(sorted((name, value.get("ticks_per_operation"),
+                          value.get("counter_frequency_hz"))
+                         for name, value in run["metrics"].items()))
+    return (3, run["pair"], run["tc"], run["topology"], run["order"],
+            run["arm"], tuple(name for name, _, _ in specs))
 
 
 def requirement(manifest, name, default):
     value = manifest.get("requirements", {}).get(name, default)
     return value if isinstance(value, dict) else default
+
+
+def descriptive_view(runs):
+    """Small contract-neutral matrix and useful profile/arm comparisons."""
+    matrix, groups = [], defaultdict(list)
+    for run in runs:
+        value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
+        if value is None and run["metric"] == 3:
+            value = statistics.mean(x["ns_per_operation"] for x in run["metrics"].values())
+        row = {"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
+               "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op",
+               "status": "DESCRIPTIVE", "detail": run["contract_class"]}
+        matrix.append(row)
+        key = (run["metric"], run["tc"], run["topology"], run.get("repetition"),
+               run.get("profile", run.get("arm", "")))
+        groups[key].append(value)
+    summaries = []
+    for key, values in sorted(groups.items(), key=lambda x: tuple(map(str, x[0]))):
+        summaries.append({"metric": key[0], "tc": key[1], "topology": key[2],
+                          "repetition": key[3], "profile_or_arm": key[4],
+                          "runs": len(values), "mean_ns_per_operation": statistics.mean(values)})
+
+    comparisons = []
+    by_profile = defaultdict(dict)
+    for run in runs:
+        if run["metric"] in (1, 2):
+            by_profile[(run["metric"], run["tc"], run["topology"],
+                        run["repetition"])][run["profile"]] = run
+    for key, profiles in sorted(by_profile.items(), key=lambda x: tuple(map(str, x[0]))):
+        if all(p in profiles for p in PROFILES):
+            naive, optimized = profiles["naive"], profiles["optimized"]
+            if key[0] == 1:
+                comparisons.append({"metric": 1, "tc": key[1], "topology": key[2],
+                                    "repetition": key[3],
+                                    "capacity_ratio_spill_to_naive": profiles["spill-noopt"]["metrics"]["capacity"]["effective_unique"] / naive["metrics"]["capacity"]["effective_unique"],
+                                    "optimized_delta_ns": optimized["metrics"]["mean_ns_per_operation"] - naive["metrics"]["mean_ns_per_operation"]})
+            else:
+                comparisons.append({"metric": 2, "tc": key[1], "topology": key[2],
+                                    "repetition": key[3],
+                                    "optimized_reduction_pct": (naive["metrics"]["mean_ns"] - optimized["metrics"]["mean_ns"]) / naive["metrics"]["mean_ns"] * 100})
+    m3_pairs = []
+    pair_groups = defaultdict(dict)
+    for run in runs:
+        if run["metric"] == 3:
+            pair_groups[(run.get("pair"), run["tc"], run.get("order"),
+                         run["topology"])][run["arm"]] = run
+    for key, arms in sorted(pair_groups.items(), key=lambda x: tuple(map(str, x[0]))):
+        if set(arms) != {"ourcc", "ha-vi"}:
+            continue
+        common = sorted(set(arms["ourcc"]["metrics"]) & set(arms["ha-vi"]["metrics"]))
+        m3_pairs.append({"pair": key[0], "tc": key[1], "order": key[2],
+                         "topology": key[3],
+                         "metrics": {name: {
+                             "ourcc_ticks_per_operation": arms["ourcc"]["metrics"][name]["ticks_per_operation"],
+                             "ha_vi_ticks_per_operation": arms["ha-vi"]["metrics"][name]["ticks_per_operation"],
+                             "delta_ticks": arms["ha-vi"]["metrics"][name]["ticks_per_operation"] - arms["ourcc"]["metrics"][name]["ticks_per_operation"]}
+                             for name in common}})
+    return {"runs": len(runs), "summaries": summaries,
+            "comparisons": comparisons, "metric3_pairs": m3_pairs, "matrix": matrix}
 
 
 def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
@@ -359,8 +604,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     # Duplicate logical slots are never silently selected.
     slots = defaultdict(list)
     for run in resolved:
-        key = ((run["metric"], run["repetition"], run["tc"], run.get("profile")) if run["metric"] < 3 else
-               (3, run["pair"], run["tc"], run["order"], run["arm"]))
+        key = logical_slot(run)
         slots[key].append(run)
     bad_ids = set()
     for key, rows in slots.items():
@@ -369,6 +613,10 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             issues.append({"severity": "ERROR", "code": "DUPLICATE_SLOT", "run_id": ",".join(row["id"] for row in rows),
                            "message": f"duplicate logical slot {key}"})
     resolved = [row for row in resolved if row["id"] not in bad_ids]
+    all_resolved = list(resolved)
+    standard_resolved = [row for row in all_resolved if row.get("standard_contract", True)]
+    extension_resolved = [row for row in all_resolved if not row.get("standard_contract", True)]
+    resolved = standard_resolved
 
     matrix, per_run = [], []
     for run in resolved:
@@ -532,7 +780,9 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                  "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if len(aggregates) == 2 and all(a["delta_ticks"] > 0 for a in aggregates)
                  else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)")
 
-    has_errors = any(i["severity"] == "ERROR" for i in issues)
+    has_errors = any(i["severity"] == "ERROR" and
+                     i.get("contract_class", "standard") == "standard"
+                     for i in issues)
     incomplete = m1_status == "INCOMPLETE" or m2_status == "INCOMPLETE" or m3_status == "INCOMPLETE"
     failed = m1_status == "FAIL" or m2_status == "FAIL" or m3_status.startswith("FAIL")
     overall, code = (("INVALID", 2) if has_errors else ("INCOMPLETE", 3) if incomplete else ("FAIL", 1) if failed else ("PASS", 0))
@@ -552,11 +802,32 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                           "incomplete_pairs": incomplete_pairs, "samples": samples, "metric_summaries": summaries,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
-              "issues": issues,
-              "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
-                                           "rejected": 0, "duplicate_conflicted": len(bad_ids),
-                                           "add_results": []}}
-    return report, resolved, matrix, per_run, issues, code
+               "views": {"standard": {"runs": len(standard_resolved), "formal": True},
+                         "all": descriptive_view(all_resolved),
+                         "extension": descriptive_view(extension_resolved)},
+               "issues": issues,
+               "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
+                                            "rejected": 0, "duplicate_conflicted": len(bad_ids),
+                                             "add_results": []}}
+    report["views"]["standard"].update({
+        "matrix": matrix,
+        "metric1": report["metric1"],
+        "metric2": report["metric2"],
+        "metric3": report["metric3"],
+    })
+    # Standard TSV/report compatibility is preserved, but per-run diagnostics
+    # expose every successfully parsed, non-conflicted run.
+    per_run = []
+    for run in all_resolved:
+        value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
+        per_run.append({"run_id": run["id"], "metric": run["metric"], "tc": run["tc"],
+                        "repetition": run["repetition"], "profile": run.get("profile", ""),
+                        "arm": run.get("arm", ""), "pair": run.get("pair", ""),
+                        "order": run.get("order", ""),
+                        "value": value if value is not None else "MULTI",
+                        "unit": "ns/op" if value is not None else "ticks/op",
+                        "status": run["status"]})
+    return report, all_resolved, matrix, per_run, issues, code
 
 
 class Metric123RawLogMatrix:
@@ -624,6 +895,26 @@ class Metric123RawLogMatrix:
             self._inferred["metric3"]["pairs"].add(slot[1])
             self._inferred["metric3"]["testcases"].add(slot[2])
 
+    @staticmethod
+    def _official_requirement_candidate(raw, slot):
+        """Do not let an explicitly nonstandard extension expand formal coverage."""
+        if slot is None:
+            return False
+        topology = str(raw.get("topology", "")).lower()
+        if slot[0] == 1:
+            return (slot[2] == 131 and topology == "8n1s" and
+                    str(raw.get("phase", "post_pressure_catalog_reuse")) == "post_pressure_catalog_reuse" and
+                    tuple(map(int, raw.get("timer_nodes", [1, 2]))) == (1, 2) and
+                    int(raw.get("home_node", 0)) == 0 and int(raw.get("home_socket", 0)) == 0)
+        if slot[0] == 2:
+            if slot[2] not in M2:
+                return False
+            phase, official_topology, node, samples = M2[slot[2]]
+            return (topology == official_topology and str(raw.get("phase", phase)) == phase and
+                    int(raw.get("expected_node", node)) == node and
+                    int(raw.get("expected_samples", samples)) == samples)
+        return slot[2] in M3 and topology == "2n1s"
+
     def add(self, run=None, **fields):
         """Parse one run immediately and return an ADDED/REJECTED status dict."""
         if run is not None and fields:
@@ -634,30 +925,45 @@ class Metric123RawLogMatrix:
             raw = dict(run)
         else:
             raise TypeError("add positional argument must be a run dict")
+        requested_id = str(raw["id"]) if raw.get("id") not in (None, "") else None
+        if requested_id is None:
+            candidate = f"run-{len(self._add_results) + 1:06d}"
+        else:
+            candidate = requested_id
+        if candidate in self._ids:
+            suffix = 2
+            while f"{candidate}-{suffix}" in self._ids:
+                suffix += 1
+            effective_id = f"{candidate}-{suffix}"
+            rename_warning = warning(
+                "DUPLICATE_RUN_ID_RENAMED", effective_id,
+                f"requested run id {candidate!r} already exists; renamed to {effective_id!r}")
+        else:
+            effective_id, rename_warning = candidate, None
+        raw["id"] = effective_id
         run_id, slot = self._identity(raw)
-        self._infer(slot)
-        fallback_id = run_id if run_id is not None else f"run-{len(self._add_results)}"
-        result = {"status": "REJECTED", "run_id": fallback_id, "slot": list(slot) if slot else None}
-        if run_id is not None and run_id in self._ids:
-            issue = {"severity": "ERROR", "code": "DUPLICATE_RUN_ID", "run_id": run_id,
-                     "message": "duplicate run id; original run retained"}
-            result["issue"] = issue
-            self._issues.append(issue)
-            self._add_results.append(result)
-            return json.loads(json.dumps(result))
-        if run_id is not None:
-            self._ids.add(run_id)
+        official_candidate = self._official_requirement_candidate(raw, slot)
+        if official_candidate:
+            self._infer(slot)
+        fallback_id = run_id
+        result = {"status": "REJECTED", "requested_id": requested_id,
+                  "run_id": fallback_id, "slot": list(slot) if slot else None}
+        self._ids.add(run_id)
+        if rename_warning:
+            raw.setdefault("_contract_warnings", []).append(rename_warning)
         try:
             parsed = extract_run(raw, self.base_dir, self.correctness_policy)
         except (ExtractError, OSError, ValueError, TypeError) as error:
             code = "EVIDENCE_INVALID" if slot is not None else "RUN_SCHEMA_INVALID"
             issue = {"severity": "ERROR", "code": code, "run_id": fallback_id,
+                     "contract_class": "standard" if official_candidate else "extension",
                      "message": str(error)}
             result["issue"] = issue
             self._issues.append(issue)
             self._add_results.append(result)
             return json.loads(json.dumps(result))
-        parsed_slot = self._identity(parsed)[1]
+        parsed_slot = logical_slot(parsed)
+        self._issues.extend(copy.deepcopy(parsed.get("contract_warnings", [])))
         self._resolved.append(parsed)
         prior_ids = list(self._slot_ids[parsed_slot])
         self._slot_ids[parsed_slot].append(parsed["id"])
@@ -674,10 +980,81 @@ class Metric123RawLogMatrix:
                 },
             }
         else:
-            result = {"status": "ADDED", "run_id": parsed["id"],
+            result = {"status": "ADDED", "requested_id": requested_id,
+                      "run_id": parsed["id"],
                       "slot": list(parsed_slot)}
+            if rename_warning:
+                result["warning"] = rename_warning
         self._add_results.append(result)
         return json.loads(json.dumps(result))
+
+    @staticmethod
+    def _union_requirements(left, right):
+        result = {}
+        for metric in sorted(set(left) | set(right)):
+            result[metric] = {}
+            lfields, rfields = left.get(metric, {}), right.get(metric, {})
+            for field in sorted(set(lfields) | set(rfields)):
+                lv, rv = lfields.get(field, []), rfields.get(field, [])
+                if isinstance(lv, list) and isinstance(rv, list):
+                    result[metric][field] = sorted(set(lv) | set(rv), key=str)
+                else:
+                    result[metric][field] = copy.deepcopy(rv if field in rfields else lv)
+        return result
+
+    def __add__(self, other):
+        if not isinstance(other, Metric123RawLogMatrix):
+            return NotImplemented
+        rank = {"optional": 0, "required": 1, "strict": 2}
+        requirements = self._union_requirements(
+            self._data().get("requirements", {}), other._data().get("requirements", {}))
+        merged = Metric123RawLogMatrix(
+            requirements=requirements,
+            correctness_policy=max((self.correctness_policy, other.correctness_policy),
+                                   key=lambda x: rank[x]), base_dir=".")
+        seen_snapshots = set()
+        for source in (self, other):
+            for record in source._resolved:
+                fingerprint = json.dumps(record, sort_keys=True)
+                if fingerprint in seen_snapshots:
+                    continue
+                seen_snapshots.add(fingerprint)
+                row = copy.deepcopy(record)
+                requested = row["id"]
+                effective = requested
+                if effective in merged._ids:
+                    suffix = 2
+                    while f"{requested}-{suffix}" in merged._ids:
+                        suffix += 1
+                    effective = f"{requested}-{suffix}"
+                    item = warning("DUPLICATE_RUN_ID_RENAMED", effective,
+                                   f"merged run id {requested!r} renamed to {effective!r}")
+                    row["id"] = effective
+                    row.setdefault("contract_warnings", []).append(item)
+                    merged._issues.append(item)
+                merged._ids.add(effective)
+                slot = logical_slot(row)
+                merged._infer(slot)
+                merged._resolved.append(row)
+                prior = list(merged._slot_ids[slot])
+                merged._slot_ids[slot].append(effective)
+                result = {"status": "REJECTED" if prior else "ADDED",
+                          "requested_id": requested, "run_id": effective,
+                          "slot": list(slot)}
+                if prior:
+                    result["issue"] = {"severity": "ERROR", "code": "DUPLICATE_SLOT",
+                                       "run_id": ",".join(prior + [effective]),
+                                       "message": f"logical slot already claimed: {slot}"}
+                merged._add_results.append(result)
+        # Preserve rejected attempts and non-run warnings/errors without rereading inputs.
+        for source in (self, other):
+            for issue in source._issues:
+                if issue not in merged._issues:
+                    merged._issues.append(copy.deepcopy(issue))
+            for result in source._add_results:
+                if result.get("status") == "REJECTED" and result.get("issue", {}).get("code") != "DUPLICATE_SLOT":
+                    merged._add_results.append(copy.deepcopy(result))
+        return merged
 
     def _data(self):
         if self._explicit_requirements:
@@ -695,7 +1072,7 @@ class Metric123RawLogMatrix:
         output = pathlib.Path(output_dir).expanduser().resolve() if output_dir is not None else None
         slot_counts = defaultdict(int)
         for row in self._resolved:
-            slot_counts[self._identity(row)[1]] += 1
+            slot_counts[logical_slot(row)] += 1
         duplicate_conflicted = sum(count for count in slot_counts.values() if count > 1)
         ingestion = {"attempted": len(self._add_results),
                      "added": sum(x["status"] == "ADDED" for x in self._add_results),
@@ -711,6 +1088,9 @@ class Metric123RawLogMatrix:
         if output is not None:
             write_outputs(output, report, resolved, matrix, per_run, issues)
         return {"report": report, "resolved_runs": resolved, "matrix": matrix,
+                "matrices": {"standard": matrix,
+                             "all": report["views"]["all"]["matrix"],
+                             "extension": report["views"]["extension"]["matrix"]},
                 "per_run_metrics": per_run, "issues": issues, "exit_code": code}
 
 
@@ -728,7 +1108,7 @@ def analyze(manifest_path, output_dir):
     output = pathlib.Path(output_dir) if output_dir is not None else None
     slot_counts = defaultdict(int)
     for row in matrix._resolved:
-        slot_counts[matrix._identity(row)[1]] += 1
+        slot_counts[logical_slot(row)] += 1
     result = aggregate_results(matrix._data(), list(matrix._resolved), list(matrix._issues),
                                output, manifest=manifest_path,
                                ingestion={"attempted": len(matrix._add_results),
@@ -751,16 +1131,27 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     (output_dir / "resolved_runs.json").write_text(json.dumps(resolved, indent=2, sort_keys=True) + "\n")
-    write_tsv(output_dir / "metric_matrix.tsv", matrix,
-              ["metric", "level", "identity", "tc", "value", "unit", "status", "detail"])
+    matrix_fields = ["metric", "level", "identity", "tc", "value", "unit", "status", "detail"]
+    write_tsv(output_dir / "metric_matrix.tsv", matrix, matrix_fields)
+    write_tsv(output_dir / "metric_matrix_standard.tsv", matrix, matrix_fields)
+    write_tsv(output_dir / "metric_matrix_all.tsv",
+              report["views"]["all"]["matrix"], matrix_fields)
+    write_tsv(output_dir / "metric_matrix_extension.tsv",
+              report["views"]["extension"]["matrix"], matrix_fields)
     write_tsv(output_dir / "per-run_metrics.tsv", per_run,
               ["run_id", "metric", "tc", "repetition", "profile", "arm", "pair", "order", "value", "unit", "status"])
-    write_tsv(output_dir / "issues.tsv", issues, ["severity", "code", "run_id", "message"])
+    write_tsv(output_dir / "issues.tsv", issues,
+              ["severity", "code", "run_id", "contract_class", "message"])
     lines = ["# Metric 1/2/3 原始日志统一报告", "", f"总体状态：**{report['overall_status']}**", "",
              "| 指标 | 状态 |", "|---|---|", f"| Metric1 | {report['metric1']['status']} |",
              f"| Metric2 | {report['metric2']['status']} |", f"| Metric3 | {report['metric3']['status']} |", "",
              "Metric3 仅表示冻结可执行参考模型范围；delta = HA-VI - OurCC，严格大于 0 才通过。",
-             "不执行 t-test，不生成 p-value，不做笛卡尔配对。", "", "## 矩阵", "",
+             "不执行 t-test，不生成 p-value，不做笛卡尔配对。", "",
+             "## 视图", "",
+             f"- Standard runs: {report['views']['standard']['runs']}",
+             f"- All parsed runs: {report['views']['all']['runs']}",
+             f"- Extension runs: {report['views']['extension']['runs']}",
+             "", "## 标准矩阵", "",
              "| Metric | Level | Identity | TC | Value | Unit | Status |", "|---|---|---|---|---:|---|---|"]
     for row in matrix:
         value = "N/A" if row["value"] is None else f"{row['value']:.9g}" if isinstance(row["value"], (int, float)) else str(row["value"])
