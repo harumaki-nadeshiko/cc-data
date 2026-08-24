@@ -352,26 +352,10 @@ def requirement(manifest, name, default):
     return value if isinstance(value, dict) else default
 
 
-def analyze(manifest_path, output_dir):
-    base = manifest_path.parent
-    data = json.loads(manifest_path.read_text())
-    if not isinstance(data, dict) or data.get("schema_version") not in (1, "1") or not isinstance(data.get("runs"), list):
-        raise ExtractError("manifest requires schema_version=1 and runs array")
-    policy = data.get("correctness_policy", "strict")
-    if policy not in ("strict", "required", "optional"):
-        raise ExtractError("correctness_policy must be strict|required|optional")
-    issues, resolved, ids = [], [], set()
-    for index, raw in enumerate(data["runs"]):
-        run_id = str(raw.get("id", f"run-{index}")) if isinstance(raw, dict) else f"run-{index}"
-        if run_id in ids:
-            issues.append({"severity": "ERROR", "code": "DUPLICATE_RUN_ID", "run_id": run_id, "message": "duplicate run id"})
-            continue
-        ids.add(run_id)
-        try:
-            resolved.append(extract_run(raw, base, policy))
-        except (ExtractError, OSError, ValueError, TypeError) as error:
-            issues.append({"severity": "ERROR", "code": "RUN_INVALID", "run_id": run_id, "message": str(error)})
-
+def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
+                      manifest=None, ingestion=None):
+    """Apply the frozen formulas to already parsed, in-memory run records."""
+    issues = list(ingestion_issues)
     # Duplicate logical slots are never silently selected.
     slots = defaultdict(list)
     for run in resolved:
@@ -481,7 +465,7 @@ def analyze(manifest_path, output_dir):
                        "run_id": f"{pair}/TC{tc}",
                        "message": f"paired arms declare multiple orders: {orders}"})
     samples, incomplete_pairs = [], []
-    evidence_root = output_dir / "evidence" / "metric3"
+    evidence_root = output_dir / "evidence" / "metric3" if output_dir is not None else None
     for pair in pairs_req:
         for tc in tcs_req:
             if (pair, tc) in conflicting_orders:
@@ -493,13 +477,14 @@ def analyze(manifest_path, output_dir):
                 continue
             (key, arms) = candidates[0]
             order = key[2]
-            for arm, source in arms.items():
-                arm_dir = evidence_root / f"pair-{pair}" / f"TC{tc}" / arm
-                arm_dir.mkdir(parents=True, exist_ok=True)
-                result = {"pair": pair, "pair_id": f"pair-{pair}-tc{tc}", "tc": tc, "order": order,
-                          "arm": arm, "status": "PASS", "return_code": 0, "metrics": source["metrics"],
-                          "raw_run_id": source["id"]}
-                (arm_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+            if evidence_root is not None:
+                for arm, source in arms.items():
+                    arm_dir = evidence_root / f"pair-{pair}" / f"TC{tc}" / arm
+                    arm_dir.mkdir(parents=True, exist_ok=True)
+                    result = {"pair": pair, "pair_id": f"pair-{pair}-tc{tc}", "tc": tc, "order": order,
+                              "arm": arm, "status": "PASS", "return_code": 0, "metrics": source["metrics"],
+                              "raw_run_id": source["id"]}
+                    (arm_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
             for name in M3[tc]:
                 left, right = arms["ourcc"]["metrics"][name], arms["ha-vi"]["metrics"][name]
                 if left["counter_frequency_hz"] != right["counter_frequency_hz"]:
@@ -551,7 +536,8 @@ def analyze(manifest_path, output_dir):
     incomplete = m1_status == "INCOMPLETE" or m2_status == "INCOMPLETE" or m3_status == "INCOMPLETE"
     failed = m1_status == "FAIL" or m2_status == "FAIL" or m3_status.startswith("FAIL")
     overall, code = (("INVALID", 2) if has_errors else ("INCOMPLETE", 3) if incomplete else ("FAIL", 1) if failed else ("PASS", 0))
-    report = {"schema_version": 1, "manifest": str(manifest_path), "correctness_policy": policy,
+    report = {"schema_version": 1, "manifest": str(manifest) if manifest is not None else None,
+              "correctness_policy": data.get("correctness_policy", "strict"),
               "overall_status": overall, "exit_code": code,
               "metric1": {"status": m1_status, "missing_slots": m1_missing, "comparisons": m1_comp},
               "metric2": {"status": m2_status, "missing_slots": m2_missing, "cases": m2_cases,
@@ -566,8 +552,193 @@ def analyze(manifest_path, output_dir):
                           "incomplete_pairs": incomplete_pairs, "samples": samples, "metric_summaries": summaries,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
-              "issues": issues}
+              "issues": issues,
+              "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
+                                           "rejected": 0, "duplicate_conflicted": len(bad_ids),
+                                           "add_results": []}}
     return report, resolved, matrix, per_run, issues, code
+
+
+class Metric123RawLogMatrix:
+    """Incrementally ingest raw runs, then aggregate exclusively from memory.
+
+    ``add`` synchronously reads and closes every input used by a run.  Therefore
+    the input trees may be removed as soon as it returns.  ``finalize`` never
+    reads or stats them; an ``output_dir`` only controls generated report files.
+    Adding after finalization is supported and subsequent finalizations include
+    the new attempt.
+
+    If ``requirements`` is omitted, expected repetitions/testcases/pairs are
+    inferred from every add attempt whose identity fields can be normalized,
+    including attempts later rejected because their evidence is invalid.
+    """
+
+    def __init__(self, requirements=None, correctness_policy="strict", base_dir=None):
+        if correctness_policy not in ("strict", "required", "optional"):
+            raise ExtractError("correctness_policy must be strict|required|optional")
+        if requirements is not None and not isinstance(requirements, dict):
+            raise ExtractError("requirements must be a mapping or None")
+        self.correctness_policy = correctness_policy
+        self.base_dir = pathlib.Path(base_dir or ".").expanduser().resolve()
+        self._explicit_requirements = requirements is not None
+        self._requirements = json.loads(json.dumps(requirements or {}))
+        self._inferred = {"metric1": {"repetitions": set()},
+                          "metric2": {"repetitions": set(), "testcases": set()},
+                          "metric3": {"pairs": set(), "testcases": set()}}
+        self._resolved = []
+        self._issues = []
+        self._ids = set()
+        self._add_results = []
+        self._slot_ids = defaultdict(list)
+
+    @staticmethod
+    def _identity(raw):
+        """Best-effort normalized identity for coverage and status reporting."""
+        if not isinstance(raw, dict):
+            return None, None
+        run_id = str(raw["id"]) if "id" in raw else None
+        try:
+            metric, tc = int(raw["metric"]), int(raw["tc"])
+            repetition = str(raw["repetition"])
+            if metric in (1, 2):
+                profile = norm_profile(raw.get("profile"))
+                return run_id, (metric, repetition, tc, profile)
+            if metric == 3:
+                pair, order, arm = str(raw["pair"]), raw["order"], raw["arm"]
+                if order not in ("AB", "BA") or arm not in ("ourcc", "ha-vi"):
+                    return run_id, None
+                return run_id, (3, pair, tc, order, arm)
+        except (KeyError, ExtractError, TypeError, ValueError):
+            pass
+        return run_id, None
+
+    def _infer(self, slot):
+        if self._explicit_requirements or slot is None:
+            return
+        if slot[0] == 1:
+            self._inferred["metric1"]["repetitions"].add(slot[1])
+        elif slot[0] == 2:
+            self._inferred["metric2"]["repetitions"].add(slot[1])
+            self._inferred["metric2"]["testcases"].add(slot[2])
+        else:
+            self._inferred["metric3"]["pairs"].add(slot[1])
+            self._inferred["metric3"]["testcases"].add(slot[2])
+
+    def add(self, run=None, **fields):
+        """Parse one run immediately and return an ADDED/REJECTED status dict."""
+        if run is not None and fields:
+            raise TypeError("add accepts either one run dict or keyword fields, not both")
+        if run is None:
+            raw = dict(fields)
+        elif isinstance(run, dict):
+            raw = dict(run)
+        else:
+            raise TypeError("add positional argument must be a run dict")
+        run_id, slot = self._identity(raw)
+        self._infer(slot)
+        fallback_id = run_id if run_id is not None else f"run-{len(self._add_results)}"
+        result = {"status": "REJECTED", "run_id": fallback_id, "slot": list(slot) if slot else None}
+        if run_id is not None and run_id in self._ids:
+            issue = {"severity": "ERROR", "code": "DUPLICATE_RUN_ID", "run_id": run_id,
+                     "message": "duplicate run id; original run retained"}
+            result["issue"] = issue
+            self._issues.append(issue)
+            self._add_results.append(result)
+            return json.loads(json.dumps(result))
+        if run_id is not None:
+            self._ids.add(run_id)
+        try:
+            parsed = extract_run(raw, self.base_dir, self.correctness_policy)
+        except (ExtractError, OSError, ValueError, TypeError) as error:
+            code = "EVIDENCE_INVALID" if slot is not None else "RUN_SCHEMA_INVALID"
+            issue = {"severity": "ERROR", "code": code, "run_id": fallback_id,
+                     "message": str(error)}
+            result["issue"] = issue
+            self._issues.append(issue)
+            self._add_results.append(result)
+            return json.loads(json.dumps(result))
+        parsed_slot = self._identity(parsed)[1]
+        self._resolved.append(parsed)
+        prior_ids = list(self._slot_ids[parsed_slot])
+        self._slot_ids[parsed_slot].append(parsed["id"])
+        if prior_ids:
+            result = {
+                "status": "REJECTED",
+                "run_id": parsed["id"],
+                "slot": list(parsed_slot),
+                "issue": {
+                    "severity": "ERROR",
+                    "code": "DUPLICATE_SLOT",
+                    "run_id": ",".join(prior_ids + [parsed["id"]]),
+                    "message": f"logical slot already claimed: {parsed_slot}",
+                },
+            }
+        else:
+            result = {"status": "ADDED", "run_id": parsed["id"],
+                      "slot": list(parsed_slot)}
+        self._add_results.append(result)
+        return json.loads(json.dumps(result))
+
+    def _data(self):
+        if self._explicit_requirements:
+            requirements = json.loads(json.dumps(self._requirements))
+        else:
+            requirements = {
+                name: {key: sorted(values) for key, values in fields.items()}
+                for name, fields in self._inferred.items()
+            }
+        return {"schema_version": 1, "correctness_policy": self.correctness_policy,
+                "requirements": requirements}
+
+    def finalize(self, output_dir=None):
+        """Return report plus matrices; optionally emit the normal output tree."""
+        output = pathlib.Path(output_dir).expanduser().resolve() if output_dir is not None else None
+        slot_counts = defaultdict(int)
+        for row in self._resolved:
+            slot_counts[self._identity(row)[1]] += 1
+        duplicate_conflicted = sum(count for count in slot_counts.values() if count > 1)
+        ingestion = {"attempted": len(self._add_results),
+                     "added": sum(x["status"] == "ADDED" for x in self._add_results),
+                     "rejected": sum(x["status"] == "REJECTED" for x in self._add_results),
+                     "duplicate_conflicted": duplicate_conflicted,
+                     "add_results": json.loads(json.dumps(self._add_results))}
+        # Isolate the retained ingestion state from callers mutating finalize's result.
+        parsed_snapshot = json.loads(json.dumps(self._resolved))
+        issue_snapshot = json.loads(json.dumps(self._issues))
+        values = aggregate_results(self._data(), parsed_snapshot, issue_snapshot,
+                                   output, ingestion=ingestion)
+        report, resolved, matrix, per_run, issues, code = values
+        if output is not None:
+            write_outputs(output, report, resolved, matrix, per_run, issues)
+        return {"report": report, "resolved_runs": resolved, "matrix": matrix,
+                "per_run_metrics": per_run, "issues": issues, "exit_code": code}
+
+
+def analyze(manifest_path, output_dir):
+    """Manifest-compatible wrapper implemented through Metric123RawLogMatrix."""
+    manifest_path = pathlib.Path(manifest_path)
+    data = json.loads(manifest_path.read_text())
+    if not isinstance(data, dict) or data.get("schema_version") not in (1, "1") or not isinstance(data.get("runs"), list):
+        raise ExtractError("manifest requires schema_version=1 and runs array")
+    matrix = Metric123RawLogMatrix(data.get("requirements"),
+                                   data.get("correctness_policy", "strict"),
+                                   manifest_path.parent)
+    for raw in data["runs"]:
+        matrix.add(raw)
+    output = pathlib.Path(output_dir) if output_dir is not None else None
+    slot_counts = defaultdict(int)
+    for row in matrix._resolved:
+        slot_counts[matrix._identity(row)[1]] += 1
+    result = aggregate_results(matrix._data(), list(matrix._resolved), list(matrix._issues),
+                               output, manifest=manifest_path,
+                               ingestion={"attempted": len(matrix._add_results),
+                                          "added": sum(x["status"] == "ADDED" for x in matrix._add_results),
+                                          "rejected": sum(x["status"] == "REJECTED" for x in matrix._add_results),
+                                          "duplicate_conflicted": sum(
+                                              count for count in slot_counts.values() if count > 1),
+                                          "add_results": matrix._add_results})
+    # Preserve analyze's historical tuple and its division of writing responsibility.
+    return result
 
 
 def write_tsv(path, rows, fields):

@@ -71,6 +71,66 @@ docker run --rm --network none --cpuset-cpus=0-31 \
   python3 -m unittest tests.scripts.test_extract_metric123_from_logs
 ```
 
+## Python 增量 API
+
+需要边获得 run、边释放远端日志空间时，可使用`Metric123RawLogMatrix`。`add()`接受一个
+run 字典或与 manifest run schema 同名的关键字参数，并在返回前完成 simout、simulator
+日志及 correctness 证据的全部解析：
+
+```python
+from scripts.extract_metric123_from_logs import Metric123RawLogMatrix
+
+matrix = Metric123RawLogMatrix(
+    requirements=None,              # 从所有 add 尝试推断覆盖需求
+    correctness_policy="strict",
+    base_dir="/archive/runs",
+)
+status = matrix.add(
+    id="tc135-r1-naive", metric=2, tc=135, repetition="r1",
+    topology="3n1s", profile="naive",
+    simulator_log_dir="tc135/r1/naive/simulator",
+    simout_dir="tc135/r1/naive/simout",
+)
+assert status["status"] in ("ADDED", "REJECTED")
+
+# add 返回后即可删除或迁移上述输入目录；finalize 不会重新 open/stat 输入文件。
+result = matrix.finalize("/tmp/metric123-report")
+report = result["report"]
+```
+
+省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 pair/order/arm 等身份字段
+可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
+坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
+重复 run ID 不覆盖第一次记录；第二个及后续重复逻辑 slot 会在`add()`时立即返回
+`REJECTED/DUPLICATE_SLOT`，所有有效声明者都从最终计算中排除，并使报告为`INVALID`。
+一次失败的 add 不阻止后续 add。`finalize()`可重复调用，结果确定；也允许在
+finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 output_dir 时不写文件，返回
+含`report`、`resolved_runs`、`matrix`、`per_run_metrics`、`issues`和`exit_code`的字典。
+
+## 正式结果还原验证
+
+增量 API 已在 Docker 中直接重放当前保留的正式 raw logs，而不是读取既有分析结果作为输入：
+
+- Metric 1/2：`results/metric12-final-v1/cases`中的 72 个 raw-log run；
+- Metric 3 p100：`results/metric3-l3-only-v4/cases`中的 80 个 raw-log arm；
+- Metric 3 p150：同目录另外 80 个 raw-log arm。
+
+重放结果与`docs/design/cc_ep_deliverable3_performance_api.md`及其机器可读来源逐字段一致：
+
+```text
+Metric 1 capacity ratio       1.5150909423828125
+Metric 1 delta cycles       -1635.994218910734
+Metric 2 equal-weight          64.75927627819759%
+
+Metric 3 p100 core              7.904166666666667 ticks
+Metric 3 p100 representative    2.8820833333333336 ticks
+Metric 3 p150 core              7.939583333333333 ticks
+Metric 3 p150 representative    2.8785156250000004 ticks
+```
+
+此外还逐轮核对 Metric 1，逐轮逐 TC 核对 Metric 2 的三个 profile 均值与降幅，并逐 TC
+核对 Metric 3 的 TC228-TC235 主值；浮点比较容差为`1e-9`。
+
 ## 输出与退出码
 
 ```text
