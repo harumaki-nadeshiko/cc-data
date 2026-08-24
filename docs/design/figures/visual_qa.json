@@ -208,13 +208,13 @@
       "svg": "docs/design/figures/ubcc-metric-summary.svg",
       "drawio": "docs/design/figures/ubcc-metric-summary.drawio",
       "png_report": {
-        "width": 1427,
+        "width": 1390,
         "height": 378,
-        "mode": "RGB",
+        "mode": "RGBA",
         "non_white_bbox": [
           58,
           65,
-          1369,
+          1332,
           320
         ],
         "margins_px": {
@@ -223,12 +223,12 @@
           "right": 58,
           "bottom": 58
         },
-        "content_bbox_ratio": 0.6198,
+        "content_bbox_ratio": 0.6183,
         "alpha_extrema": [
-          255,
+          202,
           255
         ],
-        "sampled_color_count": 1697,
+        "sampled_color_count": 1723,
         "checks": {
           "minimum_resolution": true,
           "non_empty_content": true,
@@ -264,21 +264,21 @@
         "non_white_bbox": [
           81,
           65,
-          993,
+          966,
           498
         ],
         "margins_px": {
           "left": 81,
           "top": 65,
-          "right": 85,
+          "right": 112,
           "bottom": 57
         },
-        "content_bbox_ratio": 0.66,
+        "content_bbox_ratio": 0.6405,
         "alpha_extrema": [
           255,
           255
         ],
-        "sampled_color_count": 826,
+        "sampled_color_count": 823,
         "checks": {
           "minimum_resolution": true,
           "non_empty_content": true,

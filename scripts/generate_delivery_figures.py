@@ -174,18 +174,18 @@ def charts():
     render_dot("ubcc-metric-summary", r'''digraph G {
 graph [bgcolor="white", pad="0.4", nodesep="0.45", ranksep="0.5", fontname="Noto Sans CJK SC", label="UBCC 三项性能指标验收结果", labelloc=t, fontsize=24, fontcolor="#17365D"];
 node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=16, margin="0.18,0.12", penwidth=1.6];
-m1 [label="指标 1\n等效追踪容量 1.515091×\n容量提升 51.509%\n通过", fillcolor="#E2F0D9", color="#70AD47", fontcolor="#375623"];
+m1 [label="指标 1\n等效追踪容量 1.515×\n容量提升 51.509%\n通过", fillcolor="#E2F0D9", color="#70AD47", fontcolor="#375623"];
 m2 [label="指标 2\n适用场景等权平均降幅\n64.759%\n通过", fillcolor="#D9EAF7", color="#4F81BD", fontcolor="#17365D"];
-m3 [label="指标 3\n核心场景组约 20.1%\n代表场景组约 3.64%\n参考模型范围内通过", fillcolor="#FFF2CC", color="#BF9000", fontcolor="#7F6000"];
+m3 [label="指标 3\n核心场景组约 20.09%\n代表场景组约 3.64%\n参考模型范围内通过", fillcolor="#FFF2CC", color="#BF9000", fontcolor="#7F6000"];
 {rank=same; m1; m2; m3}
 }
 ''')
     drawio("ubcc-metric-summary", "UBCC 三项性能指标验收结果", [
-        ("m1", "指标 1\n等效追踪容量 1.515091×\n容量提升 51.509%\n通过",
+        ("m1", "指标 1\n等效追踪容量 1.515×\n容量提升 51.509%\n通过",
          70, 180, 300, 190, "#E2F0D9", "#70AD47", "#375623", True),
         ("m2", "指标 2\n适用场景等权平均降幅\n64.759%\n通过",
          450, 180, 300, 190, "#D9EAF7", "#4F81BD", "#17365D", True),
-        ("m3", "指标 3\n核心场景组约 20.1%\n代表场景组约 3.64%\n参考模型范围内通过",
+        ("m3", "指标 3\n核心场景组约 20.09%\n代表场景组约 3.64%\n参考模型范围内通过",
          830, 180, 300, 190, "#FFF2CC", "#BF9000", "#7F6000", True),
     ], [])
     render_dot("ubcc-ha-vi-comparison", r'''digraph G {
@@ -193,10 +193,10 @@ graph [bgcolor="white", pad="0.4", nodesep="0.35", ranksep="0.45", fontname="Not
 node [shape=plain, fontname="Noto Sans CJK SC"];
 chart [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="9" COLOR="#B4C7E7">
 <TR><TD BGCOLOR="#D9EAF7"><B>L3 压力</B></TD><TD BGCOLOR="#D9EAF7"><B>场景组</B></TD><TD BGCOLOR="#E2F0D9"><B>UBCC</B></TD><TD BGCOLOR="#FFF2CC"><B>HA-VI</B></TD><TD BGCOLOR="#D9EAF7"><B>UBCC 降幅</B></TD></TR>
-<TR><TD>100%</TD><TD>核心场景组</TD><TD>31.439583</TD><TD>39.343750</TD><TD><B>20.090019%</B></TD></TR>
-<TR><TD>100%</TD><TD>代表场景组</TD><TD>76.177500</TD><TD>79.059583</TD><TD><B>3.645457%</B></TD></TR>
-<TR><TD>150%</TD><TD>核心场景组</TD><TD>31.406250</TD><TD>39.345833</TD><TD><B>20.178969%</B></TD></TR>
-<TR><TD>150%</TD><TD>代表场景组</TD><TD>76.194622</TD><TD>79.073138</TD><TD><B>3.640320%</B></TD></TR>
+<TR><TD>100%</TD><TD>核心场景组</TD><TD>31.440</TD><TD>39.344</TD><TD><B>20.090%</B></TD></TR>
+<TR><TD>100%</TD><TD>代表场景组</TD><TD>76.178</TD><TD>79.060</TD><TD><B>3.645%</B></TD></TR>
+<TR><TD>150%</TD><TD>核心场景组</TD><TD>31.406</TD><TD>39.346</TD><TD><B>20.179%</B></TD></TR>
+<TR><TD>150%</TD><TD>代表场景组</TD><TD>76.195</TD><TD>79.073</TD><TD><B>3.640%</B></TD></TR>
 </TABLE>>]; }
 ''')
     boxes = [
@@ -204,10 +204,10 @@ chart [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="9" C
          90, 110, 1020, 55, "#D9EAF7", "#4F81BD", "#17365D", True),
     ]
     rows = (
-        ("r1", "100%        核心场景组       31.439583   39.343750   20.090019%"),
-        ("r2", "100%        代表场景组       76.177500   79.059583    3.645457%"),
-        ("r3", "150%        核心场景组       31.406250   39.345833   20.178969%"),
-        ("r4", "150%        代表场景组       76.194622   79.073138    3.640320%"),
+        ("r1", "100%        核心场景组       31.440   39.344   20.090%"),
+        ("r2", "100%        代表场景组       76.178   79.060    3.645%"),
+        ("r3", "150%        核心场景组       31.406   39.346   20.179%"),
+        ("r4", "150%        代表场景组       76.195   79.073    3.640%"),
     )
     for index, row in enumerate(rows):
         boxes.append((row[0], row[1], 90, 185 + index * 82, 1020, 62,
