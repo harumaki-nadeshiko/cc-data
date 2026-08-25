@@ -7,7 +7,40 @@
   "properties": {
     "schema_version": {"const": 1},
     "correctness_policy": {"enum": ["strict", "required", "optional"]},
-    "requirements": {"type": "object"},
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "metric1": {
+          "type": "object",
+          "properties": {
+            "repetitions": {"type": "array", "items": {"type": ["string", "integer"]}, "uniqueItems": true},
+            "roles": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "uniqueItems": true,
+              "default": ["naive", "spill", "ideal"]
+            },
+            "ideal_min_capacity": {"type": "integer", "minimum": 1, "default": 102656}
+          }
+        },
+        "metric3": {
+          "type": "object",
+          "properties": {
+            "mode": {"enum": ["independent", "paired"], "default": "independent"},
+            "repetitions": {"type": "array", "items": {"type": ["string", "integer"]}, "uniqueItems": true},
+            "min_repetitions": {"type": "integer", "minimum": 1},
+            "testcases": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true},
+            "arms": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "uniqueItems": true,
+              "default": ["ourcc", "ha-vi"]
+            },
+            "pairs": {"type": "array", "items": {"type": ["string", "integer"]}, "uniqueItems": true}
+          }
+        }
+      }
+    },
     "runs": {
       "type": "array",
       "items": {
@@ -22,7 +55,8 @@
           "simulator_log_dir": {"type": "string"},
           "simout_dir": {"type": "string"},
           "profile": {"enum": ["naive", "spill", "spill-noopt", "optimized"]},
-          "arm": {"enum": ["ourcc", "ha-vi"]},
+          "metric1_role": {"type": "string", "minLength": 1},
+          "arm": {"type": "string", "minLength": 1},
           "pair": {"type": ["string", "integer"]},
           "order": {"enum": ["AB", "BA"]},
           "home_node": {"type": "integer", "minimum": 0},

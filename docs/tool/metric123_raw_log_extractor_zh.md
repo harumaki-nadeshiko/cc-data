@@ -38,23 +38,58 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
 
 ## 三项提取口径
 
-- Metric1：TC131/8N1S 是冻结正式合同；simulator 日志中的`UBCC-STATE/UBCC-STATS`容量、policy、exact-live；
-  simout 中 node1/node2 各唯一一条`post_pressure_catalog_reuse` GUEST-TIMER。
+- Metric1：TC131/8N1S 正式合同改为每轮三个显式角色：`naive`（512KiB naive，只提供容量分母）、
+  `spill`（512KiB spill-noopt，提供容量分子和真实 Outer 延迟）、`ideal`（spill-noopt、实验性超大
+  ResidentDir，无容量 eviction/offload，提供 Outer 反事实基线）。`metric1_role`别名包括
+  `baseline -> naive`、`spill-512k/actual -> spill`、`ideal-dir/infinite -> ideal`。省略时 profile=naive
+  自动为 naive；Home UBIO `PROCESS-MANIFEST experimental_oversized_resident_dir=1`自动为 ideal；其余
+  spill-noopt/optimized 自动为 spill，并产生`METRIC1_ROLE_AUTO_DETECTED`。
+  正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
+  `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
+  `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
+  跨轮报告 ratio/delta 的等权 mean、stdev、CV，不按 Outer sample 数给轮次加权。
+  simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，不存在时才确定性回退
+  全部日志，并去除 stdout/stderr 中完全相同的复制行；保留 source files、samples、mean、p50/p95/p99/max。
+  spill/ideal 标准角色至少须有一条 completed Outer。
+  旧 node1/node2 `post_pressure_catalog_reuse` GUEST-TIMER 已弃用为描述字段，不参与完整性或 PASS。
+  完整时继续输出旧 guest 值；缺失或部分存在仍 ADDED，产生`METRIC1_GUEST_TIMER_MISSING`，描述字段为 null。
   容量只从Home UBIO目录提取，默认`n0/s0`，兼容`ubio_tc131_n0_s0`与`ubio_n0_s0`；
   非默认Home可在run中填写`home_node/home_socket`。Home 发现依次使用标准目录名、任意布局中的
   `[PROCESS-MANIFEST]`身份、容量 marker 回退；单一回退或多个相同来源产生 WARNING，来源值冲突才拒绝。
-  非 TC131/8N1S 数据也可通过`phase/timer_nodes/home_node/home_socket`解析为 extension。
-- Metric2：TC135-140/217 的正式 phase、node、samples 合同；目标 PERF-LATENCY 必须全 run 唯一。
-  未注册 TC 需提供`phase`，可选`expected_node/expected_samples`（省略时由唯一 marker 确定）；正式 TC
-  的错误 topology 或覆盖合同字段仍可解析，但只进入 extension 描述视图。
+  `parse_capacity`还保留 manifest oversized flag、resident capacity、Home 日志中
+  `RESIDENT-FILL-DONE found=1`计数和最大 H64 exact-live。ideal 标准门禁为：TC131、8N1S、
+  spill-noopt、policy=spill、oversized=1、resident capacity>=`requirements.metric1.ideal_min_capacity`
+  （默认102656）、found fills=0、H64 exact-live=0。spill 要求 spill-noopt/policy=spill/oversized=0；
+  naive 要求 naive/policy=naive/oversized=0。门禁失败只进入 extension，正式角色槽保持缺失，绝不静默使用。
+  `requirements.metric1`支持`repetitions`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
+  旧 manifest 没有 ideal 时可正常解析（timer 缺失也不会拒绝），但标准 Metric1 为 INCOMPLETE。
+- Metric2：TC135-140/217 的冻结正式 phase、node、samples 合同仍要求正式 phase 唯一 marker，并只用它
+  计算 standard 结果。工具同时扫描全部 PERF-LATENCY。未注册 TC 省略`phase`时，只有一个 phase 会自动
+  选择并产生`METRIC2_PHASE_AUTO_DETECTED`；存在多个 phase 时不混合均值，而是全部保存在
+  `metrics.latency_phases`，产生`METRIC2_MULTIPLE_PHASES`并按 phase 输出描述矩阵。显式`phase`聚合所有
+  同名记录；频率必须一致，mean 按 samples 加权，保留 nodes、records、total samples。正式 run 的额外
+  phase 只作 extension 描述和 WARNING，不改变冻结正式值。
   每个 repetition 的 applicable case 等权均值都必须达到 10%，且 applicable case 集合跨 repetition 稳定。
   少于完整 TC135-140/217 集合时仍输出已提取值，但 Metric2 总状态为 INCOMPLETE。
 - Metric3：直接解析 TC228-235 的 GUEST-TIMER/PERF-LATENCY；这些 TC 即使 topology 非 2n1s 也可
   解析为 extension。未知 TC 必须提供`metric_specs`，每项含`kind=timer|latency`、`phase`和
-  `reduction=aggregate|max`，否则报`PARSER_SPEC_REQUIRED`。按 manifest 的`pair/tc/order`
-  严格配`ourcc`和`ha-vi`，绝不笛卡尔配对。工具在`output/evidence/metric3`生成标准 arm
-  `result.json`证据树，并使用与`analyze_metric3_paired.py`一致的冻结 primary/aggregate 权重。
-  PERF-LATENCY 多节点聚合按 samples 对 mean 加权；同一 pair/TC 的 order 冲突直接判 INVALID。
+  `reduction=aggregate|max`，否则报`PARSER_SPEC_REQUIRED`。默认是 independent：每个 run 以
+  `repetition/tc/topology/arm/metric spec names`为独立身份，不要求 pair/order，不构造配对或 ABBA；
+  每个 TC/metric/arm 对全部 independent run 计算 mean、stdev、count，delta 为两个 arm mean 之差。
+  `requirements.metric3`支持`mode=independent`（默认）、`repetitions`或正整数`min_repetitions`、
+  `testcases`和默认双 arm 的`arms`。显式 repetitions 要求每个 TC/arm/repetition 恰有一个有效 run；
+  arm 数量不平衡时仍输出描述比较，但正式状态为 INCOMPLETE。完整正式 PASS 仍要求 TC228-235 和双 arm。
+
+  `arm`可省略；工具递归读取 simulator 日志中的`EPBACKEND-PROFILE ha_endpoint_profile=ubcc|ha-vi`、
+  UBIO `PROCESS-MANIFEST home_controller=ubcc|ha-vi`或`UBIO-HA-MANIFEST controller=ha-vi`。证据一致时
+  自动归一为`ourcc`/`ha-vi`并产生`ARM_AUTO_DETECTED`；无证据或冲突分别报
+  `ARM_IDENTITY_MISSING`/`ARM_IDENTITY_CONFLICT`。显式 arm 大小写不敏感，支持
+  `ourcc/ubcc/ubcc-lossless/lossless-oneway`及`ha-vi/havi/ha_vi`别名。
+
+  兼容旧 manifest：显式`mode=paired`，或未写 mode 但 requirements 中有非空`pairs`时，继续按
+  `pair/tc/order`严格配双 arm、绝不跨 pair 或笛卡尔配对，并保持旧正式 replay 数值与证据树不变。
+  无论模式如何，描述视图都提供`metric3_arm_comparisons`；只有实际带 pair/order 的 run 才进入
+  `metric3_pairs`。PERF-LATENCY 多节点聚合按 samples 对 mean 加权。
 
 Metric3 定义`delta = HA-VI - OurCC`，严格`delta > 0`才是可执行参考模型范围 PASS。该状态
 不是物理甲方硅片测量声明。重复只作描述性汇总；工具不计算 t-test、置信区间或 p-value。
@@ -99,12 +134,28 @@ status = matrix.add(
 )
 assert status["status"] in ("ADDED", "REJECTED")
 
+# Metric1 每轮三个角色；spill 与 ideal 虽同为 spill-noopt，role 使二者 slot 可共存。
+status = matrix.add(
+    id="tc131-r1-ideal", metric=1, tc=131, repetition="r1",
+    topology="8n1s", profile="spill-noopt", metric1_role="ideal",
+    simulator_log_dir="tc131/r1/ideal/simulator",
+    simout_dir="tc131/r1/ideal/simout",
+)
+
+# Metric3 independent run：无需 pair/order，arm 也可由 simulator 日志自动识别。
+status = matrix.add(
+    id="tc228-r1-auto", metric=3, tc=228, repetition="r1",
+    topology="2n1s",
+    simulator_log_dir="tc228/r1/simulator",
+    simout_dir="tc228/r1/simout",
+)
+
 # add 返回后即可删除或迁移上述输入目录；finalize 不会重新 open/stat 输入文件。
 result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
-省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 pair/order/arm 等身份字段
+省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 repetition/TC/arm 等身份字段
 可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
 坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
 `id`可省略，工具按 add 顺序稳定生成`run-000001`。重复请求 ID 自动改为`id-2/id-3`并产生
@@ -142,11 +193,12 @@ Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubi
 - Metric 3 p100：`results/metric3-l3-only-v4/cases`中的 80 个 raw-log arm；
 - Metric 3 p150：同目录另外 80 个 raw-log arm。
 
-重放结果与`docs/design/cc_ep_deliverable3_performance_api.md`及其机器可读来源逐字段一致：
+旧 raw replay 中 Metric2/Metric3 数值继续逐字段一致；旧 Metric1 只有 naive/spill/optimized、没有
+counterfactual ideal，因此按修正定义为 INCOMPLETE。以下旧 guest delta 仅为弃用的描述兼容值，不能作为 PASS：
 
 ```text
 Metric 1 capacity ratio       1.5150909423828125
-Metric 1 delta cycles       -1635.994218910734
+Metric 1 legacy guest delta cycles -1635.994218910734 (deprecated descriptive)
 Metric 2 equal-weight          64.75927627819759%
 
 Metric 3 p100 core              7.904166666666667 ticks
@@ -173,5 +225,6 @@ output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
 
-退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵或
-Metric3 pair 不完整。缺失 arm 不会与其他 pair 的 arm 组合。
+退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵、
+independent repetition/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
+与其他 pair 的 arm 组合。

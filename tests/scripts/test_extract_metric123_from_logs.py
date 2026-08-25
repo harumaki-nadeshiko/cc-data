@@ -46,6 +46,11 @@ class ExtractMetric123Test(unittest.TestCase):
     def latency(node, phase, samples, mean=1000):
         return f"[PERF-LATENCY] node={node} phase={phase} samples={samples} min=100 p50=500 p95=1500 p99=1800 max=2000 mean={mean} counter_frequency_hz=1000000000 source=arm_cntvct_el0 unit=counter_ticks\n"
 
+    @staticmethod
+    def outer(latency_ps, req=1):
+        return (f"[EP-PERF] kind=outer node=0 pa=0x1000 reqId={req} "
+                f"latency_ps={latency_ps}\n")
+
     def manifest(self, runs, requirements, policy="strict"):
         path = self.root / "manifest.json"
         path.write_text(json.dumps({"schema_version": 1, "correctness_policy": policy,
@@ -60,7 +65,11 @@ class ExtractMetric123Test(unittest.TestCase):
             sim, out = self.root / profile / "simulator", self.root / profile / "simout"
             self.correctness(sim, 131, "8n1s")
             stats = "" if exact is None else f'[UBCC-STATS] {{"residentCapacity":{capacity},"h64ExactLiveKnown":1,"h64ExactLiveCount":{exact}}}\n'
+            manifest = {"component": "ubio", "tc": 131, "node": 0, "socket": 0,
+                        "experimental_oversized_resident_dir": 0,
+                        "overflow_policy": policy}
             self.write(sim / "nested/ubio_tc131_n0_s0/stdout.log.gz",
+                       "[PROCESS-MANIFEST] " + json.dumps(manifest) + "\n" +
                        f"[UBCC-STATE] capacity={capacity} policy={policy}\n{stats}", gz=True)
             self.write(sim / "nested/ubio_tc131_n1_s0/stdout.log",
                        "[UBCC-STATE] capacity=999999 policy=naive\n")
@@ -68,9 +77,9 @@ class ExtractMetric123Test(unittest.TestCase):
             runs.append({"id": profile, "metric": 1, "tc": 131, "repetition": "r1", "topology": "8n1s",
                          "profile": profile, "simulator_log_dir": str(sim.relative_to(self.root)), "simout_dir": str(out.relative_to(self.root))})
         report, resolved, _, _, issues, code = MOD.analyze(self.manifest(runs, {"metric1": {"repetitions": ["r1"]}, "metric2": {"repetitions": [], "testcases": []}, "metric3": {"pairs": [], "testcases": []}}), self.root / "output")
-        self.assertEqual(report["metric1"]["status"], "PASS")
-        self.assertAlmostEqual(report["metric1"]["comparisons"][0]["capacity_ratio"], 1.6)
-        self.assertFalse(issues)
+        self.assertEqual(report["metric1"]["status"], "INCOMPLETE")
+        self.assertIn(("r1", "ideal"), report["metric1"]["missing_slots"])
+        self.assertTrue(all(x["severity"] == "WARNING" for x in issues))
         self.assertTrue(all(item["metrics"]["capacity"]["resident_capacity"] == 100
                             for item in resolved))
 
@@ -175,14 +184,16 @@ class ExtractMetric123Test(unittest.TestCase):
         for node in (1, 2):
             self.write(out / f"simout_tc{tc}_node{node}.log",
                        self.timer(node, "post_pressure_catalog_reuse"))
-        text = f"[UBCC-STATE] capacity={capacity} policy={policy}\n"
+        text = ("[PROCESS-MANIFEST] " + json.dumps(
+            {"component": "ubio", "tc": tc, "node": 0, "socket": 0,
+             "experimental_oversized_resident_dir": 0,
+             "overflow_policy": policy}) + "\n" +
+                f"[UBCC-STATE] capacity={capacity} policy={policy}\n")
         if policy != "naive":
             text += f'[UBCC-STATS] {{"residentCapacity":{capacity},"h64ExactLiveKnown":1,"h64ExactLiveCount":{capacity + 50}}}\n'
         if layout == "recognized":
             target = sim / f"ubio_tc{tc}_n0_s0/stdout.log"
         elif layout == "manifest":
-            text = ("[PROCESS-MANIFEST] " + json.dumps(
-                {"component": "ubio", "tc": tc, "node": 0, "socket": 0}) + "\n" + text)
             target = sim / "arbitrary/process-A/console.txt"
         else:
             target = sim / "capacity.log"
@@ -190,6 +201,111 @@ class ExtractMetric123Test(unittest.TestCase):
         return {"id": run_id, "metric": 1, "tc": tc, "repetition": repetition,
                 "topology": topology, "profile": profile,
                 "simulator_log_dir": str(sim), "simout_dir": str(out)}
+
+    def make_formal_m1(self, run_id, role, capacity, exact, outer_values=(),
+                       timer=True, oversized=None, found=0, profile=None,
+                       explicit_role=True):
+        profile = profile or ("naive" if role == "naive" else "spill-noopt")
+        policy = "naive" if role == "naive" else "spill"
+        oversized = (1 if role == "ideal" else 0) if oversized is None else oversized
+        run = self.make_m1_run(run_id, profile=profile, capacity=capacity, policy=policy)
+        sim, out = pathlib.Path(run["simulator_log_dir"]), pathlib.Path(run["simout_dir"])
+        manifest = {"component": "ubio", "tc": 131, "node": 0, "socket": 0,
+                    "overflow_policy": policy,
+                    "experimental_oversized_resident_dir": oversized}
+        text = ("[PROCESS-MANIFEST] " + json.dumps(manifest) + "\n" +
+                f"[UBCC-STATE] capacity={capacity} policy={policy}\n")
+        if policy == "spill":
+            text += (f'[UBCC-STATS] {{"residentCapacity":{capacity},'
+                     f'"h64ExactLiveKnown":1,"h64ExactLiveCount":{exact}}}\n')
+        text += "".join(f"[RESIDENT-FILL-DONE] found=1 pa=0x{i:x}\n"
+                        for i in range(found))
+        self.write(sim / "ubio_tc131_n0_s0/stdout.log", text)
+        for index, value in enumerate(outer_values):
+            self.write(sim / f"gem5_tc131_node{index % 2}/stderr.log",
+                       self.outer(value, index + 1) +
+                       ((sim / f"gem5_tc131_node{index % 2}/stderr.log").read_text()
+                        if (sim / f"gem5_tc131_node{index % 2}/stderr.log").exists() else ""))
+        if not timer:
+            shutil.rmtree(out)
+            out.mkdir()
+        if explicit_role:
+            run["metric1_role"] = role
+        return run
+
+    def test_metric1_correct_roles_outer_delta_and_timer_optional(self):
+        req = {"metric1": {"repetitions": ["r1"],
+                            "roles": ["naive", "spill", "ideal"],
+                            "ideal_min_capacity": 1000}}
+        matrix = MOD.Metric123RawLogMatrix(req, base_dir=self.root)
+        naive = self.make_formal_m1("n", "naive", 100, None, timer=False)
+        spill = self.make_formal_m1("s", "spill", 100, 160, (12000, 14000), timer=False)
+        ideal = self.make_formal_m1("i", "ideal", 1000, 0, (10000, 12000), timer=False)
+        for run in (naive, spill, ideal):
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        result = matrix.finalize()
+        row = result["report"]["metric1"]["comparisons"][0]
+        self.assertEqual(result["report"]["metric1"]["status"], "PASS")
+        self.assertAlmostEqual(row["capacity_ratio"], 1.6)
+        self.assertEqual(row["spill_outer_samples"], 2)
+        self.assertEqual(row["ideal_outer_samples"], 2)
+        self.assertEqual(row["outer_delta_ns"], 2.0)
+        self.assertEqual(row["outer_delta_cycles"], 4.0)
+        self.assertIsNone(row["legacy_guest_descriptive"]["spill_minus_naive_ns"])
+        self.assertEqual(sum(x["code"] == "METRIC1_GUEST_TIMER_MISSING"
+                             for x in result["issues"]), 3)
+
+    def test_metric1_role_alias_auto_detection_and_three_roles_coexist(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}},
+            base_dir=self.root)
+        naive = self.make_formal_m1("n-role", "naive", 100, None,
+                                    explicit_role=False)
+        spill = self.make_formal_m1("s-role", "spill", 100, 160, (12000,),
+                                    explicit_role=False)
+        ideal = self.make_formal_m1("i-role", "ideal", 1000, 0, (10000,),
+                                    explicit_role=False)
+        spill["metric1_role"] = "actual"
+        for run in (naive, spill, ideal):
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertFalse(any(x["code"] == "DUPLICATE_SLOT" for x in result["issues"]))
+        roles = {x["metric1_role"]: x for x in result["resolved_runs"]}
+        self.assertEqual(set(roles), {"naive", "spill", "ideal"})
+        self.assertEqual(roles["spill"]["role_source"], "explicit")
+        self.assertEqual(roles["ideal"]["role_source"], "auto")
+        self.assertTrue(any(x["code"] == "METRIC1_ROLE_AUTO_DETECTED"
+                            for x in result["issues"]))
+
+    def test_metric1_optimized_is_support_not_formal_spill(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        run = self.make_formal_m1(
+            "optimized-support", "spill", 100, 160, (12000,),
+            profile="optimized", explicit_role=False)
+        self.assertEqual(matrix.add(run)["status"], "ADDED")
+        resolved = matrix.finalize()["resolved_runs"][0]
+        self.assertEqual(resolved["metric1_role"], "support")
+        self.assertEqual(resolved["contract_class"], "extension")
+
+    def test_metric1_ideal_gates_and_missing_ideal_are_incomplete(self):
+        bad_cases = ((999, 0, 0), (1000, 1, 0), (1000, 0, 1))
+        for index, (capacity, found, exact) in enumerate(bad_cases):
+            req = {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}}
+            matrix = MOD.Metric123RawLogMatrix(req, base_dir=self.root)
+            matrix.add(self.make_formal_m1(f"bn{index}", "naive", 100, None))
+            matrix.add(self.make_formal_m1(f"bs{index}", "spill", 100, 160, (12000,)))
+            added = matrix.add(self.make_formal_m1(
+                f"bi{index}", "ideal", capacity, exact, (10000,), found=found))
+            self.assertEqual(added["status"], "ADDED")
+            result = matrix.finalize()
+            self.assertEqual(result["report"]["metric1"]["status"], "INCOMPLETE")
+            self.assertIn(("r1", "ideal"), result["report"]["metric1"]["missing_slots"])
+        missing = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": ["r1"]}}, base_dir=self.root)
+        missing.add(self.make_formal_m1("mn", "naive", 100, None))
+        missing.add(self.make_formal_m1("ms", "spill", 100, 160, (12000,)))
+        self.assertEqual(missing.finalize()["report"]["metric1"]["status"], "INCOMPLETE")
 
     def test_metric1_manifest_and_capacity_fallback_discovery(self):
         for layout, code in (("manifest", "HOME_UBIO_FALLBACK"),
@@ -204,7 +320,10 @@ class ExtractMetric123Test(unittest.TestCase):
     def test_metric1_identical_fallback_sources_warn_but_conflicting_rejects(self):
         identical = self.make_m1_run("identical", layout="fallback")
         sim = pathlib.Path(identical["simulator_log_dir"])
-        self.write(sim / "second.log", "[UBCC-STATE] capacity=100 policy=naive\n")
+        self.write(sim / "second.log", text := (
+            '[PROCESS-MANIFEST] {"component":"ubio","tc":131,"node":0,"socket":0,'
+            '"experimental_oversized_resident_dir":0,"overflow_policy":"naive"}\n'
+            '[UBCC-STATE] capacity=100 policy=naive\n'))
         matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
         self.assertEqual(matrix.add(identical)["status"], "ADDED")
         self.assertTrue(any(x["code"] == "HOME_UBIO_IDENTICAL_MULTIPLE"
@@ -212,7 +331,7 @@ class ExtractMetric123Test(unittest.TestCase):
 
         conflict = self.make_m1_run("conflict", layout="fallback")
         self.write(pathlib.Path(conflict["simulator_log_dir"]) / "second.log",
-                   "[UBCC-STATE] capacity=200 policy=naive\n")
+                   text.replace("capacity=100", "capacity=200"))
         rejected = MOD.Metric123RawLogMatrix(base_dir=self.root).add(conflict)
         self.assertEqual(rejected["status"], "REJECTED")
         self.assertIn("disagree", rejected["issue"]["message"])
@@ -453,7 +572,9 @@ class ExtractMetric123Test(unittest.TestCase):
         sim, out = self.root / "m3" / "sim", self.root / "m3" / "out"
         self.correctness(sim, 228)
         self.write(out / "simout_n0", self.timer(0, "topology_remote_read"))
-        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"mode": "paired", "pairs": ["p1"], "testcases": [228]}},
+            base_dir=self.root)
         matrix.add(id="m3-ourcc", metric=3, tc=228, repetition="r1",
                    topology="2n1s", arm="ourcc", pair="p1", order="AB",
                    simulator_log_dir=str(sim), simout_dir=str(out))
@@ -481,6 +602,116 @@ class ExtractMetric123Test(unittest.TestCase):
         result["slot"][0] = 999
         stored = matrix.finalize()["report"]["ingestion"]["add_results"][0]
         self.assertEqual(stored["slot"][0], 2)
+
+    def make_m3_run(self, run_id, tc, repetition, arm=None, tick_base=100,
+                    identity=None, pair=None, order=None):
+        sim, out = self.root / run_id / "sim", self.root / run_id / "out"
+        self.correctness(sim, tc)
+        if identity:
+            self.write(sim / "identity.log", identity)
+        text = ""
+        for index, (_, (kind, phase, _)) in enumerate(MOD.M3[tc].items()):
+            ticks = (tick_base + index * 10) * 10
+            text += (self.timer(0, phase, ticks) if kind == "timer" else
+                     self.latency(0, phase, 10, tick_base + index * 10))
+        self.write(out / "simout_n0", text)
+        run = {"id": run_id, "metric": 3, "tc": tc, "repetition": repetition,
+               "topology": "2n1s", "simulator_log_dir": str(sim),
+               "simout_dir": str(out)}
+        if arm is not None: run["arm"] = arm
+        if pair is not None: run["pair"] = pair
+        if order is not None: run["order"] = order
+        return run
+
+    def test_metric3_independent_aliases_repeats_and_arm_means(self):
+        requirements = {"metric1": {"repetitions": []},
+                        "metric2": {"repetitions": [], "testcases": []},
+                        "metric3": {"mode": "independent", "repetitions": ["r1", "r2"],
+                                    "testcases": list(MOD.M3), "arms": ["UBCC", "HA_VI"]}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for tc in MOD.M3:
+            for rep, offset in (("r1", 0), ("r2", 20)):
+                matrix.add(self.make_m3_run(f"o-{tc}-{rep}", tc, rep, "lossless-oneway", 100 + offset))
+                matrix.add(self.make_m3_run(f"h-{tc}-{rep}", tc, rep, "HaVi", 130 + offset))
+        report = matrix.finalize()["report"]
+        self.assertEqual(report["metric3"]["status"], "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)")
+        self.assertEqual(report["metric3"]["comparison_mode"], "independent")
+        summary = next(x for x in report["metric3"]["metric_summaries"]
+                       if x["tc"] == 228)
+        self.assertEqual(summary["ourcc_mean_ticks"], 110)
+        self.assertEqual(summary["ha_vi_mean_ticks"], 140)
+        self.assertEqual(summary["delta_mean_ticks"], 30)
+        self.assertEqual(summary["ourcc_count"], 2)
+
+    def test_metric3_arm_auto_detection_conflict_and_missing(self):
+        for label, marker, expected in (
+                ("our", "[EPBACKEND-PROFILE] node=0 ha_endpoint_profile=ubcc\n", "ourcc"),
+                ("havi", "[UBIO-HA-MANIFEST] controller=ha-vi node=0 socket=0\n", "ha-vi")):
+            matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+            added = matrix.add(self.make_m3_run(label, 228, "r1", identity=marker))
+            self.assertEqual(added["status"], "ADDED")
+            resolved = matrix.finalize()["resolved_runs"][0]
+            self.assertEqual(resolved["arm"], expected)
+            self.assertEqual(resolved["arm_source"], "auto")
+            self.assertTrue(any(x["code"] == "ARM_AUTO_DETECTED" for x in resolved["contract_warnings"]))
+        conflict = ("[EPBACKEND-PROFILE] node=0 ha_endpoint_profile=ubcc\n"
+                    "[PROCESS-MANIFEST] {\"component\":\"ubio\",\"home_controller\":\"ha-vi\"}\n")
+        rejected = MOD.Metric123RawLogMatrix(base_dir=self.root).add(
+            self.make_m3_run("conflicting-arm", 228, "r1", identity=conflict))
+        self.assertEqual(rejected["issue"]["code"], "ARM_IDENTITY_CONFLICT")
+        missing = MOD.Metric123RawLogMatrix(base_dir=self.root).add(
+            self.make_m3_run("missing-arm", 228, "r1"))
+        self.assertEqual(missing["issue"]["code"], "ARM_IDENTITY_MISSING")
+
+    def test_metric3_independent_imbalance_is_incomplete_but_descriptive(self):
+        req = {"metric3": {"mode": "independent", "min_repetitions": 1,
+                           "testcases": [228], "arms": ["ourcc", "ha-vi"]}}
+        matrix = MOD.Metric123RawLogMatrix(req, base_dir=self.root)
+        matrix.add(self.make_m3_run("o1", 228, "r1", "ourcc", 100))
+        matrix.add(self.make_m3_run("o2", 228, "r2", "ourcc", 110))
+        matrix.add(self.make_m3_run("h1", 228, "r1", "ha-vi", 130))
+        report = matrix.finalize()["report"]
+        self.assertEqual(report["metric3"]["status"], "INCOMPLETE")
+        self.assertEqual(len(report["views"]["all"]["metric3_arm_comparisons"]), 1)
+
+    def test_metric2_unknown_phase_discovery_and_weighted_multinode(self):
+        sim, out = self.root / "m2-auto/sim", self.root / "m2-auto/out"
+        sim.mkdir(parents=True)
+        self.write(out / "simout_n0", self.latency(0, "only", 1, 100))
+        self.write(out / "simout_n1", self.latency(1, "only", 3, 300))
+        matrix = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        result = matrix.add(metric=2, tc=999, repetition="r1", topology="2n1s",
+                            profile="naive", simulator_log_dir=str(sim), simout_dir=str(out))
+        self.assertEqual(result["status"], "ADDED")
+        run = matrix.finalize()["resolved_runs"][0]
+        self.assertEqual(run["metrics"]["mean_ticks"], 250)
+        self.assertEqual(run["metrics"]["nodes"], [0, 1])
+        self.assertTrue(any(x["code"] == "METRIC2_PHASE_AUTO_DETECTED"
+                            for x in run["contract_warnings"]))
+
+    def test_metric2_unknown_multiple_phases_and_official_extra_phase(self):
+        sim, out = self.root / "m2-multi/sim", self.root / "m2-multi/out"
+        sim.mkdir(parents=True)
+        self.write(out / "simout_n0", self.latency(0, "a", 2, 100) +
+                   self.latency(0, "b", 3, 200))
+        matrix = MOD.Metric123RawLogMatrix(correctness_policy="optional", base_dir=self.root)
+        self.assertEqual(matrix.add(metric=2, tc=999, repetition="r1", topology="1n1s",
+                                    profile="naive", simulator_log_dir=str(sim),
+                                    simout_dir=str(out))["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertEqual(set(result["resolved_runs"][0]["metrics"]["latency_phases"]), {"a", "b"})
+        self.assertEqual(len(result["matrices"]["all"]), 2)
+
+        official = self.make_m2_run("official-extra", mean=1000)
+        phase, _, node, _ = MOD.M2[135]
+        path = pathlib.Path(official["simout_dir"]) / f"simout_n{node}"
+        path.write_text(path.read_text() + self.latency(node, "extra", 5, 700))
+        official_matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(official_matrix.add(official)["status"], "ADDED")
+        official_run = official_matrix.finalize()["resolved_runs"][0]
+        self.assertTrue(official_run["standard_contract"])
+        self.assertEqual(official_run["metrics"]["mean_ticks"], 1000)
+        self.assertIn("extra", official_run["metrics"]["latency_phases"])
 
 
 if __name__ == "__main__":

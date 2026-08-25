@@ -79,6 +79,18 @@ SIMOUT_PATTERNS = (
 )
 UBIO_DIR_RE = re.compile(r"ubio(?:_tc(\d+))?_n(\d+)_s(\d+)$")
 PROCESS_MANIFEST = "[PROCESS-MANIFEST]"
+ARM_ALIASES = {
+    "ourcc": "ourcc", "ubcc": "ourcc", "ubcc-lossless": "ourcc",
+    "lossless-oneway": "ourcc", "ha-vi": "ha-vi", "havi": "ha-vi",
+    "ha_vi": "ha-vi",
+}
+METRIC1_ROLE_ALIASES = {
+    "naive": "naive", "baseline": "naive",
+    "spill": "spill", "spill-512k": "spill", "actual": "spill",
+    "ideal": "ideal", "ideal-dir": "ideal", "infinite": "ideal",
+}
+OUTER_RE = re.compile(r"\[EP-PERF\]\s+kind=outer(?:\s|$).*?latency_ps=(\d+)")
+FILL_DONE_RE = re.compile(r"\[RESIDENT-FILL-DONE\].*?\bfound=(\d+)")
 
 
 class ExtractError(Exception):
@@ -101,6 +113,89 @@ def norm_profile(value):
     if value not in PROFILES:
         raise ExtractError(f"unknown profile {value!r}")
     return value
+
+
+def norm_arm(value):
+    normalized = ARM_ALIASES.get(str(value).lower())
+    if normalized is None:
+        raise ExtractError(f"unknown Metric3 arm {value!r}")
+    return normalized
+
+
+def norm_metric1_role(value):
+    normalized = METRIC1_ROLE_ALIASES.get(str(value).lower())
+    if normalized is None:
+        raise ExtractError(f"unknown Metric1 role {value!r}")
+    return normalized
+
+
+def metric1_outer_latency(root):
+    """Parse every completed Outer, preferring canonical gem5 stderr streams."""
+    preferred = sorted({p.resolve() for pattern in ("gem5_tc*_node*/stderr.log",
+                                                     "gem5_tc*_node*/stderr.log.gz")
+                        for p in root.rglob(pattern) if p.is_file()}, key=str)
+    candidates = preferred or [p.resolve() for p in all_log_files(root)
+                               if p.suffix in (".log", ".gz")]
+    first_source, rows = {}, []
+    for path in sorted(candidates, key=str):
+        with open_text(path) as stream:
+            for line_no, line in enumerate(stream, 1):
+                match = OUTER_RE.search(line)
+                if not match:
+                    continue
+                exact_line = line.rstrip("\r\n")
+                if exact_line in first_source and first_source[exact_line] != str(path):
+                    continue
+                first_source.setdefault(exact_line, str(path))
+                rows.append({"file": str(path), "line": line_no,
+                             "latency_ps": int(match.group(1))})
+    values = sorted(row["latency_ps"] for row in rows)
+    if not values:
+        return {"source_files": [], "sources": [], "samples": 0, "mean_ns": None,
+                "p50_ns": None, "p95_ns": None, "p99_ns": None, "max_ns": None}
+    percentile = lambda q: values[int(q * (len(values) - 1))] / 1000.0
+    return {"source_files": sorted({row["file"] for row in rows}), "sources": rows,
+            "samples": len(values), "mean_ns": statistics.mean(values) / 1000.0,
+            "p50_ns": statistics.median(values) / 1000.0,
+            "p95_ns": percentile(0.95), "p99_ns": percentile(0.99),
+            "max_ns": values[-1] / 1000.0}
+
+
+def detect_metric3_arm(root):
+    """Return a consistent arm identity plus every simulator-log evidence row."""
+    evidence = []
+    for path in all_log_files(root):
+        with open_text(path) as stream:
+            for line_no, line in enumerate(stream, 1):
+                profile = re.search(r"\[EPBACKEND-PROFILE\].*?ha_endpoint_profile=(\S+)", line)
+                if profile and profile.group(1).lower() in ("ubcc", "ha-vi"):
+                    arm = "ourcc" if profile.group(1).lower() == "ubcc" else "ha-vi"
+                    evidence.append({"arm": arm, "kind": "EPBACKEND-PROFILE",
+                                     "file": str(path), "line": line_no,
+                                     "value": profile.group(1)})
+                if PROCESS_MANIFEST in line:
+                    try:
+                        payload = json.loads(line.split(PROCESS_MANIFEST, 1)[1].strip())
+                    except (TypeError, ValueError):
+                        payload = {}
+                    controller = str(payload.get("home_controller", "")).lower()
+                    if payload.get("component") == "ubio" and controller in ("ubcc", "ha-vi"):
+                        evidence.append({"arm": "ourcc" if controller == "ubcc" else "ha-vi",
+                                         "kind": "PROCESS-MANIFEST", "file": str(path),
+                                         "line": line_no, "value": controller})
+                manifest = re.search(r"\[UBIO-HA-MANIFEST\].*?controller=(\S+)", line)
+                if manifest and manifest.group(1).lower() == "ha-vi":
+                    evidence.append({"arm": "ha-vi", "kind": "UBIO-HA-MANIFEST",
+                                     "file": str(path), "line": line_no,
+                                     "value": manifest.group(1)})
+    identities = sorted({row["arm"] for row in evidence})
+    if not identities:
+        raise ExtractError("ARM_IDENTITY_MISSING: no EPBACKEND-PROFILE, UBIO PROCESS-MANIFEST, or UBIO-HA-MANIFEST arm identity found")
+    if len(identities) != 1:
+        details = ", ".join(f"{row['arm']}@{row['file']}:{row['line']}({row['kind']})"
+                            for row in evidence)
+        raise ExtractError(f"ARM_IDENTITY_CONFLICT: simulator logs identify multiple arms {identities}: {details}")
+    return identities[0], evidence
 
 
 def topology_size(value):
@@ -298,14 +393,14 @@ def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id="",
     return logs, [warning(code, run_id, message)]
 
 
-def marker_rows(paths, kind, phase):
+def marker_rows(paths, kind, phase=None):
     regex = TIMER_RE if kind == "timer" else LAT_RE
     rows = []
     for path in paths:
         with open_text(path) as stream:
             for line_no, line in enumerate(stream, 1):
                 match = regex.search(line)
-                if not match or match.group(2) != phase:
+                if not match or (phase is not None and match.group(2) != phase):
                     continue
                 if kind == "timer":
                     node, count, ticks, freq, source, unit = (int(match.group(1)), int(match.group(3)),
@@ -319,8 +414,30 @@ def marker_rows(paths, kind, phase):
                 if count <= 0 or ticks <= 0 or freq <= 0 or source != "arm_cntvct_el0" or unit != "counter_ticks":
                     raise ExtractError(f"invalid {kind} marker in {path}:{line_no}")
                 rows.append({"file": str(path), "line": line_no, "node": node,
+                             "phase": match.group(2),
                              "count": count, "ticks": ticks, "frequency_hz": freq})
     return rows
+
+
+def aggregate_latency_phase(rows, expected_node=None, expected_samples=None):
+    if not rows:
+        raise ExtractError("Metric2 latency phase has no records")
+    frequencies = {row["frequency_hz"] for row in rows}
+    if len(frequencies) != 1:
+        raise ExtractError("Metric2 latency counter frequency mismatch")
+    if expected_node is not None and any(row["node"] != expected_node for row in rows):
+        raise ExtractError(f"Metric2 marker contract requires every record node={expected_node}, got nodes={sorted({r['node'] for r in rows})}")
+    total = sum(row["count"] for row in rows)
+    if expected_samples is not None and total != expected_samples:
+        raise ExtractError(f"Metric2 marker contract requires total samples={expected_samples}, got {total}")
+    frequency = next(iter(frequencies))
+    mean_ticks = sum(row["ticks"] * row["count"] for row in rows) / total
+    nodes = sorted({row["node"] for row in rows})
+    return {"phase": rows[0]["phase"], "node": nodes[0] if len(nodes) == 1 else None,
+            "nodes": nodes, "samples": total, "records": len(rows),
+            "mean_ticks": mean_ticks, "frequency_hz": frequency,
+            "mean_ns": mean_ticks * 1e9 / frequency, "sources": rows,
+            "source": rows[0] if len(rows) == 1 else None}
 
 
 def correctness(run, simulator_dir, policy):
@@ -358,7 +475,9 @@ def correctness(run, simulator_dir, policy):
 
 
 def parse_capacity(paths):
-    capacity, exact, policies, fallback_policies = 0, None, set(), set()
+    capacity, exact, exact_known = 0, None, None
+    policies, fallback_policies = set(), set()
+    oversized_values, found_fills = set(), 0
     sources = []
     for path in paths:
         with open_text(path) as stream:
@@ -380,6 +499,14 @@ def parse_capacity(paths):
                         manifest_policy = payload.get("overflow_policy")
                         if manifest_policy:
                             fallback_policies.add(str(manifest_policy))
+                        if payload.get("experimental_oversized_resident_dir") is not None:
+                            oversized_values.add(int(payload["experimental_oversized_resident_dir"]))
+                        resident = payload.get("resident_dir")
+                        if isinstance(resident, dict) and resident.get("capacity") is not None:
+                            capacity = max(capacity, int(resident["capacity"]))
+                fill_match = FILL_DONE_RE.search(line)
+                if fill_match and int(fill_match.group(1)) == 1:
+                    found_fills += 1
                 if "[UBCC-STATS]" not in line or "{" not in line:
                     continue
                 try:
@@ -388,18 +515,25 @@ def parse_capacity(paths):
                     continue
                 if payload.get("residentCapacity") is not None:
                     capacity = max(capacity, int(payload["residentCapacity"]))
-                if int(payload.get("h64ExactLiveKnown", 0)) == 1:
-                    exact = max(exact or 0, int(payload.get("h64ExactLiveCount", 0)))
+                if payload.get("h64ExactLiveKnown") is not None:
+                    known = int(payload.get("h64ExactLiveKnown", 0))
+                    count = int(payload.get("h64ExactLiveCount", 0))
+                    exact_known = max(exact_known or 0, known)
+                    exact = max(exact or 0, count)
     if not policies:
         policies = fallback_policies
     if not capacity or len(policies) != 1:
         raise ExtractError(f"UBCC capacity/policy invalid: capacity={capacity} policies={sorted(policies)}")
     policy = next(iter(policies))
-    if policy != "naive" and exact is None:
-        raise ExtractError("spill policy lacks validated H64 exact-live marker")
-    return {"policy": policy, "resident_capacity": capacity, "h64_exact_live": exact,
-            "effective_unique": capacity if policy == "naive" else max(capacity, exact),
-            "sources": sources}
+    if len(oversized_values) > 1:
+        raise ExtractError(f"conflicting experimental_oversized_resident_dir values: {sorted(oversized_values)}")
+    return {"policy": policy, "resident_capacity": capacity,
+            "h64_exact_live_known": exact_known, "h64_exact_live": exact,
+            "effective_unique": (capacity if policy == "naive" or exact is None
+                                 else max(capacity, exact)),
+            "experimental_oversized_resident_dir": (next(iter(oversized_values))
+                                                       if oversized_values else None),
+            "backstore_found_fills": found_fills, "sources": sources}
 
 
 def extract_run(run, base, policy):
@@ -419,7 +553,13 @@ def extract_run(run, base, policy):
     if not simulator.is_dir() or not simout.is_dir():
         raise ExtractError(f"input directory missing simulator={simulator} simout={simout}")
     out["simulator_log_dir"], out["simout_dir"] = str(simulator), str(simout)
-    out["simout_by_node"] = {str(k): str(v) for k, v in discover_simouts(simout, out["tc"]).items()}
+    try:
+        discovered_simouts = discover_simouts(simout, out["tc"])
+    except ExtractError as error:
+        if out["metric"] != 1 or "no supported simout files" not in str(error):
+            raise
+        discovered_simouts = {}
+    out["simout_by_node"] = {str(k): str(v) for k, v in discovered_simouts.items()}
     paths = [pathlib.Path(p) for p in out["simout_by_node"].values()]
     out["correctness"] = correctness(out, simulator, policy)
     out["contract_warnings"] = list(run.get("_contract_warnings", []))
@@ -432,12 +572,18 @@ def extract_run(run, base, policy):
         for row in rows:
             by_node[row["node"]].append(row)
         expected_nodes = tuple(map(int, run.get("timer_nodes", [1, 2])))
-        if set(by_node) != set(expected_nodes) or any(len(by_node[n]) != 1 for n in expected_nodes):
-            raise ExtractError(f"Metric1 timer duplicate/missing expected={expected_nodes} counts={dict((n,len(v)) for n,v in by_node.items())}")
-        if len({row["frequency_hz"] for row in rows}) != 1:
+        timer_complete = (set(by_node) == set(expected_nodes) and
+                          all(len(by_node[n]) == 1 for n in expected_nodes))
+        if timer_complete and len({row["frequency_hz"] for row in rows}) != 1:
             raise ExtractError("Metric1 timer frequency mismatch")
-        timer = [{**row, "ticks_per_operation": row["ticks"] / row["count"],
-                  "ns_per_operation": row["ticks"] * 1e9 / row["frequency_hz"] / row["count"]} for row in rows]
+        timer = ([{**row, "ticks_per_operation": row["ticks"] / row["count"],
+                   "ns_per_operation": row["ticks"] * 1e9 / row["frequency_hz"] / row["count"]}
+                  for row in rows] if timer_complete else [])
+        if not timer_complete:
+            out["contract_warnings"].append(warning(
+                "METRIC1_GUEST_TIMER_MISSING", out["id"],
+                f"descriptive guest timer absent/partial expected={expected_nodes} "
+                f"counts={dict((n, len(v)) for n, v in by_node.items())}"))
         home_node = int(run.get("home_node", 0))
         home_socket = int(run.get("home_socket", 0))
         explicit_home = []
@@ -452,56 +598,137 @@ def extract_run(run, base, policy):
             explicit_home)
         out["contract_warnings"].extend(discovery_warnings)
         out["home_ubio_logs"] = [str(path) for path in capacity_logs]
-        out["metrics"] = {"capacity": parse_capacity(capacity_logs), "timers": timer, "phase": phase,
-                           "mean_ns_per_operation": statistics.mean(x["ns_per_operation"] for x in timer)}
-        expected_policy = "naive" if out["profile"] == "naive" else "spill"
-        standard = (out["tc"] == 131 and out["topology"] == "8n1s" and
-                    phase == "post_pressure_catalog_reuse" and expected_nodes == (1, 2) and
-                    home_node == 0 and home_socket == 0 and
-                    out["metrics"]["capacity"]["policy"] == expected_policy)
+        capacity = parse_capacity(capacity_logs)
+        if run.get("metric1_role") is not None:
+            out["metric1_role"] = norm_metric1_role(run["metric1_role"])
+            out["role_source"] = "explicit"
+        else:
+            if out["profile"] == "naive":
+                out["metric1_role"] = "naive"
+            elif capacity["experimental_oversized_resident_dir"] == 1:
+                out["metric1_role"] = "ideal"
+            elif out["profile"] == "spill-noopt":
+                out["metric1_role"] = "spill"
+            else:
+                out["metric1_role"] = "support"
+            out["role_source"] = "auto"
+            out["contract_warnings"].append(warning(
+                "METRIC1_ROLE_AUTO_DETECTED", out["id"],
+                f"Metric1 role auto-detected as {out['metric1_role']}"))
+        outer = metric1_outer_latency(simulator)
+        guest_mean = (statistics.mean(x["ns_per_operation"] for x in timer)
+                      if timer else None)
+        out["metrics"] = {"capacity": capacity, "outer_latency": outer,
+                          "timers": timer if timer_complete else None, "phase": phase,
+                          "mean_ns_per_operation": guest_mean,
+                          "guest_timer_complete": timer_complete}
+        role = out["metric1_role"]
+        common = (out["tc"] == 131 and out["topology"] == "8n1s" and
+                  home_node == 0 and home_socket == 0)
+        if role == "naive":
+            qualified = (out["profile"] == "naive" and capacity["policy"] == "naive" and
+                         capacity["experimental_oversized_resident_dir"] in (None, 0))
+        elif role == "spill":
+            qualified = (out["profile"] == "spill-noopt" and capacity["policy"] == "spill" and
+                          capacity["experimental_oversized_resident_dir"] in (None, 0) and
+                          capacity["h64_exact_live_known"] == 1 and
+                          outer["samples"] >= 1)
+        elif role == "ideal":
+            ideal_min = int(run.get("ideal_min_capacity", 102656))
+            out["ideal_min_capacity"] = ideal_min
+            qualified = (out["profile"] == "spill-noopt" and capacity["policy"] == "spill" and
+                          capacity["experimental_oversized_resident_dir"] == 1 and
+                          capacity["resident_capacity"] >= ideal_min and
+                          capacity["backstore_found_fills"] == 0 and
+                          capacity["h64_exact_live"] == 0 and
+                          capacity["h64_exact_live_known"] in (0, 1) and
+                          outer["samples"] >= 1)
+        else:
+            qualified = False
+        standard = common and qualified
         if not standard:
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
-                f"Metric1 descriptive extension tc={out['tc']} topology={out['topology']} "
-                f"phase={phase} timer_nodes={list(expected_nodes)} home={home_node}/{home_socket} "
-                f"policy={out['metrics']['capacity']['policy']} expected_policy={expected_policy}"))
+                f"Metric1 descriptive extension role={role} tc={out['tc']} topology={out['topology']} "
+                f"profile={out['profile']} home={home_node}/{home_socket} capacity={capacity}"))
     elif out["metric"] == 2:
         registered = out["tc"] in M2
+        all_rows = marker_rows(paths, "latency")
+        by_phase = defaultdict(list)
+        for row in all_rows:
+            by_phase[row["phase"]].append(row)
         if registered:
             default_phase, official_topology, default_node, default_samples = M2[out["tc"]]
             phase = str(run.get("phase", default_phase))
             node = int(run.get("expected_node", default_node))
             samples = int(run.get("expected_samples", default_samples))
+            rows = by_phase.get(phase, [])
+            official_contract = (phase == default_phase and node == default_node and
+                                 samples == default_samples)
+            if official_contract:
+                if len(rows) != 1:
+                    raise ExtractError(f"Metric2 expected exactly one phase={phase}, got {len(rows)}")
+                if rows[0]["node"] != node or rows[0]["count"] != samples:
+                    raise ExtractError(f"TC{out['tc']} marker contract requires node={node} samples={samples}, got node={rows[0]['node']} samples={rows[0]['count']}")
+            selected = aggregate_latency_phase(rows, node, samples)
         else:
-            if "phase" not in run:
-                raise ExtractError("Metric2 unknown TC requires explicit phase")
-            phase, official_topology = str(run["phase"]), None
+            official_topology = None
             node = int(run["expected_node"]) if "expected_node" in run else None
             samples = int(run["expected_samples"]) if "expected_samples" in run else None
-        rows = marker_rows(paths, "latency", phase)
-        if len(rows) != 1:
-            raise ExtractError(f"Metric2 expected exactly one phase={phase}, got {len(rows)}")
-        row = rows[0]
-        node = row["node"] if node is None else node
-        samples = row["count"] if samples is None else samples
-        if row["node"] != node or row["count"] != samples:
-            raise ExtractError(f"TC{out['tc']} marker contract requires node={node} samples={samples}, got node={row['node']} samples={row['count']}")
-        out["metrics"] = {"phase": phase, "node": node, "samples": samples,
-                          "mean_ticks": row["ticks"], "frequency_hz": row["frequency_hz"],
-                           "mean_ns": row["ticks"] * 1e9 / row["frequency_hz"], "source": row}
+            if "phase" in run:
+                phase = str(run["phase"])
+                selected = aggregate_latency_phase(by_phase.get(phase, []), node, samples)
+            elif len(by_phase) == 1:
+                phase = next(iter(by_phase))
+                selected = aggregate_latency_phase(by_phase[phase], node, samples)
+                out["contract_warnings"].append(warning(
+                    "METRIC2_PHASE_AUTO_DETECTED", out["id"],
+                    f"Metric2 phase auto-detected as {phase!r}"))
+            elif len(by_phase) > 1:
+                phase, selected = None, None
+                out["contract_warnings"].append(warning(
+                    "METRIC2_MULTIPLE_PHASES", out["id"],
+                    f"Metric2 retained multiple independent phases: {sorted(by_phase)}"))
+            else:
+                raise ExtractError("Metric2 found no PERF-LATENCY records")
+        latency_phases = {name: aggregate_latency_phase(
+                              rows, node if not registered else None,
+                              samples if not registered and len(by_phase) == 1 else None)
+                          for name, rows in sorted(by_phase.items())}
+        if registered:
+            extras = sorted(set(by_phase) - {phase})
+            if extras:
+                out["contract_warnings"].append(warning(
+                    "METRIC2_ADDITIONAL_PHASES", out["id"],
+                    f"additional descriptive PERF-LATENCY phases retained: {extras}"))
+        out["metrics"] = {"latency_phases": latency_phases}
+        if selected is not None:
+            out["metrics"].update(selected)
         standard = (registered and out["topology"] == official_topology and phase == default_phase and
-                    node == default_node and samples == default_samples)
+                     node == default_node and samples == default_samples)
         if not standard:
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric2 descriptive extension tc={out['tc']} topology={out['topology']} "
                 f"phase={phase} node={node} samples={samples}"))
     else:
-        if run.get("arm") not in ("ourcc", "ha-vi"):
-            raise ExtractError("Metric3 requires arm ourcc/ha-vi")
-        if "pair" not in run or run.get("order") not in ("AB", "BA"):
-            raise ExtractError("Metric3 requires explicit pair and order=AB/BA")
-        out["arm"], out["pair"], out["order"] = run["arm"], str(run["pair"]), run["order"]
+        if run.get("arm") is None:
+            out["arm"], evidence = detect_metric3_arm(simulator)
+            out["arm_source"], out["arm_evidence"] = "auto", evidence
+            out["contract_warnings"].append(warning(
+                "ARM_AUTO_DETECTED", out["id"],
+                f"Metric3 arm auto-detected as {out['arm']} from {len(evidence)} simulator-log marker(s)"))
+        else:
+            out["arm"] = norm_arm(run["arm"])
+            out["arm_source"] = "explicit"
+            out["arm_evidence"] = [{"kind": "manifest", "value": str(run["arm"]),
+                                     "arm": out["arm"]}]
+        if "pair" in run:
+            out["pair"] = str(run["pair"])
+        if "order" in run:
+            if run["order"] not in ("AB", "BA"):
+                raise ExtractError("Metric3 order must be AB/BA")
+            out["order"] = run["order"]
         registered = out["tc"] in M3
         specs = M3.get(out["tc"])
         if specs is None:
@@ -546,19 +773,21 @@ def extract_run(run, base, policy):
 def logical_slot(run):
     """Identity of one experiment coordinate, including extension dimensions."""
     if run["metric"] == 1:
-        return (1, run["repetition"], run["tc"], run["topology"], run["profile"],
+        return (1, run["repetition"], run["tc"], run["topology"],
+                run.get("metric1_role"), run["profile"],
                 run["metrics"].get("phase"),
-                tuple(item["node"] for item in run["metrics"].get("timers", [])),
+                tuple(item["node"] for item in (run["metrics"].get("timers") or [])),
                 int(run.get("home_node", 0)), int(run.get("home_socket", 0)))
     if run["metric"] == 2:
         return (2, run["repetition"], run["tc"], run["topology"], run["profile"],
                 run["metrics"].get("phase"), run["metrics"].get("node"),
                 run["metrics"].get("samples"))
-    specs = tuple(sorted((name, value.get("ticks_per_operation"),
-                          value.get("counter_frequency_hz"))
-                         for name, value in run["metrics"].items()))
-    return (3, run["pair"], run["tc"], run["topology"], run["order"],
-            run["arm"], tuple(name for name, _, _ in specs))
+    names = tuple(sorted(run["metrics"]))
+    if run.get("comparison_mode") == "paired":
+        return (3, "paired", run.get("pair"), run["tc"], run["topology"],
+                run.get("order"), run["arm"], names)
+    return (3, "independent", run["repetition"], run["tc"], run["topology"],
+            run["arm"], names)
 
 
 def requirement(manifest, name, default):
@@ -573,13 +802,22 @@ def descriptive_view(runs):
         value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
         if value is None and run["metric"] == 3:
             value = statistics.mean(x["ns_per_operation"] for x in run["metrics"].values())
-        row = {"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
-               "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op",
-               "status": "DESCRIPTIVE", "detail": run["contract_class"]}
-        matrix.append(row)
+        if run["metric"] == 2 and run["metrics"].get("latency_phases"):
+            for phase, phase_data in run["metrics"]["latency_phases"].items():
+                matrix.append({"metric": "Metric2", "level": "phase", "identity": run["id"],
+                               "tc": f"TC{run['tc']}", "value": phase_data["mean_ns"],
+                               "unit": "ns/op", "status": "DESCRIPTIVE",
+                               "detail": f"{run['contract_class']}; phase={phase}"})
+        else:
+            matrix.append({"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
+                           "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op",
+                           "status": "DESCRIPTIVE", "detail": run["contract_class"]})
+        dimension = (run.get("metric1_role") if run["metric"] == 1 else
+                     run.get("profile", run.get("arm", "")))
         key = (run["metric"], run["tc"], run["topology"], run.get("repetition"),
-               run.get("profile", run.get("arm", "")))
-        groups[key].append(value)
+               dimension)
+        if value is not None:
+            groups[key].append(value)
     summaries = []
     for key, values in sorted(groups.items(), key=lambda x: tuple(map(str, x[0]))):
         summaries.append({"metric": key[0], "tc": key[1], "topology": key[2],
@@ -607,7 +845,7 @@ def descriptive_view(runs):
     m3_pairs = []
     pair_groups = defaultdict(dict)
     for run in runs:
-        if run["metric"] == 3:
+        if run["metric"] == 3 and run.get("pair") is not None and run.get("order") is not None:
             pair_groups[(run.get("pair"), run["tc"], run.get("order"),
                          run["topology"])][run["arm"]] = run
     for key, arms in sorted(pair_groups.items(), key=lambda x: tuple(map(str, x[0]))):
@@ -621,8 +859,47 @@ def descriptive_view(runs):
                              "ha_vi_ticks_per_operation": arms["ha-vi"]["metrics"][name]["ticks_per_operation"],
                              "delta_ticks": arms["ha-vi"]["metrics"][name]["ticks_per_operation"] - arms["ourcc"]["metrics"][name]["ticks_per_operation"]}
                              for name in common}})
+    arm_groups = defaultdict(list)
+    for run in runs:
+        if run["metric"] == 3:
+            for name, metric in run["metrics"].items():
+                arm_groups[(run["tc"], run["topology"], name, run["arm"])].append(
+                    metric["ticks_per_operation"])
+    arm_comparisons = []
+    coordinates = sorted({key[:3] for key in arm_groups}, key=lambda x: tuple(map(str, x)))
+    for tc, topology, name in coordinates:
+        arms = {}
+        for arm in ("ourcc", "ha-vi"):
+            values = arm_groups.get((tc, topology, name, arm), [])
+            if values:
+                arms[arm] = {"count": len(values), "mean_ticks_per_operation": statistics.mean(values),
+                             "stdev_ticks_per_operation": statistics.stdev(values) if len(values) > 1 else 0.0}
+        arm_comparisons.append({"tc": tc, "topology": topology, "metric": name,
+                                "arms": arms,
+                                "delta_ticks": (arms["ha-vi"]["mean_ticks_per_operation"] -
+                                                arms["ourcc"]["mean_ticks_per_operation"])
+                                if set(arms) == {"ourcc", "ha-vi"} else None})
+    m1_role_comparisons = []
+    role_groups = defaultdict(dict)
+    for run in runs:
+        if run["metric"] == 1:
+            role_groups[(run["repetition"], run["tc"], run["topology"])][
+                run.get("metric1_role", run["profile"])] = run
+    for key, roles in sorted(role_groups.items(), key=lambda x: tuple(map(str, x[0]))):
+        m1_role_comparisons.append({"repetition": key[0], "tc": key[1],
+                                    "topology": key[2], "roles": sorted(roles),
+                                    "capacity_ratio": (roles["spill"]["metrics"]["capacity"]["effective_unique"] /
+                                                       roles["naive"]["metrics"]["capacity"]["effective_unique"])
+                                    if "naive" in roles and "spill" in roles else None,
+                                    "outer_delta_ns": (roles["spill"]["metrics"]["outer_latency"]["mean_ns"] -
+                                                       roles["ideal"]["metrics"]["outer_latency"]["mean_ns"])
+                                    if "spill" in roles and "ideal" in roles and
+                                    roles["spill"]["metrics"]["outer_latency"]["mean_ns"] is not None and
+                                    roles["ideal"]["metrics"]["outer_latency"]["mean_ns"] is not None else None})
     return {"runs": len(runs), "summaries": summaries,
-            "comparisons": comparisons, "metric3_pairs": m3_pairs, "matrix": matrix}
+            "comparisons": comparisons, "metric3_pairs": m3_pairs,
+            "metric1_role_comparisons": m1_role_comparisons,
+            "metric3_arm_comparisons": arm_comparisons, "matrix": matrix}
 
 
 def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
@@ -660,25 +937,52 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
 
     # Metric 1 comparisons and completeness.
     m1 = [r for r in resolved if r["metric"] == 1]
-    m1_req = requirement(data, "metric1", {"repetitions": sorted({r["repetition"] for r in m1})})
+    m1_req = requirement(data, "metric1", {"repetitions": sorted({r["repetition"] for r in m1}),
+                                             "roles": ["naive", "spill", "ideal"],
+                                             "ideal_min_capacity": 102656})
     m1_reps = [str(x) for x in m1_req.get("repetitions", [])]
-    m1_by = {(r["repetition"], r["profile"]): r for r in m1}
-    m1_missing = [(rep, p) for rep in m1_reps for p in PROFILES if (rep, p) not in m1_by]
+    m1_roles = [norm_metric1_role(x) for x in m1_req.get("roles", ["naive", "spill", "ideal"])]
+    m1_by = {(r["repetition"], r["metric1_role"]): r for r in m1}
+    m1_missing = [(rep, role) for rep in m1_reps for role in m1_roles
+                  if (rep, role) not in m1_by]
     m1_comp = []
     for rep in m1_reps:
-        if all((rep, p) in m1_by for p in PROFILES):
-            naive, spill = m1_by[rep, "naive"], m1_by[rep, "spill-noopt"]
+        if all((rep, role) in m1_by for role in ("naive", "spill", "ideal")):
+            naive, spill, ideal = (m1_by[rep, role] for role in ("naive", "spill", "ideal"))
             ratio = spill["metrics"]["capacity"]["effective_unique"] / naive["metrics"]["capacity"]["effective_unique"]
-            delta_ns = spill["metrics"]["mean_ns_per_operation"] - naive["metrics"]["mean_ns_per_operation"]
-            row = {"repetition": rep, "capacity_ratio": ratio, "guest_delta_ns_per_operation": delta_ns,
-                   "guest_delta_cycles": delta_ns * 2.0, "pass": ratio >= 1.5 and delta_ns * 2.0 < 50}
+            spill_outer = spill["metrics"]["outer_latency"]
+            ideal_outer = ideal["metrics"]["outer_latency"]
+            delta_ns = spill_outer["mean_ns"] - ideal_outer["mean_ns"]
+            capacity_pass, latency_pass = ratio >= 1.5, delta_ns * 2.0 < 50
+            guest_values = {role: m1_by[rep, role]["metrics"].get("mean_ns_per_operation")
+                            for role in ("naive", "spill", "ideal")}
+            row = {"repetition": rep, "capacity_ratio": ratio,
+                   "spill_outer_samples": spill_outer["samples"],
+                   "ideal_outer_samples": ideal_outer["samples"],
+                   "spill_outer_mean_ns": spill_outer["mean_ns"],
+                   "ideal_outer_mean_ns": ideal_outer["mean_ns"],
+                   "outer_delta_ns": delta_ns, "outer_delta_cycles": delta_ns * 2.0,
+                   "capacity_pass": capacity_pass, "latency_pass": latency_pass,
+                   "pass": capacity_pass and latency_pass,
+                   "legacy_guest_descriptive": {"means_ns_per_operation": guest_values,
+                                                  "spill_minus_naive_ns":
+                                                  (guest_values["spill"] - guest_values["naive"])
+                                                  if guest_values["spill"] is not None and
+                                                  guest_values["naive"] is not None else None}}
             m1_comp.append(row)
             matrix.append({"metric": "Metric1", "level": "repetition", "identity": rep, "tc": "TC131",
-                           "value": ratio, "unit": "capacity-ratio", "status": "PASS" if row["pass"] else "FAIL",
-                           "detail": f"guest_delta_ns={delta_ns:.9g}"})
+                            "value": ratio, "unit": "capacity-ratio", "status": "PASS" if row["pass"] else "FAIL",
+                            "detail": f"outer_delta_ns={delta_ns:.9g}; roles=naive/spill/ideal"})
+    ratios = [row["capacity_ratio"] for row in m1_comp]
+    deltas = [row["outer_delta_ns"] for row in m1_comp]
+    def distribution(values):
+        mean = statistics.mean(values) if values else None
+        stdev = statistics.stdev(values) if len(values) > 1 else (0.0 if values else None)
+        return {"count": len(values), "mean": mean, "stdev": stdev,
+                "cv": (stdev / abs(mean) if mean not in (None, 0) else None)}
     m1_status = ("NOT_REQUESTED" if not m1_reps and not m1 else
-                 "INCOMPLETE" if m1_missing or not m1_reps else
-                 "PASS" if all(r["pass"] for r in m1_comp) else "FAIL")
+                  "INCOMPLETE" if m1_missing or not m1_reps else
+                  "PASS" if all(r["pass"] for r in m1_comp) else "FAIL")
 
     # Metric 2 per repetition/case and equal-weight aggregate.
     m2 = [r for r in resolved if r["metric"] == 2]
@@ -723,63 +1027,125 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         matrix.append({"metric": "Metric2", "level": "aggregate", "identity": "applicable-case equal weight",
                        "tc": "ALL", "value": m2_value, "unit": "%", "status": m2_status, "detail": "no sample weighting"})
 
-    # Metric 3 exact pairing, standard arm evidence tree, TC and frozen aggregate rows.
+    # Metric 3 supports independent repeats by default and strict legacy pairing.
     m3 = [r for r in resolved if r["metric"] == 3]
-    m3_req = requirement(data, "metric3", {"pairs": sorted({r.get("pair") for r in m3}),
-                                             "testcases": sorted({r["tc"] for r in m3})})
-    pairs_req, tcs_req = [str(x) for x in m3_req.get("pairs", [])], [int(x) for x in m3_req.get("testcases", [])]
-    groups = defaultdict(dict)
-    for row in m3:
-        groups[(row["pair"], row["tc"], row["order"])][row["arm"]] = row
-    pair_tc_orders = defaultdict(set)
-    for pair, tc, order in groups:
-        pair_tc_orders[pair, tc].add(order)
-    conflicting_orders = {key: sorted(orders) for key, orders in pair_tc_orders.items()
-                          if len(orders) > 1}
-    for (pair, tc), orders in sorted(conflicting_orders.items()):
-        issues.append({"severity": "ERROR", "code": "M3_ORDER_CONFLICT",
-                       "run_id": f"{pair}/TC{tc}",
-                       "message": f"paired arms declare multiple orders: {orders}"})
-    samples, incomplete_pairs = [], []
-    evidence_root = output_dir / "evidence" / "metric3" if output_dir is not None else None
-    for pair in pairs_req:
-        for tc in tcs_req:
-            if (pair, tc) in conflicting_orders:
-                continue
-            candidates = [(key, arms) for key, arms in groups.items() if key[0] == pair and key[1] == tc]
-            if len(candidates) != 1 or set(candidates[0][1]) != {"ourcc", "ha-vi"}:
-                incomplete_pairs.append({"pair": pair, "tc": tc, "candidates": len(candidates),
-                                         "present_arms": sorted(candidates[0][1]) if len(candidates) == 1 else []})
-                continue
-            (key, arms) = candidates[0]
-            order = key[2]
-            if evidence_root is not None:
-                for arm, source in arms.items():
-                    arm_dir = evidence_root / f"pair-{pair}" / f"TC{tc}" / arm
-                    arm_dir.mkdir(parents=True, exist_ok=True)
-                    result = {"pair": pair, "pair_id": f"pair-{pair}-tc{tc}", "tc": tc, "order": order,
-                              "arm": arm, "status": "PASS", "return_code": 0, "metrics": source["metrics"],
-                              "raw_run_id": source["id"]}
-                    (arm_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-            for name in M3[tc]:
-                left, right = arms["ourcc"]["metrics"][name], arms["ha-vi"]["metrics"][name]
-                if left["counter_frequency_hz"] != right["counter_frequency_hz"]:
-                    issues.append({"severity": "ERROR", "code": "M3_FREQUENCY_MISMATCH", "run_id": f"{pair}/TC{tc}", "message": name})
+    default_req = {"repetitions": sorted({r["repetition"] for r in m3}),
+                   "testcases": sorted({r["tc"] for r in m3})}
+    m3_req = requirement(data, "metric3", default_req)
+    paired_mode = (m3_req.get("mode") == "paired" or
+                   ("mode" not in m3_req and bool(m3_req.get("pairs"))))
+    comparison_mode = "paired" if paired_mode else "independent"
+    tcs_req = [int(x) for x in m3_req.get("testcases", [])]
+    samples, incomplete_pairs, missing_m3 = [], [], []
+    conflicting_orders = {}
+    counts_by_tc_arm = {}
+    if paired_mode:
+        pairs_req = [str(x) for x in m3_req.get("pairs", [])]
+        groups = defaultdict(dict)
+        for row in m3:
+            if row.get("pair") is not None and row.get("order") is not None:
+                groups[(row["pair"], row["tc"], row["order"])][row["arm"]] = row
+        pair_tc_orders = defaultdict(set)
+        for pair, tc, order in groups:
+            pair_tc_orders[pair, tc].add(order)
+        conflicting_orders = {key: sorted(orders) for key, orders in pair_tc_orders.items()
+                              if len(orders) > 1}
+        for (pair, tc), orders in sorted(conflicting_orders.items()):
+            issues.append({"severity": "ERROR", "code": "M3_ORDER_CONFLICT",
+                           "run_id": f"{pair}/TC{tc}",
+                           "message": f"paired arms declare multiple orders: {orders}"})
+        evidence_root = output_dir / "evidence" / "metric3" if output_dir is not None else None
+        for pair in pairs_req:
+            for tc in tcs_req:
+                if (pair, tc) in conflicting_orders:
                     continue
-                delta = right["ticks_per_operation"] - left["ticks_per_operation"]
-                samples.append({"pair": pair, "tc": tc, "order": order, "metric": name,
-                                "ourcc_ticks": left["ticks_per_operation"], "ha_vi_ticks": right["ticks_per_operation"],
-                                "delta_ticks": delta, "frequency_hz": left["counter_frequency_hz"]})
-                matrix.append({"metric": "Metric3", "level": "pair", "identity": pair, "tc": f"TC{tc}",
-                               "value": delta, "unit": f"ticks/op:{name}", "status": "OURCC_FASTER" if delta > 0 else "FAIL",
-                               "detail": f"order={order}; delta=HA-VI-OurCC"})
-    summaries = []
-    for (tc, name), rows in sorted(defaultdict(list, {key: [r for r in samples if (r["tc"], r["metric"]) == key]
-                                                        for key in {(r["tc"], r["metric"]) for r in samples}}).items()):
-        summaries.append({"tc": tc, "metric": name, "pairs": len(rows),
-                          "ourcc_mean_ticks": statistics.mean(r["ourcc_ticks"] for r in rows),
-                          "ha_vi_mean_ticks": statistics.mean(r["ha_vi_ticks"] for r in rows),
-                          "delta_mean_ticks": statistics.mean(r["delta_ticks"] for r in rows)})
+                candidates = [(key, arms) for key, arms in groups.items()
+                              if key[0] == pair and key[1] == tc]
+                if len(candidates) != 1 or set(candidates[0][1]) != {"ourcc", "ha-vi"}:
+                    incomplete_pairs.append({"pair": pair, "tc": tc, "candidates": len(candidates),
+                                             "present_arms": sorted(candidates[0][1]) if len(candidates) == 1 else []})
+                    continue
+                key, arms = candidates[0]
+                order = key[2]
+                if evidence_root is not None:
+                    for arm, source in arms.items():
+                        arm_dir = evidence_root / f"pair-{pair}" / f"TC{tc}" / arm
+                        arm_dir.mkdir(parents=True, exist_ok=True)
+                        result = {"pair": pair, "pair_id": f"pair-{pair}-tc{tc}", "tc": tc,
+                                  "order": order, "arm": arm, "status": "PASS", "return_code": 0,
+                                  "metrics": source["metrics"], "raw_run_id": source["id"]}
+                        (arm_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+                for name in M3[tc]:
+                    left, right = arms["ourcc"]["metrics"][name], arms["ha-vi"]["metrics"][name]
+                    if left["counter_frequency_hz"] != right["counter_frequency_hz"]:
+                        issues.append({"severity": "ERROR", "code": "M3_FREQUENCY_MISMATCH",
+                                       "run_id": f"{pair}/TC{tc}", "message": name})
+                        continue
+                    delta = right["ticks_per_operation"] - left["ticks_per_operation"]
+                    samples.append({"pair": pair, "tc": tc, "order": order, "metric": name,
+                                    "ourcc_ticks": left["ticks_per_operation"],
+                                    "ha_vi_ticks": right["ticks_per_operation"],
+                                    "delta_ticks": delta, "frequency_hz": left["counter_frequency_hz"]})
+                    matrix.append({"metric": "Metric3", "level": "pair", "identity": pair,
+                                   "tc": f"TC{tc}", "value": delta, "unit": f"ticks/op:{name}",
+                                   "status": "OURCC_FASTER" if delta > 0 else "FAIL",
+                                   "detail": f"order={order}; delta=HA-VI-OurCC"})
+        summaries = []
+        for key in sorted({(r["tc"], r["metric"]) for r in samples}):
+            rows = [r for r in samples if (r["tc"], r["metric"]) == key]
+            summaries.append({"tc": key[0], "metric": key[1], "pairs": len(rows),
+                              "ourcc_mean_ticks": statistics.mean(r["ourcc_ticks"] for r in rows),
+                              "ha_vi_mean_ticks": statistics.mean(r["ha_vi_ticks"] for r in rows),
+                              "delta_mean_ticks": statistics.mean(r["delta_ticks"] for r in rows)})
+        m3_complete = (bool(pairs_req and tcs_req) and not incomplete_pairs and
+                       not conflicting_orders and set(tcs_req) == set(M3))
+    else:
+        repetitions = [str(x) for x in m3_req.get("repetitions", [])]
+        min_repetitions = int(m3_req.get("min_repetitions", 0) or 0)
+        arms_req = [norm_arm(x) for x in m3_req.get("arms", ["ourcc", "ha-vi"])]
+        values = defaultdict(list)
+        present = {(r["repetition"], r["tc"], r["arm"]): r for r in m3}
+        if repetitions:
+            missing_m3 = [(rep, tc, arm) for rep in repetitions for tc in tcs_req
+                          for arm in arms_req if (rep, tc, arm) not in present]
+        for run in m3:
+            for name, metric in run["metrics"].items():
+                value = metric["ticks_per_operation"]
+                values[(run["tc"], name, run["arm"])].append(value)
+                samples.append({"run_id": run["id"], "repetition": run["repetition"],
+                                "tc": run["tc"], "arm": run["arm"], "metric": name,
+                                "ticks_per_operation": value,
+                                "frequency_hz": metric["counter_frequency_hz"]})
+        summaries = []
+        for tc, name in sorted({key[:2] for key in values}):
+            arm_stats = {}
+            for arm in ("ourcc", "ha-vi"):
+                rows = values.get((tc, name, arm), [])
+                if rows:
+                    arm_stats[arm] = {"count": len(rows), "mean_ticks": statistics.mean(rows),
+                                      "stdev_ticks": statistics.stdev(rows) if len(rows) > 1 else 0.0}
+            if set(arm_stats) == {"ourcc", "ha-vi"}:
+                summaries.append({"tc": tc, "metric": name,
+                                  "ourcc_count": arm_stats["ourcc"]["count"],
+                                  "ha_vi_count": arm_stats["ha-vi"]["count"],
+                                  "ourcc_stdev_ticks": arm_stats["ourcc"]["stdev_ticks"],
+                                  "ha_vi_stdev_ticks": arm_stats["ha-vi"]["stdev_ticks"],
+                                  "ourcc_mean_ticks": arm_stats["ourcc"]["mean_ticks"],
+                                  "ha_vi_mean_ticks": arm_stats["ha-vi"]["mean_ticks"],
+                                  "delta_mean_ticks": arm_stats["ha-vi"]["mean_ticks"] - arm_stats["ourcc"]["mean_ticks"]})
+        counts_by_tc_arm = {str(tc): {arm: sum(r["tc"] == tc and r["arm"] == arm for r in m3)
+                                      for arm in arms_req} for tc in tcs_req}
+        insufficient = [(tc, arm, counts_by_tc_arm[str(tc)][arm], min_repetitions)
+                        for tc in tcs_req for arm in arms_req
+                        if min_repetitions and counts_by_tc_arm[str(tc)][arm] < min_repetitions]
+        imbalanced = [{"tc": tc, "counts": counts_by_tc_arm[str(tc)]} for tc in tcs_req
+                      if len(set(counts_by_tc_arm[str(tc)].values())) > 1]
+        if imbalanced:
+            issues.append(warning("M3_ARM_COUNT_IMBALANCE", "metric3",
+                                  f"independent arm counts are imbalanced: {imbalanced}"))
+        missing_m3.extend(insufficient)
+        m3_complete = (bool(tcs_req) and not missing_m3 and not imbalanced and
+                       set(tcs_req) == set(M3) and set(arms_req) == {"ourcc", "ha-vi"})
     by_summary = {(r["tc"], r["metric"]): r for r in summaries}
     primary = []
     for tc in tcs_req:
@@ -788,7 +1154,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             ourcc = sum(weight * by_summary[tc, name]["ourcc_mean_ticks"] for name, weight in definition.items())
             havi = sum(weight * by_summary[tc, name]["ha_vi_mean_ticks"] for name, weight in definition.items())
             primary.append({"tc": tc, "ourcc_mean_ticks": ourcc, "ha_vi_mean_ticks": havi, "delta_mean_ticks": havi-ourcc})
-            matrix.append({"metric": "Metric3", "level": "TC", "identity": "paired mean", "tc": f"TC{tc}",
+            matrix.append({"metric": "Metric3", "level": "TC", "identity": f"{comparison_mode} arm mean", "tc": f"TC{tc}",
                            "value": havi-ourcc, "unit": "ticks/op", "status": "OURCC_FASTER" if havi > ourcc else "FAIL",
                            "detail": "frozen primary-value formula"})
     aggregates = []
@@ -800,10 +1166,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             matrix.append({"metric": "Metric3", "level": "aggregate", "identity": name, "tc": "ALL",
                            "value": delta, "unit": "ticks/op", "status": aggregates[-1]["status"],
                            "detail": "frozen weights; strict GT 0"})
-    m3_requested = bool(pairs_req or tcs_req or m3)
-    official_m3_tcs = set(M3)
-    m3_complete = (bool(pairs_req and tcs_req) and not incomplete_pairs and
-                   not conflicting_orders and set(tcs_req) == official_m3_tcs)
+    m3_requested = bool(tcs_req or m3)
     m3_status = ("NOT_REQUESTED" if not m3_requested else "INCOMPLETE" if not m3_complete else
                  "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if len(aggregates) == 2 and all(a["delta_ticks"] > 0 for a in aggregates)
                  else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)")
@@ -817,7 +1180,18 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     report = {"schema_version": 1, "manifest": str(manifest) if manifest is not None else None,
               "correctness_policy": data.get("correctness_policy", "strict"),
               "overall_status": overall, "exit_code": code,
-              "metric1": {"status": m1_status, "missing_slots": m1_missing, "comparisons": m1_comp},
+              "metric1": {"status": m1_status, "definition": {
+                                "capacity_ratio": "spill effective_unique / naive effective_unique",
+                                "outer_delta_ns": "mean(spill completed Outer) - mean(ideal completed Outer)",
+                                "cycles_per_ns": 2.0, "capacity_threshold": 1.5,
+                                "outer_delta_cycles_strict_max": 50.0,
+                                "guest_timer": "deprecated descriptive only"},
+                           "roles": m1_roles, "ideal_min_capacity": int(m1_req.get("ideal_min_capacity", 102656)),
+                           "missing_slots": m1_missing, "comparisons": m1_comp,
+                           "aggregate": {"capacity_ratio": distribution(ratios),
+                                         "outer_delta_ns": distribution(deltas),
+                                         "outer_delta_cycles": distribution([x * 2.0 for x in deltas]),
+                                         "pass_policy": "every repetition passes"}},
               "metric2": {"status": m2_status, "missing_slots": m2_missing, "cases": m2_cases,
                            "repetition_equal_weight": m2_rep,
                            "applicable_cases_by_repetition": applicable_sets,
@@ -825,9 +1199,14 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                            "official_testcase_set_complete": m2_official_set,
                            "repetitions_without_applicable_cases": empty_applicable,
                            "aggregate_reduction_pct": m2_value},
-              "metric3": {"status": m3_status, "executable_reference_model": True,
-                          "pairing_policy": "pair/tc/order identity-only; never Cartesian",
-                          "incomplete_pairs": incomplete_pairs, "samples": samples, "metric_summaries": summaries,
+               "metric3": {"status": m3_status, "executable_reference_model": True,
+                           "comparison_mode": comparison_mode,
+                           "comparison_policy": ("pair/tc/order identity-only; never Cartesian" if paired_mode else
+                                                 "arm means; no pairing/ABBA"),
+                           "pairing_policy": "pair/tc/order identity-only; never Cartesian" if paired_mode else None,
+                           "counts_by_tc_arm": counts_by_tc_arm,
+                           "missing_slots": missing_m3,
+                           "incomplete_pairs": incomplete_pairs, "samples": samples, "metric_summaries": summaries,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
                "views": {"standard": {"runs": len(standard_resolved), "formal": True},
@@ -881,9 +1260,12 @@ class Metric123RawLogMatrix:
         self.base_dir = pathlib.Path(base_dir or ".").expanduser().resolve()
         self._explicit_requirements = requirements is not None
         self._requirements = json.loads(json.dumps(requirements or {}))
-        self._inferred = {"metric1": {"repetitions": set()},
+        self._inferred = {"metric1": {"repetitions": set(),
+                                       "roles": {"naive", "spill", "ideal"},
+                                       "ideal_min_capacity": 102656},
                           "metric2": {"repetitions": set(), "testcases": set()},
-                          "metric3": {"pairs": set(), "testcases": set()}}
+                          "metric3": {"mode": "independent", "repetitions": set(),
+                                      "testcases": set(), "arms": {"ourcc", "ha-vi"}}}
         self._resolved = []
         self._issues = []
         self._ids = set()
@@ -901,12 +1283,13 @@ class Metric123RawLogMatrix:
             repetition = str(raw["repetition"])
             if metric in (1, 2):
                 profile = norm_profile(raw.get("profile"))
+                if metric == 1:
+                    role = norm_metric1_role(raw["metric1_role"]) if raw.get("metric1_role") else None
+                    return run_id, (metric, repetition, tc, role, profile)
                 return run_id, (metric, repetition, tc, profile)
             if metric == 3:
-                pair, order, arm = str(raw["pair"]), raw["order"], raw["arm"]
-                if order not in ("AB", "BA") or arm not in ("ourcc", "ha-vi"):
-                    return run_id, None
-                return run_id, (3, pair, tc, order, arm)
+                arm = norm_arm(raw["arm"])
+                return run_id, (3, repetition, tc, arm)
         except (KeyError, ExtractError, TypeError, ValueError):
             pass
         return run_id, None
@@ -920,8 +1303,9 @@ class Metric123RawLogMatrix:
             self._inferred["metric2"]["repetitions"].add(slot[1])
             self._inferred["metric2"]["testcases"].add(slot[2])
         else:
-            self._inferred["metric3"]["pairs"].add(slot[1])
+            self._inferred["metric3"]["repetitions"].add(slot[1])
             self._inferred["metric3"]["testcases"].add(slot[2])
+            self._inferred["metric3"]["arms"].add(slot[3])
 
     @staticmethod
     def _official_requirement_candidate(raw, slot):
@@ -931,8 +1315,6 @@ class Metric123RawLogMatrix:
         topology = str(raw.get("topology", "")).lower()
         if slot[0] == 1:
             return (slot[2] == 131 and topology == "8n1s" and
-                    str(raw.get("phase", "post_pressure_catalog_reuse")) == "post_pressure_catalog_reuse" and
-                    tuple(map(int, raw.get("timer_nodes", [1, 2]))) == (1, 2) and
                     int(raw.get("home_node", 0)) == 0 and int(raw.get("home_socket", 0)) == 0)
         if slot[0] == 2:
             if slot[2] not in M2:
@@ -969,6 +1351,14 @@ class Metric123RawLogMatrix:
         else:
             effective_id, rename_warning = candidate, None
         raw["id"] = effective_id
+        if int(raw.get("metric", 0) or 0) == 1 and self._explicit_requirements:
+            raw.setdefault("ideal_min_capacity", int(
+                self._requirements.get("metric1", {}).get("ideal_min_capacity", 102656)))
+        if int(raw.get("metric", 0) or 0) == 3:
+            req = self._requirements.get("metric3", {}) if self._explicit_requirements else {}
+            raw["comparison_mode"] = ("paired" if req.get("mode") == "paired" or
+                                      ("mode" not in req and bool(req.get("pairs"))) else
+                                      "independent")
         run_id, slot = self._identity(raw)
         official_candidate = self._official_requirement_candidate(raw, slot)
         if official_candidate:
@@ -982,15 +1372,28 @@ class Metric123RawLogMatrix:
         try:
             parsed = extract_run(raw, self.base_dir, self.correctness_policy)
         except (ExtractError, OSError, ValueError, TypeError) as error:
-            code = "EVIDENCE_INVALID" if slot is not None else "RUN_SCHEMA_INVALID"
+            message = str(error)
+            if message.startswith("ARM_IDENTITY_MISSING"):
+                code = "ARM_IDENTITY_MISSING"
+            elif message.startswith("ARM_IDENTITY_CONFLICT"):
+                code = "ARM_IDENTITY_CONFLICT"
+            else:
+                code = "EVIDENCE_INVALID" if slot is not None else "RUN_SCHEMA_INVALID"
             issue = {"severity": "ERROR", "code": code, "run_id": fallback_id,
-                     "contract_class": "standard" if official_candidate else "extension",
-                     "message": str(error)}
+                      "contract_class": "standard" if official_candidate else "extension",
+                      "message": message}
             result["issue"] = issue
             self._issues.append(issue)
             self._add_results.append(result)
             return json.loads(json.dumps(result))
         parsed_slot = logical_slot(parsed)
+        if (not self._explicit_requirements and parsed["metric"] == 1 and
+                parsed.get("standard_contract")):
+            self._inferred["metric1"]["repetitions"].add(parsed["repetition"])
+        if not self._explicit_requirements and parsed["metric"] == 3:
+            self._inferred["metric3"]["repetitions"].add(parsed["repetition"])
+            self._inferred["metric3"]["testcases"].add(parsed["tc"])
+            self._inferred["metric3"]["arms"].add(parsed["arm"])
         self._issues.extend(copy.deepcopy(parsed.get("contract_warnings", [])))
         self._resolved.append(parsed)
         prior_ids = list(self._slot_ids[parsed_slot])
@@ -1088,10 +1491,10 @@ class Metric123RawLogMatrix:
         if self._explicit_requirements:
             requirements = json.loads(json.dumps(self._requirements))
         else:
-            requirements = {
-                name: {key: sorted(values) for key, values in fields.items()}
-                for name, fields in self._inferred.items()
-            }
+            requirements = {}
+            for name, fields in self._inferred.items():
+                requirements[name] = {key: (sorted(values) if isinstance(values, set) else values)
+                                      for key, values in fields.items()}
         return {"schema_version": 1, "correctness_policy": self.correctness_policy,
                 "requirements": requirements}
 
