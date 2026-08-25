@@ -3032,6 +3032,8 @@ main(int argc, char **argv)
             g_rdcfg.ways = std::atoi(argv[i] + 7);
         if (!std::strncmp(argv[i], "--set-bits=", 11))
             g_rdcfg.set_bits = std::atoi(argv[i] + 11);
+        if (!std::strcmp(argv[i], "--allow-oversized-resident-dir-for-test"))
+            g_rdcfg.allow_oversized_for_test = true;
         // UBCC runtime params
         if (!std::strncmp(argv[i], "--dram-delay-ps=", 16))
             g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
@@ -3232,6 +3234,8 @@ main(int argc, char **argv)
               << ",\"pa_bits\":" << g_rdcfg.pa_bits
               << ",\"sharers_bits\":" << g_rdcfg.sharers_bits
               << ",\"epoch_bits\":" << g_rdcfg.epoch_bits << "}"
+              << ",\"experimental_oversized_resident_dir\":"
+              << (g_rdcfg.allow_oversized_for_test ? 1 : 0)
               << ",\"overflow_policy\":" << jsonQuote(overflowPolicy)
               << ",\"batch_rs\":" << (g_batchRs ? 1 : 0)
               << ",\"schema\":" << jsonQuote(backstoreSchemaModeName(g_schemaMode))
@@ -3393,7 +3397,8 @@ main(int argc, char **argv)
             "[UBIO-MANIFEST] metadata_dram_configured={} MiB per_socket={} MiB "
                 "(authoritative range: see [EPBACKEND-MANIFEST])\n"
             "[UBIO-MANIFEST] resident_capacity={} entries ({}-way x {}-set)\n"
-            "[UBIO-MANIFEST] on_chip_budget_total={} KiB (limit=512 KiB)\n"
+            "[UBIO-MANIFEST] on_chip_budget_total={} KiB (limit=512 KiB) "
+                "experimental_oversized={}\n"
             "[UBIO-MANIFEST] on_chip_breakdown: dir={} KiB bloom={} KiB "
                 "residentGroupIndex={} KiB hostLegacyGroupIndex={} KiB "
                 "blc_reserved={} KiB desc_reserved={} KiB",
@@ -3405,6 +3410,7 @@ main(int argc, char **argv)
             per_socket_dram / (1024 * 1024),
             capacity, layout.ways, layout.num_sets,
             total_on_chip / 1024,
+            g_rdcfg.allow_oversized_for_test ? 1 : 0,
             dir_bytes / 1024, bloom_bytes / 1024,
             groupIndexStorage / 1024,
             hostLegacyGroupIndexDupe / 1024,
@@ -3427,7 +3433,8 @@ main(int argc, char **argv)
         }
 
         // Hard budget assertion (includes host duplicate)
-        if (total_on_chip > 512 * 1024) {
+        if (total_on_chip > 512 * 1024 &&
+            !g_rdcfg.allow_oversized_for_test) {
             LogError("UBIO",
                 "[UBIO-FATAL] total on-chip budget {} KiB exceeds 512 KiB "
                 "limit. Reduce bloom/blc/desc or increase sram.",
