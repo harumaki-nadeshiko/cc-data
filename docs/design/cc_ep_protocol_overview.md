@@ -1,12 +1,12 @@
 # UBCC 跨节点缓存一致性协议体系结构
 
-**文档版本：V1.0**
+文档版本：V1.0
 
-**交付阶段：正式文档第一版**
+交付阶段：正式文档第一版
 
-**项目名称：<XXX>**
+项目名称：<XXX>
 
-**甲方单位：<XXX>**
+甲方单位：<XXX>
 
 <!-- PAGEBREAK -->
 
@@ -21,7 +21,7 @@
 5. 关键协议路径
 6. 并发仲裁与活性机制
 7. 方案价值与架构比较
-8. 交付代码结构
+8. 集成边界
 9. 总结
 附录 A 消息与状态速查表
 附录 B EP-RNF 仲裁规则
@@ -50,12 +50,12 @@ UBCC 的核心价值是将全局目录、跨节点权限仲裁和元数据容量
 
 UBCC 围绕以下目标进行设计：
 
-- **协议解耦**：全局目录与节点内 CHI 状态机职责分离；
-- **容量扩展**：在固定 SRAM 预算下提升等效追踪容量；
-- **精确仲裁**：依据全局目录状态选择 owner、sharer 和失效目标；
-- **事务收敛**：通过 epoch、reqId、两阶段提交和幂等处理保证同址事务有序完成；
-- **多拓扑适配**：支持多节点、多 Socket 和跨节点路由组织；
-- **工程集成**：以模块化接口接入 `<XXX>Sim` 多仿真器环境。
+- 协议解耦：全局目录与节点内 CHI 状态机职责分离；
+- 容量扩展：在固定 SRAM 预算下提升等效追踪容量；
+- 精确仲裁：依据全局目录状态选择 owner、sharer 和失效目标；
+- 事务收敛：通过 epoch、reqId、两阶段提交和幂等处理保证同址事务有序完成；
+- 多拓扑适配：支持多节点、多 Socket 和跨节点路由组织；
+- 工程集成：以模块化接口接入 ubsim 环境。
 
 ### 1.3 交付结论
 
@@ -71,23 +71,22 @@ UBCC 已形成完整的跨节点一致性数据通路和控制通路，覆盖远
 
 UBCC 将系统划分为两个协同的一致性域：
 
-- **Inner 域**：节点内标准 CHI 一致性域，包括 CPU Cache、HN-F 及节点内 snoop 路径；
-- **Outer 域**：由 UBCC 管理的跨节点一致性域，负责全局目录、权限仲裁、Recall 和
+- Inner 域：节点内标准 CHI 一致性域，包括 CPU Cache、HN-F 及节点内 snoop 路径；
+- Outer 域：由 UBCC 管理的跨节点一致性域，负责全局目录、权限仲裁、Recall 和
   Invalidate 收敛。
 
 ![图 2-1 UBCC 跨节点缓存一致性总体架构](figures/ubcc-system-architecture.png)
 
-**图 2-1** 展示了节点内 CHI、EP、UBCC、ResidentDir、Backstore 和 NetworkSim 之间的
-关系。节点内请求经 EP 接入 UBCC；UBCC 根据全局目录状态完成权限判断，并在需要时通过
-NetworkSim 与其他节点交换一致性消息。
+图 2-1　UBCC 总体架构。节点内请求经 EP 接入 UBCC；UBCC 根据全局目录状态完成权限
+判断，并经跨节点通信平面交换一致性消息。
 
 ### 2.2 控制路径与数据路径
 
 UBCC 对控制信息与数据传输采用统一事务身份进行关联：
 
-- **控制路径**：请求类型、权限状态、epoch、reqId、sharer/owner 信息和完成确认；
-- **数据路径**：远程读数据、脏数据回收、写回数据和授权返回；
-- **完成路径**：请求授权、失效确认、Clear 提交和最终权限可用。
+- 控制路径：请求类型、权限状态、epoch、reqId、sharer/owner 信息和完成确认；
+- 数据路径：远程读数据、脏数据回收、写回数据和授权返回；
+- 完成路径：请求授权、失效确认、Clear 提交和最终权限可用。
 
 数据来源由全局目录状态决定。若最新数据位于远程 owner，UBCC 发起 Recall；若 Home 已有
 权威数据，则直接组织授权返回。该设计避免由节点内任意缓存副本替代全局 owner 语义。
@@ -103,7 +102,6 @@ UBCC 对控制信息与数据传输采用统一事务身份进行关联：
 | UBCC 控制器 | Outer 域 | 维护全局目录，执行权限仲裁和事务收敛 |
 | ResidentDir | Outer 域 | 保存活跃跨节点目录元数据 |
 | Backstore | Outer 域 | 保存冷目录元数据并支持换入换出 |
-| NetworkSim | 传输层 | 组织跨节点消息路由和链路时延 |
 
 ---
 
@@ -159,10 +157,12 @@ UBAdapter 提供稳定的消息适配边界，负责：
 - 请求发送、响应分发和回调完成；
 - 对可恢复消息执行稳定 tuple 重试。
 
-### 3.6 NetworkSim
+### 3.6 gem5 EP 关系
 
-NetworkSim 根据拓扑配置连接各节点通信平面，为 UBCC 消息提供跨节点路由和链路时延。
-UBCC 协议语义不依赖特定网络拓扑，节点数和 Socket 数由配置决定。
+![图 3-1 gem5 EP 架构与控制器关系](figures/gem5-ruby-controller-relationships.png)
+
+图 3-1　gem5 EP 架构。EP-RNF、EP-SNF 和 UBAdapter 位于节点内 CHI 域与 UBCC Outer 域
+之间，分别承担 snoop 参与、服务请求接入和跨域事务关联。
 
 ---
 
@@ -196,8 +196,8 @@ UBCC 目录记录每条缓存行的全局权限关系，核心信息包括：
 
 UBCC 将授权发送与目录提交分为两个阶段：
 
-- **阶段 1：保留**。创建 outstanding，记录目标状态和事务身份，保持原已提交目录状态；
-- **阶段 2：提交**。收到匹配的 Clear 后，提交目标状态并退役对应事务。
+- 阶段 1（保留）：创建 outstanding，记录目标状态和事务身份，保持原已提交目录状态；
+- 阶段 2（提交）：收到匹配的 Clear 后，提交目标状态并退役对应事务。
 
 该语义保证 Grant 在途期间目录仍保持安全状态，并使重复请求能够返回同一授权结果。
 
@@ -302,7 +302,7 @@ Clear、Upgrade、Invalidate 和 Recall 路径均保存原事务身份。发生�
 
 ---
 
-## 7. 方案价值与架构比较
+## 7. 方案价值、设计沿革与架构比较
 
 ### 7.1 独立目录资源域
 
@@ -334,69 +334,55 @@ UBCC 支持单向完成语义、直接数据路径和批量共享者处理。相
 | 跨节点目标选择 | 全局 sharer/owner 精确选择 | 取决于具体 HA 目录组织 |
 | 协议演进边界 | Outer 域独立演进 | 与节点内协议实现耦合 |
 
+### 7.6 Phase-1 设计沿革
+
+Phase-1 先比较了若干候选组织方式，再收敛到当前方案。候选方案的职责边界如下：
+
+| 候选方案 | 核心思路 | Phase-1 判断 |
+|---|---|---|
+| HN-F 内置全局目录 | 将跨节点状态并入节点内 Home | 资源域耦合，扩容与演进边界不清晰 |
+| Backend + Bloom | Backend 保存精确状态，Bloom 用于快速过滤 | 形成“热点精确追踪、冷状态后移”的早期思路，但过滤器误判与状态权威性边界增加了论证复杂度 |
+| ResidentDir + Backstore | SRAM 保存活跃精确条目，后备层保存冷精确元数据 | 作为当前实现，保持单一精确目录语义并提供容量扩展 |
+
+设计演进不是将 Backend + Bloom 直接改名。早期方案确认了分层元数据的价值；当前方案进一步
+将权威状态统一为 ResidentDir 与 Backstore 中的精确条目，Bloom 不属于当前交付架构，也不
+承担当前协议正确性或容量结论。
+
+### 7.7 一致性状态族比较
+
+| 状态族 | 典型状态 | 数据与权限特征 | 对 Phase-1 的启示 |
+|---|---|---|---|
+| VI | Valid、Invalid | 适合窄化参考模型，owner/sharer 表达有限 | 用于 HA-VI 理论与可执行参考比较，不是 UBCC 当前状态机的完整替代 |
+| MSI | Modified、Shared、Invalid | 支持共享与单写者，独占干净态表达较弱 | 可作为最小全局目录候选 |
+| MESI | Modified、Exclusive、Shared、Invalid | 增加独占干净态，便于减少无竞争升级 | 与 UBCC 当前 owner/sharer 仲裁需求相符 |
+| MOESI | 增加 Owned | 允许脏共享与持有者转发 | 可作为后续直接转发候选；本次交付未宣称实现 Owned 机制 |
+
+当前 ResidentDir + Backstore 解决的是精确元数据的驻留与容量问题；MESI 类状态解决的是权限
+语义问题。两者职责正交，不应把历史 Bloom 过滤或尚未采用的 MOESI Owned 机制描述为当前能力。
+
 ---
 
-## 8. 交付代码结构
+## 8. 集成边界
 
-### 8.1 工程目录
+### 8.1 模块级交付边界
 
-远端交付工程采用 CMake 组织，代码结构如下：
-
-```text
-<XXX>sim/
-├── src/
-├── sims/
-│   ├── gem5/
-│   ├── ubiomodule/
-│   │   ├── CMakeLists.txt
-│   │   └── ...
-│   ├── hamodule/
-│   │   ├── CMakeLists.txt
-│   │   └── ...
-│   ├── networksim/
-│   │   ├── CMakeLists.txt
-│   │   └── ...
-│   ├── framework/
-│   │   ├── iface/
-│   │   ├── <XXX>sim_shim/
-│   │   │   ├── Port.cc
-│   │   │   ├── Message.hh
-│   │   │   └── Message.cc
-│   │   └── CMakeLists.txt
-│   ├── protocol/
-│   └── CMakeLists.txt
-├── compile.sh
-├── gen_topo.py
-├── parallel_test_v2.py
-├── simulate.py
-└── CMakeLists.txt
-```
-
-### 8.2 目录职责
-
-| 路径 | 职责 |
-|---|---|
-| `sims/gem5/` | 节点内 CHI、EP 和处理器缓存仿真 |
-| `sims/ubiomodule/` | UBCC 控制器、ResidentDir、Backstore 和协议事务处理 |
-| `sims/hamodule/` | HA-VI 可执行参考模型 |
-| `sims/networksim/` | 跨节点消息路由与链路时延 |
-| `sims/framework/iface/` | 模块间公共端口、消息和日志接口 |
-| `sims/framework/<XXX>sim_shim/` | 仿真器适配层 |
-| `sims/protocol/` | 共享协议消息、地址映射和公共数据结构 |
-| `compile.sh` | 统一编译入口 |
-| `gen_topo.py` | 拓扑配置生成入口 |
-| `simulate.py` | 单组仿真实验启动入口 |
-| `parallel_test_v2.py` | 测试集合选择、并行调度和验证汇总入口 `[TODO-R01]` |
-
-### 8.3 构建目标
-
-| 构建目标 | 产物 | 主要依赖 |
+| 模块 | 对外职责 | 稳定边界 |
 |---|---|---|
-| framework | `lib<XXX>sim_framework.a` | `lib<XXX>sim.a`、公共接口 |
-| hamodule | 静态库 | protocol、framework |
-| ubiomodule | `bin/ubiomodule` | framework、hamodule、`lib<XXX>sim.a` |
-| networksim | `bin/networksim` | framework、`lib<XXX>sim.a` |
-| gem5 | gem5 可执行文件 | framework、`lib<XXX>sim.a` |
+| gem5 节点模型 | 节点内 CHI、缓存层级与 EP 行为 | CHI 请求、snoop、数据与完成事件 |
+| UBIO | UBCC、ResidentDir、Backstore 与事务处理 | Outer 请求、响应、确认与生命周期事件 |
+| HA-VI | 冻结 VI 可执行参考 | 与 UBCC 共用 workload 和完成边界 |
+| framework | 公共消息、端口和仿真器适配 | 事务身份、路由身份和数据负载 |
+
+### 8.2 parallel_test_v2 填写模板
+
+以下内容仅为未验证模板，不构成已交付功能声明；实际信息由集成方确认后填写。
+
+| 必要字段 | 填写值 |
+|---|---|
+| 测试集合选择方式 | 〔待确认〕 |
+| 并行任务数 | 〔待确认〕 |
+| 单项超时 | 〔待确认〕 |
+| 结果判定与汇总位置 | 〔待确认〕 |
 
 ---
 
@@ -404,7 +390,7 @@ UBCC 支持单向完成语义、直接数据路径和批量共享者处理。相
 
 UBCC 以独立全局目录为核心，在保持节点内 CHI 一致性边界的同时，提供跨节点数据定位、
 权限仲裁、目录容量扩展和可恢复消息处理。该架构兼顾协议清晰度、容量效率、目标选择精度
-和多拓扑扩展能力，并已形成可集成到 `<XXX>Sim` 的完整模块化实现。
+和多拓扑扩展能力，并已形成可集成到 ubsim 的模块化实现。
 
 ---
 
@@ -456,8 +442,9 @@ UBCC 以独立全局目录为核心，在保持节点内 CHI 一致性边界的�
 | UBIO | 承载 UBCC 控制器的运行模块 |
 | ResidentDir | SRAM 驻留目录 |
 | Backstore | 冷目录元数据的后备存储 |
-| NetworkSim | 跨节点消息路由与链路时延模块 |
 | HA-VI | VI 协议可执行参考模型 |
+| ubsim |  |
+| ub |  |
 | Inner 域 | 节点内标准 CHI 一致性域 |
 | Outer 域 | UBCC 管理的跨节点一致性域 |
 | Home | 负责指定地址全局目录和仲裁的节点 |

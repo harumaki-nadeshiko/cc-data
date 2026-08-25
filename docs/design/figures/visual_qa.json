@@ -1,307 +1,300 @@
 {
-  "schema_version": 1,
-  "scope": "Structural visual QA; corporate brand review remains TODO-R04.",
+  "schema_version": 2,
+  "inventory": "docs/design/figures/figure_inventory.json",
   "figures": [
     {
       "name": "ubcc-system-architecture",
-      "png": "docs/design/figures/ubcc-system-architecture.png",
-      "svg": "docs/design/figures/ubcc-system-architecture.svg",
-      "drawio": "docs/design/figures/ubcc-system-architecture.drawio",
-      "png_report": {
-        "width": 1083,
-        "height": 1459,
-        "mode": "RGB",
-        "non_white_bbox": [
-          50,
-          58,
-          1029,
-          1409
-        ],
-        "margins_px": {
-          "left": 50,
-          "top": 58,
-          "right": 54,
-          "bottom": 50
-        },
-        "content_bbox_ratio": 0.8371,
-        "alpha_extrema": [
-          255,
-          255
-        ],
-        "sampled_color_count": 977,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "kind": "diagram",
+      "width": 3082,
+      "height": 1303,
+      "svg_report": {
+        "bytes": 43588,
+        "font_declared": true,
+        "minimum_font_size": 10.0
       },
       "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 18,
-        "label_count": 16
+        "page_width": 1600,
+        "page_height": 700,
+        "label_count": 35,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true
+        }
       },
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "gem5-ruby-controller-relationships",
+      "kind": "diagram",
+      "width": 3082,
+      "height": 1293,
+      "svg_report": {
+        "bytes": 37087,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": {
+        "page_width": 1600,
+        "page_height": 700,
+        "label_count": 30,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true
+        }
+      },
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true
       },
       "status": "PASS"
     },
     {
       "name": "ubcc-protocol-paths",
-      "png": "docs/design/figures/ubcc-protocol-paths.png",
-      "svg": "docs/design/figures/ubcc-protocol-paths.svg",
-      "drawio": "docs/design/figures/ubcc-protocol-paths.drawio",
-      "png_report": {
-        "width": 1847,
-        "height": 867,
-        "mode": "RGBA",
-        "non_white_bbox": [
-          68,
-          58,
-          1779,
-          800
-        ],
-        "margins_px": {
-          "left": 68,
-          "top": 58,
-          "right": 68,
-          "bottom": 67
-        },
-        "content_bbox_ratio": 0.7928,
-        "alpha_extrema": [
-          170,
-          255
-        ],
-        "sampled_color_count": 1782,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "kind": "diagram",
+      "width": 2962,
+      "height": 1013,
+      "svg_report": {
+        "bytes": 34124,
+        "font_declared": true,
+        "minimum_font_size": 10.0
       },
       "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 27,
-        "label_count": 25
+        "page_width": 1540,
+        "page_height": 600,
+        "label_count": 28,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true
+        }
       },
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true
       },
       "status": "PASS"
     },
     {
       "name": "ubcc-verification-stack",
-      "png": "docs/design/figures/ubcc-verification-stack.png",
-      "svg": "docs/design/figures/ubcc-verification-stack.svg",
-      "drawio": "docs/design/figures/ubcc-verification-stack.drawio",
-      "png_report": {
-        "width": 806,
-        "height": 1397,
-        "mode": "RGBA",
-        "non_white_bbox": [
-          50,
-          58,
-          756,
-          1346
-        ],
-        "margins_px": {
-          "left": 50,
-          "top": 58,
-          "right": 50,
-          "bottom": 51
-        },
-        "content_bbox_ratio": 0.8076,
-        "alpha_extrema": [
-          170,
-          255
-        ],
-        "sampled_color_count": 1343,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "kind": "diagram",
+      "width": 2962,
+      "height": 602,
+      "svg_report": {
+        "bytes": 16364,
+        "font_declared": true,
+        "minimum_font_size": 10.0
       },
       "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 15,
-        "label_count": 13
+        "page_width": 1540,
+        "page_height": 350,
+        "label_count": 13,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true
+        }
       },
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true
       },
       "status": "PASS"
     },
     {
       "name": "ubcc-two-phase-commit",
-      "png": "docs/design/figures/ubcc-two-phase-commit.png",
-      "svg": "docs/design/figures/ubcc-two-phase-commit.svg",
-      "drawio": "docs/design/figures/ubcc-two-phase-commit.drawio",
-      "png_report": {
-        "width": 751,
-        "height": 963,
-        "mode": "RGBA",
-        "non_white_bbox": [
-          50,
-          58,
-          700,
-          913
-        ],
-        "margins_px": {
-          "left": 50,
-          "top": 58,
-          "right": 51,
-          "bottom": 50
-        },
-        "content_bbox_ratio": 0.7684,
-        "alpha_extrema": [
-          212,
-          255
-        ],
-        "sampled_color_count": 1917,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "kind": "diagram",
+      "width": 2882,
+      "height": 603,
+      "svg_report": {
+        "bytes": 16456,
+        "font_declared": true,
+        "minimum_font_size": 10.0
       },
       "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 13,
-        "label_count": 11
+        "page_width": 1500,
+        "page_height": 390,
+        "label_count": 13,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true
+        }
       },
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true
       },
       "status": "PASS"
     },
     {
-      "name": "ubcc-metric-summary",
-      "png": "docs/design/figures/ubcc-metric-summary.png",
-      "svg": "docs/design/figures/ubcc-metric-summary.svg",
-      "drawio": "docs/design/figures/ubcc-metric-summary.drawio",
-      "png_report": {
-        "width": 1390,
-        "height": 378,
-        "mode": "RGBA",
-        "non_white_bbox": [
-          58,
-          65,
-          1332,
-          320
-        ],
-        "margins_px": {
-          "left": 58,
-          "top": 65,
-          "right": 58,
-          "bottom": 58
-        },
-        "content_bbox_ratio": 0.6183,
-        "alpha_extrema": [
-          202,
-          255
-        ],
-        "sampled_color_count": 1723,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "name": "ubcc-metric1-capacity-latency",
+      "kind": "chart",
+      "width": 1756,
+      "height": 773,
+      "svg_report": {
+        "bytes": 18402,
+        "font_declared": true,
+        "minimum_font_size": 12.0
       },
-      "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 6,
-        "label_count": 4
-      },
+      "drawio_report": null,
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-metric2-reductions",
+      "kind": "chart",
+      "width": 1647,
+      "height": 794,
+      "svg_report": {
+        "bytes": 12788,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true
       },
       "status": "PASS"
     },
     {
       "name": "ubcc-ha-vi-comparison",
-      "png": "docs/design/figures/ubcc-ha-vi-comparison.png",
-      "svg": "docs/design/figures/ubcc-ha-vi-comparison.svg",
-      "drawio": "docs/design/figures/ubcc-ha-vi-comparison.drawio",
-      "png_report": {
-        "width": 1078,
-        "height": 555,
-        "mode": "RGB",
-        "non_white_bbox": [
-          81,
-          65,
-          966,
-          498
-        ],
-        "margins_px": {
-          "left": 81,
-          "top": 65,
-          "right": 112,
-          "bottom": 57
-        },
-        "content_bbox_ratio": 0.6405,
-        "alpha_extrema": [
-          255,
-          255
-        ],
-        "sampled_color_count": 823,
-        "checks": {
-          "minimum_resolution": true,
-          "non_empty_content": true,
-          "edge_clearance": true,
-          "color_content": true
-        }
+      "kind": "chart",
+      "width": 1631,
+      "height": 828,
+      "svg_report": {
+        "bytes": 12361,
+        "font_declared": true,
+        "minimum_font_size": 12.0
       },
-      "drawio_report": {
-        "xml_valid": true,
-        "cell_count": 8,
-        "label_count": 6
-      },
+      "drawio_report": null,
       "checks": {
-        "minimum_resolution": true,
-        "non_empty_content": true,
-        "edge_clearance": true,
-        "color_content": true,
-        "cjk_font_available": true,
+        "png_present": true,
         "svg_present": true,
-        "drawio_editable_content": true
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-q1-q5-qualification",
+      "kind": "chart",
+      "width": 1492,
+      "height": 739,
+      "svg_report": {
+        "bytes": 9913,
+        "font_declared": true,
+        "minimum_font_size": 12.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true
       },
       "status": "PASS"
     }
   ],
-  "overall_status": "PASS"
+  "obsolete_files": [],
+  "graphviz_sources": [],
+  "stale_chart_sources": [],
+  "overall_status": "PASS",
+  "errors": []
 }

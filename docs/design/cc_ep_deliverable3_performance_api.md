@@ -1,12 +1,12 @@
 # UBCC 性能验收与集成接口说明
 
-**文档版本：V1.0**
+文档版本：V1.0
 
-**交付阶段：正式文档第一版**
+交付阶段：正式文档第一版
 
-**项目名称：<XXX>**
+项目名称：<XXX>
 
-**甲方单位：<XXX>**
+甲方单位：<XXX>
 
 <!-- PAGEBREAK -->
 
@@ -21,7 +21,7 @@
 5. 指标 3：UBCC 与 HA-VI 配对比较
 6. 正确性与回归结果
 7. 集成接口
-8. 集成流程与代码结构
+8. 集成流程与验证模板
 9. 总结
 附录 A 指标口径
 附录 B 指标 2 场景说明
@@ -40,12 +40,10 @@
 UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI 配对比较三项指标。三项
 指标均达到冻结验收口径。
 
-![图 1-1 UBCC 三项性能指标验收结果](figures/ubcc-metric-summary.png)
-
 | 指标 | 验收门槛 | 最终结果 | 结论 |
 |---|---:|---:|---|
 | 指标 1：等效追踪容量 | ≥ 1.500× | 1.515× | 通过 |
-| 指标 1：附加时延 | < 50.000 cycles | -1635.994 cycles | 通过 |
+| 指标 1：附加时延 | < 50.000 cycles | 21.069156 cycles | 通过 |
 | 指标 2：适用场景等权平均降幅 | ≥ 10.000% | 64.759% | 通过 |
 | 指标 3：UBCC 相对 HA-VI | 两场景组均满足 UBCC 平均时延更低 | 两压力点、两场景组全部满足 | 在可执行参考模型范围内通过 |
 
@@ -55,7 +53,8 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 
 | 验证矩阵 | 规模 | 结果 |
 |---|---:|---:|
-| 指标 1/2 正式矩阵 | 72 项 | 72/72 通过 |
+| 指标 1 独立矩阵 | 9 项 | 9/9 通过 |
+| 指标 2 正式矩阵 | 63 项 | 63/63 通过 |
 | 指标 3 配对矩阵 | 160 arms | 160/160 通过 |
 | 重型回归 | 6 项 | 6/6 通过 |
 | Q1-Q5 故障资格 | 52 项 | 52/52 通过 |
@@ -87,7 +86,7 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 
 ### 2.1 Profile 定义
 
-指标 1/2 使用三个 profile：
+指标 1/2 的基础配置使用三个 profile：
 
 | Profile | 目录策略 | 时延优化 | 论证职责 |
 |---|---|---|---|
@@ -95,12 +94,15 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 | spill-noopt | ResidentDir + Backstore | 关闭 | 证明容量扩展本身的收益与成本 |
 | optimized | ResidentDir + Backstore | 开启 | 证明协议优化后的应用场景价值 |
 
+Metric1 在此基础上把 spill-noopt 分成两个显式实验角色：spill-512K 和
+spill-IdealDir；naive 仅用于容量分母。
+
 ### 2.2 指标 1 口径
 
 指标 1 包含两个子项：
 
-1. `spill-noopt / naive` 等效追踪容量比不低于 1.5；
-2. `spill-noopt - naive` 的平均 guest 时延增量低于 50 cycles。
+1. `spill / naive` 等效追踪容量比不低于 1.5，其中 spill 为 512K 容量约束角色；
+2. `spill-512K - spill-IdealDir` 的已完成 Outer 事件平均时延增量低于 50 cycles。
 
 等效追踪容量按 ResidentDir 与已持久化 Backstore 元数据的去重覆盖量计算。
 
@@ -117,8 +119,8 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 
 指标 3 采用五对 UBCC/HA-VI 配对运行，并在两个 L3 压力点分别判定：
 
-- **核心场景组**：TC228、TC229、TC230 各占 1/3；
-- **代表场景组**：TC231-TC235 各占 1/5。
+- 核心场景组：TC228、TC229、TC230 各占 1/3；
+- 代表场景组：TC231-TC235 各占 1/5。
 
 代表场景组每个 testcase 只贡献一个主值：
 
@@ -132,8 +134,9 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 
 ### 2.5 完成边界
 
-所有比较采用共同的根操作边界。开始点为 workload 发起目标操作，结束点为数据和权限满足
-该 workload 的可观察完成条件。内部服务计时和诊断子阶段不重复计入聚合。
+所有比较遵循发布事件原则：只统计满足冻结完成条件并已经发布完成事件的根操作。开始点为
+workload 发起目标操作，结束点为数据和权限满足该 workload 的可观察完成条件。未完成事件、
+内部服务计时和诊断子阶段不进入聚合。
 
 ### 2.6 计分集与支撑集
 
@@ -152,29 +155,43 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 
 ### 3.1 结果
 
-| 项目 | naive | spill-noopt | 比较结果 |
-|---|---:|---:|---:|
-| 等效追踪条目 | 65,536 | 99,293 | 1.515× |
-| guest 平均时延 | 899.032 ns/op | 81.035 ns/op | -817.997 ns/op |
-| 2 GHz 周期差 | — | — | -1635.994 cycles |
+| 子项 | 比较角色 | 最终结果 | 门槛 |
+|---|---|---:|---:|
+| 等效追踪容量 | spill / naive | 99,293 / 65,536 = 1.515× | ≥ 1.500× |
+| Outer 附加时延 | spill-512K mean - spill-IdealDir mean | 10.534578 ns | < 25.000 ns |
+| 2 GHz 周期换算 | 10.534578 ns × 2 cycles/ns | 21.069156 cycles | < 50.000 cycles |
+
+![图 3-1 Metric1 容量与 Outer 附加时延](figures/ubcc-metric1-capacity-latency.png)
+
+图 3-1　Metric1 结果图。容量按 spill/naive 计算，其中 spill 为 512K 容量约束角色；时延按已完成 Outer 事件的
+spill-512K 均值减去 spill-IdealDir 均值计算。
 
 ### 3.2 结果解释
 
-spill-noopt 的等效追踪容量达到 naive 的 1.515 倍，超过 1.5 倍门槛。容量扩展由
+spill 的等效追踪容量达到 naive 的 1.515 倍，超过 1.5 倍门槛；该角色采用 512K 容量
+约束。容量扩展由
 ResidentDir 与 Backstore 的分层管理实现，热点元数据保留在 SRAM 路径，冷元数据进入
 后备存储。
 
-压力后的 guest 平均时延没有增加，spill-noopt 比 naive 低 817.997 ns/op。该结果说明
-分层目录不仅扩展了等效追踪容量，也减少了 naive 容量替换带来的重复目录操作。
+附加时延采用同为 spill-noopt 策略的两个角色隔离容量溢出成本：spill-512K 使用 512K
+容量约束，spill-IdealDir 使用实验性超大 ResidentDir 作为无溢出的反事实基线。三次重复中，
+每次均对全部已完成 Outer 事件求均值后作差；跨轮等权均值为 10.534578 ns，即
+21.069156 cycles。
 
 ### 3.3 结论
 
 指标 1 的容量和时延两个子项均通过：
 
 - 等效追踪容量提升 51.509%；
-- 附加时延低于合同上限，并表现为负增量。
+- 附加时延为 21.069156 cycles，低于 50 cycles 合同上限。
 
-### 3.4 容量机制支撑结果
+### 3.4 运行核算
+
+Metric1 固定为 3 次重复，每次包含 naive、spill-512K、spill-IdealDir 三个角色，共 9 个
+物理运行。naive 只提供容量分母；spill-512K 同时提供容量分子和实际 Outer 时延；
+spill-IdealDir 只提供无溢出 Outer 时延基线。同一物理运行不重复占用同轮角色槽。
+
+### 3.5 容量机制支撑结果
 
 指标 1 的合同数值由 TC131 给出，以下 testcase 对容量机制和 Backstore 生命周期提供支撑：
 
@@ -212,6 +229,10 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 
 TC140 的 naive 均值为 119.209 ns，低于 500 ns 适用门槛，因此作为低时延中性控制项，
 不进入指标 2 聚合。
+
+![图 4-1 Metric2 适用场景端到端时延](figures/ubcc-metric2-reductions.png)
+
+图 4-1　Metric2 结果图。六个适用场景按 case 等权聚合，TC140 保留为中性控制项。
 
 ### 4.2 聚合结果
 
@@ -298,6 +319,10 @@ producer-consumer、queued token 和 catalog-KV。
 | 150% | 核心场景组 | 31.406 | 39.346 | 20.179% |
 | 150% | 代表场景组 | 76.195 | 79.073 | 3.640% |
 
+![图 5-1 Metric3 UBCC 与 HA-VI 配对比较](figures/ubcc-ha-vi-comparison.png)
+
+图 5-1　Metric3 配对结果。图中比较冻结的 2N1S、O3、单向完成语义和两个 L3 压力点。
+
 ### 5.3 理论路径解释
 
 使用统一表达：
@@ -354,7 +379,8 @@ write`。read 和 write 先分别计量，再合成为一个 testcase 主值，�
 
 | 矩阵 | 计划项 | 通过 | 失败 |
 |---|---:|---:|---:|
-| 指标 1/2 | 72 | 72 | 0 |
+| 指标 1 | 9 | 9 | 0 |
+| 指标 2 | 63 | 63 | 0 |
 | 指标 3 | 160 arms | 160 | 0 |
 
 每项性能运行同时检查数据读回、目标阶段、受管模块退出和 profile 身份，确保性能值来自完整
@@ -425,44 +451,31 @@ EP-SNF 接收节点内服务请求，将地址、操作类型和事务身份交�
 
 ---
 
-## 8. 集成流程与代码结构
+## 8. 集成流程与验证模板
 
-### 8.1 构建流程
+### 8.1 集成流程
 
-远端工程采用 CMake 组织，`compile.sh` 作为统一构建入口，依次完成 framework、hamodule、
-ubiomodule、networksim 和 gem5 的构建。
+1. 集成方确定节点数、Socket 数、地址映射和链路参数；
+2. ubsim 装载 gem5 节点模型、UBIO 和所选参考模型；
+3. 调度层选择 testcase 或矩阵并分配并行资源；
+4. 各模块按共同事务身份交换请求、响应和完成事件；
+5. 验证层检查数据结果、协议完成条件和受管模块状态；
+6. 汇总层按冻结口径生成矩阵结论。
 
-### 8.2 运行流程
+验证环境曾使用临时模拟传输承载跨进程消息；该设施不属于项目架构、交付组件或公开接口。
 
-1. `gen_topo.py` 根据节点数、Socket 数和链路参数生成拓扑；
-2. `parallel_test_v2.py` 选择 testcase 或矩阵，生成运行配置并安排并行资源；
-3. `parallel_test_v2.py` 调用 `simulate.py` 启动单组仿真；
-4. `simulate.py` 根据 JSON 配置启动 gem5、ubiomodule 和 networksim；
-5. 验证逻辑汇总数据结果和模块退出状态；
-6. `parallel_test_v2.py` 汇总矩阵结果。`[TODO-R01]`
+### 8.2 parallel_test_v2 填写模板
 
-### 8.3 工程结构
+以下模板尚未验证，仅用于等待集成方补齐必要信息，不构成功能承诺。
 
-```text
-<XXX>sim/
-├── src/
-├── sims/
-│   ├── gem5/
-│   ├── ubiomodule/
-│   ├── hamodule/
-│   ├── networksim/
-│   ├── framework/
-│   │   ├── iface/
-│   │   └── <XXX>sim_shim/
-│   └── protocol/
-├── compile.sh
-├── gen_topo.py
-├── parallel_test_v2.py
-├── simulate.py
-└── CMakeLists.txt
-```
+| 必要字段 | 填写值 |
+|---|---|
+| 测试集合选择方式 | 〔待确认〕 |
+| 并行任务数 | 〔待确认〕 |
+| 单项超时 | 〔待确认〕 |
+| 结果判定与汇总位置 | 〔待确认〕 |
 
-### 8.4 集成配置
+### 8.3 集成配置
 
 主要配置项包括：
 
@@ -490,8 +503,8 @@ UBCC 在容量效率、适用场景时延和 HA-VI 配对比较三个维度均�
 
 | 指标 | 计算方式 |
 |---|---|
-| 指标 1 容量比 | spill-noopt 等效追踪容量 / naive 等效追踪容量 |
-| 指标 1 时延差 | spill-noopt guest 平均时延 - naive guest 平均时延 |
+| 指标 1 容量比 | spill 等效追踪容量 / naive 等效追踪容量（spill 为 512K 容量约束角色） |
+| 指标 1 时延差 | 已完成 Outer 事件的 spill-512K 均值 - spill-IdealDir 均值 |
 | 指标 2 case 降幅 | `(naive - optimized) / naive × 100%` |
 | 指标 2 聚合 | 适用 case 降幅的等权平均 |
 | 指标 3 delta | `HA-VI 平均时延 - UBCC 平均时延` |
@@ -550,7 +563,6 @@ UBCC 在容量效率、适用场景时延和 HA-VI 配对比较三个维度均�
 | EP-RNF | read shared/unique、clean unique、snoop | data、snoop response、completion |
 | EP-SNF | request service | CHI data/response |
 | UBAdapter | send、receive、retry、callback | Outer message、local completion |
-| NetworkSim | route message | destination delivery |
 
 ---
 
@@ -573,3 +585,5 @@ UBCC 在容量效率、适用场景时延和 HA-VI 配对比较三个维度均�
 | 单向完成语义 | 根操作不以同步 ClearResp 作为完成条件的语义 |
 | 配对运行 | UBCC 与 HA-VI 使用相同输入和冻结条件的成对运行 |
 | 完成边界 | 根操作开始和结束时刻的共同定义 |
+| ubsim |  |
+| ub |  |

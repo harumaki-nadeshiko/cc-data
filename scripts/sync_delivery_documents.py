@@ -13,6 +13,12 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EMU_PER_CM = 360_000
+EMU_PER_INCH = 914_400
+EMU_PER_POINT = 12_700
+EMU_PER_PIXEL = 9_525
+DEFAULT_IMAGE_MAX_WIDTH = int(15.5 * EMU_PER_CM)
+DEFAULT_IMAGE_MAX_HEIGHT = int(11.5 * EMU_PER_CM)
 PAIRS = (
     "docs/design/cc_ep_protocol_overview.md",
     "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
@@ -35,10 +41,14 @@ def plain(text):
     return text.replace("**", "").replace("__", "").replace("`", "").strip()
 
 
-def run(text, bold=False, mono=False):
-    font = "Consolas" if mono else "Arial"
-    props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:eastAsia="等线"/>'
-             + ("<w:b/>" if bold else ""))
+def run(text, bold=False, mono=False, heading=False, size=None):
+    font = "Consolas" if mono else "Calibri"
+    east_asia = "Microsoft YaHei" if mono or not heading else "SimHei"
+    props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" '
+             f'w:eastAsia="{east_asia}" w:cs="{font}"/>'
+             + ("<w:b/>" if bold else "")
+             + (f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>'
+                if size else ""))
     return f"<w:r><w:rPr>{props}</w:rPr><w:t xml:space=\"preserve\">{escape(text)}</w:t></w:r>"
 
 
@@ -51,11 +61,19 @@ def paragraph(text="", style=None, bold=False, mono=False, indent=0,
         props += '<w:jc w:val="center"/>'
     if keep_next:
         props += '<w:keepNext/>'
-    return f"<w:p><w:pPr>{props}</w:pPr>{run(text, bold, mono)}</w:p>"
+    return (f"<w:p><w:pPr>{props}</w:pPr>"
+            f"{run(text, bold, mono, bool(style and (style == 'Title' or style.startswith('Heading'))))}"
+            "</w:p>")
 
 
 def table(rows):
-    output = ['<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr>']
+    output = [
+        '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>'
+        '<w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="autofit"/>'
+        '<w:tblCellMar><w:top w:w="60" w:type="dxa"/>'
+        '<w:left w:w="90" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/>'
+        '<w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>'
+    ]
     width = max((len(row) for row in rows), default=0)
     for row_index, row in enumerate(rows):
         row_props = '<w:trPr><w:cantSplit/>'
@@ -64,7 +82,13 @@ def table(rows):
         row_props += '</w:trPr>'
         output.append(f"<w:tr>{row_props}")
         for cell in row + [""] * (width - len(row)):
-            output.append("<w:tc><w:tcPr/><w:p>" + run(plain(cell), row_index == 0) + "</w:p></w:tc>")
+            shading = '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>' if row_index == 0 else ""
+            output.append(
+                f'<w:tc><w:tcPr>{shading}</w:tcPr><w:p><w:pPr>'
+                '<w:pStyle w:val="TableText"/><w:jc w:val="left"/>'
+                '<w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/>'
+                '</w:pPr>' + run(plain(cell), row_index == 0,
+                                 heading=row_index == 0, size=18) + '</w:p></w:tc>')
         output.append("</w:tr>")
     output.append("</w:tbl>")
     return "".join(output)
@@ -77,16 +101,67 @@ def png_size(path):
     return struct.unpack(">II", data[16:24])
 
 
-def image_paragraph(rel_id, name, width_px, height_px):
-    max_width = 5_900_000
-    max_height = 7_800_000
-    cx = min(max_width, int(width_px * 9525))
-    cy = int(cx * height_px / width_px)
-    if cy > max_height:
-        cy = max_height
-        cx = int(cy * width_px / height_px)
-    drawing = f'''<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="1" name="{escape(name)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'''
-    return f'<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr>{drawing}</w:p>'
+def length_to_emu(value):
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(cm|mm|in|pt|px)?", value,
+                         re.IGNORECASE)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = (match.group(2) or "px").lower()
+    factors = {"cm": EMU_PER_CM, "mm": EMU_PER_CM / 10,
+               "in": EMU_PER_INCH, "pt": EMU_PER_POINT,
+               "px": EMU_PER_PIXEL}
+    return int(amount * factors[unit])
+
+
+def parse_image(line):
+    """Return alt, target, hinted width and height for a Markdown image."""
+    match = re.fullmatch(r"!\[([^]]*)\]\(([^)]+)\)\s*(?:\{([^}]*)\})?",
+                         line.strip())
+    if not match:
+        return None
+    alt, target, attributes = match.groups()
+    width = height = None
+    size_match = re.search(r"\s+=([0-9.]+(?:cm|mm|in|pt|px)?)x([0-9.]+(?:cm|mm|in|pt|px)?)\s*$",
+                           target, re.IGNORECASE)
+    if size_match:
+        width = length_to_emu(size_match.group(1))
+        height = length_to_emu(size_match.group(2))
+        target = target[:size_match.start()].strip()
+    if attributes:
+        for key, value in re.findall(r"(width|height)\s*=\s*[\"']?([0-9.]+(?:cm|mm|in|pt|px)?)[\"']?",
+                                     attributes, re.IGNORECASE):
+            if key.lower() == "width":
+                width = length_to_emu(value)
+            else:
+                height = length_to_emu(value)
+    # A quoted Markdown title is not part of the image path.
+    target = re.sub(r'\s+["\'][^"\']*["\']\s*$', "", target).strip()
+    return alt, target, width, height
+
+
+def image_extent(width_px, height_px, hinted_width=None, hinted_height=None):
+    natural_width = width_px * EMU_PER_PIXEL
+    natural_height = height_px * EMU_PER_PIXEL
+    if hinted_width and hinted_height:
+        scale = min(hinted_width / natural_width,
+                    hinted_height / natural_height)
+    elif hinted_width:
+        scale = hinted_width / natural_width
+    elif hinted_height:
+        scale = hinted_height / natural_height
+    else:
+        scale = 1.0
+    scale = min(scale, DEFAULT_IMAGE_MAX_WIDTH / natural_width,
+                DEFAULT_IMAGE_MAX_HEIGHT / natural_height)
+    return max(1, int(natural_width * scale)), max(1, int(natural_height * scale))
+
+
+def image_paragraph(rel_id, name, width_px, height_px, drawing_id,
+                    hinted_width=None, hinted_height=None):
+    cx, cy = image_extent(width_px, height_px, hinted_width, hinted_height)
+    drawing = f'''<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="{drawing_id}" name="{escape(name)}" descr="{escape(name)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="{drawing_id}" name="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'''
+    return f'<w:p><w:pPr><w:jc w:val="center"/><w:keepNext/><w:spacing w:before="100" w:after="40"/></w:pPr>{drawing}</w:p>'
 
 
 def page_break():
@@ -113,7 +188,8 @@ def convert_markdown(text, md_path):
             if code is None:
                 code = []
             else:
-                output.append(paragraph("\n".join(code), "Code", mono=True))
+                for code_line in code or [""]:
+                    output.append(paragraph(code_line, "Code", mono=True))
                 code = None
             index += 1
             continue
@@ -121,15 +197,26 @@ def convert_markdown(text, md_path):
             code.append(line)
             index += 1
             continue
-        image = re.fullmatch(r"!\[([^]]*)\]\(([^)]+)\)", line.strip())
+        image = parse_image(line)
         if image:
-            path = (md_path.parent / image.group(2)).resolve()
+            alt, target, hinted_width, hinted_height = image
+            path = (md_path.parent / target).resolve()
             width, height = png_size(path)
             rel_id = f"rIdImage{len(images) + 1}"
             media_name = f"image{len(images) + 1}.png"
             images.append((rel_id, media_name, path))
-            output.append(image_paragraph(rel_id, image.group(1) or media_name,
-                                          width, height))
+            caption = plain(alt) or media_name
+            output.append(image_paragraph(rel_id, caption, width, height,
+                                           len(images), hinted_width,
+                                           hinted_height))
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            next_line_is_caption = (
+                next_index < len(lines) and
+                re.match(r"^\s*图\s*\d+(?:[-－]\d+)?", lines[next_index]))
+            if alt.strip() and not next_line_is_caption:
+                output.append(paragraph(plain(alt), "FigureCaption", center=True))
             index += 1
             continue
         if line.startswith("|") and line.rstrip().endswith("|"):
@@ -140,6 +227,13 @@ def convert_markdown(text, md_path):
                     rows.append(cells)
                 index += 1
             output.append(table(rows))
+            if index < len(lines):
+                caption = re.fullmatch(r"\s*(?:(?:Table|表)\s*[:：]|:)\s*(.+?)\s*",
+                                       lines[index], re.IGNORECASE)
+                if caption:
+                    output.append(paragraph(plain(caption.group(1)), "TableCaption",
+                                            center=True))
+                    index += 1
             continue
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
@@ -154,25 +248,31 @@ def convert_markdown(text, md_path):
             output.append(paragraph("• " + plain(re.sub(r"^\s*[-*+]\s+", "", line)), indent=360))
         elif line.startswith(">"):
             output.append(paragraph(plain(line.lstrip("> ")), "Quote", indent=360))
+        elif re.match(r"^\s*图\s*\d+(?:[-－]\d+)?", line):
+            output.append(paragraph(plain(line), "FigureCaption", center=True))
         elif line.strip() and not re.fullmatch(r"\s*[-*_]{3,}\s*", line):
             output.append(paragraph(plain(line), first_line=420))
-        else:
-            output.append(paragraph())
         index += 1
+    if code is not None:
+        for code_line in code or [""]:
+            output.append(paragraph(code_line, "Code", mono=True))
     return "".join(output), images
 
 
 def styles():
     return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:line="360" w:lineRule="auto" w:after="100"/><w:jc w:val="both"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="等线"/><w:sz w:val="21"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="1800" w:after="480"/><w:keepNext/></w:pPr><w:rPr><w:b/><w:color w:val="17365D"/><w:sz w:val="40"/><w:szCs w:val="40"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:color w:val="17365D"/><w:sz w:val="32"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:color w:val="365F91"/><w:sz w:val="28"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="160" w:after="80"/><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:b/><w:color w:val="4F81BD"/><w:sz w:val="24"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:shd w:fill="F2F2F2"/><w:ind w:left="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="400" w:lineRule="exact"/><w:jc w:val="both"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:after="180" w:line="480" w:lineRule="exact"/><w:keepNext/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="17365D"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80" w:line="400" w:lineRule="exact"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="17365D"/><w:sz w:val="30"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="180" w:after="60" w:line="400" w:lineRule="exact"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="365F91"/><w:sz w:val="26"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="120" w:after="40" w:line="400" w:lineRule="exact"/><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="4F81BD"/><w:sz w:val="23"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/><w:shd w:fill="F2F2F2"/><w:ind w:left="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Microsoft YaHei" w:cs="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
-<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/><w:insideH w:val="single" w:sz="4"/><w:insideV w:val="single" w:sz="4"/></w:tblBorders></w:tblPr></w:style>
+<w:style w:type="paragraph" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="FigureCaption"><w:name w:val="Figure Caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:keepLines/><w:spacing w:before="0" w:after="120" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:color w:val="555555"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="TableCaption"><w:name w:val="Table Caption"/><w:basedOn w:val="FigureCaption"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="100" w:line="320" w:lineRule="exact"/></w:pPr></w:style>
+<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:color="B7C9E2" w:sz="4"/><w:left w:val="single" w:color="B7C9E2" w:sz="4"/><w:bottom w:val="single" w:color="B7C9E2" w:sz="4"/><w:right w:val="single" w:color="B7C9E2" w:sz="4"/><w:insideH w:val="single" w:color="D9E2F3" w:sz="4"/><w:insideV w:val="single" w:color="D9E2F3" w:sz="4"/></w:tblBorders></w:tblPr></w:style>
 </w:styles>'''
 
 
@@ -189,8 +289,8 @@ def build_docx(md_path, docx_path):
                 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>'
                 + body
                 + '<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/>'
-                '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" '
-                'w:bottom="1134" w:left="1134" w:header="567" w:footer="567"/></w:sectPr>'
+                '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1134" '
+                'w:bottom="1417" w:left="1134" w:header="567" w:footer="567"/></w:sectPr>'
                 '</w:body></w:document>')
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     core = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

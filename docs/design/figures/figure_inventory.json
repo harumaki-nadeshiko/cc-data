@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagrams": [
+    "ubcc-system-architecture",
+    "gem5-ruby-controller-relationships",
+    "ubcc-protocol-paths",
+    "ubcc-verification-stack",
+    "ubcc-two-phase-commit"
+  ],
+  "charts": [
+    "ubcc-metric1-capacity-latency",
+    "ubcc-metric2-reductions",
+    "ubcc-ha-vi-comparison",
+    "ubcc-q1-q5-qualification"
+  ],
+  "obsolete": [
+    "ubcc-metric-summary"
+  ],
+  "diagram_exports": [
+    {
+      "name": "ubcc-system-architecture",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "gem5-ruby-controller-relationships",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-protocol-paths",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-verification-stack",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-two-phase-commit",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    }
+  ]
+}
