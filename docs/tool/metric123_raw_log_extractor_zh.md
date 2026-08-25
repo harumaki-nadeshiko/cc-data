@@ -122,6 +122,8 @@ Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubi
 `PROCESS-MANIFEST`身份、最后是唯一或数值一致的容量 marker 来源。回退会产生
 `HOME_UBIO_FALLBACK`或`HOME_UBIO_IDENTICAL_MULTIPLE` WARNING；只有多个来源的容量、policy
 或 effective unique 互相矛盾时才拒绝。平铺保存的 manifest 与容量日志可以分开存在。
+如果远端归档已丢失目录名和`PROCESS-MANIFEST`，可显式传入`home_ubio_log_dir`或
+`home_ubio_logs=[...]`；该选择优先于自动发现并产生`HOME_UBIO_EXPLICIT` WARNING。
 
 标准和扩展实验的逻辑 slot 包含 topology 与解析定义，因此同一 TC/profile 的 8N1S 标准点和
 4N1S 扩展点可以同时存在。只有完全相同实验坐标的第二个数据点才是`DUPLICATE_SLOT`。

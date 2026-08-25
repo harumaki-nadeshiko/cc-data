@@ -27,6 +27,12 @@
           "order": {"enum": ["AB", "BA"]},
           "home_node": {"type": "integer", "minimum": 0},
           "home_socket": {"type": "integer", "minimum": 0},
+          "home_ubio_log_dir": {"type": "string"},
+          "home_ubio_logs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
+          },
           "timer_nodes": {"type": "array", "items": {"type": "integer"}, "uniqueItems": true},
           "phase": {"type": "string", "minLength": 1},
           "expected_node": {"type": "integer", "minimum": 0},

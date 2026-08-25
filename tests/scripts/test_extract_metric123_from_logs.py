@@ -292,6 +292,35 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(any(x["code"] == "HOME_UBIO_FALLBACK"
                             for x in matrix.finalize()["issues"]))
 
+    def test_explicit_home_ubio_path_resolves_ambiguous_sources(self):
+        sim, out = self.root / "ambiguous/sim", self.root / "ambiguous/out"
+        sim.mkdir(parents=True)
+        home = sim / "home-node"
+        peer = sim / "peer-node"
+        self.write(home / "stdout.log",
+                   "[UBCC-STATE] capacity=57344 policy=spill\n"
+                   '[UBCC-STATS] {"h64ExactLiveKnown":1,'
+                   '"h64ExactLiveCount":99424}\n')
+        self.write(peer / "stdout.log",
+                   "[UBCC-STATE] capacity=57344 policy=spill\n"
+                   '[UBCC-STATS] {"h64ExactLiveKnown":1,'
+                   '"h64ExactLiveCount":57344}\n')
+        for node in (1, 2):
+            self.write(out / f"simout_n{node}",
+                       self.timer(node, "post_pressure_catalog_reuse"))
+        matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        added = matrix.add(
+            metric=1, tc=131, repetition="r1", topology="8n1s",
+            profile="spill-noopt", simulator_log_dir=str(sim),
+            simout_dir=str(out), home_ubio_log_dir=str(home))
+        self.assertEqual(added["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertEqual(result["resolved_runs"][0]["metrics"]["capacity"]
+                         ["effective_unique"], 99424)
+        self.assertTrue(any(x["code"] == "HOME_UBIO_EXPLICIT"
+                            for x in result["issues"]))
+
     def test_invalid_extension_does_not_invalidate_standard_view(self):
         requirements = {"metric1": {"repetitions": []},
                         "metric2": {"repetitions": ["r1"], "testcases": [135]},

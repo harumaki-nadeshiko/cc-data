@@ -168,13 +168,33 @@ def _logical_logs(root, evidence_file):
     return [p.resolve() for p in all_log_files(evidence_file.parent)]
 
 
-def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id=""):
+def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id="",
+                            explicit_logs=()):
     """Discover home UBIO evidence and return ``(logs, warnings)``.
 
     Directory identity is preferred, then PROCESS-MANIFEST identity, and finally
     capacity-bearing streams.  Multiple stdout/stderr files in one process
     directory are one logical source rather than duplicate UBIO processes.
     """
+    if explicit_logs:
+        logs = []
+        for path in explicit_logs:
+            path = pathlib.Path(path).resolve()
+            if path.is_dir():
+                logs.extend(all_log_files(path))
+            elif path.is_file():
+                logs.append(path)
+            else:
+                raise ExtractError(f"explicit home UBIO path does not exist: {path}")
+        logs = sorted(set(logs), key=str)
+        if not logs:
+            raise ExtractError("explicit home UBIO paths contain no readable logs")
+        parse_capacity(logs)
+        return logs, [warning(
+            "HOME_UBIO_EXPLICIT", run_id,
+            "home UBIO selected from explicit paths: " +
+            ", ".join(str(path) for path in logs))]
+
     current, legacy = set(), set()
     for path in root.rglob("ubio*_n*_s*"):
         if not path.is_dir():
@@ -420,8 +440,16 @@ def extract_run(run, base, policy):
                   "ns_per_operation": row["ticks"] * 1e9 / row["frequency_hz"] / row["count"]} for row in rows]
         home_node = int(run.get("home_node", 0))
         home_socket = int(run.get("home_socket", 0))
+        explicit_home = []
+        if run.get("home_ubio_log_dir"):
+            explicit_home.append(resolve(base, run["home_ubio_log_dir"]))
+        raw_home_logs = run.get("home_ubio_logs", [])
+        if isinstance(raw_home_logs, (str, pathlib.Path)):
+            raw_home_logs = [raw_home_logs]
+        explicit_home.extend(resolve(base, value) for value in raw_home_logs)
         capacity_logs, discovery_warnings = discover_home_ubio_logs(
-            simulator, out["tc"], home_node, home_socket, out["id"])
+            simulator, out["tc"], home_node, home_socket, out["id"],
+            explicit_home)
         out["contract_warnings"].extend(discovery_warnings)
         out["home_ubio_logs"] = [str(path) for path in capacity_logs]
         out["metrics"] = {"capacity": parse_capacity(capacity_logs), "timers": timer, "phase": phase,
