@@ -83,6 +83,24 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(all(item["metrics"]["capacity"]["resident_capacity"] == 100
                             for item in resolved))
 
+    def test_process_testcase_hint_is_optional_but_conflicts_reject(self):
+        run = self.make_m1_run("tc-hint", layout="recognized")
+        sim = pathlib.Path(run["simulator_log_dir"])
+        log = sim / "ubio_tc131_n0_s0/stdout.log"
+        text = log.read_text()
+        log.write_text(text.replace('"tc": 131,', '"tc": 0,'))
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(matrix.add(run)["status"], "ADDED")
+
+        conflict = self.make_m1_run("tc-conflict", layout="recognized")
+        conflict_log = (pathlib.Path(conflict["simulator_log_dir"]) /
+                        "ubio_tc131_n0_s0/stdout.log")
+        conflict_log.write_text(conflict_log.read_text().replace('"tc": 131,',
+                                                                 '"tc": 999,'))
+        rejected = MOD.Metric123RawLogMatrix(base_dir=self.root).add(conflict)
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertIn("conflicts with manifest tc=131", rejected["issue"]["message"])
+
     def test_metric2_duplicate_and_missing_phase_are_clear_errors(self):
         phase, topology, node, samples = MOD.M2[135]
         runs = []

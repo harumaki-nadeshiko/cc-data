@@ -992,7 +992,7 @@ run_tc() {
         uextra="$uextra --home-controller=ha-vi --ha-exact-bytes=$HA_EXACT_BYTES"
         uextra="$uextra --ha-max-active=$HA_MAX_ACTIVE --ha-max-queue=$HA_MAX_QUEUE"
     fi
-    uextra="$uextra --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
+    uextra="$uextra --tc=${tc} --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
     [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
@@ -1050,6 +1050,7 @@ run_tc() {
         mkdir -p "$gdir" "$node_od"
         local cmd
         cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
+        cmd="$cmd --tc=$tc"
         cmd="$cmd --l3-size=$EP_L3_SIZE --l3-assoc=$EP_L3_ASSOC"
         # Optional per-node gem5 tracing for long-running E2E diagnosis.
         # Keep the debug stream separate from stderr so runner diagnostics stay usable.

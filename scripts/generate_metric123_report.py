@@ -33,6 +33,16 @@ def stat_mean(value, label):
     return float(value["mean"])
 
 
+def stat_cv_pct(value):
+    if not isinstance(value, dict):
+        return 0.0
+    if value.get("cv_pct") is not None:
+        return float(value["cv_pct"])
+    if value.get("cv") is not None:
+        return float(value["cv"]) * 100.0
+    return 0.0
+
+
 def normalize_case(value):
     text = str(value)
     return text if text.upper().startswith("TC") else f"TC{text}"
@@ -56,7 +66,62 @@ def profile_means_from_rounds(target2, case):
     }
 
 
-def parse_target12(data, source_path):
+def parse_corrected_metric1(data, source_path):
+    """Read the corrected spill-512K versus spill-IdealDir Outer delta."""
+    if isinstance(data.get("metric1"), dict):
+        metric1 = data["metric1"]
+        aggregate = metric1.get("aggregate", {})
+        delta_ns_stats = aggregate.get("outer_delta_ns")
+        delta_cycles_stats = aggregate.get("outer_delta_cycles")
+        if not isinstance(delta_ns_stats, dict) or not isinstance(delta_cycles_stats, dict):
+            raise InputError("Metric 1 raw report lacks Outer delta aggregates")
+        definition = metric1.get("definition", {})
+        expected = "mean(spill completed Outer) - mean(ideal completed Outer)"
+        if definition.get("outer_delta_ns") != expected:
+            raise InputError("Metric 1 raw report uses an unsupported latency definition")
+        comparisons = metric1.get("comparisons", [])
+        if not comparisons:
+            raise InputError("Metric 1 raw report has no complete spill/IdealDir repetitions")
+        return {
+            "status": metric1.get("status", "INCOMPLETE"),
+            "outer_delta_ns": stat_mean(delta_ns_stats, "outer_delta_ns"),
+            "outer_delta_cycles": stat_mean(delta_cycles_stats, "outer_delta_cycles"),
+            "latency_delta_cv_pct": stat_cv_pct(delta_ns_stats),
+            "definition": definition,
+            "comparisons": comparisons,
+            "source": str(source_path),
+            "source_sha256": sha256(source_path),
+        }
+
+    if (data.get("definition") ==
+            "mean(all completed spill Outer) - mean(all completed ideal Outer)"):
+        repeats = data.get("repeats", {})
+        complete = [row for row in repeats.values()
+                    if row.get("delta_outer_mean_ns") is not None and
+                    row.get("delta_outer_mean_cycles_2ghz") is not None]
+        if int(data.get("complete_repeats", len(complete))) != len(complete) or not complete:
+            raise InputError("Metric 1 Outer/IdealDir summary has incomplete repetitions")
+        return {
+            "status": data.get("status", "INCOMPLETE"),
+            "outer_delta_ns": float(data["delta_mean_ns"]),
+            "outer_delta_cycles": float(data["delta_mean_cycles_2ghz"]),
+            "latency_delta_cv_pct": (
+                float(data.get("delta_stdev_ns", 0.0)) /
+                abs(float(data["delta_mean_ns"])) * 100.0
+                if float(data["delta_mean_ns"]) else 0.0),
+            "definition": {
+                "outer_delta_ns": "mean(spill completed Outer) - mean(ideal completed Outer)",
+                "cycles_per_ns": 2.0,
+                "outer_delta_cycles_strict_max": 50.0,
+            },
+            "comparisons": complete,
+            "source": str(source_path),
+            "source_sha256": sha256(source_path),
+        }
+    raise InputError("Metric 1 JSON is not a corrected completed-Outer result")
+
+
+def parse_target12(data, source_path, metric1_result=None):
     try:
         target1 = data["target1"]
         target2 = data["target2"]
@@ -65,20 +130,40 @@ def parse_target12(data, source_path):
     except (KeyError, TypeError) as error:
         raise InputError("target12 JSON does not contain target1/target2 statistics") from error
 
-    delta_ns_stats = (t1_stats.get("guest_delta_ns_per_operation") or
-                      t1_stats.get("guest_reuse_delta_ns_per_operation"))
-    delta_cycles_stats = (t1_stats.get("guest_delta_cycles") or
-                          t1_stats.get("guest_reuse_delta_cycles_at_2ghz"))
+    capacity_ratio = stat_mean(t1_stats.get("capacity_ratio"), "capacity_ratio")
     metric1 = {
-        "status": "PASS" if t1_stats.get("pass") else "FAIL",
-        "capacity_ratio": stat_mean(t1_stats.get("capacity_ratio"), "capacity_ratio"),
-        "capacity_increase_pct": (
-            stat_mean(t1_stats.get("capacity_ratio"), "capacity_ratio") - 1.0) * 100.0,
-        "guest_delta_ns_per_operation": stat_mean(delta_ns_stats, "guest_delta_ns"),
-        "guest_delta_cycles": stat_mean(delta_cycles_stats, "guest_delta_cycles"),
+        "status": "INCOMPLETE",
+        "capacity_ratio": capacity_ratio,
+        "capacity_increase_pct": (capacity_ratio - 1.0) * 100.0,
+        "outer_delta_ns": None,
+        "outer_delta_cycles": None,
         "capacity_cv_pct": float(t1_stats.get("capacity_ratio", {}).get("cv_pct", 0.0)),
-        "latency_delta_cv_pct": float((delta_ns_stats or {}).get("cv_pct", 0.0)),
+        "latency_delta_cv_pct": None,
+        "definition": {
+            "capacity_ratio": "spill effective_unique / naive effective_unique",
+            "outer_delta_ns": "mean(spill completed Outer) - mean(ideal completed Outer)",
+            "cycles_per_ns": 2.0,
+            "guest_timer": "deprecated descriptive only",
+        },
+        "latency_source": None,
+        "latency_source_sha256": None,
     }
+    if metric1_result is not None:
+        definition = dict(metric1["definition"])
+        definition.update(metric1_result["definition"])
+        metric1.update({
+            "status": ("PASS" if capacity_ratio >= 1.5 and
+                       metric1_result["status"] == "PASS" else
+                       "INCOMPLETE" if metric1_result["status"] in
+                       ("INCOMPLETE", "NOT_REQUESTED") else "FAIL"),
+            "outer_delta_ns": metric1_result["outer_delta_ns"],
+            "outer_delta_cycles": metric1_result["outer_delta_cycles"],
+            "latency_delta_cv_pct": metric1_result["latency_delta_cv_pct"],
+            "definition": definition,
+            "latency_source": metric1_result["source"],
+            "latency_source_sha256": metric1_result["source_sha256"],
+            "comparisons": metric1_result["comparisons"],
+        })
 
     applicable = [normalize_case(value)
                   for value in t2_stats.get("applicable_cases", [])]
@@ -180,8 +265,10 @@ def parse_metric3(path):
     }
 
 
-def build_report(target12_path, metric3_path, label):
-    parsed = parse_target12(load_json(target12_path), target12_path)
+def build_report(target12_path, metric1_path, metric3_path, label):
+    metric1_result = (parse_corrected_metric1(load_json(metric1_path), metric1_path)
+                      if metric1_path else None)
+    parsed = parse_target12(load_json(target12_path), target12_path, metric1_result)
     metric3 = parse_metric3(metric3_path)
     metric12_pass = (parsed["metric1"]["status"] == "PASS" and
                      parsed["metric2"]["status"] == "PASS")
@@ -193,6 +280,8 @@ def build_report(target12_path, metric3_path, label):
         "label": label,
         "metric12_source": parsed["source"],
         "metric12_source_sha256": parsed["source_sha256"],
+        "metric1_latency_source": parsed["metric1"].get("latency_source"),
+        "metric1_latency_source_sha256": parsed["metric1"].get("latency_source_sha256"),
         "parser_schema_version": parsed["parser_schema_version"],
         "matrix_status_counts": parsed["matrix_status_counts"],
         "correctness_gate_status": parsed["correctness_gate_status"],
@@ -209,6 +298,10 @@ def build_report(target12_path, metric3_path, label):
 
 def format_optional(value):
     return "N/A" if value is None else f"{value:.6f}"
+
+
+def format_optional_unit(value, unit):
+    return "N/A" if value is None else f"{value:.6f} {unit}"
 
 
 def render_markdown(report):
@@ -231,10 +324,10 @@ def render_markdown(report):
         "| 项目 | 结果 |", "|---|---:|",
         f"| spill / naive 等效容量比 | {m1['capacity_ratio']:.6f} |",
         f"| 等效容量提升 | {m1['capacity_increase_pct']:.6f}% |",
-        f"| spill-noopt - naive guest 时延 | {m1['guest_delta_ns_per_operation']:.6f} ns/op |",
-        f"| 按合同频率换算 | {m1['guest_delta_cycles']:.6f} cycles |",
+        f"| spill-512K - spill-IdealDir completed Outer 均值 | {format_optional_unit(m1['outer_delta_ns'], 'ns')} |",
+        f"| 按 2 GHz 换算 | {format_optional_unit(m1['outer_delta_cycles'], 'cycles')} |",
         f"| 容量跨轮 CV | {m1['capacity_cv_pct']:.6f}% |",
-        f"| 时延差跨轮 CV | {m1['latency_delta_cv_pct']:.6f}% |", "",
+        f"| 时延差跨轮 CV | {format_optional_unit(m1['latency_delta_cv_pct'], '%')} |", "",
         "## 指标 2", "",
         f"- 适用集合：{', '.join(m2['applicable_cases'])}",
         f"- case-level 等权平均降幅：**{m2['equal_weight_mean_reduction_pct']:.6f}%**",
@@ -271,6 +364,9 @@ def render_markdown(report):
     if m3.get("source"):
         lines.extend([f"- 指标 3 模型 JSON：`{m3['source']}`",
                       f"- SHA-256：`{m3['source_sha256']}`"])
+    if m1.get("latency_source"):
+        lines.extend([f"- 指标 1 Outer/IdealDir JSON：`{m1['latency_source']}`",
+                      f"- SHA-256：`{m1['latency_source_sha256']}`"])
     return "\n".join(lines) + "\n"
 
 
@@ -279,8 +375,8 @@ def compact_text(report):
     return "\n".join([
         f"metric1={m1['status']} capacity_ratio={m1['capacity_ratio']:.6f} "
         f"increase={m1['capacity_increase_pct']:.3f}% "
-        f"guest_delta={m1['guest_delta_ns_per_operation']:.3f}ns/op "
-        f"delta_cycles={m1['guest_delta_cycles']:.3f}",
+        f"outer_delta={format_optional_unit(m1['outer_delta_ns'], 'ns')} "
+        f"delta_cycles={format_optional(m1['outer_delta_cycles'])}",
         f"metric2={m2['status']} applicable={','.join(m2['applicable_cases'])} "
         f"equal_weight_reduction={m2['equal_weight_mean_reduction_pct']:.3f}% "
         f"cv={m2['cross_round_cv_pct']:.3f}%",
@@ -295,8 +391,8 @@ def tsv_rows(report):
     rows = [
         ["metric1", "capacity_ratio", m1["capacity_ratio"], "ratio", m1["status"]],
         ["metric1", "capacity_increase", m1["capacity_increase_pct"], "pct", m1["status"]],
-        ["metric1", "guest_delta", m1["guest_delta_ns_per_operation"], "ns/op", m1["status"]],
-        ["metric1", "guest_delta", m1["guest_delta_cycles"], "cycles", m1["status"]],
+        ["metric1", "outer_delta", m1["outer_delta_ns"], "ns", m1["status"]],
+        ["metric1", "outer_delta", m1["outer_delta_cycles"], "cycles", m1["status"]],
         ["metric2", "equal_weight_reduction", m2["equal_weight_mean_reduction_pct"],
          "pct", m2["status"]],
         ["metric3", "contract_status", m3["status"], "status", m3["status"]],
@@ -331,16 +427,20 @@ def main():
         description="Generate compact metric 1/2/3 reports from structured JSON")
     parser.add_argument("--target12-json", required=True,
                         help="performance_comparison.json or final summary.json")
+    parser.add_argument("--metric1-json",
+                        help="corrected raw report.json or spill-vs-Ideal summary.json")
     parser.add_argument("--metric3-v4-json",
                         help="combined Metric 3 v4 L3-pressure report")
     parser.add_argument("--label", default="manual-log-extraction")
     parser.add_argument("--out-dir", required=True)
     args = parser.parse_args()
     target12_path = pathlib.Path(args.target12_json).expanduser().resolve()
+    metric1_path = (pathlib.Path(args.metric1_json).expanduser().resolve()
+                    if args.metric1_json else None)
     metric3_path = (pathlib.Path(args.metric3_v4_json).expanduser().resolve()
                     if args.metric3_v4_json else None)
     try:
-        report = build_report(target12_path, metric3_path, args.label)
+        report = build_report(target12_path, metric1_path, metric3_path, args.label)
         out_dir = pathlib.Path(args.out_dir).expanduser().resolve()
         write_outputs(report, out_dir)
     except (InputError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:

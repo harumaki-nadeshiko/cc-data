@@ -24,6 +24,7 @@ sys.modules.setdefault("analyze_metric12_run_list", RUN_LIST)
 SPEC.loader.exec_module(RUN_LIST)
 
 PROFILES = RUN_LIST.PROFILES
+TARGET1_ROLES = RUN_LIST.TARGET1_ROLES
 TARGET2_CASES = tuple(RUN_LIST.TARGET2_PHASES)
 EXIT_CODES = {"PASS": 0, "FAIL": 1, "INVALID": 2, "INCOMPLETE": 3}
 
@@ -157,7 +158,8 @@ class Metric12ManifestAuditor:
             if not isinstance(spec, dict):
                 raise ValueError(f"requirements must define {aliases[0]}")
             repetitions = _repetitions(spec.get("repetitions"), aliases[0])
-            profiles = spec.get("profiles", list(PROFILES))
+            default_profiles = TARGET1_ROLES if target == "target1" else PROFILES
+            profiles = spec.get("roles", spec.get("profiles", list(default_profiles)))
             if not isinstance(profiles, list) or not profiles:
                 raise ValueError(f"{aliases[0]}.profiles must be a non-empty list")
             normalized_profiles = []
@@ -166,6 +168,8 @@ class Metric12ManifestAuditor:
                 if key not in RUN_LIST.PROFILE_ALIASES:
                     raise ValueError(f"unknown profile {profile!r}")
                 normalized = RUN_LIST.PROFILE_ALIASES[key]
+                if normalized not in default_profiles:
+                    raise ValueError(f"{aliases[0]} does not support profile/role {profile!r}")
                 if normalized in normalized_profiles:
                     raise ValueError(f"duplicate profile {normalized!r}")
                 normalized_profiles.append(normalized)
@@ -245,10 +249,12 @@ class Metric12ManifestAuditor:
         values = [
             f"target={feature.target}", f"round={canonical_round}",
             f"case={feature.case}", f"topology={feature.topology}",
-            f"profile={feature.profile}", f"phase={feature.phase}",
+            f"profile={feature.profile}",
             f"home_node={feature.home_node}", f"home_socket={feature.home_socket}",
             "timer_nodes=" + ",".join(str(node) for node in feature.timer_nodes),
         ]
+        if feature.phase:
+            values.append(f"phase={feature.phase}")
         return ";".join(values)
 
     def _logical_uses(self, raws, physical_runs, requirements):
@@ -317,26 +323,26 @@ class Metric12ManifestAuditor:
             run = use["resolved"]
             feature = run.record.feature
             if feature.target == "target1":
-                timer_paths = []
-                for node in feature.timer_nodes:
-                    if node not in run.simout_by_node:
-                        raise RUN_LIST.EvidenceError(f"target1 lacks simout node {node}")
-                    timer_paths.append(run.simout_by_node[node])
-                timers = RUN_LIST.Metric12RunListAnalyzer._timer_records(
-                    timer_paths, feature.phase)
-                counts = {node: 0 for node in feature.timer_nodes}
-                for timer in timers:
-                    if timer["node"] in counts:
-                        counts[timer["node"]] += 1
-                if len(timers) != len(counts) or any(value != 1 for value in counts.values()):
-                    raise RUN_LIST.EvidenceError(f"target1 timer contract mismatch: {counts}")
-                if len({timer["frequency_hz"] for timer in timers}) != 1:
-                    raise RUN_LIST.EvidenceError("target1 timer frequencies differ")
                 capacity = RUN_LIST.Metric12RunListAnalyzer._parse_capacity(run.ubio_logs)
                 expected_policy = "naive" if feature.profile == "naive" else "spill"
                 if capacity["policy"] != expected_policy:
                     raise RUN_LIST.EvidenceError(
                         f"target1 profile {feature.profile} requires policy {expected_policy}")
+                if feature.profile == "spill-noopt":
+                    if (capacity["experimental_oversized_resident_dir"] not in (None, 0) or
+                            capacity["h64_exact_live_known"] != 1):
+                        raise RUN_LIST.EvidenceError("spill-512K qualification failed")
+                    RUN_LIST.Metric12RunListAnalyzer._outer_latency(
+                        run.record.simulator_log_dir)
+                elif feature.profile == "ideal":
+                    if (capacity["experimental_oversized_resident_dir"] != 1 or
+                            capacity["resident_capacity"] <
+                            self.thresholds["target1_ideal_min_capacity"] or
+                            capacity["backstore_found_fills"] != 0 or
+                            capacity["h64_exact_live"] != 0):
+                        raise RUN_LIST.EvidenceError("IdealDir qualification failed")
+                    RUN_LIST.Metric12RunListAnalyzer._outer_latency(
+                        run.record.simulator_log_dir)
             else:
                 latency = RUN_LIST.Metric12RunListAnalyzer._latency_record(
                     tuple(run.simout_by_node.values()), feature.phase)
@@ -388,33 +394,30 @@ class Metric12ManifestAuditor:
     def _provisional(self, slot_map, requirements):
         result = {"metric1": {"comparisons": []}, "metric2": {"comparisons": []}}
         thresholds = self.thresholds
-        # A comparison is computable only when all three official profiles are valid.
+        # A comparison is computable only when all three official roles are valid.
         for repetition in requirements["target1"]["repetitions"]:
             selected = {}
-            for profile in PROFILES:
+            for profile in TARGET1_ROLES:
                 slot = slot_map.get(_slot_key("target1", repetition, "TC131", profile))
                 if slot and slot["status"] in ("VALID", "REUSE"):
                     selected[profile] = slot["selected_use"]["resolved"]
-            if len(selected) != len(PROFILES):
+            if len(selected) != len(TARGET1_ROLES):
                 continue
             try:
                 values = {}
                 for profile, run in selected.items():
-                    feature = run.record.feature
-                    timers = RUN_LIST.Metric12RunListAnalyzer._timer_records(
-                        [run.simout_by_node[node] for node in feature.timer_nodes], feature.phase)
-                    if len(timers) != len(feature.timer_nodes):
-                        raise RUN_LIST.EvidenceError("target1 timer count mismatch")
                     values[profile] = {
                         "capacity": RUN_LIST.Metric12RunListAnalyzer._parse_capacity(run.ubio_logs),
-                        "mean_ns": statistics.mean(item["mean_ns_per_operation"] for item in timers),
+                        "outer": (RUN_LIST.Metric12RunListAnalyzer._outer_latency(
+                            run.record.simulator_log_dir)
+                                  if profile in ("spill-noopt", "ideal") else None),
                     }
                 ratio = values["spill-noopt"]["capacity"]["effective_unique"] / values["naive"]["capacity"]["effective_unique"]
-                delta_ns = values["spill-noopt"]["mean_ns"] - values["naive"]["mean_ns"]
+                delta_ns = values["spill-noopt"]["outer"]["mean_ns"] - values["ideal"]["outer"]["mean_ns"]
                 delta_cycles = delta_ns * thresholds["target1_contract_clock_hz"] / 1.0e9
                 result["metric1"]["comparisons"].append({
                     "repetition": str(repetition), "capacity_ratio": ratio,
-                    "guest_delta_ns_per_operation": delta_ns, "guest_delta_cycles": delta_cycles,
+                    "outer_delta_ns": delta_ns, "outer_delta_cycles": delta_cycles,
                     "would_pass": ratio >= thresholds["target1_capacity_ratio_min"] and
                                   delta_cycles < thresholds["target1_max_extra_cycles"],
                 })
@@ -468,7 +471,10 @@ class Metric12ManifestAuditor:
         unexpected = []
         for use in uses:
             if use.get("slot_key") not in expected_set:
-                if use.get("slot_key"):
+                key = use.get("slot_key")
+                support_only = bool(key and key[0] == "target1" and key[3] == "optimized")
+                use["support_only"] = support_only
+                if key and not support_only:
                     use["issues"].append(_issue("UNEXPECTED_SLOT", "logical use does not match requirements"))
                 unexpected.append(use)
             else:
@@ -503,7 +509,8 @@ class Metric12ManifestAuditor:
         for use in unexpected:
             row = _slot_dict(use["slot_key"]) if use.get("slot_key") else {
                 "metric": None, "target": None, "repetition": None, "case": None, "profile": None}
-            row.update({"status": "UNEXPECTED", "uses": [use["id"]],
+            row.update({"status": "SUPPORT" if use.get("support_only") else "UNEXPECTED",
+                        "uses": [use["id"]],
                         "physical_run_ids": [use["physical_run_id"]], "issues": use["issues"]})
             unexpected_rows.append(row)
 
@@ -519,7 +526,7 @@ class Metric12ManifestAuditor:
             selected = [row["selected_use"]["run_dict"] for row in slots]
             t1_count = len(requirements["target1"]["repetitions"])
             t2_count = len(requirements["target2"]["repetitions"])
-            if t1_count == t2_count and set(requirements["target1"]["profiles"]) == set(PROFILES) and \
+            if t1_count == t2_count and set(requirements["target1"]["profiles"]) == set(TARGET1_ROLES) and \
                     set(requirements["target2"]["profiles"]) == set(PROFILES) and \
                     set(requirements["target2"]["cases"]) == set(TARGET2_CASES):
                 try:

@@ -23,7 +23,7 @@ def write_fixture(root, tc, profile="optimized"):
             silent, batch = 0, 1
         else:
             silent, batch = ((1, 1) if profile == "optimized" else (0, 0))
-        gem5_config_argv = ["test_e2e.py", "--x=1", "--x=2"]
+        gem5_config_argv = ["test_e2e.py", f"--tc={tc}", "--x=1", "--x=2"]
         if tc == 134:
             gem5_config_argv += [f"--silent-upgrade={silent}", "--direct-fwd=0",
                                  f"--ubcc-batch-rs={batch}"]
@@ -45,7 +45,7 @@ def write_fixture(root, tc, profile="optimized"):
                           "direct_fwd": {"requested": 0, "effective": 0},
                           "batch_rs": {"requested": batch, "effective": batch}})
         for socket in range(2):
-            ubio_argv = ["ubio"]
+            ubio_argv = ["ubio", f"--tc={tc}"]
             bloom, policy = 61440, "spill"
             if tc == 134 and profile == "naive":
                 bloom, policy = 0, "naive"
@@ -171,6 +171,41 @@ class AuditTcLaunchTest(unittest.TestCase):
         result = run_audit(self.root, "--tc", "98")
         self.assertEqual(result.returncode, 1)
         self.assertIn("fault rules present", result.stdout)
+
+    def test_accepts_missing_process_testcase_argv(self):
+        write_fixture(self.root, 134, "spill-noopt")
+        log = self.root / "remote_tc134_all_stdout.log"
+        rows = []
+        removed = False
+        for line in log.read_text().splitlines():
+            row = json.loads(line.split("[PROCESS-MANIFEST] ", 1)[1])
+            if not removed and row["component"] == "ubio":
+                row["argv"].remove("--tc=134")
+                removed = True
+            rows.append(row)
+        log.write_text("".join("[PROCESS-MANIFEST] " + json.dumps(row) + "\n"
+                               for row in rows))
+        (self.root / "launch_commands_tc134.jsonl").unlink()
+        result = run_audit(self.root, "--tc", "134", "--profile", "spill-noopt")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rejects_duplicate_or_wrong_gem5_testcase_argv(self):
+        write_fixture(self.root, 134, "spill-noopt")
+        log = self.root / "remote_tc134_all_stdout.log"
+        rows = []
+        changed = False
+        for line in log.read_text().splitlines():
+            row = json.loads(line.split("[PROCESS-MANIFEST] ", 1)[1])
+            if not changed and row["component"] == "gem5-config":
+                row["config_argv"].append("--tc=999")
+                changed = True
+            rows.append(row)
+        log.write_text("".join("[PROCESS-MANIFEST] " + json.dumps(row) + "\n"
+                               for row in rows))
+        (self.root / "launch_commands_tc134.jsonl").unlink()
+        result = run_audit(self.root, "--tc", "134", "--profile", "spill-noopt")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("gem5 optional testcase argv", result.stdout)
 
 
 if __name__ == "__main__":

@@ -256,6 +256,29 @@ def process_manifests(path):
     return rows
 
 
+def validate_optional_process_tc(root, expected_tc):
+    """Reject conflicting nonzero process hints; missing/zero hints are valid."""
+    conflicts = []
+    for path in all_log_files(root):
+        for row in process_manifests(path):
+            if row.get("component") not in ("ubio", "gem5-config", "gem5"):
+                continue
+            raw_tc = row.get("tc")
+            if raw_tc in (None, "", 0, "0"):
+                continue
+            try:
+                actual = int(raw_tc)
+            except (TypeError, ValueError):
+                conflicts.append(f"{path}: invalid tc={raw_tc!r}")
+                continue
+            if actual != expected_tc:
+                conflicts.append(f"{path}: tc={actual}")
+    if conflicts:
+        raise ExtractError(
+            f"process testcase hint conflicts with manifest tc={expected_tc}: " +
+            ", ".join(conflicts))
+
+
 def _logical_logs(root, evidence_file):
     """Return all streams belonging to a directory process, or one root stream."""
     if evidence_file.parent == root:
@@ -338,7 +361,7 @@ def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id="",
             row_tc = row.get("tc")
             if (row.get("component") == "ubio" and int(row.get("node", -1)) == node and
                     int(row.get("socket", -1)) == socket and
-                    (row_tc is None or int(row_tc) == tc)):
+                    (row_tc in (None, "", 0, "0") or int(row_tc) == tc)):
                 key = str(path.parent.resolve()) if path.parent != root else str(path.resolve())
                 manifest_sources[key] = _logical_logs(root, path)
     if manifest_sources:
@@ -553,6 +576,7 @@ def extract_run(run, base, policy):
     if not simulator.is_dir() or not simout.is_dir():
         raise ExtractError(f"input directory missing simulator={simulator} simout={simout}")
     out["simulator_log_dir"], out["simout_dir"] = str(simulator), str(simout)
+    validate_optional_process_tc(simulator, out["tc"])
     try:
         discovered_simouts = discover_simouts(simout, out["tc"])
     except ExtractError as error:

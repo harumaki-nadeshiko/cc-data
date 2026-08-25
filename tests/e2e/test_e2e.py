@@ -3760,7 +3760,7 @@ def gem5_config_main():
         "config_argv": list(sys.argv),
         "process_argv": _process_argv,
         "unknown_args": list(_unknown),
-        "tc": _args.tc or int(os.environ.get("E2E_TC", "0")),
+        "tc": _args.tc,
         "node": _local_node,
         "num_nodes": _cfg_num_nodes,
         "num_sockets": _cfg_num_sockets,

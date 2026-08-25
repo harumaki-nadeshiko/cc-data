@@ -5,6 +5,11 @@
     "feature": "target=target1;round=1;case=TC131;topology=8n1s;profile=naive"
   },
   {
+    "simulator_log_dir": "/logs/target1/round1/ideal/tc131",
+    "workload_output_dir": "/runs/target1/round1/ideal/tc131/m5out",
+    "feature": "target=target1;round=1;case=TC131;topology=8n1s;profile=ideal"
+  },
+  {
     "simulator_log_dir": "/logs/target2/round1/optimized/tc135",
     "workload_output_dir": "/runs/target2/round1/optimized/tc135/m5out",
     "feature": "target=target2;round=1;case=TC135;topology=3n1s;profile=optimized"

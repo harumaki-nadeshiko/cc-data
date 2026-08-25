@@ -72,6 +72,20 @@ class Metric12ManifestAuditorTest(unittest.TestCase):
         self.assertEqual(report["coverage"]["counts"]["VALID"], 72)
         self.assertEqual(report["evidence_ledger"]["independent_evidence_count"], 72)
         self.assertIsNotNone(report["formal_analysis"])
+        self.assertEqual(
+            report["provisional"]["metric1"]["comparisons"][0]["outer_delta_ns"], 2.0)
+
+    def test_legacy_guest_timer_profile_matrix_is_incomplete_not_pass(self):
+        runs = self.legacy_runs()
+        for run in runs:
+            if run["feature"].startswith("target1|") and run["feature"].endswith("|ideal"):
+                run["feature"] = run["feature"][:-len("ideal")] + "optimized"
+        report = self.audit(runs)
+        self.assertEqual(report["status"], "INCOMPLETE")
+        self.assertEqual(report["coverage"]["counts"]["MISSING"], 3)
+        self.assertEqual(report["coverage"]["counts"]["SUPPORT"], 3)
+        self.assertEqual(report["provisional"]["metric1"]["comparisons"], [])
+        self.assertIsNone(report["formal_analysis"])
 
     def test_independent_noncontiguous_repetitions(self):
         runs = self.legacy_runs()

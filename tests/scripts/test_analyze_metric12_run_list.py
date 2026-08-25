@@ -49,8 +49,8 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
         self.write(child / "networksim.exit", "0\n")
 
     def add_run(self, target, round_id, case, topology, profile,
-                timer_ticks=None, latency_mean=None, capacity=None,
-                policy=None, exact_live=None):
+                 timer_ticks=None, latency_mean=None, capacity=None,
+                 policy=None, exact_live=None, outer_values=(), oversized=0):
         key = f"{target}_r{round_id}_{case}_{profile}"
         sim_dir = self.root / key / "logs"
         workload_dir = self.root / key / "m5out"
@@ -58,21 +58,22 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
         for node in range(nodes):
             self.write(workload_dir / f"node{node}" / f"simout_n{node}", "")
         if target == "target1":
-            for node, ticks in zip((1, 2), timer_ticks):
-                self.write(
-                    workload_dir / f"node{node}" / f"simout_n{node}",
-                    f"[GUEST-TIMER] node={node} phase=post_pressure_catalog_reuse "
-                    f"operations=1 counter_ticks={ticks} "
-                    "counter_frequency_hz=1000000000 source=arm_cntvct_el0 "
-                    "unit=counter_ticks\n")
             ubio = sim_dir / f"ubio_tc{case[2:]}_n0_s0" / "stdout.log"
-            lines = [f"[UBCC-STATE] tick=1 capacity={capacity} policy={policy}\n",
-                     f"[UBCC-STATS] {{\"residentCapacity\":{capacity}}}\n"]
+            lines = ["[PROCESS-MANIFEST] " +
+                     f'{{"component":"ubio","experimental_oversized_resident_dir":{oversized}}}\n',
+                     f"[UBCC-STATE] tick=1 capacity={capacity} policy={policy}\n",
+                      f"[UBCC-STATS] {{\"residentCapacity\":{capacity}}}\n"]
             if exact_live is not None:
                 lines.append(
                     "[UBCC-STATS] {\"h64ExactLiveKnown\":1,"
                     f"\"h64ExactLiveCount\":{exact_live}}}\n")
             self.write(ubio, "".join(lines))
+            for index, value in enumerate(outer_values):
+                path = sim_dir / f"gem5_tc{case[2:]}_node{index % 2}" / "stderr.log"
+                previous = path.read_text() if path.exists() else ""
+                self.write(path, previous +
+                           f"[EP-PERF] kind=outer node=0 pa=0x1000 reqId={index + 1} "
+                           f"latency_ps={value}\n")
         else:
             phase = MODULE.TARGET2_PHASES[case]
             contract = MODULE.TARGET2_MARKER_CONTRACT[case]
@@ -108,17 +109,17 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
             "TC217": {"naive": 500, "spill-noopt": 350, "optimized": 250},
         }
         for round_id in (1, 2, 3):
-            for profile in MODULE.PROFILES:
+            for profile in MODULE.TARGET1_ROLES:
                 if profile == "naive":
-                    capacity, policy, exact, ticks = 65536, "naive", None, (1000, 1000)
+                    capacity, policy, exact, outer, oversized = 65536, "naive", None, (), 0
                 elif profile == "spill-noopt":
-                    capacity, policy, exact, ticks = 57344, "spill", 102656, (900, 900)
+                    capacity, policy, exact, outer, oversized = 57344, "spill", 102656, (12000, 14000), 0
                 else:
-                    capacity, policy, exact, ticks = 57344, "spill", 102656, (800, 800)
+                    capacity, policy, exact, outer, oversized = 131072, "spill", 0, (10000, 12000), 1
                 runs.append(self.add_run(
                     "target1", round_id, "TC131", "8n1s", profile,
-                    timer_ticks=ticks, capacity=capacity, policy=policy,
-                    exact_live=exact))
+                    capacity=capacity, policy=policy, exact_live=exact,
+                    outer_values=outer, oversized=oversized))
             for case, values in target2_values.items():
                 topology = "2n1s" if case == "TC217" else "3n1s"
                 for profile in MODULE.PROFILES:
@@ -135,8 +136,7 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
             report["target1"]["statistics"]["capacity_ratio"]["mean"],
             102656 / 65536)
         self.assertAlmostEqual(
-            report["target1"]["statistics"]["guest_delta_ns_per_operation"]["mean"],
-            -100.0)
+            report["target1"]["statistics"]["outer_delta_ns"]["mean"], 2.0)
         self.assertEqual(
             report["target2"]["statistics"]["applicable_cases"],
             ["TC135", "TC136", "TC137", "TC138", "TC139", "TC217"])
@@ -145,11 +145,13 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
                   ["optimized_reduction_pct"]["mean"], 0)
         self.assertTrue(report["target2"]["statistics"]["applicable_set_stable"])
         self.assertEqual(len(report["resolved_runs"]), 72)
+        self.assertEqual(sum("gem5_tc131_node" in row["path"]
+                             for row in report["inputs"]), 12)
 
     def test_bad_node_simout_mapping_is_rejected(self):
         run = self.add_run(
             "target1", 1, "TC131", "8n1s", "naive",
-            timer_ticks=(1000, 1000), capacity=65536, policy="naive")
+            capacity=65536, policy="naive")
         workload = pathlib.Path(run["workload_output_dir"])
         bad = workload / "node7" / "simout_n7"
         bad.rename(workload / "node7" / "simout_n6")
@@ -167,7 +169,7 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
     def test_verifier_must_end_in_pass(self):
         run = self.add_run(
             "target1", 1, "TC131", "8n1s", "naive",
-            timer_ticks=(1000, 1000), capacity=65536, policy="naive")
+            capacity=65536, policy="naive")
         verifier = pathlib.Path(run["simulator_log_dir"]) / "verify_tc131.log"
         verifier.write_text(
             ">>> TC131 PASSED <<<\n>>> TC131 FAILED <<<\n")
@@ -177,7 +179,7 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
     def test_child_status_identity_is_exact(self):
         run = self.add_run(
             "target1", 1, "TC131", "8n1s", "naive",
-            timer_ticks=(1000, 1000), capacity=65536, policy="naive")
+            capacity=65536, policy="naive")
         child = pathlib.Path(run["simulator_log_dir"]) / "child_status_tc131"
         (child / "unrelated.exit").write_text("0\n")
         with self.assertRaises(MODULE.EvidenceError):
@@ -198,8 +200,8 @@ class Metric12RunListAnalyzerTest(unittest.TestCase):
     def test_ubio_stdout_and_stderr_are_both_parsed(self):
         run = self.add_run(
             "target1", 1, "TC131", "8n1s", "spill-noopt",
-            timer_ticks=(900, 900), capacity=57344, policy="spill",
-            exact_live=102656)
+            capacity=57344, policy="spill", exact_live=102656,
+            outer_values=(12000,))
         ubio_dir = pathlib.Path(run["simulator_log_dir"]) / "ubio_tc131_n0_s0"
         stdout = ubio_dir / "stdout.log"
         lines = stdout.read_text().splitlines()

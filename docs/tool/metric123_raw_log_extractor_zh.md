@@ -43,7 +43,7 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   ResidentDir，无容量 eviction/offload，提供 Outer 反事实基线）。`metric1_role`别名包括
   `baseline -> naive`、`spill-512k/actual -> spill`、`ideal-dir/infinite -> ideal`。省略时 profile=naive
   自动为 naive；Home UBIO `PROCESS-MANIFEST experimental_oversized_resident_dir=1`自动为 ideal；其余
-  spill-noopt/optimized 自动为 spill，并产生`METRIC1_ROLE_AUTO_DETECTED`。
+  其余spill-noopt自动为spill；optimized自动为support extension，并产生`METRIC1_ROLE_AUTO_DETECTED`。
   正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
   `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
@@ -63,6 +63,67 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   naive 要求 naive/policy=naive/oversized=0。门禁失败只进入 extension，正式角色槽保持缺失，绝不静默使用。
   `requirements.metric1`支持`repetitions`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
   旧 manifest 没有 ideal 时可正常解析（timer 缺失也不会拒绝），但标准 Metric1 为 INCOMPLETE。
+  下游`scripts/generate_metric123_report.py`必须通过`--metric1-json`读取本提取器的`report.json`或
+  `run_metric1_outer_ideal_matrix.py`的`summary.json`。旧Metric1/2 JSON中的`guest_delta_*`只保留历史
+  描述用途；未提供corrected Outer/IdealDir结果时，统一报告中的Metric1固定为`INCOMPLETE`，不得再据此PASS。
+  裸进程启动不强制传testcase：gem5的`test_e2e.py --tc=N`与UBIO的`ubio --tc=N`都是可选身份提示。
+  提取时以raw manifest中每个run的`tc`为权威身份；进程`PROCESS-MANIFEST.tc`缺失或为0时允许，非零时
+  只做一致性交叉校验，冲突才拒绝。UBIO的`--tc`不选择overflow policy、ResidentDir容量、协议优化或
+  fault规则，这些功能配置仍必须由各自argv给出。
+
+### Metric1 裸进程 argv 合同
+
+正式矩阵固定为`TC131 / 8N1S / O3 / 3 repetitions x 3 roles`。外部launcher负责把每个物理运行
+登记到raw manifest的`tc=131`和对应`metric1_role`；gem5与UBIO进程argv中的`--tc=131`均可省略。
+Port/IPC/PDES参数不属于Metric1提取合同。
+
+每个gem5节点的共同配置脚本参数为：
+
+```text
+test_e2e.py
+--node-id=<0..7> --num-nodes=8 --num-sockets=1
+--workload=<TC131 workload.elf>
+--cpu-model=o3 --sequencer-max-outstanding=16
+--l3-size=256kB --l3-assoc=16
+--ha-profile=ubcc --clear-profile=ack
+--silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0
+--ubcc-metadata-size=134217728
+```
+
+每个UBIO使用`--node=<0..7> --socket=0 --num-nodes=8 --num-sockets=1`，角色差异为：
+
+```text
+naive:
+  --bloom-bytes=0 --sram-bytes=524288 --ways=0 --set-bits=0
+  --dir-overflow-policy=naive --batch-rs=0
+  --metadata-dram-bytes=134217728
+
+spill:
+  --bloom-bytes=61440 --sram-bytes=524288 --ways=0 --set-bits=0
+  --dir-overflow-policy=spill --batch-rs=0
+  --metadata-dram-bytes=134217728
+
+ideal:
+  --bloom-bytes=61440 --sram-bytes=2097152 --ways=32 --set-bits=0
+  --dir-overflow-policy=spill --batch-rs=0
+  --allow-oversized-resident-dir-for-test
+  --metadata-dram-bytes=134217728
+```
+
+推荐的非正式extension最小矩阵同样使用`naive/spill/ideal`三角色，每点先做1轮资格运行：
+
+```text
+TC132 / 3N1S / dirty checkpoint recovery / 73728 unique lines
+TC133 / 8N1S / shared frontier reuse      / 69632 unique lines
+TC142 / 3N1S / portable OLTP p150         / 98304 unique lines
+```
+
+TC132/TC133直接复用现有workload。TC142必须在编译workload时使用p150定义，不把这些定义传给
+gem5或UBIO：`PORTABLE_PRESSURE_LINES=98208`、`PORTABLE_TARGET_FOOTPRINT_LINES=98304`、
+`PORTABLE_NAIVE_CAPACITY_LINES=65536`、`PORTABLE_PRESSURE_LEVEL_PCT=150`、`PORTABLE_BATCHES=32`。
+三类extension沿用与正式矩阵相同的gem5 O3/L3/优化关闭参数和三角色UBIO目录参数，只替换
+`--workload`、`--num-nodes`及每节点进程数。extension必须单独报告Outer samples和mean，不与TC131
+正式三轮聚合。TC125-130、TC200-203等要求实际spill/fill或工作集远小于512KiB容量的机制测试不纳入。
 - Metric2：TC135-140/217 的冻结正式 phase、node、samples 合同仍要求正式 phase 唯一 marker，并只用它
   计算 standard 结果。工具同时扫描全部 PERF-LATENCY。未注册 TC 省略`phase`时，只有一个 phase 会自动
   选择并产生`METRIC2_PHASE_AUTO_DETECTED`；存在多个 phase 时不混合均值，而是全部保存在

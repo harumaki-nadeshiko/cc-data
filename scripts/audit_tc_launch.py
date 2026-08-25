@@ -177,11 +177,18 @@ def audit(args):
         check.equal(record.get("topology"), "8n2s", "launch topology")
         argv = record.get("argv", [])
         check.expect(not option_values(argv, "--fault-rules"),
-                     f"fault override present in {record.get('component')} argv")
+                      f"fault override present in {record.get('component')} argv")
     for record in by_process["ubio"]:
         check.equal(record.get("num_nodes"), topology["num_nodes"], "UBIO num_nodes")
         check.equal(record.get("num_sockets"), topology["num_sockets"], "UBIO num_sockets")
         argv = record.get("argv", [])
+        tc_values = option_values(argv, "--tc")
+        check.expect(tc_values in ([], [str(args.tc)]),
+                     f"UBIO optional testcase argv {record.get('node')}:{record.get('socket')} "
+                     f"must be absent or {args.tc}, got {tc_values}")
+        check.expect(record.get("tc") in (None, 0, args.tc),
+                     f"UBIO optional manifest testcase {record.get('node')}:{record.get('socket')} "
+                     f"must be absent, 0, or {args.tc}, got {record.get('tc')}")
         check.expect(not option_values(argv, "--fault-rules"),
                      f"fault rules present in UBIO {record.get('node')}:{record.get('socket')} argv")
         check.equal(record.get("home_controller"), common["ubio_home_controller"],
@@ -212,6 +219,14 @@ def audit(args):
         check.equal(record.get("process_cpu_count"), topology["cpus_per_gem5_process"],
                     "gem5 process CPU count")
         check.equal(record.get("unknown_args"), [], "gem5 unknown args")
+        config_argv = record.get("config_argv", record.get("argv", []))
+        tc_values = option_values(config_argv, "--tc")
+        check.expect(tc_values in ([], [str(args.tc)]),
+                     f"gem5 optional testcase argv node {record.get('node')} "
+                     f"must be absent or {args.tc}, got {tc_values}")
+        check.expect(record.get("tc") in (None, 0, args.tc),
+                     f"gem5 optional manifest testcase node {record.get('node')} "
+                     f"must be absent, 0, or {args.tc}, got {record.get('tc')}")
         check.equal(record.get("ha_profile"), common["ha_profile"], "gem5 HA profile")
         check.equal(record.get("clear_profile"), common["clear_profile"], "gem5 Clear profile")
     for record in by_process["networksim"]:

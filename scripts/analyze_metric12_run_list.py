@@ -32,6 +32,7 @@ if __name__ == "__main__":
 
 
 PROFILES = ("naive", "spill-noopt", "optimized")
+TARGET1_ROLES = ("naive", "spill-noopt", "ideal")
 PROFILE_ALIASES = {
     "naive": "naive",
     "spill": "spill-noopt",
@@ -40,6 +41,11 @@ PROFILE_ALIASES = {
     "optimized": "optimized",
     "spill-opt": "optimized",
     "spill_opt": "optimized",
+    "spill-512k": "spill-noopt",
+    "actual": "spill-noopt",
+    "ideal": "ideal",
+    "ideal-dir": "ideal",
+    "infinite": "ideal",
 }
 TARGET_ALIASES = {
     "1": "target1",
@@ -80,6 +86,7 @@ DEFAULT_THRESHOLDS = {
     "target1_capacity_ratio_min": 1.5,
     "target1_max_extra_cycles": 50.0,
     "target1_contract_clock_hz": 2.0e9,
+    "target1_ideal_min_capacity": 102656,
     "target2_applicable_naive_mean_ns": 500.0,
     "target2_equal_weight_reduction_min_pct": 10.0,
 }
@@ -93,6 +100,8 @@ LATENCY_RE = re.compile(
     r"\[PERF-LATENCY\] node=(\d+) phase=(\S+) samples=(\d+) "
     r"min=(\d+) p50=(\d+) p95=(\d+) p99=(\d+) max=(\d+) mean=(\d+) "
     r"counter_frequency_hz=(\d+) source=(\S+) unit=(\S+)")
+OUTER_RE = re.compile(r"\[EP-PERF\]\s+kind=outer(?:\s|$).*?latency_ps=(\d+)")
+FILL_DONE_RE = re.compile(r"\[RESIDENT-FILL-DONE\].*?\bfound=(\d+)")
 NODE_DIR_RE = re.compile(r"node(\d+)$")
 SIMOUT_RE = re.compile(r"simout_n(\d+)(?:\.gz)?$")
 UBIO_DIR_RE = re.compile(r"ubio(?:_tc(\d+))?_n(\d+)_s(\d+)$")
@@ -291,10 +300,14 @@ class Metric12RunListAnalyzer:
                 raise FeatureParseError(
                     f"run[{index}] official target1 requires topology 8n1s, "
                     f"got {topology}")
-            phase = phase or "post_pressure_catalog_reuse"
-            if not feature.timer_nodes:
-                raise FeatureParseError(f"run[{index}] target1 requires timer_nodes")
+            if profile not in TARGET1_ROLES + ("optimized",):
+                raise FeatureParseError(
+                    f"run[{index}] target1 role/support profile must be one of "
+                    f"{TARGET1_ROLES + ('optimized',)}, got {profile}")
         else:
+            if profile not in PROFILES:
+                raise FeatureParseError(
+                    f"run[{index}] target2 profile must be one of {PROFILES}, got {profile}")
             expected = TARGET2_PHASES.get(case)
             if expected is None:
                 raise FeatureParseError(
@@ -496,6 +509,9 @@ class Metric12RunListAnalyzer:
         capacity = 0
         policies = set()
         exact_live = None
+        exact_live_known = None
+        oversized = set()
+        found_fills = 0
         for path in paths:
             with open_text(path) as stream:
                 for line in stream:
@@ -503,6 +519,17 @@ class Metric12RunListAnalyzer:
                     if state:
                         capacity = max(capacity, int(state.group(1)))
                         policies.add(state.group(2))
+                    if "[PROCESS-MANIFEST]" in line:
+                        try:
+                            payload = json.loads(line.split("[PROCESS-MANIFEST]", 1)[1].strip())
+                        except (TypeError, ValueError):
+                            payload = {}
+                        if (payload.get("component") == "ubio" and
+                                payload.get("experimental_oversized_resident_dir") is not None):
+                            oversized.add(int(payload["experimental_oversized_resident_dir"]))
+                    fill = FILL_DONE_RE.search(line)
+                    if fill and int(fill.group(1)) == 1:
+                        found_fills += 1
                     if "[UBCC-STATS]" not in line or "{" not in line:
                         continue
                     try:
@@ -511,13 +538,17 @@ class Metric12RunListAnalyzer:
                         continue
                     if payload.get("residentCapacity") is not None:
                         capacity = max(capacity, int(payload["residentCapacity"]))
-                    if int(payload.get("h64ExactLiveKnown", 0)) == 1:
+                    if payload.get("h64ExactLiveKnown") is not None:
+                        known = int(payload.get("h64ExactLiveKnown", 0))
+                        exact_live_known = max(exact_live_known or 0, known)
                         exact_live = max(exact_live or 0,
                                          int(payload.get("h64ExactLiveCount", 0)))
         if not capacity:
             raise EvidenceError("no UBCC resident capacity marker in home UBIO log")
         if len(policies) != 1:
             raise EvidenceError(f"expected one UBCC policy, found {sorted(policies)}")
+        if len(oversized) > 1:
+            raise EvidenceError(f"conflicting oversized directory flags: {sorted(oversized)}")
         policy = policies.pop()
         if policy == "naive":
             effective = capacity
@@ -529,8 +560,44 @@ class Metric12RunListAnalyzer:
             "policy": policy,
             "resident_capacity": capacity,
             "h64_exact_live": exact_live,
+            "h64_exact_live_known": exact_live_known,
             "effective_unique": effective,
+            "experimental_oversized_resident_dir": (next(iter(oversized))
+                                                        if oversized else None),
+            "backstore_found_fills": found_fills,
         }
+
+    @staticmethod
+    def _outer_latency(root):
+        preferred = sorted({path.resolve() for pattern in (
+            "gem5_tc*_node*/stderr.log", "gem5_tc*_node*/stderr.log.gz")
+                            for path in root.rglob(pattern) if path.is_file()}, key=str)
+        candidates = preferred or sorted(
+            (path.resolve() for path in root.rglob("*")
+             if path.is_file() and path.suffix in (".log", ".gz")), key=str)
+        first_source, rows = {}, []
+        for path in candidates:
+            with open_text(path) as stream:
+                for line_no, line in enumerate(stream, 1):
+                    match = OUTER_RE.search(line)
+                    if not match:
+                        continue
+                    exact_line = line.rstrip("\r\n")
+                    if exact_line in first_source and first_source[exact_line] != str(path):
+                        continue
+                    first_source.setdefault(exact_line, str(path))
+                    rows.append({"file": str(path), "line": line_no,
+                                 "latency_ps": int(match.group(1))})
+        values = sorted(row["latency_ps"] for row in rows)
+        if not values:
+            raise EvidenceError(f"no completed EP-PERF kind=outer below {root}")
+        percentile = lambda q: values[int(q * (len(values) - 1))] / 1000.0
+        return {"source_files": sorted({row["file"] for row in rows}),
+                "sources": rows, "samples": len(values),
+                "mean_ns": statistics.mean(values) / 1000.0,
+                "p50_ns": statistics.median(values) / 1000.0,
+                "p95_ns": percentile(0.95), "p99_ns": percentile(0.99),
+                "max_ns": values[-1] / 1000.0}
 
     @staticmethod
     def _timer_records(paths, phase):
@@ -627,7 +694,7 @@ class Metric12RunListAnalyzer:
         if t1_rounds != t2_rounds:
             raise MatrixError(f"target1 rounds {t1_rounds} differ from target2 {t2_rounds}")
         for round_id in t1_rounds:
-            for profile in PROFILES:
+            for profile in TARGET1_ROLES:
                 if (round_id, profile) not in target1:
                     raise MatrixError(f"missing target1 run {(round_id, profile)}")
             for case in TARGET2_PHASES:
@@ -681,54 +748,47 @@ class Metric12RunListAnalyzer:
                 "verifier_log": str(run.correctness.verifier_log),
                 "child_exit_count": len(run.correctness.child_exit_files),
             })
-        report["inputs"] = self._input_metadata(all_paths)
-
         ratios, deltas_ns, deltas_cycles = [], [], []
         for round_id in rounds:
             round_report = {}
-            for profile in PROFILES:
+            for profile in TARGET1_ROLES:
                 run = target1[(round_id, profile)]
-                feature = run.record.feature
-                timer_paths = []
-                for node in feature.timer_nodes:
-                    if node not in run.simout_by_node:
-                        raise EvidenceError(
-                            f"target1 round {round_id} {profile} lacks simout node {node}")
-                    timer_paths.append(run.simout_by_node[node])
-                timers = self._timer_records(timer_paths, feature.phase)
-                counts = {node: 0 for node in feature.timer_nodes}
-                for timer in timers:
-                    if timer["node"] in counts:
-                        counts[timer["node"]] += 1
-                if any(count != 1 for count in counts.values()) or len(timers) != len(counts):
-                    raise EvidenceError(
-                        f"target1 round {round_id} {profile} requires exactly one "
-                        f"timer for nodes {feature.timer_nodes}, got {counts}")
-                frequencies = {timer["frequency_hz"] for timer in timers}
-                if len(frequencies) != 1:
-                    raise EvidenceError("target1 timer frequencies differ")
                 round_report[profile] = {
                     "coverage": self._parse_capacity(run.ubio_logs),
-                    "guest_timers": timers,
-                    "guest_mean_ns_per_operation": statistics.mean(
-                        timer["mean_ns_per_operation"] for timer in timers),
+                    "outer_latency": (self._outer_latency(run.record.simulator_log_dir)
+                                      if profile in ("spill-noopt", "ideal") else None),
                 }
+                if round_report[profile]["outer_latency"] is not None:
+                    all_paths.extend(pathlib.Path(path) for path in
+                                     round_report[profile]["outer_latency"]["source_files"])
             if round_report["naive"]["coverage"]["policy"] != "naive":
                 raise EvidenceError(f"target1 round {round_id} naive policy mismatch")
-            for profile in ("spill-noopt", "optimized"):
+            if round_report["naive"]["coverage"]["experimental_oversized_resident_dir"] not in (None, 0):
+                raise EvidenceError(f"target1 round {round_id} naive unexpectedly uses oversized directory")
+            for profile in ("spill-noopt", "ideal"):
                 if round_report[profile]["coverage"]["policy"] != "spill":
                     raise EvidenceError(
                         f"target1 round {round_id} {profile} policy mismatch")
+            spill_coverage = round_report["spill-noopt"]["coverage"]
+            if (spill_coverage["experimental_oversized_resident_dir"] not in (None, 0) or
+                    spill_coverage["h64_exact_live_known"] != 1):
+                raise EvidenceError(f"target1 round {round_id} spill-512K qualification failed")
+            ideal_coverage = round_report["ideal"]["coverage"]
+            if (ideal_coverage["experimental_oversized_resident_dir"] != 1 or
+                    ideal_coverage["resident_capacity"] < thresholds["target1_ideal_min_capacity"] or
+                    ideal_coverage["backstore_found_fills"] != 0 or
+                    ideal_coverage["h64_exact_live"] != 0):
+                raise EvidenceError(f"target1 round {round_id} IdealDir qualification failed")
             ratio = (round_report["spill-noopt"]["coverage"]["effective_unique"] /
                      round_report["naive"]["coverage"]["effective_unique"])
-            delta_ns = (round_report["spill-noopt"]["guest_mean_ns_per_operation"] -
-                        round_report["naive"]["guest_mean_ns_per_operation"])
+            delta_ns = (round_report["spill-noopt"]["outer_latency"]["mean_ns"] -
+                        round_report["ideal"]["outer_latency"]["mean_ns"])
             delta_cycles = (delta_ns * thresholds["target1_contract_clock_hz"] / 1.0e9)
             round_report["comparison"] = {
                 "capacity_ratio": ratio,
                 "capacity_increase_pct": (ratio - 1.0) * 100.0,
-                "guest_delta_ns_per_operation": delta_ns,
-                "guest_delta_cycles": delta_cycles,
+                "outer_delta_ns": delta_ns,
+                "outer_delta_cycles": delta_cycles,
                 "capacity_pass": ratio >= thresholds["target1_capacity_ratio_min"],
                 "latency_pass": delta_cycles < thresholds["target1_max_extra_cycles"],
             }
@@ -738,8 +798,9 @@ class Metric12RunListAnalyzer:
             deltas_cycles.append(delta_cycles)
         report["target1"]["statistics"] = {
             "capacity_ratio": describe(ratios),
-            "guest_delta_ns_per_operation": describe(deltas_ns),
-            "guest_delta_cycles": describe(deltas_cycles),
+            "outer_delta_ns": describe(deltas_ns),
+            "outer_delta_cycles": describe(deltas_cycles),
+            "definition": "mean(spill-512K completed Outer) - mean(spill-IdealDir completed Outer)",
             "pass": (all(value >= thresholds["target1_capacity_ratio_min"]
                          for value in ratios) and
                      all(value < thresholds["target1_max_extra_cycles"]
@@ -828,6 +889,7 @@ class Metric12RunListAnalyzer:
         report["overall_pass"] = (
             report["target1"]["statistics"]["pass"] and
             report["target2"]["statistics"]["pass"])
+        report["inputs"] = self._input_metadata(all_paths)
         report["csv_rows"] = csv_rows
         return report
 
@@ -843,8 +905,8 @@ class Metric12RunListAnalyzer:
             f"- Correctness gate: {report['correctness_gate']['status']}", "",
             "## Metric 1", "",
             f"- Capacity ratio: {target1['capacity_ratio']['mean']:.6f}",
-            f"- Guest delta: {target1['guest_delta_ns_per_operation']['mean']:.6f} ns/op",
-            f"- Delta cycles: {target1['guest_delta_cycles']['mean']:.6f}", "",
+            f"- Completed Outer delta: {target1['outer_delta_ns']['mean']:.6f} ns",
+            f"- Delta cycles at 2 GHz: {target1['outer_delta_cycles']['mean']:.6f}", "",
             "## Metric 2", "",
             f"- Applicable cases: {', '.join(target2['applicable_cases'])}",
             f"- Equal-weight reduction: "

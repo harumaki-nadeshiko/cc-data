@@ -2985,12 +2985,16 @@ main(int argc, char **argv)
     std::vector<std::string> faultRuleArgs;
     int nid = 0;
     int sid = 0;
+    // Evidence identity only. The testcase does not select protocol behavior;
+    // every functional UBIO setting remains an independent argv option.
+    int tc = 0;
     bool paBitsExplicit = false;
     bool sharersBitsExplicit = false;
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strncmp(argv[i], "--node=", 7)) nid = std::atoi(argv[i] + 7);
         if (!std::strncmp(argv[i], "--socket=", 9)) sid = std::atoi(argv[i] + 9);
+        if (!std::strncmp(argv[i], "--tc=", 5)) tc = std::atoi(argv[i] + 5);
         if (!std::strncmp(argv[i], "--num-sockets=", 14)) g_numSockets = std::atoi(argv[i] + 14);
         if (!std::strncmp(argv[i], "--num-nodes=", 12)) g_numNodes = std::atoi(argv[i] + 12);
         if (!std::strncmp(argv[i], "--home-controller=", 18)) {
@@ -3217,13 +3221,17 @@ main(int argc, char **argv)
                  sid, g_numSockets);
         return 1;
     }
+    if (tc < 0) {
+        LogError("UBIO", "[UBIO-FATAL] --tc={} must be non-negative", tc);
+        return 1;
+    }
     for (const auto &rules : faultRuleArgs) parseFaultRules(rules, nid);
 
     const char *overflowPolicy =
         g_overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? "naive" : "spill";
     std::cout << "[PROCESS-MANIFEST] {\"component\":\"ubio\",\"argv\":"
               << argvJson(argc, argv)
-              << ",\"tc\":" << std::atoi(envOrEmpty("E2E_TC"))
+              << ",\"tc\":" << tc
               << ",\"node\":" << nid << ",\"socket\":" << sid
               << ",\"num_nodes\":" << g_numNodes
               << ",\"num_sockets\":" << g_numSockets
