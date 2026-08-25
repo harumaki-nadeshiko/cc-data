@@ -76,6 +76,29 @@
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
+      "evidence_sets": [
+        {
+          "name": "capacity",
+          "physical_runs": 6,
+          "roles": [
+            "naive",
+            "spill-noopt"
+          ],
+          "repetitions": 3,
+          "aggregation": "per-role capacity, then spill / naive; optimized support runs are excluded"
+        },
+        {
+          "name": "outer_latency",
+          "physical_arms": 6,
+          "roles": [
+            "spill-512K",
+            "spill-IdealDir"
+          ],
+          "repetitions": 3,
+          "aggregation": "per-repeat completed-Outer mean difference, then equal-weight mean"
+        }
+      ],
+      "cross_set_weighting": "none; the two evidence sets serve independent Metric1 subcontracts",
       "expected_values": {
         "capacity_ratio": 1.5150909423828125,
         "capacity_increase_pct": 51.50909423828125,

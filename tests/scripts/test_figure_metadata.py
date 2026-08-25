@@ -38,6 +38,11 @@ class FigureMetadataTest(unittest.TestCase):
         self.assertEqual(chart["source_artifacts"], [GENERATOR.METRIC_REPORT,
                                                      GENERATOR.METRIC1_OUTER_SUMMARY])
         self.assertNotIn("guest_delta", json.dumps(chart))
+        self.assertEqual(chart["evidence_sets"][0]["physical_runs"], 6)
+        self.assertEqual(chart["evidence_sets"][1]["physical_arms"], 6)
+        self.assertEqual(
+            chart["cross_set_weighting"],
+            "none; the two evidence sets serve independent Metric1 subcontracts")
         report = GENERATOR.require_json(GENERATOR.METRIC_REPORT)
         outer = GENERATOR.require_json(GENERATOR.METRIC1_OUTER_SUMMARY)
         lineage = next(row for row in GENERATOR.chart_lineage(

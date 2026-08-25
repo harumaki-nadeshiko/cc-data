@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "795f27067d7c7e4e6ab73e39b236e46cfe35956cfb375fcd0f02cb529600b3b3",
+      "docx_sha256": "4d2745ca7a97161fbe74250cdf43ffd89c090324dc31f9225837f70de8c8c31c",
       "embedded_source_sha256": "eebcad06938f5252dc4bb325979d8c22c00d4db6248495103be3a71555b59160",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
       "markdown_sha256": "eebcad06938f5252dc4bb325979d8c22c00d4db6248495103be3a71555b59160"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "17ba414e8ac6fcf1b11a5cae2bd8bd09447197ba20de3ca55d76d44b1401106e",
-      "embedded_source_sha256": "f7279c954c91b5a8ab8b858750b4e50ecbff49652bcc601b42cc3c95bcab1a21",
+      "docx_sha256": "5ce5d4853d6c0de4fbda40109a5ff749dd840b375385e095d54ca84831715e62",
+      "embedded_source_sha256": "ac96688eca53d23e657f37cc8ac1319c41584013f0b47dbba15fdf1323acee55",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
-      "markdown_sha256": "f7279c954c91b5a8ab8b858750b4e50ecbff49652bcc601b42cc3c95bcab1a21"
+      "markdown_sha256": "ac96688eca53d23e657f37cc8ac1319c41584013f0b47dbba15fdf1323acee55"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "8476a791a02f00a7a2e25bfde005e8fb0d43e8b9a975715236e714be2a80c59c",
-      "embedded_source_sha256": "35f9bc2a3a88a3d04facc32a261a7b6365d0d3d2fb7b50a9e59ff96113c634d4",
+      "docx_sha256": "858b8978086387012155cb87e24e737d20c71dd7dd611ea3effdf3649fe5d3a5",
+      "embedded_source_sha256": "6c4ff02f0df8535644a84d943db575ce7430e7a5961ab2180510943ee4ed31ad",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "35f9bc2a3a88a3d04facc32a261a7b6365d0d3d2fb7b50a9e59ff96113c634d4"
+      "markdown_sha256": "6c4ff02f0df8535644a84d943db575ce7430e7a5961ab2180510943ee4ed31ad"
     }
   ],
   "schema_version": 1

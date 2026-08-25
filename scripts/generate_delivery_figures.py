@@ -474,6 +474,12 @@ def chart_lineage(report, outer, matrix):
     return [
         {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [METRIC_REPORT, METRIC1_OUTER_SUMMARY],
          "generator": GENERATOR, "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
+         "evidence_sets": [
+             {"name": "capacity", "physical_runs": 6, "roles": ["naive", "spill-noopt"],
+              "repetitions": 3, "aggregation": "per-role capacity, then spill / naive; optimized support runs are excluded"},
+             {"name": "outer_latency", "physical_arms": 6, "roles": ["spill-512K", "spill-IdealDir"],
+              "repetitions": 3, "aggregation": "per-repeat completed-Outer mean difference, then equal-weight mean"}],
+         "cross_set_weighting": "none; the two evidence sets serve independent Metric1 subcontracts",
          "expected_values": {"capacity_ratio": float(report["metric1"]["capacity_ratio"]), "capacity_increase_pct": float(report["metric1"]["capacity_increase_pct"]), "ideal_outer_mean_ns": float(first["ideal"]["outer_mean_ns"]), "spill_outer_mean_ns": float(first["spill"]["outer_mean_ns"]), "outer_delta_mean_ns": float(outer["delta_mean_ns"]), "ideal_resident_capacity": int(first["ideal"]["resident_capacity"]), "spill_resident_capacity": int(first["spill"]["resident_capacity"])},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric1-capacity-latency"]},
         {"name": "ubcc-metric2-reductions", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,

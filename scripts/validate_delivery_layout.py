@@ -293,7 +293,10 @@ def main(argv=None):
             documents.append(report)
         except (RuntimeError, ValueError, ET.ParseError, IndexError) as error:
             errors.append(f"{path}: {error}")
-    payload = {"schema_version": 1, "thresholds": THRESHOLDS,
+    payload = {"schema_version": 1, "review_method": "automated_pdf_structure",
+               "human_visual_review": "NOT_RUN",
+               "limitations": ["No subjective typography, brand, color, or reading-experience review was performed."],
+               "thresholds": THRESHOLDS,
                "documents": documents, "errors": errors,
                "overall_status": "PASS" if not errors and all(
                    item["status"] == "PASS" for item in documents) else "FAIL"}

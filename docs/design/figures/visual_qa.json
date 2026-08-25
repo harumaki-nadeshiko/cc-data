@@ -1,5 +1,10 @@
 {
   "schema_version": 3,
+  "review_method": "automated_structural_and_lineage",
+  "human_visual_review": "NOT_RUN",
+  "limitations": [
+    "No pixel-level aesthetic, brand, color-perception, or semantic-arrow review was performed."
+  ],
   "inventory": "docs/design/figures/figure_inventory.json",
   "figures": [
     {
@@ -241,6 +246,7 @@
         "generator_exists": true,
         "document_references_exist": true,
         "no_stale_guest_latency_field": true,
+        "metric1_evidence_sets": true,
         "values_match_source_json": true
       },
       "status": "PASS"

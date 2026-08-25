@@ -64,7 +64,10 @@ UBCC 采用分层验证方法：形式化模型验证状态与动作规则，定
 | 多 PA 与多 Socket 隔离 | TLA+ + 多拓扑验证 | 通过 |
 | 处理器 O3 下的同步语义 | 可执行验证 | 通过 |
 | Q1-Q5 故障资格 | 52 项物理运行 | 52/52 通过 |
-| 拓扑覆盖 | 3N1S、3N2S、8N2S、16N1S | 通过 |
+| 拓扑覆盖 | 3N1S、3N2S、8N2S、16N1S Level-A | 协议节点规模与端点能力通过 |
+
+表中 Liveness 结论仅适用于对应 temporal property、FairSpec/forward-progress 公平性和可恢复
+故障最终解除的模型条件；focused 仲裁与 waiter 模型只单独检查 Safety，不作独立活性证明。
 
 形式化模型与可执行验证从不同抽象层共同覆盖 UBCC 的安全性、活性和可恢复传输故障能力。
 
@@ -73,7 +76,7 @@ UBCC 采用分层验证方法：形式化模型验证状态与动作规则，定
 | 项目 | 结论 | 适用范围 |
 |---|---|---|
 | 实现验证 | 端到端、O3、多拓扑与 Q1-Q5 资格结果通过 | 当前实现及冻结可执行场景 |
-| 形式化验证 | 核心模型与 focused 模型覆盖各自声明的 Safety/Liveness 性质 | 有界状态、抽象环境与模型公平性假设 |
+| 形式化验证 | 核心模型覆盖声明的 Safety/Liveness；focused 模型覆盖声明的 Safety | 有界状态、抽象环境与模型公平性假设 |
 | HA 比较 | 冻结 HA-VI 参考范围内聚合结果支持 UBCC 优势 | 2N1S、O3、单向完成语义和两个 L3 压力点 |
 | 范围外 | 不作本次交付能力主张 | 永久 Home 故障在线恢复、物理芯片和端口级 Switch 微体系结构 |
 
@@ -97,7 +100,7 @@ UBCC 采用分层验证方法：形式化模型验证状态与动作规则，定
 | 证据层级 | 当前证据 | 可支持的结论 | 不应外推为 |
 |---|---|---|---|
 | 当前实现 + 端到端执行 | 协议实现、定向机制测试、O3、多拓扑、性能正确性门禁和 Q1-Q5 | 已执行场景中的数据、权限、收敛与故障恢复结果 | 对所有环境和所有故障的穷尽证明 |
-| 有界 / focused 形式化模型 | 目录核心、传输故障、多 PA/Socket、snoop 仲裁与 waiter 退役模型 | 各模型状态空间和公平性假设内的 Safety/Liveness 性质 | 未建模硬件细节或完整系统的无界证明 |
+| 有界 / focused 形式化模型 | 目录核心、传输故障、多 PA/Socket、snoop 仲裁与 waiter 退役模型 | 核心/传输模型的 Safety/Liveness，以及 focused 模型声明的 Safety | 未建模硬件细节或完整系统的无界证明 |
 | 理论分析 | 协议路径、目录组织、HA-VI 结构差异与复杂度解释 | 解释机制差异和实验结果来源 | 实现通过、性能胜负或物理芯片测量 |
 | 本次范围外 | 永久 Home 失效恢复、客户物理 HA 和端口级 Switch 微体系结构 | 明确交付边界 | 已验证或已实现能力 |
 
@@ -191,8 +194,8 @@ EP-RNF focused 模型覆盖 active Recall、ReadShared、ReadUnique、CleanUniqu
 | UBCC 目录核心 | 目录状态、授权与提交 | 通过 | 通过 |
 | 传输故障 | 丢失、重复、乱序 | 通过 | 通过 |
 | 多 PA / 多 Socket | 状态隔离 | 通过 | 通过 |
-| EP-RNF 仲裁 | 同址 snoop 收敛 | 通过 | 通过 |
-| waiter 退役 | 精确退役与重放 | 通过 | 通过 |
+| EP-RNF 仲裁 | 同址 snoop 仲裁安全性 | 通过 | 未单独检查，由可执行验证补充 |
+| waiter 退役 | 精确退役与重放安全性 | 通过 | 未单独检查，由可执行验证补充 |
 
 ---
 
@@ -275,7 +278,7 @@ Q1-Q5 矩阵面向可恢复消息传输故障，覆盖基础故障、连续丢�
 | Q2 | 8 | Clear、Upgrade、InvalidateAck、RecallResp 连续丢失 | 8/8 通过 |
 | Q3 | 4 | 请求与响应的双故障组合 | 4/4 通过 |
 | Q4 | 8 | 32 PA、burst、partial Ack、multi-source、near-outstanding | 8/8 通过 |
-| Q5 | 12 | 3N1S、3N2S、8N2S、16N1S | 12/12 通过 |
+| Q5 | 12 | 3N1S、3N2S、8N2S、16N1S Level-A | 12/12 通过 |
 | 合计 | 52 | Q1-Q5 | 52/52 通过 |
 
 ![图 5-1 Q1-Q5 故障资格结果](figures/ubcc-q1-q5-qualification.png)
@@ -324,7 +327,7 @@ Q4 覆盖 32 PA、partial Ack、多源 Ack 和接近 outstanding 容量的代表
 | 3N1S | 基础跨节点失效与确认 | 3/3 通过 |
 | 3N2S | 多 Socket 路由与事务身份 | 3/3 通过 |
 | 8N2S | 多 sharer 与 partial Ack | 3/3 通过 |
-| 16N1S | node15、16 节点共享转写者 | 3/3 通过 |
+| 16N1S Level-A | node15、16 节点共享转写者 | 3/3 通过 |
 
 ---
 
@@ -406,7 +409,7 @@ HA-VI 证据用于回答：在相同 workload、完成边界和冻结参数下�
 - UBCC 目录状态与关键活性机制；
 - EP-RNF、EP-SNF 和 UBAdapter 协同；
 - 可恢复消息传输故障；
-- 3N1S、3N2S、8N2S 和 16N1S 代表拓扑；
+- 3N1S、3N2S、8N2S 和 16N1S Level-A 代表拓扑；
 - O3 处理器模型下的同步语义；
 - 性能矩阵执行前的正确性门禁。
 
@@ -462,7 +465,7 @@ UBCC 已建立从形式化模型到端到端执行的分层验证体系。目录
 | Q2 | 连续丢失 | ClearReq、UpgradeReq、InvalidateAck、RecallResp | 3N1S |
 | Q3 | 双故障组合 | 请求 + 响应 | 3N1S |
 | Q4 | burst / concurrency | Clear、InvalidateAck、RecallResp | 3N1S |
-| Q5 | topology | InvalidateReq、InvalidateAck | 3N1S、3N2S、8N2S、16N1S |
+| Q5 | topology | InvalidateReq、InvalidateAck | 3N1S、3N2S、8N2S、16N1S Level-A |
 
 ---
 

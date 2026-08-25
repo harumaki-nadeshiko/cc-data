@@ -78,7 +78,7 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 | 合同计分集 | TC131、TC135-TC140、TC217 | 计算指标 1/2 最终合同数值 |
 | 容量与机制集 | TC120-TC129、TC141 | 验证访问模式、offload/onload、writeback、replay 和 shared-writer recovery |
 | 真实容量压力集 | TC130-TC134 | 验证热点复用、catalog、checkpoint、frontier 和 sliding window |
-| 代表应用集 | TC142-TC147 | 验证数据库、FaaS、图计算和 feature store 在 16N1S 下的应用价值 |
+| 代表应用集 | TC142-TC147 | 验证数据库、FaaS、图计算和 feature store 在 16N1S Level-A 下的应用价值 |
 
 支撑 testcase 不重复加入合同总分；它们用于说明 UBCC 的收益来源和适用场景，并排除合同
 结果由单一 workload 产生的替代解释。
@@ -121,8 +121,8 @@ spill-IdealDir；naive 仅用于容量分母。
 spill-IdealDir，共 6 个物理 arms。两个合格证据集按各自冻结职责组合形成当前接受值，既不
 把 optimized 混入容量计算，也不对跨证据集运行重复加权。
 
-后续标准化采集合同可以统一为每轮 naive、spill-512K、spill-IdealDir 三角色的 3×3 裸启动
-矩阵；该合同描述未来采集方式，不表示当前已经存在这样的九运行证据。
+验收后若需要统一复现，可选用每轮 naive、spill-512K、spill-IdealDir 三角色的 3×3 裸启动
+矩阵。该方案不是本轮验收 Gate，不影响当前冻结接受值；未经合同变更不据此要求新增实验。
 
 ### 2.3 指标 2 口径
 
@@ -167,7 +167,7 @@ workload 发起目标操作，结束点为数据和权限满足该 workload 的�
 - TC125-TC129 验证 Backstore 机制路径的完成性；
 - TC130-TC134 展示固定容量压力下的真实数据复用场景；
 - TC141 验证 spill 后 shared-to-writer 恢复；
-- TC142-TC147 展示 16N1S 代表应用结果。
+- TC142-TC147 展示 16N1S Level-A 代表应用结果。
 
 ---
 
@@ -215,8 +215,7 @@ ResidentDir 与 Backstore 的分层管理实现，热点元数据保留在 SRAM 
    两个角色的已完成 Outer 事件均值作差，再对三轮等权平均。
 
 当前结果没有把两个证据集拼成一个原生三角色九运行矩阵，也没有让任何运行跨职责重复计权。
-未来可采用统一 3×3 裸启动合同重新采集，但这不改变当前 1.515× 与 10.534578 ns / 21.069156
-cycles 的接受值。
+该可选复现方案不改变当前 1.515× 与 10.534578 ns / 21.069156 cycles 的接受值。
 
 ### 3.5 容量机制支撑结果
 
@@ -302,7 +301,7 @@ TC130-TC134 使用更大工作集和多节点拓扑，展示目录压力后状�
 TC130、TC133 和 TC134 表明 UBCC 在目录压力后仍能保留有价值的热点元数据，收益在滑动
 窗口和高复用场景中最为突出。TC132 负责验证脏数据恢复路径，不进入指标 2 合同聚合。
 
-### 4.6 16N1S 代表应用结果
+### 4.6 16N1S Level-A 代表应用结果
 
 TC142-TC147 覆盖数据库、FaaS、图计算和 feature store。每个 testcase 均运行 naive、
 spill-noopt 和 optimized 三个 profile，共 18/18 通过。
@@ -317,8 +316,8 @@ spill-noopt 和 optimized 三个 profile，共 18/18 通过。
 | TC147 | Feature store | 2892.318 | 2321.671 | 19.730% |
 
 六个代表应用均显示 optimized 相对 naive 的端到端收益，降幅范围为 14.67%–28.81%。
-该矩阵证明 UBCC 的容量和协议机制可以迁移到真实应用形态与 16 节点拓扑，而不局限于
-协议微场景。
+该矩阵证明 UBCC 的容量和协议机制可以迁移到真实应用形态与 16N1S Level-A 协议节点规模，
+而不局限于协议微场景；该结论不包含端口级 Switch 微体系结构。
 
 ---
 
@@ -428,7 +427,7 @@ write`。read 和 write 先分别计量，再合成为一个 testcase 主值，�
 且正确的协议执行。
 
 支撑结果还包括 TC120-TC129 的机制与性能路径、TC130-TC134 的真实容量压力场景、
-TC141 shared-writer recovery，以及 TC142-TC147 的 16N1S 三 profile 应用矩阵。
+TC141 shared-writer recovery，以及 TC142-TC147 的 16N1S Level-A 三 profile 应用矩阵。
 
 ### 6.2 重型回归
 

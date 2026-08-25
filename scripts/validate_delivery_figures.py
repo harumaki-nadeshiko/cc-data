@@ -137,6 +137,15 @@ def validate_chart_metadata(chart):
         not Path(ref["document"]).is_absolute() and (ROOT / ref["document"]).is_file()
         for ref in references)
     checks["no_stale_guest_latency_field"] = not contains_stale_guest_latency(chart)
+    if chart.get("name") == "ubcc-metric1-capacity-latency":
+        sets = chart.get("evidence_sets", [])
+        checks["metric1_evidence_sets"] = (
+            len(sets) == 2 and sets[0].get("physical_runs") == 6 and
+            sets[0].get("roles") == ["naive", "spill-noopt"] and
+            sets[1].get("physical_arms") == 6 and
+            sets[1].get("roles") == ["spill-512K", "spill-IdealDir"] and
+            chart.get("cross_set_weighting") ==
+            "none; the two evidence sets serve independent Metric1 subcontracts")
     if checks["source_artifacts_exist"]:
         try:
             value_field, expected = expected_chart_values(chart.get("name"), sources)
@@ -210,7 +219,10 @@ def main():
     stale_chart_sources = sorted(str(path.relative_to(ROOT)) for stem in charts
                                  if (path := FIGURES / f"{stem}.drawio").exists())
     if stale_chart_sources: errors.append(f"stale chart draw.io sources remain: {stale_chart_sources}")
-    payload = {"schema_version": 3, "inventory": str(INVENTORY.relative_to(ROOT)), "figures": rows,
+    payload = {"schema_version": 3, "review_method": "automated_structural_and_lineage",
+               "human_visual_review": "NOT_RUN",
+               "limitations": ["No pixel-level aesthetic, brand, color-perception, or semantic-arrow review was performed."],
+               "inventory": str(INVENTORY.relative_to(ROOT)), "figures": rows,
                "obsolete_files": obsolete_files, "graphviz_sources": dot_sources,
                "stale_chart_sources": stale_chart_sources,
                "overall_status": "PASS" if not errors else "FAIL", "errors": errors}
