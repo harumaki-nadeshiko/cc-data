@@ -161,7 +161,9 @@ def image_paragraph(rel_id, name, width_px, height_px, drawing_id,
                     hinted_width=None, hinted_height=None):
     cx, cy = image_extent(width_px, height_px, hinted_width, hinted_height)
     drawing = f'''<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="{drawing_id}" name="{escape(name)}" descr="{escape(name)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="{drawing_id}" name="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'''
-    return f'<w:p><w:pPr><w:jc w:val="center"/><w:keepNext/><w:spacing w:before="100" w:after="40"/></w:pPr>{drawing}</w:p>'
+    return (f'<w:p><w:pPr><w:jc w:val="center"/>'
+            f'<w:spacing w:before="100" w:after="40" w:line="240" '
+            f'w:lineRule="auto"/></w:pPr>{drawing}</w:p>')
 
 
 def page_break():

@@ -18,11 +18,15 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib import font_manager
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+except ModuleNotFoundError:  # Metadata-only validation does not require rendering dependencies.
+    matplotlib = plt = font_manager = None
+    FancyArrowPatch = FancyBboxPatch = Rectangle = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +50,25 @@ CHART_STEMS = (
     "ubcc-ha-vi-comparison",
     "ubcc-q1-q5-qualification",
 )
+
+GENERATOR = "scripts/generate_delivery_figures.py::metric_charts"
+METRIC_REPORT = "results/metric12-final-v1/report/metric123_report.json"
+METRIC1_OUTER_SUMMARY = "results/metric1-outer-ideal-matrix-v1/summary.json"
+QUALIFICATION_MATRIX = "scripts/fault_qualification_matrix.json"
+
+DIAGRAM_DOCUMENT_REFERENCES = {
+    "ubcc-system-architecture": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 2-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 2-1"}],
+    "gem5-ruby-controller-relationships": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 3-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 3-1"}],
+    "ubcc-protocol-paths": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 5-1"}],
+    "ubcc-verification-stack": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 1-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 1-1"}],
+    "ubcc-two-phase-commit": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 4-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 4-1"}],
+}
+CHART_DOCUMENT_REFERENCES = {
+    "ubcc-metric1-capacity-latency": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-1"}],
+    "ubcc-metric2-reductions": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 4-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 4-1"}],
+    "ubcc-ha-vi-comparison": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 5-1"}],
+    "ubcc-q1-q5-qualification": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 5-1"}],
+}
 
 
 @dataclass(frozen=True)
@@ -257,6 +280,8 @@ def write_drawio(diagram):
 
 
 def configure_plot():
+    if plt is None:
+        raise RuntimeError("matplotlib is required to render delivery figures")
     # Some documentation images expose the licensed YaHei file under a
     # different fontconfig alias.  Register it directly when available, then
     # keep the authored family name stable in SVG/CSS and draw.io XML.
@@ -363,9 +388,9 @@ def save_chart(fig, stem):
 
 def metric_charts():
     configure_plot()
-    report = require_json("results/metric12-final-v1/report/metric123_report.json")
-    outer = require_json("results/metric1-outer-ideal-matrix-v1/summary.json")
-    matrix = require_json("scripts/fault_qualification_matrix.json")
+    report = require_json(METRIC_REPORT)
+    outer = require_json(METRIC1_OUTER_SUMMARY)
+    matrix = require_json(QUALIFICATION_MATRIX)
 
     # Metric 1: capacity comes from the final contract; corrected Outer latency
     # comes from the dedicated spill-vs-IdealDir experiment.  The stale guest
@@ -439,6 +464,31 @@ def metric_charts():
         ax.text(bar.get_x()+bar.get_width()/2, value+.35, str(value), ha="center", fontweight="bold")
     ax.text(.99, .96, f"Total: {sum(qvalues)}", transform=ax.transAxes, ha="right", va="top", color="#375623", fontweight="bold")
     save_chart(fig, "ubcc-q1-q5-qualification")
+    return chart_lineage(report, outer, matrix)
+
+
+def chart_lineage(report, outer, matrix):
+    first = outer["repeats"]["1"]
+    counts = Counter(row["qualification"] for row in matrix["cases"])
+    labels = [f"Q{i}" for i in range(1, 6)]
+    return [
+        {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [METRIC_REPORT, METRIC1_OUTER_SUMMARY],
+         "generator": GENERATOR, "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
+         "expected_values": {"capacity_ratio": float(report["metric1"]["capacity_ratio"]), "capacity_increase_pct": float(report["metric1"]["capacity_increase_pct"]), "ideal_outer_mean_ns": float(first["ideal"]["outer_mean_ns"]), "spill_outer_mean_ns": float(first["spill"]["outer_mean_ns"]), "outer_delta_mean_ns": float(outer["delta_mean_ns"]), "ideal_resident_capacity": int(first["ideal"]["resident_capacity"]), "spill_resident_capacity": int(first["spill"]["resident_capacity"])},
+         "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric1-capacity-latency"]},
+        {"name": "ubcc-metric2-reductions", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,
+         "metric_definition": "Per-case optimized reduction versus naive; non-applicable cases remain visible as excluded.",
+         "expected_values": {"cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]), "applicable": bool(row["applicable"])} for row in report["metric2"]["cases"]], "applicable_equal_weight_mean_reduction_pct": float(report["metric2"]["equal_weight_mean_reduction_pct"])},
+         "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric2-reductions"]},
+        {"name": "ubcc-ha-vi-comparison", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,
+         "metric_definition": "Grouped UBCC and HA-VI ticks per operation at each pressure level for core and representative equal-weight scopes.",
+         "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
+         "document_references": CHART_DOCUMENT_REFERENCES["ubcc-ha-vi-comparison"]},
+        {"name": "ubcc-q1-q5-qualification", "source_artifacts": [QUALIFICATION_MATRIX], "generator": GENERATOR,
+         "metric_definition": "Count of canonical fault-qualification matrix cases grouped by Q1-Q5 qualification.",
+         "derived_values": {"qualification_counts": {label: counts[label] for label in labels}, "total": sum(counts[label] for label in labels)},
+         "document_references": CHART_DOCUMENT_REFERENCES["ubcc-q1-q5-qualification"]},
+    ]
 
 
 def remove_obsolete():
@@ -461,6 +511,22 @@ def remove_obsolete():
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    metadata_only = "--metadata-only" in os.sys.argv[1:]
+    if metadata_only:
+        report = require_json(METRIC_REPORT)
+        outer = require_json(METRIC1_OUTER_SUMMARY)
+        matrix = require_json(QUALIFICATION_MATRIX)
+        charts = chart_lineage(report, outer, matrix)
+        diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
+                    for stem in DIAGRAM_STEMS]
+        existing = require_json("docs/design/figures/figure_inventory.json") if (OUT / "figure_inventory.json").is_file() else {}
+        manifest = {"schema_version": 2, "diagrams": diagrams, "charts": charts,
+                    "obsolete": ["ubcc-metric-summary"],
+                    "diagram_exports": existing.get("diagram_exports", [])}
+        (OUT / "figure_inventory.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"updated metadata for {len(diagrams) + len(charts)} figures in {OUT}")
+        return
     remove_obsolete()
     diagrams = (architecture_diagram(), gem5_diagram(), protocol_diagram(), verification_diagram(), two_phase_diagram())
     export_rows = []
@@ -472,9 +538,11 @@ def main():
             export_rows.append((diagram.stem, "matplotlib same-model fallback", detail))
         else:
             export_rows.append((diagram.stem, detail, ""))
-    metric_charts()
-    manifest = {"schema_version": 1, "diagrams": list(DIAGRAM_STEMS), "charts": list(CHART_STEMS),
-                "obsolete": ["ubcc-metric-summary"],
+    charts = metric_charts()
+    diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
+                for stem in DIAGRAM_STEMS]
+    manifest = {"schema_version": 2, "diagrams": diagrams, "charts": charts,
+                 "obsolete": ["ubcc-metric-summary"],
                 "diagram_exports": [{"name": name, "renderer": renderer, "drawio_cli_blocker": blocker}
                                     for name, renderer, blocker in export_rows]}
     (OUT / "figure_inventory.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

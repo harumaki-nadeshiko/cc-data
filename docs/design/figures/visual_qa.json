@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "inventory": "docs/design/figures/figure_inventory.json",
   "figures": [
     {
@@ -39,7 +39,8 @@
         "max_expected_page_height": true,
         "approved_drawio_font": true,
         "minimum_font_size": true,
-        "no_core_networksim_component": true
+        "no_core_networksim_component": true,
+        "diagram_document_references": true
       },
       "status": "PASS"
     },
@@ -80,7 +81,8 @@
         "max_expected_page_height": true,
         "approved_drawio_font": true,
         "minimum_font_size": true,
-        "no_core_networksim_component": true
+        "no_core_networksim_component": true,
+        "diagram_document_references": true
       },
       "status": "PASS"
     },
@@ -121,7 +123,8 @@
         "max_expected_page_height": true,
         "approved_drawio_font": true,
         "minimum_font_size": true,
-        "no_core_networksim_component": true
+        "no_core_networksim_component": true,
+        "diagram_document_references": true
       },
       "status": "PASS"
     },
@@ -162,7 +165,8 @@
         "max_expected_page_height": true,
         "approved_drawio_font": true,
         "minimum_font_size": true,
-        "no_core_networksim_component": true
+        "no_core_networksim_component": true,
+        "diagram_document_references": true
       },
       "status": "PASS"
     },
@@ -203,7 +207,8 @@
         "max_expected_page_height": true,
         "approved_drawio_font": true,
         "minimum_font_size": true,
-        "no_core_networksim_component": true
+        "no_core_networksim_component": true,
+        "diagram_document_references": true
       },
       "status": "PASS"
     },
@@ -224,7 +229,19 @@
         "minimum_resolution": true,
         "release_aspect_ratio": true,
         "approved_svg_font": true,
-        "minimum_svg_font_size": true
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
       },
       "status": "PASS"
     },
@@ -245,7 +262,19 @@
         "minimum_resolution": true,
         "release_aspect_ratio": true,
         "approved_svg_font": true,
-        "minimum_svg_font_size": true
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
       },
       "status": "PASS"
     },
@@ -266,7 +295,19 @@
         "minimum_resolution": true,
         "release_aspect_ratio": true,
         "approved_svg_font": true,
-        "minimum_svg_font_size": true
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
       },
       "status": "PASS"
     },
@@ -287,7 +328,19 @@
         "minimum_resolution": true,
         "release_aspect_ratio": true,
         "approved_svg_font": true,
-        "minimum_svg_font_size": true
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
       },
       "status": "PASS"
     }

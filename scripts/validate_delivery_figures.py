@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Structural QA for the round-1 release figure inventory."""
+"""Structural and data-lineage QA for the delivery figure inventory."""
 
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -16,6 +17,8 @@ FONT = "Microsoft YaHei"
 MAX_PAGE_HEIGHT = 750
 MIN_FONT = 11
 OBSOLETE = "ubcc-metric-summary"
+REQUIRED_CHART_FIELDS = ("name", "source_artifacts", "generator", "metric_definition", "document_references")
+STALE_GUEST_LATENCY_FIELDS = {"guest_delta_cycles", "guest_delta_ns_per_operation"}
 
 
 def png_dimensions(path):
@@ -66,13 +69,104 @@ def inspect_svg(path):
             "minimum_font_size": min(sizes) if sizes else None}
 
 
+def load_json(relative):
+    return json.loads((ROOT / relative).read_text(encoding="utf-8"))
+
+
+def contains_stale_guest_latency(value):
+    if isinstance(value, dict):
+        return (bool(STALE_GUEST_LATENCY_FIELDS.intersection(value)) or
+                any(contains_stale_guest_latency(item) for item in value.values()))
+    if isinstance(value, list):
+        return any(contains_stale_guest_latency(item) for item in value)
+    return isinstance(value, str) and any(field in value for field in STALE_GUEST_LATENCY_FIELDS)
+
+
+def expected_chart_values(stem, sources):
+    source = {path: load_json(path) for path in sources}
+    if stem == "ubcc-metric1-capacity-latency":
+        report, outer = source[sources[0]], source[sources[1]]
+        first = outer["repeats"]["1"]
+        return "expected_values", {
+            "capacity_ratio": float(report["metric1"]["capacity_ratio"]),
+            "capacity_increase_pct": float(report["metric1"]["capacity_increase_pct"]),
+            "ideal_outer_mean_ns": float(first["ideal"]["outer_mean_ns"]),
+            "spill_outer_mean_ns": float(first["spill"]["outer_mean_ns"]),
+            "outer_delta_mean_ns": float(outer["delta_mean_ns"]),
+            "ideal_resident_capacity": int(first["ideal"]["resident_capacity"]),
+            "spill_resident_capacity": int(first["spill"]["resident_capacity"]),
+        }
+    if stem == "ubcc-metric2-reductions":
+        metric2 = source[sources[0]]["metric2"]
+        return "expected_values", {
+            "cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]),
+                       "applicable": bool(row["applicable"])} for row in metric2["cases"]],
+            "applicable_equal_weight_mean_reduction_pct": float(metric2["equal_weight_mean_reduction_pct"]),
+        }
+    if stem == "ubcc-ha-vi-comparison":
+        levels = source[sources[0]]["metric3"]["levels"]
+        return "expected_values", {
+            "groups": [{"pressure_level": level["pressure_level"], "scope": scope,
+                        "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]),
+                        "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])}
+                       for level in levels for key, scope in
+                       (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))],
+        }
+    if stem == "ubcc-q1-q5-qualification":
+        matrix = source[sources[0]]
+        counts = Counter(row["qualification"] for row in matrix["cases"])
+        labels = [f"Q{i}" for i in range(1, 6)]
+        return "derived_values", {"qualification_counts": {label: counts[label] for label in labels},
+                                  "total": sum(counts[label] for label in labels)}
+    raise ValueError(f"no chart lineage validator for {stem}")
+
+
+def validate_chart_metadata(chart):
+    checks = {f"metadata_{field}": bool(chart.get(field)) for field in REQUIRED_CHART_FIELDS}
+    checks["metadata_values"] = ("expected_values" in chart) ^ ("derived_values" in chart)
+    sources = chart.get("source_artifacts", [])
+    checks["source_artifacts_are_relative"] = bool(sources) and all(
+        isinstance(path, str) and not Path(path).is_absolute() and ".." not in Path(path).parts for path in sources)
+    checks["source_artifacts_exist"] = checks["source_artifacts_are_relative"] and all(
+        (ROOT / path).is_file() for path in sources)
+    generator = str(chart.get("generator", "")).split("::", 1)[0]
+    checks["generator_exists"] = bool(generator) and (ROOT / generator).is_file()
+    references = chart.get("document_references", [])
+    checks["document_references_exist"] = bool(references) and all(
+        isinstance(ref, dict) and ref.get("figure") and ref.get("document") and
+        not Path(ref["document"]).is_absolute() and (ROOT / ref["document"]).is_file()
+        for ref in references)
+    checks["no_stale_guest_latency_field"] = not contains_stale_guest_latency(chart)
+    if checks["source_artifacts_exist"]:
+        try:
+            value_field, expected = expected_chart_values(chart.get("name"), sources)
+            checks["values_match_source_json"] = chart.get(value_field) == expected
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            checks["values_match_source_json"] = False
+    else:
+        checks["values_match_source_json"] = False
+    return checks
+
+
+def validate_diagram_metadata(diagram):
+    references = diagram.get("document_references", []) if isinstance(diagram, dict) else []
+    return {
+        "diagram_document_references": bool(references) and all(
+            isinstance(ref, dict) and ref.get("figure") and ref.get("document") and
+            not Path(ref["document"]).is_absolute() and (ROOT / ref["document"]).is_file()
+            for ref in references)
+    }
+
+
 def main():
     errors = []
     if not INVENTORY.is_file():
         raise SystemExit("missing docs/design/figures/figure_inventory.json")
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    diagrams = tuple(inventory.get("diagrams", ()))
-    charts = tuple(inventory.get("charts", ()))
+    diagram_entries = tuple(inventory.get("diagrams", ()))
+    chart_entries = tuple(inventory.get("charts", ()))
+    diagrams = tuple(entry.get("name") if isinstance(entry, dict) else entry for entry in diagram_entries)
+    charts = tuple(entry.get("name") if isinstance(entry, dict) else entry for entry in chart_entries)
     names = diagrams + charts
     if len(names) != len(set(names)) or not diagrams or not charts:
         errors.append("figure inventory is empty or contains duplicate names")
@@ -99,6 +193,9 @@ def main():
             if checks["drawio_present"]:
                 drawio_report = inspect_drawio(source, stem)
                 checks.update(drawio_report["checks"])
+            checks.update(validate_diagram_metadata(diagram_entries[diagrams.index(stem)]))
+        else:
+            checks.update(validate_chart_metadata(chart_entries[charts.index(stem)]))
         row = {"name": stem, "kind": "diagram" if stem in diagrams else "chart", "width": width, "height": height,
                "svg_report": svg_report, "drawio_report": drawio_report, "checks": checks,
                "status": "PASS" if checks and all(checks.values()) else "FAIL"}
@@ -113,7 +210,7 @@ def main():
     stale_chart_sources = sorted(str(path.relative_to(ROOT)) for stem in charts
                                  if (path := FIGURES / f"{stem}.drawio").exists())
     if stale_chart_sources: errors.append(f"stale chart draw.io sources remain: {stale_chart_sources}")
-    payload = {"schema_version": 2, "inventory": str(INVENTORY.relative_to(ROOT)), "figures": rows,
+    payload = {"schema_version": 3, "inventory": str(INVENTORY.relative_to(ROOT)), "figures": rows,
                "obsolete_files": obsolete_files, "graphviz_sources": dot_sources,
                "stale_chart_sources": stale_chart_sources,
                "overall_status": "PASS" if not errors else "FAIL", "errors": errors}

@@ -103,6 +103,13 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
                 para.find(f"{W}pPr/{W}pStyle").get(f"{W}val") == "FigureCaption")
         ]
         self.assertEqual(len(captions), 2)
+        drawing_paragraphs = [
+            paragraph for paragraph in self.document.findall(f".//{W}p")
+            if paragraph.find(f"{W}r/{W}drawing") is not None
+        ]
+        for drawing in drawing_paragraphs:
+            spacing = drawing.find(f"{W}pPr/{W}spacing")
+            self.assertEqual(spacing.get(f"{W}lineRule"), "auto")
 
     def test_drawing_ids_are_unique(self):
         ids = [item.get("id") for item in self.document.findall(f".//{WP}docPr")]

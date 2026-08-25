@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "6013e7212a0de20f3b06a4de6ec2b2715967f9a8a28e574829dcdab6ac5bae94",
-      "embedded_source_sha256": "43e17895793b045914bd1b8532771878669b1699ab2d1b926f4e00da20774a7a",
+      "docx_sha256": "795f27067d7c7e4e6ab73e39b236e46cfe35956cfb375fcd0f02cb529600b3b3",
+      "embedded_source_sha256": "eebcad06938f5252dc4bb325979d8c22c00d4db6248495103be3a71555b59160",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
-      "markdown_sha256": "43e17895793b045914bd1b8532771878669b1699ab2d1b926f4e00da20774a7a"
+      "markdown_sha256": "eebcad06938f5252dc4bb325979d8c22c00d4db6248495103be3a71555b59160"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "b4e5f1e1dcf9c188bd7a82dc83197eead9cb26d4a027a2d8500bc1460bb06aba",
-      "embedded_source_sha256": "99c139236744f0f8ca30daba4381527dc746696039bc892bef9be5e21f4b6512",
+      "docx_sha256": "17ba414e8ac6fcf1b11a5cae2bd8bd09447197ba20de3ca55d76d44b1401106e",
+      "embedded_source_sha256": "f7279c954c91b5a8ab8b858750b4e50ecbff49652bcc601b42cc3c95bcab1a21",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
-      "markdown_sha256": "99c139236744f0f8ca30daba4381527dc746696039bc892bef9be5e21f4b6512"
+      "markdown_sha256": "f7279c954c91b5a8ab8b858750b4e50ecbff49652bcc601b42cc3c95bcab1a21"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "1f91c72b3327896d34bc4520de3a0ba1219b07e1acf4108bfdbb4eada6753f4f",
-      "embedded_source_sha256": "44212b65d5a463c2a6e188488380050d206a42a050c4f96c9ed61e39fc19e4c3",
+      "docx_sha256": "8476a791a02f00a7a2e25bfde005e8fb0d43e8b9a975715236e714be2a80c59c",
+      "embedded_source_sha256": "35f9bc2a3a88a3d04facc32a261a7b6365d0d3d2fb7b50a9e59ff96113c634d4",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "44212b65d5a463c2a6e188488380050d206a42a050c4f96c9ed61e39fc19e4c3"
+      "markdown_sha256": "35f9bc2a3a88a3d04facc32a261a7b6365d0d3d2fb7b50a9e59ff96113c634d4"
     }
   ],
   "schema_version": 1

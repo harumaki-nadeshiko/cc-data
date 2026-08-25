@@ -1,17 +1,233 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "diagrams": [
-    "ubcc-system-architecture",
-    "gem5-ruby-controller-relationships",
-    "ubcc-protocol-paths",
-    "ubcc-verification-stack",
-    "ubcc-two-phase-commit"
+    {
+      "name": "ubcc-system-architecture",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 2-1"
+        },
+        {
+          "document": "docs/design/cc_ep_protocol_overview.docx",
+          "figure": "图 2-1"
+        }
+      ]
+    },
+    {
+      "name": "gem5-ruby-controller-relationships",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 3-1"
+        },
+        {
+          "document": "docs/design/cc_ep_protocol_overview.docx",
+          "figure": "图 3-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-protocol-paths",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 5-1"
+        },
+        {
+          "document": "docs/design/cc_ep_protocol_overview.docx",
+          "figure": "图 5-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-verification-stack",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
+          "figure": "图 1-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
+          "figure": "图 1-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-two-phase-commit",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
+          "figure": "图 4-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
+          "figure": "图 4-1"
+        }
+      ]
+    }
   ],
   "charts": [
-    "ubcc-metric1-capacity-latency",
-    "ubcc-metric2-reductions",
-    "ubcc-ha-vi-comparison",
-    "ubcc-q1-q5-qualification"
+    {
+      "name": "ubcc-metric1-capacity-latency",
+      "source_artifacts": [
+        "results/metric12-final-v1/report/metric123_report.json",
+        "results/metric1-outer-ideal-matrix-v1/summary.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
+      "expected_values": {
+        "capacity_ratio": 1.5150909423828125,
+        "capacity_increase_pct": 51.50909423828125,
+        "ideal_outer_mean_ns": 159.23491239746727,
+        "spill_outer_mean_ns": 169.7694905650195,
+        "outer_delta_mean_ns": 10.53457816755224,
+        "ideal_resident_capacity": 131072,
+        "spill_resident_capacity": 57344
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 3-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 3-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-metric2-reductions",
+      "source_artifacts": [
+        "results/metric12-final-v1/report/metric123_report.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Per-case optimized reduction versus naive; non-applicable cases remain visible as excluded.",
+      "expected_values": {
+        "cases": [
+          {
+            "case": "TC135",
+            "optimized_reduction_pct": 98.30508474576271,
+            "applicable": true
+          },
+          {
+            "case": "TC136",
+            "optimized_reduction_pct": 96.66666666666666,
+            "applicable": true
+          },
+          {
+            "case": "TC137",
+            "optimized_reduction_pct": 25.0,
+            "applicable": true
+          },
+          {
+            "case": "TC138",
+            "optimized_reduction_pct": -13.33333333333334,
+            "applicable": true
+          },
+          {
+            "case": "TC139",
+            "optimized_reduction_pct": 97.30185497470488,
+            "applicable": true
+          },
+          {
+            "case": "TC140",
+            "optimized_reduction_pct": 0.0,
+            "applicable": false
+          },
+          {
+            "case": "TC217",
+            "optimized_reduction_pct": 84.61538461538461,
+            "applicable": true
+          }
+        ],
+        "applicable_equal_weight_mean_reduction_pct": 64.75927627819759
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 4-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 4-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-ha-vi-comparison",
+      "source_artifacts": [
+        "results/metric12-final-v1/report/metric123_report.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Grouped UBCC and HA-VI ticks per operation at each pressure level for core and representative equal-weight scopes.",
+      "expected_values": {
+        "groups": [
+          {
+            "pressure_level": 100,
+            "scope": "core",
+            "ubcc_ticks_per_operation": 31.43958333333334,
+            "ha_vi_ticks_per_operation": 39.34375
+          },
+          {
+            "pressure_level": 100,
+            "scope": "representative",
+            "ubcc_ticks_per_operation": 76.1775,
+            "ha_vi_ticks_per_operation": 79.05958333333334
+          },
+          {
+            "pressure_level": 150,
+            "scope": "core",
+            "ubcc_ticks_per_operation": 31.40625,
+            "ha_vi_ticks_per_operation": 39.34583333333333
+          },
+          {
+            "pressure_level": 150,
+            "scope": "representative",
+            "ubcc_ticks_per_operation": 76.19462239583333,
+            "ha_vi_ticks_per_operation": 79.07313802083333
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 5-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 5-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-q1-q5-qualification",
+      "source_artifacts": [
+        "scripts/fault_qualification_matrix.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Count of canonical fault-qualification matrix cases grouped by Q1-Q5 qualification.",
+      "derived_values": {
+        "qualification_counts": {
+          "Q1": 20,
+          "Q2": 8,
+          "Q3": 4,
+          "Q4": 8,
+          "Q5": 12
+        },
+        "total": 52
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
+          "figure": "图 5-1"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
+          "figure": "图 5-1"
+        }
+      ]
+    }
   ],
   "obsolete": [
     "ubcc-metric-summary"
