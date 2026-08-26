@@ -731,6 +731,98 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(official_run["metrics"]["mean_ticks"], 1000)
         self.assertIn("extra", official_run["metrics"]["latency_phases"])
 
+    def test_metric1_missing_guest_timers_are_null_in_descriptive_views(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        runs = (
+            self.make_formal_m1("missing-naive", "naive", 100, None, timer=False),
+            self.make_formal_m1("missing-spill", "spill", 100, 160, (12000,),
+                                timer=False),
+            self.make_formal_m1("missing-optimized", "spill", 100, 160,
+                                profile="optimized", explicit_role=False,
+                                timer=False),
+        )
+        for run in runs:
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        result = matrix.finalize(self.root / "missing-m1-report")
+        comparison = result["report"]["views"]["all"]["comparisons"][0]
+        self.assertIsNone(comparison["optimized_delta_ns"])
+        self.assertEqual(result["report"]["metric1"]["status"], "INCOMPLETE")
+        self.assertTrue(all(row["value"] is None for row in
+                            result["report"]["views"]["all"]["matrix"]))
+        self.assertIn("N/A", (self.root / "missing-m1-report" /
+                              "metric_matrix_all.tsv").read_text())
+
+    def test_metric2_missing_mean_and_zero_denominator_are_incomplete(self):
+        requirements = {"metric1": {"repetitions": []},
+                        "metric2": {"repetitions": ["r1"], "testcases": [135]},
+                        "metric3": {"testcases": []}}
+        for label, unavailable in (("missing", None), ("zero", 0)):
+            matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+            for profile, mean in (("naive", 1000), ("spill-noopt", 900),
+                                  ("optimized", 800)):
+                self.assertEqual(matrix.add(self.make_m2_run(
+                    f"{label}-{profile}", profile=profile, mean=mean))["status"],
+                    "ADDED")
+            naive = next(run for run in matrix._resolved if run["profile"] == "naive")
+            naive["metrics"]["mean_ns"] = unavailable
+            result = matrix.finalize(self.root / f"{label}-m2-report")
+            self.assertEqual(result["report"]["metric2"]["status"], "INCOMPLETE")
+            case = result["report"]["metric2"]["cases"][0]
+            self.assertIsNone(case["optimized_reduction_pct"])
+            comparison = result["report"]["views"]["all"]["comparisons"][0]
+            self.assertIsNone(comparison["optimized_reduction_pct"])
+            self.assertIn("N/A", (self.root / f"{label}-m2-report" /
+                                  "metric_matrix.tsv").read_text())
+
+    def test_metric3_missing_arm_value_is_incomplete_without_view_crash(self):
+        requirements = {"metric1": {"repetitions": []},
+                        "metric2": {"repetitions": [], "testcases": []},
+                        "metric3": {"mode": "independent", "repetitions": ["r1"],
+                                    "testcases": list(MOD.M3),
+                                    "arms": ["ourcc", "ha-vi"]}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for tc in MOD.M3:
+            for arm, tick_base in (("ourcc", 100), ("ha-vi", 130)):
+                run = self.make_m3_run(f"missing-arm-{tc}-{arm}", tc, "r1",
+                                       arm, tick_base, pair=f"p{tc}", order="AB")
+                self.assertEqual(matrix.add(run)["status"],
+                    "ADDED")
+        target = next(run for run in matrix._resolved
+                      if run["tc"] == 228 and run["arm"] == "ha-vi")
+        target["metrics"]["remote_read"]["ticks_per_operation"] = None
+        target["metrics"]["remote_read"]["ns_per_operation"] = None
+        result = matrix.finalize(self.root / "missing-m3-report")
+        self.assertEqual(result["report"]["metric3"]["status"], "INCOMPLETE")
+        self.assertTrue(result["report"]["metric3"]["missing_slots"])
+        run_row = next(row for row in result["report"]["views"]["all"]["matrix"]
+                       if row["identity"] == target["id"])
+        self.assertIsNone(run_row["value"])
+        pair = next(row for row in result["report"]["views"]["all"]["metric3_pairs"]
+                    if row["tc"] == 228)
+        self.assertIsNone(pair["metrics"]["remote_read"]["ha_vi_ticks_per_operation"])
+        self.assertIsNone(pair["metrics"]["remote_read"]["delta_ticks"])
+        self.assertIn("N/A", (self.root / "missing-m3-report" /
+                              "metric_matrix_all.tsv").read_text())
+
+    def test_descriptive_nonfinite_and_non_arithmetic_values_render_null(self):
+        run = self.make_m2_run("nonfinite-extension", profile="naive")
+        run.update(tc=999, topology="1n1s", phase=MOD.M2[135][0],
+                   expected_node=MOD.M2[135][2], expected_samples=MOD.M2[135][3])
+        matrix = MOD.Metric123RawLogMatrix(correctness_policy="optional",
+                                           base_dir=self.root)
+        self.assertEqual(matrix.add(run)["status"], "ADDED")
+        parsed = matrix._resolved[0]
+        parsed["metrics"]["mean_ns"] = float("inf")
+        parsed["metrics"]["latency_phases"][MOD.M2[135][0]]["mean_ns"] = "N/A"
+        result = matrix.finalize(self.root / "nonfinite-report")
+        self.assertIsNone(result["report"]["views"]["all"]["matrix"][0]["value"])
+        self.assertIsNone(result["report"]["views"]["extension"]["matrix"][0]["value"])
+        self.assertIn("N/A", (self.root / "nonfinite-report" /
+                              "metric_matrix_extension.tsv").read_text())
+        resolved_json = json.loads((self.root / "nonfinite-report" /
+                                    "resolved_runs.json").read_text())
+        self.assertIsNone(resolved_json[0]["metrics"]["mean_ns"])
+
 
 if __name__ == "__main__":
     unittest.main()

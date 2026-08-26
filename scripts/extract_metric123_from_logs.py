@@ -10,6 +10,8 @@ import copy
 import csv
 import gzip
 import json
+import math
+import numbers
 import pathlib
 import re
 import statistics
@@ -95,6 +97,57 @@ FILL_DONE_RE = re.compile(r"\[RESIDENT-FILL-DONE\].*?\bfound=(\d+)")
 
 class ExtractError(Exception):
     pass
+
+
+def finite_number(value):
+    """Return value when it is a finite arithmetic scalar, otherwise None."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def safe_subtract(left, right):
+    left, right = finite_number(left), finite_number(right)
+    return None if left is None or right is None else left - right
+
+
+def safe_divide(numerator, denominator):
+    numerator, denominator = finite_number(numerator), finite_number(denominator)
+    return (None if numerator is None or denominator in (None, 0) else
+            numerator / denominator)
+
+
+def safe_mean(values):
+    values = list(values)
+    return (statistics.mean(values) if values and
+            all(finite_number(value) is not None for value in values) else None)
+
+
+def safe_stdev(values):
+    values = list(values)
+    if not values or any(finite_number(value) is None for value in values):
+        return None
+    return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
+def safe_weighted_sum(weighted_values):
+    weighted_values = list(weighted_values)
+    if not weighted_values or any(finite_number(value) is None or
+                                  finite_number(weight) is None
+                                  for weight, value in weighted_values):
+        return None
+    return sum(weight * value for weight, value in weighted_values)
+
+
+def json_ready(value):
+    """Recursively map non-finite numeric leaves to JSON null."""
+    if isinstance(value, dict):
+        return {key: json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_ready(item) for item in value]
+    if isinstance(value, numbers.Real) and not isinstance(value, bool):
+        return value if math.isfinite(value) else None
+    return value
 
 
 def open_text(path):
@@ -825,11 +878,12 @@ def descriptive_view(runs):
     for run in runs:
         value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
         if value is None and run["metric"] == 3:
-            value = statistics.mean(x["ns_per_operation"] for x in run["metrics"].values())
+            value = safe_mean(x.get("ns_per_operation") for x in run["metrics"].values())
+        value = finite_number(value)
         if run["metric"] == 2 and run["metrics"].get("latency_phases"):
             for phase, phase_data in run["metrics"]["latency_phases"].items():
                 matrix.append({"metric": "Metric2", "level": "phase", "identity": run["id"],
-                               "tc": f"TC{run['tc']}", "value": phase_data["mean_ns"],
+                               "tc": f"TC{run['tc']}", "value": finite_number(phase_data.get("mean_ns")),
                                "unit": "ns/op", "status": "DESCRIPTIVE",
                                "detail": f"{run['contract_class']}; phase={phase}"})
         else:
@@ -840,13 +894,13 @@ def descriptive_view(runs):
                      run.get("profile", run.get("arm", "")))
         key = (run["metric"], run["tc"], run["topology"], run.get("repetition"),
                dimension)
-        if value is not None:
+        if finite_number(value) is not None:
             groups[key].append(value)
     summaries = []
     for key, values in sorted(groups.items(), key=lambda x: tuple(map(str, x[0]))):
         summaries.append({"metric": key[0], "tc": key[1], "topology": key[2],
                           "repetition": key[3], "profile_or_arm": key[4],
-                          "runs": len(values), "mean_ns_per_operation": statistics.mean(values)})
+                          "runs": len(values), "mean_ns_per_operation": safe_mean(values)})
 
     comparisons = []
     by_profile = defaultdict(dict)
@@ -860,12 +914,21 @@ def descriptive_view(runs):
             if key[0] == 1:
                 comparisons.append({"metric": 1, "tc": key[1], "topology": key[2],
                                     "repetition": key[3],
-                                    "capacity_ratio_spill_to_naive": profiles["spill-noopt"]["metrics"]["capacity"]["effective_unique"] / naive["metrics"]["capacity"]["effective_unique"],
-                                    "optimized_delta_ns": optimized["metrics"]["mean_ns_per_operation"] - naive["metrics"]["mean_ns_per_operation"]})
+                                    "capacity_ratio_spill_to_naive": safe_divide(
+                                        profiles["spill-noopt"]["metrics"]["capacity"].get("effective_unique"),
+                                        naive["metrics"]["capacity"].get("effective_unique")),
+                                    "optimized_delta_ns": safe_subtract(
+                                        optimized["metrics"].get("mean_ns_per_operation"),
+                                        naive["metrics"].get("mean_ns_per_operation"))})
             else:
+                naive_mean = naive["metrics"].get("mean_ns")
+                optimized_mean = optimized["metrics"].get("mean_ns")
                 comparisons.append({"metric": 2, "tc": key[1], "topology": key[2],
                                     "repetition": key[3],
-                                    "optimized_reduction_pct": (naive["metrics"]["mean_ns"] - optimized["metrics"]["mean_ns"]) / naive["metrics"]["mean_ns"] * 100})
+                                    "optimized_reduction_pct": safe_divide(
+                                        safe_subtract(naive_mean, optimized_mean), naive_mean)})
+                if comparisons[-1]["optimized_reduction_pct"] is not None:
+                    comparisons[-1]["optimized_reduction_pct"] *= 100
     m3_pairs = []
     pair_groups = defaultdict(dict)
     for run in runs:
@@ -879,16 +942,21 @@ def descriptive_view(runs):
         m3_pairs.append({"pair": key[0], "tc": key[1], "order": key[2],
                          "topology": key[3],
                          "metrics": {name: {
-                             "ourcc_ticks_per_operation": arms["ourcc"]["metrics"][name]["ticks_per_operation"],
-                             "ha_vi_ticks_per_operation": arms["ha-vi"]["metrics"][name]["ticks_per_operation"],
-                             "delta_ticks": arms["ha-vi"]["metrics"][name]["ticks_per_operation"] - arms["ourcc"]["metrics"][name]["ticks_per_operation"]}
+                             "ourcc_ticks_per_operation": finite_number(
+                                 arms["ourcc"]["metrics"][name].get("ticks_per_operation")),
+                             "ha_vi_ticks_per_operation": finite_number(
+                                 arms["ha-vi"]["metrics"][name].get("ticks_per_operation")),
+                             "delta_ticks": safe_subtract(
+                                 arms["ha-vi"]["metrics"][name].get("ticks_per_operation"),
+                                 arms["ourcc"]["metrics"][name].get("ticks_per_operation"))}
                              for name in common}})
     arm_groups = defaultdict(list)
     for run in runs:
         if run["metric"] == 3:
             for name, metric in run["metrics"].items():
-                arm_groups[(run["tc"], run["topology"], name, run["arm"])].append(
-                    metric["ticks_per_operation"])
+                value = finite_number(metric.get("ticks_per_operation"))
+                if value is not None:
+                    arm_groups[(run["tc"], run["topology"], name, run["arm"])].append(value)
     arm_comparisons = []
     coordinates = sorted({key[:3] for key in arm_groups}, key=lambda x: tuple(map(str, x)))
     for tc, topology, name in coordinates:
@@ -896,11 +964,12 @@ def descriptive_view(runs):
         for arm in ("ourcc", "ha-vi"):
             values = arm_groups.get((tc, topology, name, arm), [])
             if values:
-                arms[arm] = {"count": len(values), "mean_ticks_per_operation": statistics.mean(values),
-                             "stdev_ticks_per_operation": statistics.stdev(values) if len(values) > 1 else 0.0}
+                arms[arm] = {"count": len(values), "mean_ticks_per_operation": safe_mean(values),
+                             "stdev_ticks_per_operation": safe_stdev(values)}
         arm_comparisons.append({"tc": tc, "topology": topology, "metric": name,
                                 "arms": arms,
-                                "delta_ticks": (arms["ha-vi"]["mean_ticks_per_operation"] -
+                                "delta_ticks": safe_subtract(
+                                                arms["ha-vi"]["mean_ticks_per_operation"],
                                                 arms["ourcc"]["mean_ticks_per_operation"])
                                 if set(arms) == {"ourcc", "ha-vi"} else None})
     m1_role_comparisons = []
@@ -912,14 +981,14 @@ def descriptive_view(runs):
     for key, roles in sorted(role_groups.items(), key=lambda x: tuple(map(str, x[0]))):
         m1_role_comparisons.append({"repetition": key[0], "tc": key[1],
                                     "topology": key[2], "roles": sorted(roles),
-                                    "capacity_ratio": (roles["spill"]["metrics"]["capacity"]["effective_unique"] /
-                                                       roles["naive"]["metrics"]["capacity"]["effective_unique"])
+                                    "capacity_ratio": safe_divide(
+                                                       roles["spill"]["metrics"]["capacity"].get("effective_unique"),
+                                                       roles["naive"]["metrics"]["capacity"].get("effective_unique"))
                                     if "naive" in roles and "spill" in roles else None,
-                                    "outer_delta_ns": (roles["spill"]["metrics"]["outer_latency"]["mean_ns"] -
-                                                       roles["ideal"]["metrics"]["outer_latency"]["mean_ns"])
-                                    if "spill" in roles and "ideal" in roles and
-                                    roles["spill"]["metrics"]["outer_latency"]["mean_ns"] is not None and
-                                    roles["ideal"]["metrics"]["outer_latency"]["mean_ns"] is not None else None})
+                                    "outer_delta_ns": safe_subtract(
+                                                       roles["spill"]["metrics"]["outer_latency"].get("mean_ns"),
+                                                       roles["ideal"]["metrics"]["outer_latency"].get("mean_ns"))
+                                    if "spill" in roles and "ideal" in roles else None})
     return {"runs": len(runs), "summaries": summaries,
             "comparisons": comparisons, "metric3_pairs": m3_pairs,
             "metric1_role_comparisons": m1_role_comparisons,
@@ -949,7 +1018,8 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
 
     matrix, per_run = [], []
     for run in resolved:
-        value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
+        value = finite_number(run["metrics"].get(
+            "mean_ns_per_operation", run["metrics"].get("mean_ns")))
         per_run.append({"run_id": run["id"], "metric": run["metric"], "tc": run["tc"],
                         "repetition": run["repetition"], "profile": run.get("profile", ""),
                         "arm": run.get("arm", ""), "pair": run.get("pair", ""), "order": run.get("order", ""),
@@ -973,12 +1043,17 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     for rep in m1_reps:
         if all((rep, role) in m1_by for role in ("naive", "spill", "ideal")):
             naive, spill, ideal = (m1_by[rep, role] for role in ("naive", "spill", "ideal"))
-            ratio = spill["metrics"]["capacity"]["effective_unique"] / naive["metrics"]["capacity"]["effective_unique"]
+            ratio = safe_divide(spill["metrics"]["capacity"].get("effective_unique"),
+                                naive["metrics"]["capacity"].get("effective_unique"))
             spill_outer = spill["metrics"]["outer_latency"]
             ideal_outer = ideal["metrics"]["outer_latency"]
-            delta_ns = spill_outer["mean_ns"] - ideal_outer["mean_ns"]
+            delta_ns = safe_subtract(spill_outer.get("mean_ns"), ideal_outer.get("mean_ns"))
+            if ratio is None or delta_ns is None:
+                m1_missing.append((rep, "required_metrics"))
+                continue
             capacity_pass, latency_pass = ratio >= 1.5, delta_ns * 2.0 < 50
-            guest_values = {role: m1_by[rep, role]["metrics"].get("mean_ns_per_operation")
+            guest_values = {role: finite_number(
+                                m1_by[rep, role]["metrics"].get("mean_ns_per_operation"))
                             for role in ("naive", "spill", "ideal")}
             row = {"repetition": rep, "capacity_ratio": ratio,
                    "spill_outer_samples": spill_outer["samples"],
@@ -1000,10 +1075,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     ratios = [row["capacity_ratio"] for row in m1_comp]
     deltas = [row["outer_delta_ns"] for row in m1_comp]
     def distribution(values):
-        mean = statistics.mean(values) if values else None
-        stdev = statistics.stdev(values) if len(values) > 1 else (0.0 if values else None)
+        values = [value for value in values if finite_number(value) is not None]
+        mean = safe_mean(values)
+        stdev = safe_stdev(values)
         return {"count": len(values), "mean": mean, "stdev": stdev,
-                "cv": (stdev / abs(mean) if mean not in (None, 0) else None)}
+                "cv": safe_divide(stdev, abs(mean) if mean is not None else None)}
     m1_status = ("NOT_REQUESTED" if not m1_reps and not m1 else
                   "INCOMPLETE" if m1_missing or not m1_reps else
                   "PASS" if all(r["pass"] for r in m1_comp) else "FAIL")
@@ -1020,8 +1096,19 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     for rep in m2_reps:
         for tc in m2_tcs:
             if all((rep, tc, p) in m2_by for p in PROFILES):
-                means = {p: m2_by[rep, tc, p]["metrics"]["mean_ns"] for p in PROFILES}
-                reduction = (means["naive"] - means["optimized"]) / means["naive"] * 100
+                means = {p: finite_number(m2_by[rep, tc, p]["metrics"].get("mean_ns"))
+                         for p in PROFILES}
+                reduction = safe_divide(safe_subtract(means["naive"], means["optimized"]),
+                                        means["naive"])
+                if reduction is None:
+                    m2_missing.append((rep, tc, "required_metrics"))
+                    m2_cases.append({"repetition": rep, "tc": tc, "means_ns": means,
+                                     "optimized_reduction_pct": None, "applicable": None})
+                    matrix.append({"metric": "Metric2", "level": "TC", "identity": rep,
+                                   "tc": f"TC{tc}", "value": None, "unit": "%",
+                                   "status": "INCOMPLETE", "detail": "required mean unavailable"})
+                    continue
+                reduction *= 100
                 applicable = means["naive"] >= 500
                 row = {"repetition": rep, "tc": tc, "means_ns": means,
                        "optimized_reduction_pct": reduction, "applicable": applicable}
@@ -1035,11 +1122,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             row["tc"] for row in m2_cases
             if row["repetition"] == rep and row["applicable"])
     empty_applicable = [rep for rep in m2_reps if not rep_means.get(rep)]
-    m2_rep = [{"repetition": rep, "mean_reduction_pct": statistics.mean(rep_means[rep]),
+    m2_rep = [{"repetition": rep, "mean_reduction_pct": safe_mean(rep_means[rep]),
                "cases": len(rep_means[rep]),
-               "pass": statistics.mean(rep_means[rep]) >= 10}
+               "pass": safe_mean(rep_means[rep]) >= 10}
               for rep in m2_reps if rep_means.get(rep)]
-    m2_value = statistics.mean(row["mean_reduction_pct"] for row in m2_rep) if m2_rep else None
+    m2_value = safe_mean(row["mean_reduction_pct"] for row in m2_rep)
     applicable_stable = (not m2_reps or
                          len({applicable_sets.get(rep, ()) for rep in m2_reps}) == 1)
     m2_status = ("NOT_REQUESTED" if not m2_reps and not m2_tcs and not m2 else
@@ -1061,6 +1148,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     comparison_mode = "paired" if paired_mode else "independent"
     tcs_req = [int(x) for x in m3_req.get("testcases", [])]
     samples, incomplete_pairs, missing_m3 = [], [], []
+    m3_metric_incomplete = False
     conflicting_orders = {}
     counts_by_tc_arm = {}
     if paired_mode:
@@ -1097,18 +1185,26 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                         arm_dir.mkdir(parents=True, exist_ok=True)
                         result = {"pair": pair, "pair_id": f"pair-{pair}-tc{tc}", "tc": tc,
                                   "order": order, "arm": arm, "status": "PASS", "return_code": 0,
-                                  "metrics": source["metrics"], "raw_run_id": source["id"]}
-                        (arm_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+                            "metrics": source["metrics"], "raw_run_id": source["id"]}
+                        (arm_dir / "result.json").write_text(json.dumps(
+                            json_ready(result), indent=2, sort_keys=True,
+                            allow_nan=False) + "\n")
                 for name in M3[tc]:
                     left, right = arms["ourcc"]["metrics"][name], arms["ha-vi"]["metrics"][name]
                     if left["counter_frequency_hz"] != right["counter_frequency_hz"]:
                         issues.append({"severity": "ERROR", "code": "M3_FREQUENCY_MISMATCH",
                                        "run_id": f"{pair}/TC{tc}", "message": name})
                         continue
-                    delta = right["ticks_per_operation"] - left["ticks_per_operation"]
+                    left_value = finite_number(left.get("ticks_per_operation"))
+                    right_value = finite_number(right.get("ticks_per_operation"))
+                    delta = safe_subtract(right_value, left_value)
+                    if delta is None:
+                        m3_metric_incomplete = True
+                        missing_m3.append((pair, tc, name, "required_metrics"))
+                        continue
                     samples.append({"pair": pair, "tc": tc, "order": order, "metric": name,
-                                    "ourcc_ticks": left["ticks_per_operation"],
-                                    "ha_vi_ticks": right["ticks_per_operation"],
+                                    "ourcc_ticks": left_value,
+                                    "ha_vi_ticks": right_value,
                                     "delta_ticks": delta, "frequency_hz": left["counter_frequency_hz"]})
                     matrix.append({"metric": "Metric3", "level": "pair", "identity": pair,
                                    "tc": f"TC{tc}", "value": delta, "unit": f"ticks/op:{name}",
@@ -1118,11 +1214,12 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         for key in sorted({(r["tc"], r["metric"]) for r in samples}):
             rows = [r for r in samples if (r["tc"], r["metric"]) == key]
             summaries.append({"tc": key[0], "metric": key[1], "pairs": len(rows),
-                              "ourcc_mean_ticks": statistics.mean(r["ourcc_ticks"] for r in rows),
-                              "ha_vi_mean_ticks": statistics.mean(r["ha_vi_ticks"] for r in rows),
-                              "delta_mean_ticks": statistics.mean(r["delta_ticks"] for r in rows)})
+                              "ourcc_mean_ticks": safe_mean(r["ourcc_ticks"] for r in rows),
+                              "ha_vi_mean_ticks": safe_mean(r["ha_vi_ticks"] for r in rows),
+                              "delta_mean_ticks": safe_mean(r["delta_ticks"] for r in rows)})
         m3_complete = (bool(pairs_req and tcs_req) and not incomplete_pairs and
-                       not conflicting_orders and set(tcs_req) == set(M3))
+                       not conflicting_orders and not m3_metric_incomplete and
+                       set(tcs_req) == set(M3))
     else:
         repetitions = [str(x) for x in m3_req.get("repetitions", [])]
         min_repetitions = int(m3_req.get("min_repetitions", 0) or 0)
@@ -1134,7 +1231,12 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                           for arm in arms_req if (rep, tc, arm) not in present]
         for run in m3:
             for name, metric in run["metrics"].items():
-                value = metric["ticks_per_operation"]
+                value = finite_number(metric.get("ticks_per_operation"))
+                if value is None:
+                    m3_metric_incomplete = True
+                    missing_m3.append((run["repetition"], run["tc"], run["arm"],
+                                       name, "required_metrics"))
+                    continue
                 values[(run["tc"], name, run["arm"])].append(value)
                 samples.append({"run_id": run["id"], "repetition": run["repetition"],
                                 "tc": run["tc"], "arm": run["arm"], "metric": name,
@@ -1146,8 +1248,8 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             for arm in ("ourcc", "ha-vi"):
                 rows = values.get((tc, name, arm), [])
                 if rows:
-                    arm_stats[arm] = {"count": len(rows), "mean_ticks": statistics.mean(rows),
-                                      "stdev_ticks": statistics.stdev(rows) if len(rows) > 1 else 0.0}
+                    arm_stats[arm] = {"count": len(rows), "mean_ticks": safe_mean(rows),
+                                      "stdev_ticks": safe_stdev(rows)}
             if set(arm_stats) == {"ourcc", "ha-vi"}:
                 summaries.append({"tc": tc, "metric": name,
                                   "ourcc_count": arm_stats["ourcc"]["count"],
@@ -1156,7 +1258,9 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                   "ha_vi_stdev_ticks": arm_stats["ha-vi"]["stdev_ticks"],
                                   "ourcc_mean_ticks": arm_stats["ourcc"]["mean_ticks"],
                                   "ha_vi_mean_ticks": arm_stats["ha-vi"]["mean_ticks"],
-                                  "delta_mean_ticks": arm_stats["ha-vi"]["mean_ticks"] - arm_stats["ourcc"]["mean_ticks"]})
+                                  "delta_mean_ticks": safe_subtract(
+                                      arm_stats["ha-vi"]["mean_ticks"],
+                                      arm_stats["ourcc"]["mean_ticks"])})
         counts_by_tc_arm = {str(tc): {arm: sum(r["tc"] == tc and r["arm"] == arm for r in m3)
                                       for arm in arms_req} for tc in tcs_req}
         insufficient = [(tc, arm, counts_by_tc_arm[str(tc)][arm], min_repetitions)
@@ -1169,22 +1273,35 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                   f"independent arm counts are imbalanced: {imbalanced}"))
         missing_m3.extend(insufficient)
         m3_complete = (bool(tcs_req) and not missing_m3 and not imbalanced and
-                       set(tcs_req) == set(M3) and set(arms_req) == {"ourcc", "ha-vi"})
+                       not m3_metric_incomplete and set(tcs_req) == set(M3) and
+                       set(arms_req) == {"ourcc", "ha-vi"})
     by_summary = {(r["tc"], r["metric"]): r for r in summaries}
     primary = []
     for tc in tcs_req:
         definition = M3_PRIMARY.get(tc, {})
         if definition and all((tc, name) in by_summary for name in definition):
-            ourcc = sum(weight * by_summary[tc, name]["ourcc_mean_ticks"] for name, weight in definition.items())
-            havi = sum(weight * by_summary[tc, name]["ha_vi_mean_ticks"] for name, weight in definition.items())
-            primary.append({"tc": tc, "ourcc_mean_ticks": ourcc, "ha_vi_mean_ticks": havi, "delta_mean_ticks": havi-ourcc})
+            ourcc = safe_weighted_sum((weight, by_summary[tc, name].get("ourcc_mean_ticks"))
+                                      for name, weight in definition.items())
+            havi = safe_weighted_sum((weight, by_summary[tc, name].get("ha_vi_mean_ticks"))
+                                     for name, weight in definition.items())
+            delta = safe_subtract(havi, ourcc)
+            if delta is None:
+                m3_complete = False
+                missing_m3.append((tc, "primary_required_metrics"))
+                continue
+            primary.append({"tc": tc, "ourcc_mean_ticks": ourcc, "ha_vi_mean_ticks": havi, "delta_mean_ticks": delta})
             matrix.append({"metric": "Metric3", "level": "TC", "identity": f"{comparison_mode} arm mean", "tc": f"TC{tc}",
-                           "value": havi-ourcc, "unit": "ticks/op", "status": "OURCC_FASTER" if havi > ourcc else "FAIL",
+                           "value": delta, "unit": "ticks/op", "status": "OURCC_FASTER" if delta > 0 else "FAIL",
                            "detail": "frozen primary-value formula"})
     aggregates = []
     for name, weights in M3_AGGREGATES.items():
         if all(key in by_summary for key in weights):
-            delta = sum(weight * by_summary[key]["delta_mean_ticks"] for key, weight in weights.items())
+            delta = safe_weighted_sum((weight, by_summary[key].get("delta_mean_ticks"))
+                                      for key, weight in weights.items())
+            if delta is None:
+                m3_complete = False
+                missing_m3.append((name, "aggregate_required_metrics"))
+                continue
             aggregates.append({"name": name, "delta_ticks": delta,
                                "status": "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if delta > 0 else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)"})
             matrix.append({"metric": "Metric3", "level": "aggregate", "identity": name, "tc": "ALL",
@@ -1250,7 +1367,8 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     # expose every successfully parsed, non-conflicted run.
     per_run = []
     for run in all_resolved:
-        value = run["metrics"].get("mean_ns_per_operation", run["metrics"].get("mean_ns"))
+        value = finite_number(run["metrics"].get(
+            "mean_ns_per_operation", run["metrics"].get("mean_ns")))
         per_run.append({"run_id": run["id"], "metric": run["metric"], "tc": run["tc"],
                         "repetition": run["repetition"], "profile": run.get("profile", ""),
                         "arm": run.get("arm", ""), "pair": run.get("pair", ""),
@@ -1579,13 +1697,17 @@ def analyze(manifest_path, output_dir):
 def write_tsv(path, rows, fields):
     with path.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, delimiter="\t", extrasaction="ignore")
-        writer.writeheader(); writer.writerows(rows)
+        writer.writeheader()
+        writer.writerows({key: ("N/A" if value is None else value)
+                          for key, value in row.items()} for row in rows)
 
 
 def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    (output_dir / "resolved_runs.json").write_text(json.dumps(resolved, indent=2, sort_keys=True) + "\n")
+    (output_dir / "report.json").write_text(json.dumps(
+        json_ready(report), indent=2, sort_keys=True, allow_nan=False) + "\n")
+    (output_dir / "resolved_runs.json").write_text(json.dumps(
+        json_ready(resolved), indent=2, sort_keys=True, allow_nan=False) + "\n")
     matrix_fields = ["metric", "level", "identity", "tc", "value", "unit", "status", "detail"]
     write_tsv(output_dir / "metric_matrix.tsv", matrix, matrix_fields)
     write_tsv(output_dir / "metric_matrix_standard.tsv", matrix, matrix_fields)
