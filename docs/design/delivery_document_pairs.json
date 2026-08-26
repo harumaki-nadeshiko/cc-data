@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "392217e72e71309c798408f2447fd46d77d0d2d1aced018ffdd31a7dff491fdc",
+      "docx_sha256": "4774e0e9b9cf11602e56ab84aee3935569a651d1f22bf8db4171d1fe3c2b4ab3",
       "embedded_source_sha256": "126d536ffb9ccd28294e20836ce2c03dae751c0a689d31c3d6284835c2ebcf0b",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
       "markdown_sha256": "126d536ffb9ccd28294e20836ce2c03dae751c0a689d31c3d6284835c2ebcf0b"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "a0117c22e1d42c86d08e73a04eb48ed80e9d8ae9648fa6351c5ca49c2fca3062",
+      "docx_sha256": "5b55290b5e8eb5d0ac579af6fe5879bb8015a1c9a6e4d1d759ab229b80bf34cd",
       "embedded_source_sha256": "7d878e96f10a39c47205a9505804abb9f1e066f74c6eb70457de37c30e26331a",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
       "markdown_sha256": "7d878e96f10a39c47205a9505804abb9f1e066f74c6eb70457de37c30e26331a"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "40bc0267bbeb14fa6e21f5bbc05c05f41ed0dd3c098e1fe5c3d2c9553f30cca0",
-      "embedded_source_sha256": "7acc27190097555a6e503c95acd72d3dbab47cf55af80dab48e862cdb2bcfb8a",
+      "docx_sha256": "a20aa971498708953c53f5f7943915818b214f77cac064f94c69fe0ac9643c61",
+      "embedded_source_sha256": "5c4ffcc8f7ec723439b7137481706b204815355f3b2e40b0568523f1ba06f475",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "7acc27190097555a6e503c95acd72d3dbab47cf55af80dab48e862cdb2bcfb8a"
+      "markdown_sha256": "5c4ffcc8f7ec723439b7137481706b204815355f3b2e40b0568523f1ba06f475"
     }
   ],
   "schema_version": 1

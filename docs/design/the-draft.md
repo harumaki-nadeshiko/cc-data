@@ -398,3 +398,27 @@ Visual Round 4 修复五张 Draw.io 图的主要碰撞与小字号问题；Word 
 
 Visual Round 5 重点关闭剩余硬伤：合并稀疏术语尾页、阻止英文标识符硬拆、消除 Metric1
 标题叠压和总体架构图中央碰撞。所有修改均限定在 Word 布局与图形构图。
+
+## 16. Visual Round 6 审阅记录
+
+### 16.1 审阅者与分歧处理
+
+- hitomi-agent：报告部分表格仍有英文标识符硬拆和 TC229 单字孤行；
+- futsu-agent：判定没有剩余 must-fix，仅列出少量可选图形润色；
+- 对分歧项使用当前 PDF 的逐页 `pdftotext -layout` 结果裁决，确认 hitomi 报告的
+  `InvalidateReq`、`UpgradeAckNotify`、`InvalidateAck`、`RecallResp`、`sliding`、`feature`
+  确实发生字符中断，TC229 也存在单字“写”孤行。
+
+### 16.2 已接受发现与修改
+
+1. 在表格段落加入 Word `wordWrap=0`，禁止 Latin 单词在字符中间断行；U+2060 和定向
+   8 pt 继续作为双保险。
+2. TC229 句子仅重排同义语序，避免引号内短语产生孤立单字，不改变技术含义。
+3. 稀疏术语尾页、总体架构碰撞和 Metric1 标题叠压已由两位 reviewer 确认关闭，不再修改。
+
+### 16.3 可选项不再修改
+
+- gem5 图个别标签紧凑、two-phase timeout 靠近连线、部分数据图轴标签偏小均属于可接受
+  范围，不继续扩大图形改动；
+- 封面、目录和空白术语定义保持用户要求；
+- 本轮后以 PDF 文本敏感词跨行检查、自动布局 QA 和字体嵌入结果作为收口门槛。

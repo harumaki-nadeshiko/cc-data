@@ -133,6 +133,7 @@ def table(rows, compact=False):
             output.append(
                 f'<w:tc><w:tcPr>{cell_width}{shading}</w:tcPr><w:p><w:pPr>'
                 f'<w:pStyle w:val="{paragraph_style}"/><w:jc w:val="left"/>'
+                '<w:wordWrap w:val="0"/>'
                 f'<w:spacing w:before="0" w:after="0" w:line="{line_height}" w:lineRule="exact"/>'
                 '</w:pPr>' + run(cell_text, row_index == 0,
                                  heading=row_index == 0, size=cell_font_size,

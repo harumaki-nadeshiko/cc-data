@@ -86,6 +86,8 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             paragraph = cell.find(f"{W}p")
             self.assertEqual(paragraph.find(f"{W}pPr/{W}jc").get(f"{W}val"),
                              "left")
+            self.assertEqual(paragraph.find(f"{W}pPr/{W}wordWrap").get(f"{W}val"),
+                             "0")
             text = "".join(cell.itertext()).replace(MOD.WORD_JOINER, "")
             expected_size = "16" if any(
                 identifier in text for identifier in MOD.NARROW_TABLE_IDENTIFIERS) else "18"
