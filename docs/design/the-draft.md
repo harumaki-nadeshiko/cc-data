@@ -367,3 +367,34 @@ Round 3 仅做严谨性和发布记录收口：纠正 focused 模型证据等级
 Visual Round 4 修复五张 Draw.io 图的主要碰撞与小字号问题；Word 生成器增加英文整词换行、
 紧凑术语表、widow/CJK 行控制和短尾保护；正式 Markdown 只移动图示解释并缩短图注。
 全部修改均为视觉与排版调整。
+
+## 15. Visual Round 5 审阅记录
+
+### 15.1 审阅者与范围
+
+- hitomi-agent：复查 Visual Round 4 后的三册 42 页和 9 张图；
+- futsu-agent：对相同产物独立复查；
+- 本轮继续只处理视觉问题，不改变技术内容。
+
+### 15.2 已接受发现
+
+1. Deliverable 3 术语表仍产生稀疏末页；DOCX 输出将两列表转换为
+   `术语｜说明｜术语｜说明` 四列配对布局，减少表高并保持 ubsim/ub 定义空白。
+2. U+FEFF 在 LibreOffice 中不能可靠阻止英文标识符断行，改用 U+2060；对
+   `InvalidateReq`、`UpgradeAckNotify`、`InvalidateAck`、`frontier`、`evict` 所在窄单元格
+   额外使用 8 pt 定向字号，PDF 文本复核确认不再字符中断行。
+3. Metric1 数据图移除与左右子图标题竞争的冗余总标题，保留两个子图标题和文档图注。
+4. UBCC 总体架构图进一步移除中央冗余边标签并增加 Node0 Outer domain 横向留白，消除
+   `Outer messages`、`message conversion`、`hot metadata` 和 `generic packets` 的碰撞。
+
+### 15.3 未接受或延后
+
+- 不修改 ubsim/ub 空白定义；
+- 不改变目录页、封面或正文技术内容；
+- gem5 图、two-phase 图的轻微标签紧凑仅作为可选项，由最后一轮复审决定是否需要继续调整；
+- 数据图颜色语义统一属于可选润色，当前区分度和可读性已满足发布要求。
+
+### 15.4 修改摘要
+
+Visual Round 5 重点关闭剩余硬伤：合并稀疏术语尾页、阻止英文标识符硬拆、消除 Metric1
+标题叠压和总体架构图中央碰撞。所有修改均限定在 Word 布局与图形构图。

@@ -86,22 +86,35 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             paragraph = cell.find(f"{W}p")
             self.assertEqual(paragraph.find(f"{W}pPr/{W}jc").get(f"{W}val"),
                              "left")
+            text = "".join(cell.itertext()).replace(MOD.WORD_JOINER, "")
+            expected_size = "16" if any(
+                identifier in text for identifier in MOD.NARROW_TABLE_IDENTIFIERS) else "18"
             self.assertEqual(paragraph.find(f"{W}r/{W}rPr/{W}sz").get(f"{W}val"),
-                             "18")
+                             expected_size)
         margins = table.find(f"{W}tblPr/{W}tblCellMar")
         self.assertIsNotNone(margins)
 
     def test_ascii_identifiers_in_table_cells_use_word_joiners(self):
         text = "".join(self.document.find(f".//{W}tbl").itertext())
+        self.assertEqual(MOD.WORD_JOINER, "\u2060")
+        self.assertNotIn("\ufeff", text)
         for identifier in ("InvalidateReq", "frontier", "evict"):
             protected = MOD.WORD_JOINER.join(identifier)
             self.assertIn(protected, text)
             self.assertNotIn(identifier, text)
 
-    def test_glossary_table_uses_compact_eight_point_style(self):
+    def test_break_sensitive_table_identifiers_use_targeted_minimum_font(self):
+        table = self.document.find(f".//{W}tbl")
+        identifier_cell = next(
+            cell for cell in table.findall(f".//{W}tc")
+            if "InvalidateReq" in "".join(cell.itertext()).replace(MOD.WORD_JOINER, ""))
+        self.assertEqual(
+            identifier_cell.find(f"{W}p/{W}r/{W}rPr/{W}sz").get(f"{W}val"), "16")
+
+    def test_glossary_table_uses_compact_four_column_eight_point_style(self):
         body, _ = MOD.convert_markdown(
             "## 附录 E 术语表\n\n| 术语 | 说明 |\n|---|---|\n"
-            "| ubsim |  |\n| ub |  |\n| InvalidateAck | 确认 |\n",
+            "| UBCC | 方案 |\n| InvalidateAck | 确认 |\n| ubsim |  |\n| ub |  |\n",
             self.markdown)
         document = ET.fromstring(
             '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
@@ -111,10 +124,35 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         for paragraph in table.findall(f".//{W}p"):
             self.assertEqual(paragraph.find(f"{W}pPr/{W}pStyle").get(f"{W}val"),
                              "CompactGlossaryText")
+            self.assertEqual(paragraph.find(f"{W}pPr/{W}spacing").get(f"{W}line"),
+                             "160")
             self.assertEqual(paragraph.find(f"{W}r/{W}rPr/{W}sz").get(f"{W}val"), "16")
-        cells = table.findall(f"{W}tr/{W}tc")
-        self.assertEqual("".join(cells[3].itertext()), "")
-        self.assertEqual("".join(cells[5].itertext()), "")
+        rows = table.findall(f"{W}tr")
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(
+            [column.get(f"{W}w") for column in table.findall(f"{W}tblGrid/{W}gridCol")],
+            ["1500", "3300", "1500", "3300"])
+        self.assertEqual(
+            ["".join(cell.itertext()).replace(MOD.WORD_JOINER, "")
+             for cell in rows[0].findall(f"{W}tc")],
+            ["术语", "说明", "术语", "说明"])
+        self.assertEqual(
+            ["".join(cell.itertext()).replace(MOD.WORD_JOINER, "")
+             for cell in rows[1].findall(f"{W}tc")],
+            ["UBCC", "方案", "ubsim", ""])
+        self.assertEqual(
+            ["".join(cell.itertext()).replace(MOD.WORD_JOINER, "")
+             for cell in rows[2].findall(f"{W}tc")],
+            ["InvalidateAck", "确认", "ub", ""])
+
+    def test_non_glossary_tables_remain_two_columns(self):
+        body, _ = MOD.convert_markdown(
+            "## 普通表格\n\n| 术语 | 说明 |\n|---|---|\n| a | b |\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        self.assertEqual(len(document.find(f".//{W}tr").findall(f"{W}tc")), 2)
 
     def test_images_do_not_exceed_configured_max_height_or_width(self):
         extents = self.document.findall(f".//{WP}extent")

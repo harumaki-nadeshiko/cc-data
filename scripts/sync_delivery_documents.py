@@ -19,11 +19,14 @@ EMU_PER_POINT = 12_700
 EMU_PER_PIXEL = 9_525
 DEFAULT_IMAGE_MAX_WIDTH = int(15.5 * EMU_PER_CM)
 DEFAULT_IMAGE_MAX_HEIGHT = int(11.5 * EMU_PER_CM)
-# U+FEFF is a zero-width no-break character understood by Word/LibreOffice.
-# It is used instead of U+2060 because the approved delivery fonts contain it,
-# avoiding a renderer fallback font solely for invisible layout controls.
-WORD_JOINER = "\ufeff"
+# U+2060 is the Unicode word-joiner intended to prohibit a line break without
+# changing the visible identifier.  LibreOffice treats U+FEFF as a removable
+# byte-order mark in DOCX text, so it does not reliably protect table content.
+WORD_JOINER = "\u2060"
 ASCII_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)(?![A-Za-z0-9_])")
+NARROW_TABLE_IDENTIFIERS = (
+    "InvalidateReq", "UpgradeAckNotify", "InvalidateAck", "frontier", "evict",
+)
 PAIRS = (
     "docs/design/cc_ep_protocol_overview.md",
     "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
@@ -97,7 +100,7 @@ def paragraph(text="", style=None, bold=False, mono=False, indent=0,
 def table(rows, compact=False):
     cell_top_bottom = 0 if compact else 60
     cell_left_right = 45 if compact else 90
-    line_height = 220 if compact else 320
+    line_height = 160 if compact else 320
     font_size = 16 if compact else 18
     paragraph_style = "CompactGlossaryText" if compact else "TableText"
     output = [
@@ -108,24 +111,53 @@ def table(rows, compact=False):
         f'<w:right w:w="{cell_left_right}" w:type="dxa"/></w:tblCellMar></w:tblPr>'
     ]
     width = max((len(row) for row in rows), default=0)
+    column_widths = [1500, 3300, 1500, 3300] if compact and width == 4 else []
+    if column_widths:
+        output.append('<w:tblGrid>' + ''.join(
+            f'<w:gridCol w:w="{value}"/>' for value in column_widths) +
+                      '</w:tblGrid>')
     for row_index, row in enumerate(rows):
         row_props = '<w:trPr><w:cantSplit/>'
         if row_index == 0:
             row_props += '<w:tblHeader/>'
         row_props += '</w:trPr>'
         output.append(f"<w:tr>{row_props}")
-        for cell in row + [""] * (width - len(row)):
+        for cell_index, cell in enumerate(row + [""] * (width - len(row))):
+            cell_text = plain(cell)
+            cell_font_size = (16 if not compact and any(
+                identifier in cell_text for identifier in NARROW_TABLE_IDENTIFIERS)
+                              else font_size)
             shading = '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>' if row_index == 0 else ""
+            cell_width = (f'<w:tcW w:w="{column_widths[cell_index]}" w:type="dxa"/>'
+                          if column_widths else "")
             output.append(
-                f'<w:tc><w:tcPr>{shading}</w:tcPr><w:p><w:pPr>'
+                f'<w:tc><w:tcPr>{cell_width}{shading}</w:tcPr><w:p><w:pPr>'
                 f'<w:pStyle w:val="{paragraph_style}"/><w:jc w:val="left"/>'
                 f'<w:spacing w:before="0" w:after="0" w:line="{line_height}" w:lineRule="exact"/>'
-                '</w:pPr>' + run(plain(cell), row_index == 0,
-                                 heading=row_index == 0, size=font_size,
+                '</w:pPr>' + run(cell_text, row_index == 0,
+                                 heading=row_index == 0, size=cell_font_size,
                                  nonbreaking_identifiers=True) + '</w:p></w:tc>')
         output.append("</w:tr>")
     output.append("</w:tbl>")
     return "".join(output)
+
+
+def compact_glossary_rows(rows):
+    """Lay out a two-column glossary as two term/description pairs per row."""
+    if not rows or len(rows[0]) != 2:
+        return rows
+    header = rows[0]
+    output = [header + header]
+    entries = rows[1:]
+    midpoint = (len(entries) + 1) // 2
+    left_entries = entries[:midpoint]
+    right_entries = entries[midpoint:]
+    for index, entry in enumerate(left_entries):
+        left = entry + [""] * (2 - len(entry))
+        right = right_entries[index] if index < len(right_entries) else ["", ""]
+        right = right + [""] * (2 - len(right))
+        output.append(left[:2] + right[:2])
+    return output
 
 
 def png_size(path):
@@ -263,7 +295,10 @@ def convert_markdown(text, md_path):
                 if not all(re.fullmatch(r":?-{3,}:?", item) for item in cells):
                     rows.append(cells)
                 index += 1
-            output.append(table(rows, compact="术语表" in current_heading))
+            compact = "术语表" in current_heading
+            if compact:
+                rows = compact_glossary_rows(rows)
+            output.append(table(rows, compact=compact))
             if index < len(lines):
                 caption = re.fullmatch(r"\s*(?:(?:Table|表)\s*[:：]|:)\s*(.+?)\s*",
                                        lines[index], re.IGNORECASE)
@@ -309,7 +344,7 @@ def styles():
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/><w:shd w:fill="F2F2F2"/><w:ind w:left="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Microsoft YaHei" w:cs="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="CompactGlossaryText"><w:name w:val="Compact Glossary Text"/><w:basedOn w:val="TableText"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="CompactGlossaryText"><w:name w:val="Compact Glossary Text"/><w:basedOn w:val="TableText"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="160" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="FigureCaption"><w:name w:val="Figure Caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:keepLines/><w:spacing w:before="0" w:after="120" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableCaption"><w:name w:val="Table Caption"/><w:basedOn w:val="FigureCaption"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="100" w:line="320" w:lineRule="exact"/></w:pPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:color="B7C9E2" w:sz="4"/><w:left w:val="single" w:color="B7C9E2" w:sz="4"/><w:bottom w:val="single" w:color="B7C9E2" w:sz="4"/><w:right w:val="single" w:color="B7C9E2" w:sz="4"/><w:insideH w:val="single" w:color="D9E2F3" w:sz="4"/><w:insideV w:val="single" w:color="D9E2F3" w:sz="4"/></w:tblBorders></w:tblPr></w:style>
