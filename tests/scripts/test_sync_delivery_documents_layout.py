@@ -37,7 +37,7 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             "# 布局测试\n\n"
             "正文第一段。\n\n---\n\n"
             "## 紧凑标题\n\n"
-            "| 中文列 | 数值 |\n|---|---:|\n| 不应拉伸 | 1 |\n\n"
+            "| 中文列 | 数值 |\n|---|---:|\n| InvalidateReq frontier evict | 1 |\n\n"
             "```text\nfirst line\nsecond line\n```\n\n"
             "![图 1 测试图](large.png)\n\n"
             "![图 2 第二张图](large.png){width=20cm height=20cm}\n",
@@ -91,6 +91,31 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         margins = table.find(f"{W}tblPr/{W}tblCellMar")
         self.assertIsNotNone(margins)
 
+    def test_ascii_identifiers_in_table_cells_use_word_joiners(self):
+        text = "".join(self.document.find(f".//{W}tbl").itertext())
+        for identifier in ("InvalidateReq", "frontier", "evict"):
+            protected = MOD.WORD_JOINER.join(identifier)
+            self.assertIn(protected, text)
+            self.assertNotIn(identifier, text)
+
+    def test_glossary_table_uses_compact_eight_point_style(self):
+        body, _ = MOD.convert_markdown(
+            "## 附录 E 术语表\n\n| 术语 | 说明 |\n|---|---|\n"
+            "| ubsim |  |\n| ub |  |\n| InvalidateAck | 确认 |\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        table = document.find(f".//{W}tbl")
+        self.assertEqual(table.find(f"{W}tblPr/{W}tblCellMar/{W}top").get(f"{W}w"), "0")
+        for paragraph in table.findall(f".//{W}p"):
+            self.assertEqual(paragraph.find(f"{W}pPr/{W}pStyle").get(f"{W}val"),
+                             "CompactGlossaryText")
+            self.assertEqual(paragraph.find(f"{W}r/{W}rPr/{W}sz").get(f"{W}val"), "16")
+        cells = table.findall(f"{W}tr/{W}tc")
+        self.assertEqual("".join(cells[3].itertext()), "")
+        self.assertEqual("".join(cells[5].itertext()), "")
+
     def test_images_do_not_exceed_configured_max_height_or_width(self):
         extents = self.document.findall(f".//{WP}extent")
         self.assertEqual(len(extents), 2)
@@ -134,6 +159,30 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         ]
         self.assertEqual(len(captions), 1)
         self.assertEqual("".join(captions[0].itertext()), "图 2-1　示例说明。")
+
+    def test_explanation_precedes_image_and_short_caption_follows_it(self):
+        body, _ = MOD.convert_markdown(
+            "图示解释放在正文。\n\n![较长的替代文本](large.png)\n\n图 2-1　短标题\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+            body + '</w:body>')
+        paragraphs = document.findall(f"{W}p")
+        self.assertEqual("".join(paragraphs[0].itertext()).replace(MOD.WORD_JOINER, ""),
+                         "图示解释放在正文。")
+        self.assertIsNotNone(paragraphs[1].find(f".//{W}drawing"))
+        self.assertEqual(paragraphs[2].find(f"{W}pPr/{W}pStyle").get(f"{W}val"),
+                         "FigureCaption")
+        self.assertEqual("".join(paragraphs[2].itertext()), "图 2-1　短标题")
+
+    def test_normal_style_enables_widow_and_cjk_line_controls(self):
+        normal = self.style("Normal")
+        self.assertIsNotNone(normal.find(f"{W}pPr/{W}widowControl"))
+        self.assertIsNotNone(normal.find(f"{W}pPr/{W}kinsoku"))
 
     def test_page_geometry_and_code_lines(self):
         section = self.document.find(f".//{W}sectPr")

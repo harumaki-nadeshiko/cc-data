@@ -98,6 +98,8 @@ class Edge:
     dashed: bool = False
     bidirectional: bool = False
     width: float = 2.0
+    label_x: float = 0.0
+    label_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -129,22 +131,22 @@ def required(value, description):
 
 def architecture_diagram():
     b = [
-        Box("project", "CC-EP / UBCC project boundary", 35, 75, 1530, 500,
+        Box("project", "CC-EP / UBCC project boundary", 35, 75, 1530, 530,
             "#FFFFFF", NAVY, NAVY, 15, True, False, True, True),
-        Box("node0", "Node 0 process boundary", 65, 115, 690, 420,
+        Box("node0", "Node 0 process boundary", 65, 115, 690, 450,
             "#F8FBFE", BLUE, NAVY, 15, True, False, True, True),
-        Box("inner0", "Inner domain (CHI / local coherence)", 90, 165, 300, 320,
+        Box("inner0", "Inner domain (CHI / local coherence)", 90, 165, 285, 320,
             PALE_BLUE, BLUE, NAVY, 14, True, False, True, True),
-        Box("outer0", "Outer domain (cross-node coherence)", 415, 165, 310, 320,
+        Box("outer0", "Outer domain (cross-node coherence)", 390, 165, 365, 350,
             PALE_GREEN, GREEN, NAVY, 14, True, False, True, True),
-        Box("cpu0", "CPU / private caches", 115, 225, 245, 58, PALE_BLUE, BLUE, NAVY, 14, True),
-        Box("hnf0", "HN-F / shared cache", 115, 350, 245, 58, "#EAF2F8", BLUE, NAVY, 14, True),
-        Box("ep0", "EP-RNF  ·  EP-SNF", 440, 215, 260, 55, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("backend0", "EPBackend", 440, 305, 120, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("adapter0", "UBAdapter", 580, 305, 120, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("ubio0", "UBIO / UBCC", 440, 395, 120, 58, PALE_GREEN, GREEN, "#375623", 14, True),
-        Box("dir0", "ResidentDir", 580, 385, 120, 42, PALE_GREEN, GREEN, "#375623", 13, True),
-        Box("back0", "Backstore", 580, 445, 120, 42, PALE_ORANGE, ORANGE, "#843C0C", 13, True),
+        Box("cpu0", "CPU / private caches", 110, 225, 235, 58, PALE_BLUE, BLUE, NAVY, 14, True),
+        Box("hnf0", "HN-F / shared cache", 110, 350, 235, 58, "#EAF2F8", BLUE, NAVY, 14, True),
+        Box("ep0", "EP-RNF  ·  EP-SNF", 420, 215, 300, 55, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("backend0", "EPBackend", 420, 335, 140, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("adapter0", "UBAdapter", 580, 335, 140, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("ubio0", "UBIO / UBCC", 420, 425, 140, 58, PALE_GREEN, GREEN, "#375623", 14, True),
+        Box("dir0", "ResidentDir", 580, 415, 140, 42, PALE_GREEN, GREEN, "#375623", 13, True),
+        Box("back0", "Backstore", 580, 465, 140, 42, PALE_ORANGE, ORANGE, "#843C0C", 13, True),
         Box("transport", "Generic cross-node transport boundary", 780, 245, 145, 195,
             PALE_GRAY, GRAY, "#404040", 14, True, True),
         Box("node1", "Node 1+ process boundary", 950, 115, 585, 420,
@@ -159,14 +161,14 @@ def architecture_diagram():
             555, 610, 500, 55, "#FFFFFF", GRAY, "#606060", 12, False, True),
     ]
     e = [
-        Edge("cpu0", "hnf0", "loads / stores"), Edge("hnf0", "ep0", "CHI req / rsp / snoop"),
-        Edge("ep0", "backend0", "protocol events"), Edge("backend0", "adapter0", "message conversion"),
-        Edge("adapter0", "ubio0", "Outer messages", bidirectional=True),
-        Edge("ubio0", "dir0", "hot metadata", bidirectional=True), Edge("dir0", "back0", "spill / fill", bidirectional=True),
-        Edge("ubio0", "transport", "generic packets", bidirectional=True),
-        Edge("transport", "ubcc1", "generic packets", bidirectional=True),
-        Edge("cpu1", "ep1", "CHI"), Edge("ep1", "ubcc1", "Outer", bidirectional=True),
-        Edge("ubcc1", "store1", "metadata", bidirectional=True),
+        Edge("cpu0", "hnf0", "loads / stores", label_y=-16), Edge("hnf0", "ep0"),
+        Edge("ep0", "backend0", "protocol events", label_x=-0.35), Edge("backend0", "adapter0"),
+        Edge("adapter0", "ubio0", bidirectional=True),
+        Edge("ubio0", "dir0", bidirectional=True), Edge("dir0", "back0", "spill / fill", bidirectional=True, label_x=0.42),
+        Edge("ubio0", "transport", bidirectional=True),
+        Edge("transport", "ubcc1", "generic packets", bidirectional=True, label_y=-16),
+        Edge("cpu1", "ep1", "CHI", label_y=-16), Edge("ep1", "ubcc1", "Outer", bidirectional=True, label_x=0.35),
+        Edge("ubcc1", "store1", "metadata", bidirectional=True, label_y=-16),
         Edge("simnote", "transport", "simulation binding", GRAY, True, False, 1.3),
     ]
     return Diagram("ubcc-system-architecture", "UBCC 跨节点缓存一致性总体架构", 1600, 700, tuple(b), tuple(e))
@@ -178,27 +180,27 @@ def gem5_diagram():
         Box("ruby", "Ruby controllers", 65, 120, 930, 405, "#F7FBF7", GREEN, "#375623", 15, True, False, True, True),
         Box("nonruby", "Non-Ruby components", 1025, 120, 510, 405, "#FFF9F1", AMBER, "#7F6000", 15, True, False, True, True),
         Box("cpu", "CPU + RubySequencers", 90, 185, 180, 60, PALE_BLUE, BLUE, NAVY, 14, True),
-        Box("l1", "L1I / L1D\ncontrollers", 315, 185, 145, 60, PALE_GREEN, GREEN, "#375623", 14, True),
-        Box("l2", "Private L2\ncontroller", 505, 185, 145, 60, "#DDEBF7", TEAL, NAVY, 14, True),
-        Box("hnf", "HN-F + L3\nhome controller", 700, 185, 175, 60, PALE_BLUE, BLUE, NAVY, 14, True),
+        Box("l1", "L1I / L1D\ncontrollers", 315, 185, 175, 70, PALE_GREEN, GREEN, "#375623", 14, True),
+        Box("l2", "Private L2\ncontroller", 540, 185, 165, 70, "#DDEBF7", TEAL, NAVY, 14, True),
+        Box("hnf", "HN-F + L3\nhome controller", 755, 185, 190, 70, PALE_BLUE, BLUE, NAVY, 14, True),
         Box("lsnf", "L-SNF\nlocal memory controller", 235, 365, 185, 60, PALE_GREEN, GREEN, "#375623", 14, True),
         Box("mem", "Local MemCtrl", 500, 365, 150, 60, PALE_GREEN, GREEN, "#375623", 14, True),
-        Box("eprnf", "EP-RNF", 700, 330, 130, 52, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("metarnf", "Meta-RNF", 700, 420, 130, 52, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("epsnf", "EP-SNF", 865, 375, 105, 52, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("eprnf", "EP-RNF", 745, 335, 145, 58, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("metarnf", "Meta-RNF", 745, 430, 145, 58, PALE_AMBER, AMBER, "#7F6000", 14, True),
+        Box("epsnf", "EP-SNF", 900, 380, 110, 58, PALE_AMBER, AMBER, "#7F6000", 14, True),
         Box("backend", "EPBackend", 1060, 210, 180, 58, PALE_AMBER, AMBER, "#7F6000", 14, True),
         Box("adapter", "UBAdapter", 1300, 210, 180, 58, PALE_AMBER, AMBER, "#7F6000", 14, True),
         Box("ubio", "External UBIO / UBCC boundary", 1160, 390, 260, 70, PALE_GRAY, GRAY, "#404040", 14, True, True),
         Box("legend", "Line legend:  solid = CHI / Ruby path   ·   dashed = endpoint / external message path   ·   ↔ = bidirectional", 250, 610, 1100, 50, "#FFFFFF", GRAY, "#404040", 13),
     ]
     e = [
-        Edge("cpu", "l1", "sequencer"), Edge("l1", "l2", "CHI"), Edge("l2", "hnf", "CHI"),
-        Edge("hnf", "lsnf", "local / private"), Edge("lsnf", "mem", "memory"),
-        Edge("hnf", "eprnf", "remote request"), Edge("hnf", "metarnf", "metadata"),
-        Edge("epsnf", "hnf", "remote snoop / data"),
-        Edge("eprnf", "backend", "events", AMBER, True), Edge("metarnf", "backend", "metadata", AMBER, True),
-        Edge("backend", "epsnf", "snoop events", AMBER, True), Edge("backend", "adapter", "packets", AMBER, True, True),
-        Edge("adapter", "ubio", "external UBIO", GRAY, True, True),
+        Edge("cpu", "l1", "sequencer", label_y=-18), Edge("l1", "l2", "CHI", label_y=-18), Edge("l2", "hnf", "CHI", label_y=-18),
+        Edge("hnf", "lsnf", "local / private", label_x=-0.35), Edge("lsnf", "mem", "memory", label_y=-18),
+        Edge("hnf", "eprnf", "remote request", label_x=0.35), Edge("hnf", "metarnf", "metadata", label_x=-0.35),
+        Edge("epsnf", "hnf", "remote snoop / data", label_x=0.35),
+        Edge("eprnf", "backend", "events", AMBER, True, label_y=-18), Edge("metarnf", "backend", "metadata", AMBER, True, label_y=18),
+        Edge("backend", "epsnf", "snoop events", AMBER, True, label_y=-18), Edge("backend", "adapter", "packets", AMBER, True, True, label_y=-18),
+        Edge("adapter", "ubio", "external UBIO", GRAY, True, True, label_y=18),
     ]
     return Diagram("gem5-ruby-controller-relationships", "gem5 内部 EP 架构与 Ruby 控制器边界", 1600, 700, tuple(b), tuple(e))
 
@@ -215,8 +217,8 @@ def protocol_diagram():
         labels = (f"发起节点\n{row[1]}", f"Home UBCC\n{row[2]}", "Owner / Sharer\n响应", f"发起节点完成\n{row[3]}")
         for j, label in enumerate(labels):
             boxes.append(Box(f"p{i}{j}", label, 155 + j * 340, y + 28, 235, 55, fills[j], (BLUE, GREEN, AMBER, BLUE)[j], NAVY, 13, j in (0, 3)))
-        edges.extend((Edge(f"p{i}0", f"p{i}1", "request"), Edge(f"p{i}1", f"p{i}2", "recall / invalidate"),
-                      Edge(f"p{i}2", f"p{i}1", "data / ack"), Edge(f"p{i}1", f"p{i}3", "grant / completion")))
+        edges.extend((Edge(f"p{i}0", f"p{i}1", "request", label_y=-18), Edge(f"p{i}1", f"p{i}2", "recall / invalidate", label_y=-18),
+                      Edge(f"p{i}2", f"p{i}1", "data / ack", label_y=18), Edge(f"p{i}1", f"p{i}3", "grant / completion", label_y=-18)))
     return Diagram("ubcc-protocol-paths", "UBCC 三类核心协议路径", 1540, 600, tuple(boxes), tuple(edges))
 
 
@@ -226,7 +228,7 @@ def verification_diagram():
     boxes = [Box(f"v{i}", label, 55 + i * 245, 150, 205, 90,
                  (PALE_BLUE, PALE_GREEN, PALE_AMBER, "#EAF2F8", PALE_ORANGE, PALE_GRAY)[i],
                  (BLUE, GREEN, AMBER, BLUE, ORANGE, GRAY)[i], NAVY, 14, True) for i, label in enumerate(labels)]
-    edges = tuple(Edge(f"v{i}", f"v{i+1}", ("抽象", "机制映射", "实现", "故障扩展", "规模扩展")[i]) for i in range(5))
+    edges = tuple(Edge(f"v{i}", f"v{i+1}", ("抽象", "机制映射", "实现", "故障扩展", "规模扩展")[i], label_y=-18 if i % 2 == 0 else 18) for i in range(5))
     note = "从协议不变量到形式化、定向机制、端到端、故障与多拓扑验证的单向证据链"
     return Diagram("ubcc-verification-stack", "UBCC 分层验证体系", 1540, 350, tuple(boxes), edges, note)
 
@@ -238,8 +240,8 @@ def two_phase_diagram():
                  (BLUE, AMBER, BLUE, GREEN, GREEN)[i], NAVY, 14, True) for i, label in enumerate(labels)]
     boxes.append(Box("retry", "丢失 / 延迟：相同 tuple 重试，幂等恢复原 Grant", 555, 260, 520, 55,
                      PALE_ORANGE, ORANGE, "#843C0C", 13, False, True))
-    edges = [Edge(f"t{i}", f"t{i+1}", ("创建", "授权", "Clear", "commit")[i]) for i in range(4)]
-    edges += [Edge("t2", "retry", "timeout", ORANGE, True), Edge("retry", "t2", "idempotent replay", ORANGE, True)]
+    edges = [Edge(f"t{i}", f"t{i+1}", ("创建", "授权", "Clear", "commit")[i], label_y=-18 if i % 2 == 0 else 18) for i in range(4)]
+    edges += [Edge("t2", "retry", "timeout", ORANGE, True, label_y=-18), Edge("retry", "t2", "idempotent replay", ORANGE, True, label_y=18)]
     return Diagram("ubcc-two-phase-commit", "UBCC 两阶段目录提交", 1500, 390, tuple(boxes), tuple(edges))
 
 
@@ -261,7 +263,7 @@ def write_drawio(diagram):
         "math": "0", "shadow": "0", "background": "#FFFFFF"})
     root = ET.SubElement(graph, "root")
     ET.SubElement(root, "mxCell", {"id": "0"}); ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
-    title = Box("title", diagram.title, 30, 15, diagram.width - 60, 45, "#FFFFFF", "none", NAVY, 22, True, False, False)
+    title = Box("title", diagram.title, 30, 15, diagram.width - 60, 45, "#FFFFFF", "none", NAVY, 24, True, False, False)
     for box in (title,) + diagram.boxes:
         cell = ET.SubElement(root, "mxCell", {"id": box.id, "value": box.label, "style": style_string(box), "vertex": "1", "parent": "1"})
         ET.SubElement(cell, "mxGeometry", {"x": str(box.x), "y": str(box.y), "width": str(box.w), "height": str(box.h), "as": "geometry"})
@@ -273,9 +275,11 @@ def write_drawio(diagram):
         style = (f"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
                  f"strokeWidth={edge.width};strokeColor={edge.color};dashed={1 if edge.dashed else 0};dashPattern=6 4;"
                  f"endArrow=block;endFill=1;startArrow={'block' if edge.bidirectional else 'none'};"
-                 f"startFill={1 if edge.bidirectional else 0};fontSize=12;fontColor=#404040;fontFamily={FONT};labelBackgroundColor=#FFFFFF;")
+                 f"startFill={1 if edge.bidirectional else 0};fontSize=14;fontColor=#404040;fontFamily={FONT};labelBackgroundColor=#FFFFFF;")
         cell = ET.SubElement(root, "mxCell", {"id": f"e{i}", "value": edge.label, "style": style, "edge": "1", "parent": "1", "source": edge.source, "target": edge.target})
-        ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
+        geometry = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
+        if edge.label_x or edge.label_y:
+            ET.SubElement(geometry, "mxPoint", {"x": str(edge.label_x), "y": str(edge.label_y), "as": "offset"})
     ET.ElementTree(mxfile).write(OUT / f"{diagram.stem}.drawio", encoding="utf-8", xml_declaration=True)
 
 
@@ -329,7 +333,8 @@ def render_fallback(diagram):
                                 mutation_scale=10, linewidth=edge.width, linestyle="--" if edge.dashed else "-", color=edge.color)
         ax.add_patch(arrow)
         if edge.label:
-            ax.text((sx + tx) / 2, (sy + ty) / 2 - 6, edge.label, ha="center", va="bottom", fontsize=10,
+            ax.text((sx + tx) / 2 + edge.label_x * 80, (sy + ty) / 2 - 6 + edge.label_y,
+                    edge.label, ha="center", va="bottom", fontsize=10,
                     color="#404040", bbox={"facecolor": "white", "edgecolor": "none", "pad": 1})
     if diagram.note:
         ax.text(diagram.width / 2, diagram.height - 38, diagram.note, ha="center", va="center", fontsize=12, color="#606060")
@@ -355,7 +360,7 @@ def export_drawio(diagram):
     try:
         for fmt in ("svg", "png"):
             target = OUT / f"{diagram.stem}.{fmt}"
-            args = [command, "--no-sandbox", "--export", "--format", fmt, "--crop", "--border", "20"]
+            args = ["xvfb-run", "-a", command, "--no-sandbox", "--export", "--format", fmt, "--crop", "--border", "20"]
             if fmt == "png":
                 args += ["--scale", "2"]
             args += ["--output", str(target), str(source)]
@@ -413,7 +418,6 @@ def metric_charts():
     axes[1].set_ylabel("Outer mean latency (ns)"); axes[1].set_ylim(0, max(means) * 1.28); axes[1].grid(axis="y", alpha=.22)
     axes[1].text(.5, max(means) * 1.10, f"Spill − IdealDir = +{delta_ns:.3f} ns", ha="center", color="#843C0C", fontweight="bold")
     axes[1].set_title("Corrected scope: Outer spill vs IdealDir")
-    fig.suptitle("Metric 1 capacity and Outer latency", fontsize=18, color=NAVY, fontweight="bold")
     save_chart(fig, "ubcc-metric1-capacity-latency")
 
     # Metric 2, including the negative TC138 and explicitly excluded TC140.

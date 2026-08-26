@@ -19,6 +19,11 @@ EMU_PER_POINT = 12_700
 EMU_PER_PIXEL = 9_525
 DEFAULT_IMAGE_MAX_WIDTH = int(15.5 * EMU_PER_CM)
 DEFAULT_IMAGE_MAX_HEIGHT = int(11.5 * EMU_PER_CM)
+# U+FEFF is a zero-width no-break character understood by Word/LibreOffice.
+# It is used instead of U+2060 because the approved delivery fonts contain it,
+# avoiding a renderer fallback font solely for invisible layout controls.
+WORD_JOINER = "\ufeff"
+ASCII_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)(?![A-Za-z0-9_])")
 PAIRS = (
     "docs/design/cc_ep_protocol_overview.md",
     "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
@@ -41,9 +46,31 @@ def plain(text):
     return text.replace("**", "").replace("__", "").replace("`", "").strip()
 
 
-def run(text, bold=False, mono=False, heading=False, size=None):
+def prevent_ascii_identifier_breaks(text):
+    """Keep English/ASCII identifiers together without changing their appearance."""
+    return ASCII_IDENTIFIER.sub(
+        lambda match: WORD_JOINER.join(match.group(1)), text)
+
+
+def prevent_short_line_tail(text, protected_characters=6):
+    """Keep a short paragraph tail together to avoid isolated final glyphs."""
+    if len(text) < protected_characters:
+        return text
+    start = len(text) - protected_characters
+    tail = text[start:]
+    if not re.search(r"[\u3400-\u9fff]", tail):
+        return text
+    return text[:start] + WORD_JOINER.join(tail)
+
+
+def run(text, bold=False, mono=False, heading=False, size=None,
+        nonbreaking_identifiers=False, protect_tail=False):
     font = "Consolas" if mono else "Calibri"
     east_asia = "Microsoft YaHei" if mono or not heading else "SimHei"
+    if nonbreaking_identifiers:
+        text = prevent_ascii_identifier_breaks(text)
+    if protect_tail:
+        text = prevent_short_line_tail(text)
     props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" '
              f'w:eastAsia="{east_asia}" w:cs="{font}"/>'
              + ("<w:b/>" if bold else "")
@@ -53,7 +80,8 @@ def run(text, bold=False, mono=False, heading=False, size=None):
 
 
 def paragraph(text="", style=None, bold=False, mono=False, indent=0,
-              first_line=0, center=False, keep_next=False):
+              first_line=0, center=False, keep_next=False,
+              protect_tail=False):
     props = (f'<w:pStyle w:val="{style}"/>' if style else "")
     if indent or first_line:
         props += f'<w:ind w:left="{indent}" w:firstLine="{first_line}"/>'
@@ -62,17 +90,22 @@ def paragraph(text="", style=None, bold=False, mono=False, indent=0,
     if keep_next:
         props += '<w:keepNext/>'
     return (f"<w:p><w:pPr>{props}</w:pPr>"
-            f"{run(text, bold, mono, bool(style and (style == 'Title' or style.startswith('Heading'))))}"
+            f"{run(text, bold, mono, bool(style and (style == 'Title' or style.startswith('Heading'))), protect_tail=protect_tail)}"
             "</w:p>")
 
 
-def table(rows):
+def table(rows, compact=False):
+    cell_top_bottom = 0 if compact else 60
+    cell_left_right = 45 if compact else 90
+    line_height = 220 if compact else 320
+    font_size = 16 if compact else 18
+    paragraph_style = "CompactGlossaryText" if compact else "TableText"
     output = [
         '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>'
         '<w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="autofit"/>'
-        '<w:tblCellMar><w:top w:w="60" w:type="dxa"/>'
-        '<w:left w:w="90" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/>'
-        '<w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>'
+        f'<w:tblCellMar><w:top w:w="{cell_top_bottom}" w:type="dxa"/>'
+        f'<w:left w:w="{cell_left_right}" w:type="dxa"/><w:bottom w:w="{cell_top_bottom}" w:type="dxa"/>'
+        f'<w:right w:w="{cell_left_right}" w:type="dxa"/></w:tblCellMar></w:tblPr>'
     ]
     width = max((len(row) for row in rows), default=0)
     for row_index, row in enumerate(rows):
@@ -85,10 +118,11 @@ def table(rows):
             shading = '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>' if row_index == 0 else ""
             output.append(
                 f'<w:tc><w:tcPr>{shading}</w:tcPr><w:p><w:pPr>'
-                '<w:pStyle w:val="TableText"/><w:jc w:val="left"/>'
-                '<w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/>'
+                f'<w:pStyle w:val="{paragraph_style}"/><w:jc w:val="left"/>'
+                f'<w:spacing w:before="0" w:after="0" w:line="{line_height}" w:lineRule="exact"/>'
                 '</w:pPr>' + run(plain(cell), row_index == 0,
-                                 heading=row_index == 0, size=18) + '</w:p></w:tc>')
+                                 heading=row_index == 0, size=font_size,
+                                 nonbreaking_identifiers=True) + '</w:p></w:tc>')
         output.append("</w:tr>")
     output.append("</w:tbl>")
     return "".join(output)
@@ -177,6 +211,7 @@ def convert_markdown(text, md_path):
     index = 0
     code = None
     first_heading = True
+    current_heading = ""
     while index < len(lines):
         line = lines[index]
         if line.strip() == "<!-- PAGEBREAK -->":
@@ -228,7 +263,7 @@ def convert_markdown(text, md_path):
                 if not all(re.fullmatch(r":?-{3,}:?", item) for item in cells):
                     rows.append(cells)
                 index += 1
-            output.append(table(rows))
+            output.append(table(rows, compact="术语表" in current_heading))
             if index < len(lines):
                 caption = re.fullmatch(r"\s*(?:(?:Table|表)\s*[:：]|:)\s*(.+?)\s*",
                                        lines[index], re.IGNORECASE)
@@ -240,6 +275,7 @@ def convert_markdown(text, md_path):
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
             value = plain(heading.group(2))
+            current_heading = value
             style = "Title" if first_heading else f"Heading{min(len(heading.group(1)), 3)}"
             output.append(paragraph(value, style, center=first_heading,
                                     keep_next=True))
@@ -253,7 +289,8 @@ def convert_markdown(text, md_path):
         elif re.match(r"^\s*图\s*\d+(?:[-－]\d+)?", line):
             output.append(paragraph(plain(line), "FigureCaption", center=True))
         elif line.strip() and not re.fullmatch(r"\s*[-*_]{3,}\s*", line):
-            output.append(paragraph(plain(line), first_line=420))
+            output.append(paragraph(plain(line), first_line=420,
+                                    protect_tail=True))
         index += 1
     if code is not None:
         for code_line in code or [""]:
@@ -264,7 +301,7 @@ def convert_markdown(text, md_path):
 def styles():
     return '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="400" w:lineRule="exact"/><w:jc w:val="both"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:widowControl/><w:kinsoku/><w:spacing w:before="0" w:after="0" w:line="400" w:lineRule="exact"/><w:jc w:val="both"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="21"/><w:szCs w:val="21"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:after="180" w:line="480" w:lineRule="exact"/><w:keepNext/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="17365D"/><w:sz w:val="36"/><w:szCs w:val="36"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80" w:line="400" w:lineRule="exact"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="17365D"/><w:sz w:val="30"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="180" w:after="60" w:line="400" w:lineRule="exact"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimHei" w:cs="Calibri"/><w:b/><w:color w:val="365F91"/><w:sz w:val="26"/></w:rPr></w:style>
@@ -272,6 +309,7 @@ def styles():
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/><w:shd w:fill="F2F2F2"/><w:ind w:left="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Microsoft YaHei" w:cs="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="CompactGlossaryText"><w:name w:val="Compact Glossary Text"/><w:basedOn w:val="TableText"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="FigureCaption"><w:name w:val="Figure Caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:keepLines/><w:spacing w:before="0" w:after="120" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableCaption"><w:name w:val="Table Caption"/><w:basedOn w:val="FigureCaption"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="100" w:line="320" w:lineRule="exact"/></w:pPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:color="B7C9E2" w:sz="4"/><w:left w:val="single" w:color="B7C9E2" w:sz="4"/><w:bottom w:val="single" w:color="B7C9E2" w:sz="4"/><w:right w:val="single" w:color="B7C9E2" w:sz="4"/><w:insideH w:val="single" w:color="D9E2F3" w:sz="4"/><w:insideV w:val="single" w:color="D9E2F3" w:sz="4"/></w:tblBorders></w:tblPr></w:style>

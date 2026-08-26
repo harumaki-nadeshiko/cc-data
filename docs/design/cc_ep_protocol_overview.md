@@ -84,10 +84,12 @@ UBCC 将系统划分为两个协同的一致性域：
 - Outer 域：由 UBCC 管理的跨节点一致性域，负责全局目录、权限仲裁、Recall 和
   Invalidate 收敛。
 
+节点内请求经 EP 接入 UBCC；UBCC 根据全局目录状态完成权限判断，并经跨节点通信平面交换
+一致性消息。
+
 ![图 2-1 UBCC 跨节点缓存一致性总体架构](figures/ubcc-system-architecture.png)
 
-图 2-1　UBCC 总体架构。节点内请求经 EP 接入 UBCC；UBCC 根据全局目录状态完成权限
-判断，并经跨节点通信平面交换一致性消息。
+图 2-1　UBCC 总体架构
 
 ### 2.2 控制路径与数据路径
 
@@ -168,10 +170,12 @@ UBAdapter 提供稳定的消息适配边界，负责：
 
 ### 3.6 gem5 EP 关系
 
+EP-RNF、EP-SNF 和 UBAdapter 位于节点内 CHI 域与 UBCC Outer 域之间，分别承担 snoop
+参与、服务请求接入和跨域事务关联。
+
 ![图 3-1 gem5 EP 架构与控制器关系](figures/gem5-ruby-controller-relationships.png)
 
-图 3-1　gem5 EP 架构。EP-RNF、EP-SNF 和 UBAdapter 位于节点内 CHI 域与 UBCC Outer 域
-之间，分别承担 snoop 参与、服务请求接入和跨域事务关联。
+图 3-1　gem5 EP 架构
 
 ---
 
@@ -225,6 +229,8 @@ UBCC 使用以下机制处理消息重复、延迟和重试：
 ## 5. 关键协议路径
 
 ![图 5-1 UBCC 三类核心协议路径](figures/ubcc-protocol-paths.png)
+
+图 5-1　UBCC 核心协议路径
 
 ### 5.1 远程读
 

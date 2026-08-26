@@ -181,10 +181,12 @@ workload 发起目标操作，结束点为数据和权限满足该 workload 的�
 | Outer 附加时延 | spill-512K mean - spill-IdealDir mean | 10.534578 ns | < 25.000 ns |
 | 2 GHz 周期换算 | 10.534578 ns × 2 cycles/ns | 21.069156 cycles | < 50.000 cycles |
 
+容量按 spill/naive 计算，其中 spill 为 512K 容量约束角色；时延按已完成 Outer 事件的
+spill-512K 均值减去 spill-IdealDir 均值计算。
+
 ![图 3-1 Metric1 容量与 Outer 附加时延](figures/ubcc-metric1-capacity-latency.png)
 
-图 3-1　Metric1 结果图。容量按 spill/naive 计算，其中 spill 为 512K 容量约束角色；时延按已完成 Outer 事件的
-spill-512K 均值减去 spill-IdealDir 均值计算。
+图 3-1　Metric1 容量与附加时延
 
 ### 3.2 结果解释
 
@@ -256,9 +258,11 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 TC140 的 naive 均值为 119.209 ns，低于 500 ns 适用门槛，因此作为低时延中性控制项，
 不进入指标 2 聚合。
 
+六个适用场景按 case 等权聚合，TC140 保留为中性控制项。
+
 ![图 4-1 Metric2 适用场景端到端时延](figures/ubcc-metric2-reductions.png)
 
-图 4-1　Metric2 结果图。六个适用场景按 case 等权聚合，TC140 保留为中性控制项。
+图 4-1　Metric2 场景时延
 
 ### 4.2 聚合结果
 
@@ -359,9 +363,11 @@ producer-consumer、queued token 和 catalog-KV。
 | 150% | 核心场景组 | 31.406 | 39.346 | 20.179% |
 | 150% | 代表场景组 | 76.195 | 79.073 | 3.640% |
 
+图中比较冻结的 2N1S、O3、单向完成语义和两个 L3 压力点。
+
 ![图 5-1 Metric3 UBCC 与 HA-VI 配对比较](figures/ubcc-ha-vi-comparison.png)
 
-图 5-1　Metric3 配对结果。图中比较冻结的 2N1S、O3、单向完成语义和两个 L3 压力点。
+图 5-1　Metric3 配对结果
 
 ### 5.4 理论路径解释
 

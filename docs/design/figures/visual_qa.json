@@ -13,14 +13,14 @@
       "width": 3082,
       "height": 1303,
       "svg_report": {
-        "bytes": 43588,
+        "bytes": 38726,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
       "drawio_report": {
         "page_width": 1600,
         "page_height": 700,
-        "label_count": 35,
+        "label_count": 30,
         "minimum_font_size": 12.0,
         "checks": {
           "editable_content": true,
@@ -55,7 +55,7 @@
       "width": 3082,
       "height": 1293,
       "svg_report": {
-        "bytes": 37087,
+        "bytes": 37117,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
@@ -63,7 +63,7 @@
         "page_width": 1600,
         "page_height": 700,
         "label_count": 30,
-        "minimum_font_size": 12.0,
+        "minimum_font_size": 13.0,
         "checks": {
           "editable_content": true,
           "wide_aspect_ratio": true,
@@ -105,7 +105,7 @@
         "page_width": 1540,
         "page_height": 600,
         "label_count": 28,
-        "minimum_font_size": 12.0,
+        "minimum_font_size": 13.0,
         "checks": {
           "editable_content": true,
           "wide_aspect_ratio": true,
@@ -189,7 +189,7 @@
         "page_width": 1500,
         "page_height": 390,
         "label_count": 13,
-        "minimum_font_size": 12.0,
+        "minimum_font_size": 13.0,
         "checks": {
           "editable_content": true,
           "wide_aspect_ratio": true,
@@ -220,10 +220,10 @@
     {
       "name": "ubcc-metric1-capacity-latency",
       "kind": "chart",
-      "width": 1756,
-      "height": 773,
+      "width": 1818,
+      "height": 746,
       "svg_report": {
-        "bytes": 18402,
+        "bytes": 18359,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -254,10 +254,10 @@
     {
       "name": "ubcc-metric2-reductions",
       "kind": "chart",
-      "width": 1647,
-      "height": 794,
+      "width": 1656,
+      "height": 795,
       "svg_report": {
-        "bytes": 12788,
+        "bytes": 12986,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
@@ -287,10 +287,10 @@
     {
       "name": "ubcc-ha-vi-comparison",
       "kind": "chart",
-      "width": 1631,
-      "height": 828,
+      "width": 1637,
+      "height": 829,
       "svg_report": {
-        "bytes": 12361,
+        "bytes": 12375,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -320,10 +320,10 @@
     {
       "name": "ubcc-q1-q5-qualification",
       "kind": "chart",
-      "width": 1492,
-      "height": 739,
+      "width": 1497,
+      "height": 740,
       "svg_report": {
-        "bytes": 9913,
+        "bytes": 9915,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
