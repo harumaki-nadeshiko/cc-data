@@ -183,7 +183,7 @@
         "results/metric12-final-v1/report/metric123_report.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
-      "metric_definition": "Grouped UBCC and HA-VI ticks per operation at each pressure level for core and representative equal-weight scopes.",
+      "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
       "expected_values": {
         "groups": [
           {
@@ -197,18 +197,6 @@
             "scope": "representative",
             "ubcc_ticks_per_operation": 76.1775,
             "ha_vi_ticks_per_operation": 79.05958333333334
-          },
-          {
-            "pressure_level": 150,
-            "scope": "core",
-            "ubcc_ticks_per_operation": 31.40625,
-            "ha_vi_ticks_per_operation": 39.34583333333333
-          },
-          {
-            "pressure_level": 150,
-            "scope": "representative",
-            "ubcc_ticks_per_operation": 76.19462239583333,
-            "ha_vi_ticks_per_operation": 79.07313802083333
           }
         ]
       },
@@ -248,6 +236,190 @@
         {
           "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
           "figure": "图 5-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-tc120-124-scenarios",
+      "source_artifacts": [
+        "docs/design/performance_preview_data.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Scenario change reductions; visual-only preview derived from the checked-in preview data.",
+      "derived_values": {
+        "rows": [
+          {
+            "case": "TC120",
+            "reduction_pct": 5.34
+          },
+          {
+            "case": "TC121",
+            "reduction_pct": 0.85
+          },
+          {
+            "case": "TC122",
+            "reduction_pct": -0.01
+          },
+          {
+            "case": "TC123",
+            "reduction_pct": -0.01
+          },
+          {
+            "case": "TC124",
+            "reduction_pct": 0.0
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 3-2"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 3-2"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-tc130-134-pressure",
+      "source_artifacts": [
+        "docs/design/performance_preview_data.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Pressure path reductions; visual-only preview derived from the checked-in preview data.",
+      "derived_values": {
+        "rows": [
+          {
+            "case": "TC130",
+            "reduction_pct": 57.68
+          },
+          {
+            "case": "TC131",
+            "reduction_pct": 1.84
+          },
+          {
+            "case": "TC132",
+            "reduction_pct": -39.49
+          },
+          {
+            "case": "TC133",
+            "reduction_pct": 7.17
+          },
+          {
+            "case": "TC134",
+            "reduction_pct": 76.42
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 4-2"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 4-2"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-tc142-147-applications",
+      "source_artifacts": [
+        "docs/design/performance_preview_data.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Application reductions; visual-only preview derived from the checked-in preview data.",
+      "derived_values": {
+        "rows": [
+          {
+            "case": "TC142",
+            "reduction_pct": 14.674
+          },
+          {
+            "case": "TC143",
+            "reduction_pct": 25.69
+          },
+          {
+            "case": "TC144",
+            "reduction_pct": 16.872
+          },
+          {
+            "case": "TC145",
+            "reduction_pct": 20.588
+          },
+          {
+            "case": "TC146",
+            "reduction_pct": 28.808
+          },
+          {
+            "case": "TC147",
+            "reduction_pct": 19.73
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 4-3"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 4-3"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-metric3-per-tc-reductions",
+      "source_artifacts": [
+        "docs/design/performance_preview_data.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Metric3 per-TC reductions; visual-only preview derived from the checked-in preview data.",
+      "derived_values": {
+        "rows": [
+          {
+            "case": "228",
+            "reduction_pct": 0.3123373243102523
+          },
+          {
+            "case": "229",
+            "reduction_pct": 47.54817275747508
+          },
+          {
+            "case": "230",
+            "reduction_pct": 2.713487629688749
+          },
+          {
+            "case": "231",
+            "reduction_pct": 2.6379993900579324
+          },
+          {
+            "case": "232",
+            "reduction_pct": 10.25766871165642
+          },
+          {
+            "case": "233",
+            "reduction_pct": 3.922843519722574
+          },
+          {
+            "case": "234",
+            "reduction_pct": 3.0041093949270237
+          },
+          {
+            "case": "235",
+            "reduction_pct": 16.912103083294983
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 5-2"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 5-2"
         }
       ]
     }

@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from typing import Optional
 import xml.etree.ElementTree as ET
 
 try:
@@ -49,12 +50,56 @@ CHART_STEMS = (
     "ubcc-metric2-reductions",
     "ubcc-ha-vi-comparison",
     "ubcc-q1-q5-qualification",
+    "ubcc-tc120-124-scenarios",
+    "ubcc-tc130-134-pressure",
+    "ubcc-tc142-147-applications",
+    "ubcc-metric3-per-tc-reductions",
 )
 
 GENERATOR = "scripts/generate_delivery_figures.py::metric_charts"
 METRIC_REPORT = "results/metric12-final-v1/report/metric123_report.json"
 METRIC1_OUTER_SUMMARY = "results/metric1-outer-ideal-matrix-v1/summary.json"
 QUALIFICATION_MATRIX = "scripts/fault_qualification_matrix.json"
+PREVIEW_DATA = "docs/design/performance_preview_data.json"
+
+
+def preview_data(report):
+    """Load optional preview data, retaining the published values as fallback."""
+    path = ROOT / PREVIEW_DATA
+    if path.is_file():
+        raw = require_json(PREVIEW_DATA)
+        cases = raw.get("testcases", {})
+        def reduction(tc, field="optimized_reduction_pct"):
+            return float(required(cases[tc]["measurements"].get(field), f"{tc}.{field}"))
+
+        def metric3_primary(tc, pressure):
+            row = cases[tc]["metric3"][f"p{pressure}"]
+            if "ubcc" in row:
+                return row
+            if tc == "TC232":
+                return row["composite"]
+            return row["primary"]
+        return {
+            "tc120_124": [{"case": tc, "reduction_pct": reduction(tc)} for tc in ("TC120", "TC121", "TC122", "TC123", "TC124")],
+            "tc130_134": [{"case": tc, "reduction_pct": reduction(tc, "primary_reduction_pct")} for tc in ("TC130", "TC131", "TC132", "TC133", "TC134")],
+            "tc142_147": [{"case": tc, "reduction_pct": reduction(tc)} for tc in ("TC142", "TC143", "TC144", "TC145", "TC146", "TC147")],
+            "metric3_per_tc": [{"case": tc[2:], "reduction_pct":
+                                100.0 * (1.0 - metric3_primary(tc, 100)["ubcc"] /
+                                         metric3_primary(tc, 100)["ha_vi"])}
+                               for tc in ("TC228", "TC229", "TC230", "TC231", "TC232", "TC233", "TC234", "TC235")],
+        }
+    return {
+        "tc120_124": [{"case": "TC120", "reduction_pct": -5.37}, {"case": "TC121", "reduction_pct": -0.86},
+                       {"case": "TC122", "reduction_pct": 0.02}, {"case": "TC123", "reduction_pct": 0.00},
+                       {"case": "TC124", "reduction_pct": 0.04}],
+        "tc130_134": [{"case": "TC130", "reduction_pct": 57.68}, {"case": "TC131", "reduction_pct": 0.00},
+                       {"case": "TC132", "reduction_pct": 0.00}, {"case": "TC133", "reduction_pct": 7.17},
+                       {"case": "TC134", "reduction_pct": 76.42}],
+        "tc142_147": [{"case": "TC142", "reduction_pct": 14.674}, {"case": "TC143", "reduction_pct": 25.690},
+                       {"case": "TC144", "reduction_pct": 16.872}, {"case": "TC145", "reduction_pct": 20.588},
+                       {"case": "TC146", "reduction_pct": 28.808}, {"case": "TC147", "reduction_pct": 19.730}],
+        "metric3_per_tc": [],
+    }
 
 DIAGRAM_DOCUMENT_REFERENCES = {
     "ubcc-system-architecture": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 2-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 2-1"}],
@@ -100,6 +145,11 @@ class Edge:
     width: float = 2.0
     label_x: float = 0.0
     label_y: float = 0.0
+    source_x: Optional[float] = None
+    source_y: Optional[float] = None
+    target_x: Optional[float] = None
+    target_y: Optional[float] = None
+    waypoints: tuple = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -131,47 +181,52 @@ def required(value, description):
 
 def architecture_diagram():
     b = [
-        Box("project", "CC-EP / UBCC project boundary", 35, 75, 1530, 530,
-            "#FFFFFF", NAVY, NAVY, 15, True, False, True, True),
-        Box("node0", "Node 0 process boundary", 65, 115, 690, 450,
-            "#F8FBFE", BLUE, NAVY, 15, True, False, True, True),
-        Box("inner0", "Inner domain (CHI / local coherence)", 90, 165, 285, 320,
-            PALE_BLUE, BLUE, NAVY, 14, True, False, True, True),
-        Box("outer0", "Outer domain (cross-node coherence)", 390, 165, 365, 350,
-            PALE_GREEN, GREEN, NAVY, 14, True, False, True, True),
-        Box("cpu0", "CPU / private caches", 110, 225, 235, 58, PALE_BLUE, BLUE, NAVY, 14, True),
-        Box("hnf0", "HN-F / shared cache", 110, 350, 235, 58, "#EAF2F8", BLUE, NAVY, 14, True),
-        Box("ep0", "EP-RNF  ·  EP-SNF", 420, 215, 300, 55, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("backend0", "EPBackend", 420, 335, 140, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("adapter0", "UBAdapter", 580, 335, 140, 50, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("ubio0", "UBIO / UBCC", 420, 425, 140, 58, PALE_GREEN, GREEN, "#375623", 14, True),
-        Box("dir0", "ResidentDir", 580, 415, 140, 42, PALE_GREEN, GREEN, "#375623", 13, True),
-        Box("back0", "Backstore", 580, 465, 140, 42, PALE_ORANGE, ORANGE, "#843C0C", 13, True),
-        Box("transport", "Generic cross-node transport boundary", 780, 245, 145, 195,
-            PALE_GRAY, GRAY, "#404040", 14, True, True),
-        Box("node1", "Node 1+ process boundary", 950, 115, 585, 420,
-            "#F8FBFE", BLUE, NAVY, 15, True, False, True, True),
-        Box("inner1", "Inner domain", 980, 175, 220, 300, PALE_BLUE, BLUE, NAVY, 14, True, False, True, True),
-        Box("outer1", "Outer domain", 1230, 175, 275, 300, PALE_GREEN, GREEN, NAVY, 14, True, False, True, True),
-        Box("cpu1", "CPU / caches / HN-F", 1005, 260, 170, 72, PALE_BLUE, BLUE, NAVY, 14, True),
-        Box("ep1", "EP-RNF · EP-SNF\nEPBackend · UBAdapter", 1255, 225, 225, 72, PALE_AMBER, AMBER, "#7F6000", 14, True),
-        Box("ubcc1", "UBIO / UBCC", 1255, 350, 105, 58, PALE_GREEN, GREEN, "#375623", 14, True),
-        Box("store1", "ResidentDir\nBackstore", 1380, 350, 100, 58, PALE_ORANGE, ORANGE, "#843C0C", 13, True),
-        Box("simnote", "Temporary simulation transport only:\nNetworkSim (not a project component)",
-            555, 610, 500, 55, "#FFFFFF", GRAY, "#606060", 12, False, True),
+        Box("node0", "Node 0", 35, 95, 520, 445, "#F8FBFE", BLUE, NAVY, 16, True, False, False, True),
+        Box("inner0", "Inner domain", 60, 145, 215, 345, PALE_BLUE, "#B4C7E7", NAVY, 13, True, False, False, True),
+        Box("outer0", "Outer domain", 300, 145, 225, 345, PALE_GREEN, "#A9D18E", NAVY, 13, True, False, False, True),
+        Box("cpu0", "CPU / private caches", 82, 205, 170, 56, PALE_BLUE, BLUE, NAVY, 13, True, False, False),
+        Box("hnf0", "HN-F / shared cache", 82, 330, 170, 56, "#EAF2F8", BLUE, NAVY, 13, True, False, False),
+        Box("ep0", "EP-RNF / EP-SNF", 325, 205, 175, 56, PALE_AMBER, AMBER, "#7F6000", 13, True, False, False),
+        Box("backend0", "EPBackend", 325, 305, 82, 50, PALE_AMBER, AMBER, "#7F6000", 12, True, False, False),
+        Box("adapter0", "UBAdapter", 418, 305, 82, 50, PALE_AMBER, AMBER, "#7F6000", 12, True, False, False),
+        Box("ubcc0", "UBIO / UBCC", 325, 405, 82, 52, PALE_GREEN, GREEN, "#375623", 12, True, False, False),
+        Box("store0", "ResidentDir\nBackstore", 418, 400, 82, 62, PALE_ORANGE, ORANGE, "#843C0C", 11, True, False, False),
+        Box("transport", "Generic packet transport", 615, 285, 250, 72, PALE_GRAY, GRAY, "#404040", 14, True, True, False),
+        Box("node1", "Node 1 … Node N", 925, 95, 520, 445, "#F8FBFE", BLUE, NAVY, 16, True, False, False, True),
+        Box("inner1", "Inner domain", 950, 145, 215, 345, PALE_BLUE, "#B4C7E7", NAVY, 13, True, False, False, True),
+        Box("outer1", "Outer domain", 1190, 145, 225, 345, PALE_GREEN, "#A9D18E", NAVY, 13, True, False, False, True),
+        Box("cpu1", "CPU / private caches", 972, 205, 170, 56, PALE_BLUE, BLUE, NAVY, 13, True, False, False),
+        Box("hnf1", "HN-F / shared cache", 972, 330, 170, 56, "#EAF2F8", BLUE, NAVY, 13, True, False, False),
+        Box("ep1", "EP-RNF / EP-SNF", 1215, 205, 175, 56, PALE_AMBER, AMBER, "#7F6000", 13, True, False, False),
+        Box("backend1", "EPBackend", 1215, 305, 82, 50, PALE_AMBER, AMBER, "#7F6000", 12, True, False, False),
+        Box("adapter1", "UBAdapter", 1308, 305, 82, 50, PALE_AMBER, AMBER, "#7F6000", 12, True, False, False),
+        Box("ubcc1", "UBIO / UBCC", 1215, 405, 82, 52, PALE_GREEN, GREEN, "#375623", 12, True, False, False),
+        Box("store1", "ResidentDir\nBackstore", 1308, 400, 82, 62, PALE_ORANGE, ORANGE, "#843C0C", 11, True, False, False),
+        Box("simnote", "Temporary simulation binding only: NetworkSim (not a project component)", 540, 585, 400, 38, "#FFFFFF", GRAY, "#606060", 11, False, True, False),
     ]
     e = [
-        Edge("cpu0", "hnf0", "loads / stores", label_y=-16), Edge("hnf0", "ep0"),
-        Edge("ep0", "backend0", "protocol events", label_x=-0.35), Edge("backend0", "adapter0"),
-        Edge("adapter0", "ubio0", bidirectional=True),
-        Edge("ubio0", "dir0", bidirectional=True), Edge("dir0", "back0", "spill / fill", bidirectional=True, label_x=0.42),
-        Edge("ubio0", "transport", bidirectional=True),
-        Edge("transport", "ubcc1", "generic packets", bidirectional=True, label_y=-16),
-        Edge("cpu1", "ep1", "CHI", label_y=-16), Edge("ep1", "ubcc1", "Outer", bidirectional=True, label_x=0.35),
-        Edge("ubcc1", "store1", "metadata", bidirectional=True, label_y=-16),
-        Edge("simnote", "transport", "simulation binding", GRAY, True, False, 1.3),
+        Edge("cpu0", "hnf0", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("hnf0", "ep0", source_x=1, source_y=.5, target_x=0, target_y=.5,
+             waypoints=((285, 358), (285, 233))),
+        Edge("ep0", "backend0", source_x=.47, source_y=1, target_x=.5, target_y=0),
+        Edge("backend0", "adapter0", source_x=1, source_y=.5, target_x=0, target_y=.5),
+        Edge("backend0", "ubcc0", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("ubcc0", "store0", bidirectional=True, source_x=1, source_y=.5, target_x=0, target_y=.5),
+        Edge("adapter0", "transport", color=TEAL, source_x=1, source_y=.5, target_x=0, target_y=.35,
+             waypoints=((550, 330), (550, 310))),
+        Edge("transport", "adapter1", color=TEAL, source_x=1, source_y=.35, target_x=0, target_y=.5,
+             waypoints=((900, 310), (1180, 310), (1180, 330))),
+        Edge("cpu1", "hnf1", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("hnf1", "ep1", source_x=1, source_y=.5, target_x=0, target_y=.5,
+             waypoints=((1175, 358), (1175, 233))),
+        Edge("ep1", "backend1", source_x=.47, source_y=1, target_x=.5, target_y=0),
+        Edge("backend1", "adapter1", source_x=1, source_y=.5, target_x=0, target_y=.5),
+        Edge("backend1", "ubcc1", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("ubcc1", "store1", bidirectional=True, source_x=1, source_y=.5, target_x=0, target_y=.5),
+        Edge("simnote", "transport", color=GRAY, dashed=True, width=1.3,
+             source_x=.5, source_y=0, target_x=.5, target_y=1),
     ]
-    return Diagram("ubcc-system-architecture", "UBCC 跨节点缓存一致性总体架构", 1600, 700, tuple(b), tuple(e))
+    return Diagram("ubcc-system-architecture", "UBCC 跨节点缓存一致性总体架构", 1480, 660, tuple(b), tuple(e))
 
 
 def gem5_diagram():
@@ -195,7 +250,7 @@ def gem5_diagram():
     ]
     e = [
         Edge("cpu", "l1", "sequencer", label_y=-18), Edge("l1", "l2", "CHI", label_y=-18), Edge("l2", "hnf", "CHI", label_y=-18),
-        Edge("hnf", "lsnf", "local / private", label_x=-0.35), Edge("lsnf", "mem", "memory", label_y=-18),
+        Edge("hnf", "lsnf"), Edge("lsnf", "mem", "memory", label_y=-18),
         Edge("hnf", "eprnf", "remote request", label_x=0.35), Edge("hnf", "metarnf", "metadata", label_x=-0.35),
         Edge("epsnf", "hnf", "remote snoop / data", label_x=0.35),
         Edge("eprnf", "backend", "events", AMBER, True, label_y=-18), Edge("metarnf", "backend", "metadata", AMBER, True, label_y=18),
@@ -213,13 +268,19 @@ def protocol_diagram():
     fills = (PALE_BLUE, PALE_GREEN, PALE_AMBER, "#EAF2F8")
     for i, row in enumerate(rows):
         y = 125 + i * 145
-        boxes.append(Box(f"lane{i}", row[0], 45, y, 1450, 105, "#FFFFFF", "#B4C7E7", NAVY, 14, True, False, True, True))
-        labels = (f"发起节点\n{row[1]}", f"Home UBCC\n{row[2]}", "Owner / Sharer\n响应", f"发起节点完成\n{row[3]}")
+        boxes.append(Box(f"lane{i}", row[0], 35, y, 1450, 108, "#FFFFFF", "#B4C7E7", NAVY, 14, True, False, False, True))
+        labels = (f"Requester\n{row[1]}", f"Home UBCC\n{row[2]}", "Owner / Sharer\nresponse", f"Requester\n{row[3]}")
         for j, label in enumerate(labels):
-            boxes.append(Box(f"p{i}{j}", label, 155 + j * 340, y + 28, 235, 55, fills[j], (BLUE, GREEN, AMBER, BLUE)[j], NAVY, 13, j in (0, 3)))
-        edges.extend((Edge(f"p{i}0", f"p{i}1", "request", label_y=-18), Edge(f"p{i}1", f"p{i}2", "recall / invalidate", label_y=-18),
-                      Edge(f"p{i}2", f"p{i}1", "data / ack", label_y=18), Edge(f"p{i}1", f"p{i}3", "grant / completion", label_y=-18)))
-    return Diagram("ubcc-protocol-paths", "UBCC 三类核心协议路径", 1540, 600, tuple(boxes), tuple(edges))
+            boxes.append(Box(f"p{i}{j}", label, 175 + j * 330, y + 30, 220, 56, fills[j], (BLUE, GREEN, AMBER, BLUE)[j], NAVY, 13, j in (0, 3), False, False))
+        # Four independent lanes: request, recall/invalidate, data/ack, grant.
+        edges.extend((
+            Edge(f"p{i}0", f"p{i}1", color=BLUE, source_x=1, source_y=.35, target_x=0, target_y=.35),
+            Edge(f"p{i}1", f"p{i}2", color=AMBER, source_x=1, source_y=.25, target_x=0, target_y=.25),
+            Edge(f"p{i}2", f"p{i}1", color=TEAL, source_x=0, source_y=.75, target_x=1, target_y=.75),
+            Edge(f"p{i}1", f"p{i}3", color=GREEN, source_x=1, source_y=.52, target_x=0, target_y=.52,
+                 waypoints=((805, y + 93), (1135, y + 93))),
+        ))
+    return Diagram("ubcc-protocol-paths", "UBCC 三类核心协议路径", 1540, 620, tuple(boxes), tuple(edges))
 
 
 def verification_diagram():
@@ -272,12 +333,18 @@ def write_drawio(diagram):
         cell = ET.SubElement(root, "mxCell", {"id": note.id, "value": note.label, "style": style_string(note), "vertex": "1", "parent": "1"})
         ET.SubElement(cell, "mxGeometry", {"x": str(note.x), "y": str(note.y), "width": str(note.w), "height": str(note.h), "as": "geometry"})
     for i, edge in enumerate(diagram.edges):
-        style = (f"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
-                 f"strokeWidth={edge.width};strokeColor={edge.color};dashed={1 if edge.dashed else 0};dashPattern=6 4;"
-                 f"endArrow=block;endFill=1;startArrow={'block' if edge.bidirectional else 'none'};"
-                 f"startFill={1 if edge.bidirectional else 0};fontSize=14;fontColor=#404040;fontFamily={FONT};labelBackgroundColor=#FFFFFF;")
+        style = (f"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=16;html=1;"
+                  f"strokeWidth={edge.width};strokeColor={edge.color};dashed={1 if edge.dashed else 0};dashPattern=6 4;"
+                  f"endArrow=block;endFill=1;startArrow={'block' if edge.bidirectional else 'none'};"
+                  f"startFill={1 if edge.bidirectional else 0};fontSize=14;fontColor=#404040;fontFamily={FONT};labelBackgroundColor=#FFFFFF;"
+                  + (f"exitX={edge.source_x};exitY={edge.source_y};exitDx=0;exitDy=0;" if edge.source_x is not None else "")
+                  + (f"entryX={edge.target_x};entryY={edge.target_y};entryDx=0;entryDy=0;" if edge.target_x is not None else ""))
         cell = ET.SubElement(root, "mxCell", {"id": f"e{i}", "value": edge.label, "style": style, "edge": "1", "parent": "1", "source": edge.source, "target": edge.target})
         geometry = ET.SubElement(cell, "mxGeometry", {"relative": "1", "as": "geometry"})
+        if edge.waypoints:
+            points = ET.SubElement(geometry, "Array", {"as": "points"})
+            for x, y in edge.waypoints:
+                ET.SubElement(points, "mxPoint", {"x": str(x), "y": str(y)})
         if edge.label_x or edge.label_y:
             ET.SubElement(geometry, "mxPoint", {"x": str(edge.label_x), "y": str(edge.label_y), "as": "offset"})
     ET.ElementTree(mxfile).write(OUT / f"{diagram.stem}.drawio", encoding="utf-8", xml_declaration=True)
@@ -396,6 +463,7 @@ def metric_charts():
     report = require_json(METRIC_REPORT)
     outer = require_json(METRIC1_OUTER_SUMMARY)
     matrix = require_json(QUALIFICATION_MATRIX)
+    preview = preview_data(report)
 
     # Metric 1: capacity comes from the final contract; corrected Outer latency
     # comes from the dedicated spill-vs-IdealDir experiment.  The stale guest
@@ -417,7 +485,7 @@ def metric_charts():
                 color=[BLUE, ORANGE], width=.58)
     axes[1].set_ylabel("Outer mean latency (ns)"); axes[1].set_ylim(0, max(means) * 1.28); axes[1].grid(axis="y", alpha=.22)
     axes[1].text(.5, max(means) * 1.10, f"Spill − IdealDir = +{delta_ns:.3f} ns", ha="center", color="#843C0C", fontweight="bold")
-    axes[1].set_title("Corrected scope: Outer spill vs IdealDir")
+    axes[1].set_title("Outer spill vs IdealDir")
     save_chart(fig, "ubcc-metric1-capacity-latency")
 
     # Metric 2, including the negative TC138 and explicitly excluded TC140.
@@ -426,7 +494,7 @@ def metric_charts():
     values = [float(required(row.get("optimized_reduction_pct"), f"{names[i]} reduction")) for i, row in enumerate(cases)]
     applicable = [bool(required(row.get("applicable"), f"{names[i]} applicable")) for i, row in enumerate(cases)]
     colors = [GRAY if not ok else ORANGE if value < 0 else BLUE for value, ok in zip(values, applicable)]
-    fig, ax = plt.subplots(figsize=(10.8, 4.8))
+    fig, ax = plt.subplots(figsize=(9.4, 3.8))
     bars = ax.bar(names, values, color=colors, width=.66); ax.axhline(0, color="#404040", linewidth=.9)
     ax.set_ylabel("Reduction vs naive (%)"); ax.set_title("Metric 2: per-case latency reduction", color=NAVY, fontweight="bold")
     ax.grid(axis="y", alpha=.22); ax.set_ylim(min(-22, min(values) - 8), max(values) + 17)
@@ -438,16 +506,19 @@ def metric_charts():
     save_chart(fig, "ubcc-metric2-reductions")
 
     # Metric 3 grouped UBCC vs HA-VI bars.
-    levels = required(report.get("metric3", {}).get("levels"), "metric3.levels")
+    levels = [level for level in required(report.get("metric3", {}).get("levels"), "metric3.levels")
+              if int(level.get("pressure_level", -1)) == 100]
+    if len(levels) != 1:
+        raise ValueError("Metric3 formal chart requires exactly the 100% L3 pressure result")
     labels, ubcc, havi = [], [], []
     for level in levels:
         pressure = required(level.get("pressure_level"), "Metric3 pressure_level")
         for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative")):
             row = required(level.get(key), f"Metric3 {key}")
-            labels.append(f"{pressure}%\n{scope}")
+            labels.append(scope)
             ubcc.append(float(required(row.get("ourcc_ticks_per_operation"), f"{key}.ourcc")))
             havi.append(float(required(row.get("ha_vi_ticks_per_operation"), f"{key}.ha_vi")))
-    fig, ax = plt.subplots(figsize=(10.8, 4.8)); x = list(range(len(labels))); w = .34
+    fig, ax = plt.subplots(figsize=(9.4, 3.8)); x = list(range(len(labels))); w = .34
     ax.bar([v-w/2 for v in x], ubcc, w, label="UBCC", color=BLUE)
     ax.bar([v+w/2 for v in x], havi, w, label="HA-VI", color=AMBER)
     ax.set_xticks(x, labels); ax.set_ylabel("ticks / operation"); ax.grid(axis="y", alpha=.22); ax.legend(frameon=False, ncol=2)
@@ -461,21 +532,63 @@ def metric_charts():
     if any(label not in counts for label in qlabels) or sum(counts[label] for label in qlabels) != int(required(matrix.get("case_count"), "case_count")):
         raise ValueError("Q1-Q5 qualification inventory is incomplete or inconsistent")
     qvalues = [counts[label] for label in qlabels]
-    fig, ax = plt.subplots(figsize=(9.8, 4.4)); bars = ax.bar(qlabels, qvalues, color=[BLUE, TEAL, GREEN, AMBER, ORANGE], width=.62)
+    fig, ax = plt.subplots(figsize=(7.2, 3.5)); bars = ax.bar(qlabels, qvalues, color=[BLUE, TEAL, GREEN, AMBER, ORANGE], width=.62)
     ax.set_ylabel("Qualification case count"); ax.set_title("Q1-Q5 qualification inventory", color=NAVY, fontweight="bold"); ax.grid(axis="y", alpha=.22)
     ax.set_ylim(0, max(qvalues) * 1.22)
     for bar, value in zip(bars, qvalues):
         ax.text(bar.get_x()+bar.get_width()/2, value+.35, str(value), ha="center", fontweight="bold")
     ax.text(.99, .96, f"Total: {sum(qvalues)}", transform=ax.transAxes, ha="right", va="top", color="#375623", fontweight="bold")
     save_chart(fig, "ubcc-q1-q5-qualification")
-    return chart_lineage(report, outer, matrix)
+
+    def compact_bar(stem, title, rows, ylabel, width=8.8):
+        fig, ax = plt.subplots(figsize=(width, 3.7))
+        labels = [row[0][2:] if row[0].startswith("TC") else row[0] for row in rows]
+        values = [row[1] for row in rows]
+        bars = ax.bar(labels, values, color=[BLUE if value >= 0 else ORANGE for value in values], width=.62)
+        ax.axhline(0, color="#404040", linewidth=.8); ax.grid(axis="y", alpha=.2)
+        ax.set_title(title, color=NAVY, fontweight="bold"); ax.set_ylabel(ylabel)
+        span = max(max(values) - min(values), 1.0)
+        lower = min(0, min(values) - span * .14)
+        upper = max(0, max(values) + span * .18)
+        ax.set_ylim(lower, upper)
+        for bar, value in zip(bars, values):
+            near_zero = abs(value) < span * .055
+            if near_zero:
+                y, va, color = span * .045, "bottom", "#404040"
+            elif value < 0:
+                y, va, color = value + span * .045, "bottom", "white"
+            else:
+                y, va, color = value + span * .025, "bottom", "#404040"
+            ax.text(bar.get_x() + bar.get_width() / 2, y, f"{value:.2f}%",
+                    ha="center", va=va, fontsize=10, color=color, fontweight="bold")
+        save_chart(fig, stem)
+
+    compact_bar("ubcc-tc120-124-scenarios", "TC120–TC124 scenario changes",
+                [(row["case"], row["reduction_pct"]) for row in preview["tc120_124"]], "optimized reduction (%)", 8.4)
+    compact_bar("ubcc-tc130-134-pressure", "TC130–TC134 pressure-path comparison",
+                [(row["case"], row["reduction_pct"]) for row in preview["tc130_134"]], "optimized reduction (%)", 8.4)
+    compact_bar("ubcc-tc142-147-applications", "TC142–TC147 application reductions",
+                [(row["case"], row["reduction_pct"]) for row in preview["tc142_147"]], "optimized reduction (%)", 9.2)
+    metric3_rows = preview["metric3_per_tc"]
+    labels = [str(tc) for tc in range(228, 236)]
+    values = [next(row["reduction_pct"] for row in metric3_rows if row["case"] == str(tc)) for tc in range(228, 236)]
+    fig, ax = plt.subplots(figsize=(8.4, 4.5)); y = list(range(len(labels)))
+    bars = ax.barh(y, values, .56, color=BLUE)
+    ax.set_yticks(y, labels); ax.set_xlabel("UBCC reduction (%)"); ax.grid(axis="x", alpha=.2)
+    ax.set_title("Metric3 per-testcase reductions", color=NAVY, fontweight="bold")
+    ax.set_xlim(0, max(values) * 1.23); ax.invert_yaxis()
+    for bar, value in zip(bars, values):
+        ax.text(value + max(values) * .012, bar.get_y() + bar.get_height() / 2,
+                f"{value:.2f}%", va="center", ha="left", fontsize=10, color="#404040")
+    save_chart(fig, "ubcc-metric3-per-tc-reductions")
+    return chart_lineage(report, outer, matrix, preview)
 
 
-def chart_lineage(report, outer, matrix):
+def chart_lineage(report, outer, matrix, preview=None):
     first = outer["repeats"]["1"]
     counts = Counter(row["qualification"] for row in matrix["cases"])
     labels = [f"Q{i}" for i in range(1, 6)]
-    return [
+    charts = [
         {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [METRIC_REPORT, METRIC1_OUTER_SUMMARY],
          "generator": GENERATOR, "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
          "evidence_sets": [
@@ -491,14 +604,29 @@ def chart_lineage(report, outer, matrix):
          "expected_values": {"cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]), "applicable": bool(row["applicable"])} for row in report["metric2"]["cases"]], "applicable_equal_weight_mean_reduction_pct": float(report["metric2"]["equal_weight_mean_reduction_pct"])},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric2-reductions"]},
         {"name": "ubcc-ha-vi-comparison", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,
-         "metric_definition": "Grouped UBCC and HA-VI ticks per operation at each pressure level for core and representative equal-weight scopes.",
-         "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
+         "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
+         "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] if int(level["pressure_level"]) == 100 for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-ha-vi-comparison"]},
         {"name": "ubcc-q1-q5-qualification", "source_artifacts": [QUALIFICATION_MATRIX], "generator": GENERATOR,
          "metric_definition": "Count of canonical fault-qualification matrix cases grouped by Q1-Q5 qualification.",
          "derived_values": {"qualification_counts": {label: counts[label] for label in labels}, "total": sum(counts[label] for label in labels)},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-q1-q5-qualification"]},
     ]
+    if preview is not None:
+        refs = {
+            "ubcc-tc120-124-scenarios": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-2"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-2"}],
+            "ubcc-tc130-134-pressure": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 4-2"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 4-2"}],
+            "ubcc-tc142-147-applications": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 4-3"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 4-3"}],
+            "ubcc-metric3-per-tc-reductions": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 5-2"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 5-2"}],
+        }
+        for stem, title, key in (("ubcc-tc120-124-scenarios", "Scenario change reductions", "tc120_124"),
+                                 ("ubcc-tc130-134-pressure", "Pressure path reductions", "tc130_134"),
+                                 ("ubcc-tc142-147-applications", "Application reductions", "tc142_147"),
+                                 ("ubcc-metric3-per-tc-reductions", "Metric3 per-TC reductions", "metric3_per_tc")):
+            charts.append({"name": stem, "source_artifacts": [PREVIEW_DATA], "generator": GENERATOR,
+                           "metric_definition": title + "; visual-only preview derived from the checked-in preview data.",
+                           "derived_values": {"rows": preview[key]}, "document_references": refs[stem]})
+    return charts
 
 
 def remove_obsolete():
@@ -526,7 +654,8 @@ def main():
         report = require_json(METRIC_REPORT)
         outer = require_json(METRIC1_OUTER_SUMMARY)
         matrix = require_json(QUALIFICATION_MATRIX)
-        charts = chart_lineage(report, outer, matrix)
+        preview = preview_data(report)
+        charts = chart_lineage(report, outer, matrix, preview)
         diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
                     for stem in DIAGRAM_STEMS]
         existing = require_json("docs/design/figures/figure_inventory.json") if (OUT / "figure_inventory.json").is_file() else {}

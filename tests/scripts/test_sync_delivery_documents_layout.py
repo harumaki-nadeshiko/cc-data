@@ -47,6 +47,7 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         with zipfile.ZipFile(self.docx) as archive:
             self.document = ET.fromstring(archive.read("word/document.xml"))
             self.styles = ET.fromstring(archive.read("word/styles.xml"))
+            self.first_footer = ET.fromstring(archive.read("word/footerFirst.xml"))
 
     def tearDown(self):
         self.temp.cleanup()
@@ -113,7 +114,7 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         self.assertEqual(
             identifier_cell.find(f"{W}p/{W}r/{W}rPr/{W}sz").get(f"{W}val"), "16")
 
-    def test_glossary_table_uses_compact_four_column_eight_point_style(self):
+    def test_glossary_table_uses_four_columns_with_normal_table_typography(self):
         body, _ = MOD.convert_markdown(
             "## 附录 E 术语表\n\n| 术语 | 说明 |\n|---|---|\n"
             "| UBCC | 方案 |\n| InvalidateAck | 确认 |\n| ubsim |  |\n| ub |  |\n",
@@ -122,13 +123,14 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
             body + '</w:body>')
         table = document.find(f".//{W}tbl")
-        self.assertEqual(table.find(f"{W}tblPr/{W}tblCellMar/{W}top").get(f"{W}w"), "0")
+        self.assertEqual(table.find(f"{W}tblPr/{W}tblCellMar/{W}top").get(f"{W}w"), "70")
+        self.assertEqual(table.find(f"{W}tblPr/{W}tblCellMar/{W}bottom").get(f"{W}w"), "70")
         for paragraph in table.findall(f".//{W}p"):
             self.assertEqual(paragraph.find(f"{W}pPr/{W}pStyle").get(f"{W}val"),
                              "CompactGlossaryText")
             self.assertEqual(paragraph.find(f"{W}pPr/{W}spacing").get(f"{W}line"),
-                             "160")
-            self.assertEqual(paragraph.find(f"{W}r/{W}rPr/{W}sz").get(f"{W}val"), "16")
+                              "310")
+            self.assertEqual(paragraph.find(f"{W}r/{W}rPr/{W}sz").get(f"{W}val"), "18")
         rows = table.findall(f"{W}tr")
         self.assertEqual(len(rows), 3)
         self.assertEqual(
@@ -155,6 +157,105 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
             body + '</w:body>')
         self.assertEqual(len(document.find(f".//{W}tr").findall(f"{W}tc")), 2)
+
+    def test_inline_bold_is_native_in_body_list_and_quote_runs(self):
+        body, _ = MOD.convert_markdown(
+            "# 标题\n\n<!-- PAGEBREAK -->\n\n普通 **64.759%** 结论。\n\n"
+            "- 保留 **关键项** 强调\n\n> 引用中的 **重点** 内容\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        for bold_text, full_text in (("64.759%", "普通 64.759% 结论。"),
+                                     ("关键项", "• 保留 关键项 强调"),
+                                     ("重点", "引用中的 重点 内容")):
+            paragraph = next(item for item in document.findall(f"{W}p")
+                             if bold_text in "".join(item.itertext()))
+            self.assertEqual("".join(paragraph.itertext()).replace(MOD.WORD_JOINER, ""),
+                             full_text)
+            bold_runs = [item for item in paragraph.findall(f"{W}r")
+                         if item.find(f"{W}rPr/{W}b") is not None]
+            self.assertEqual(["".join(item.itertext()) for item in bold_runs],
+                             [bold_text])
+
+    def test_single_percentage_code_fence_becomes_bold_in_previous_sentence(self):
+        body, _ = MOD.convert_markdown(
+            "聚合结果为：\n\n```text\n64.759%\n```\n", self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        paragraphs = document.findall(f"{W}p")
+        self.assertEqual(len(paragraphs), 1)
+        self.assertEqual("".join(paragraphs[0].itertext()).replace(MOD.WORD_JOINER, ""),
+                         "聚合结果为： 64.759%")
+        percentage_run = next(item for item in paragraphs[0].findall(f"{W}r")
+                              if "64.759%" in "".join(item.itertext()))
+        self.assertIsNotNone(percentage_run.find(f"{W}rPr/{W}b"))
+
+    def test_cover_page_contains_only_title_and_ignores_legacy_metadata(self):
+        body, _ = MOD.convert_markdown(
+            "# 仅标题\n\n文档版本：V1.0\n\n交付阶段：正式版\n\n"
+            "项目名称：示例\n\n甲方单位：客户\n\n<!-- PAGEBREAK -->\n\n## 目录\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        before_break = []
+        for paragraph in document.findall(f"{W}p"):
+            if paragraph.find(f".//{W}br") is not None:
+                break
+            before_break.append("".join(paragraph.itertext()))
+        self.assertEqual(before_break, ["仅标题"])
+        all_text = "".join(document.itertext())
+        for metadata in ("文档版本", "交付阶段", "项目名称", "甲方单位"):
+            self.assertNotIn(metadata, all_text)
+        self.assertIsNotNone(self.document.find(f".//{W}sectPr/{W}titlePg"))
+        self.assertEqual("".join(self.first_footer.itertext()), "")
+
+    def test_table_width_directive_and_automatic_widths_use_fixed_grid(self):
+        body, _ = MOD.convert_markdown(
+            "<!-- table-widths: 20%, 50%, 30% -->\n"
+            "| ID | 很长的性能场景说明 | 结果 |\n|---|---|---|\n| TC1 | 描述 | PASS |\n\n"
+            "| 短 | 特别特别长的性能附录说明列 | 值 |\n|---|---|---|\n| A | B | C |\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        tables = document.findall(f"{W}tbl")
+        explicit = [int(item.get(f"{W}w"))
+                    for item in tables[0].findall(f"{W}tblGrid/{W}gridCol")]
+        automatic = [int(item.get(f"{W}w"))
+                     for item in tables[1].findall(f"{W}tblGrid/{W}gridCol")]
+        self.assertEqual(explicit, [1920, 4800, 2880])
+        self.assertGreater(automatic[1], automatic[0])
+        self.assertGreater(automatic[1], automatic[2])
+        for table in tables:
+            self.assertEqual(table.find(f"{W}tblPr/{W}tblLayout").get(f"{W}type"),
+                             "fixed")
+            self.assertIsNotNone(table.find(f"{W}tr/{W}trPr/{W}tblHeader"))
+            for cell in table.findall(f".//{W}tc"):
+                self.assertIsNotNone(cell.find(f"{W}tcPr/{W}tcW"))
+
+    def test_markdown_width_only_hint_and_data_chart_default_are_narrow_centered(self):
+        hinted = MOD.parse_image("![普通图](large.png =8cm)")
+        chart = MOD.parse_image("![Metric2 reductions](ubcc-metric2-reductions.png)")
+        self.assertEqual(hinted[2], 8 * MOD.EMU_PER_CM)
+        self.assertIsNone(hinted[3])
+        self.assertEqual(chart[2], int(13.2 * MOD.EMU_PER_CM))
+        body, _ = MOD.convert_markdown(
+            "![Metric2 reductions](large.png)\n", self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+            'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+            body + '</w:body>')
+        drawing = next(paragraph for paragraph in document.findall(f"{W}p")
+                       if paragraph.find(f".//{W}drawing") is not None)
+        self.assertEqual(drawing.find(f"{W}pPr/{W}jc").get(f"{W}val"), "center")
+        self.assertLess(int(drawing.find(f".//{WP}extent").get("cx")),
+                        MOD.DEFAULT_IMAGE_MAX_WIDTH)
 
     def test_images_do_not_exceed_configured_max_height_or_width(self):
         extents = self.document.findall(f".//{WP}extent")

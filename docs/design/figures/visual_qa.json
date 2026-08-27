@@ -10,18 +10,18 @@
     {
       "name": "ubcc-system-architecture",
       "kind": "diagram",
-      "width": 3082,
-      "height": 1303,
+      "width": 2842,
+      "height": 1219,
       "svg_report": {
-        "bytes": 38726,
+        "bytes": 31288,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
       "drawio_report": {
-        "page_width": 1600,
-        "page_height": 700,
-        "label_count": 30,
-        "minimum_font_size": 12.0,
+        "page_width": 1480,
+        "page_height": 660,
+        "label_count": 23,
+        "minimum_font_size": 11.0,
         "checks": {
           "editable_content": true,
           "wide_aspect_ratio": true,
@@ -55,14 +55,14 @@
       "width": 3082,
       "height": 1293,
       "svg_report": {
-        "bytes": 37117,
+        "bytes": 36143,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
       "drawio_report": {
         "page_width": 1600,
         "page_height": 700,
-        "label_count": 30,
+        "label_count": 29,
         "minimum_font_size": 13.0,
         "checks": {
           "editable_content": true,
@@ -95,16 +95,16 @@
       "name": "ubcc-protocol-paths",
       "kind": "diagram",
       "width": 2962,
-      "height": 1013,
+      "height": 1019,
       "svg_report": {
-        "bytes": 34124,
+        "bytes": 22031,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
       "drawio_report": {
         "page_width": 1540,
-        "page_height": 600,
-        "label_count": 28,
+        "page_height": 620,
+        "label_count": 16,
         "minimum_font_size": 13.0,
         "checks": {
           "editable_content": true,
@@ -220,10 +220,10 @@
     {
       "name": "ubcc-metric1-capacity-latency",
       "kind": "chart",
-      "width": 1756,
+      "width": 1735,
       "height": 745,
       "svg_report": {
-        "bytes": 18359,
+        "bytes": 18334,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -254,10 +254,10 @@
     {
       "name": "ubcc-metric2-reductions",
       "kind": "chart",
-      "width": 1647,
-      "height": 794,
+      "width": 1452,
+      "height": 656,
       "svg_report": {
-        "bytes": 12788,
+        "bytes": 12797,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
@@ -287,10 +287,10 @@
     {
       "name": "ubcc-ha-vi-comparison",
       "kind": "chart",
-      "width": 1631,
-      "height": 828,
+      "width": 1436,
+      "height": 656,
       "svg_report": {
-        "bytes": 12361,
+        "bytes": 8166,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -320,12 +320,144 @@
     {
       "name": "ubcc-q1-q5-qualification",
       "kind": "chart",
-      "width": 1492,
-      "height": 739,
+      "width": 1129,
+      "height": 614,
       "svg_report": {
-        "bytes": 9913,
+        "bytes": 9887,
         "font_declared": true,
         "minimum_font_size": 12.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-tc120-124-scenarios",
+      "kind": "chart",
+      "width": 1280,
+      "height": 642,
+      "svg_report": {
+        "bytes": 11114,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-tc130-134-pressure",
+      "kind": "chart",
+      "width": 1308,
+      "height": 642,
+      "svg_report": {
+        "bytes": 11255,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-tc142-147-applications",
+      "kind": "chart",
+      "width": 1408,
+      "height": 642,
+      "svg_report": {
+        "bytes": 11991,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-metric3-per-tc-reductions",
+      "kind": "chart",
+      "width": 1273,
+      "height": 792,
+      "svg_report": {
+        "bytes": 12645,
+        "font_declared": true,
+        "minimum_font_size": 10.0
       },
       "drawio_report": null,
       "checks": {

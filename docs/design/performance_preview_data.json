@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "units": {
+    "scenario_total": "guest CNTVCT ticks per completed scenario",
+    "phase": "guest CNTVCT ticks per completed operation",
+    "metric2": "ns per completed operation",
+    "metric3": "ticks per completed operation"
+  },
+  "required_testcases": [
+    "TC120", "TC121", "TC122", "TC123", "TC124", "TC125", "TC126", "TC127",
+    "TC128", "TC129", "TC130", "TC131", "TC132", "TC133", "TC134", "TC135",
+    "TC136", "TC137", "TC138", "TC139", "TC140", "TC141", "TC142", "TC143",
+    "TC144", "TC145", "TC146", "TC147", "TC217", "TC228", "TC229", "TC230",
+    "TC231", "TC232", "TC233", "TC234", "TC235"
+  ],
+  "testcases": {
+    "TC120": {
+      "topology_roles": "3N1S；node0 初始化 12 条线，node1 共享读取 6 条热点线，node2 更新偶数热点线。",
+      "phases": "populate → shared_hot_reads（24 ops）→ owner_migration → hot reread。",
+      "pressure_working_set": "12 lines，其中 6 条为热点；小目录 mixed read/write。",
+      "completion_boundary": "完整场景完成；路径计时边界为 node1 的 24 次 shared-hot reads。",
+      "demonstrated_capability": "共享读、所有权迁移和更新后重读在三种 profile 下完成。",
+      "measurements": {"naive_total_ticks": null, "spill_noopt_total_ticks": null, "optimized_total_ticks": null, "spill_noopt_reduction_pct": 5.37, "optimized_reduction_pct": 5.34, "retained_path_ticks_per_op": 34.958333, "retained_path_ns_per_op": 1389.11936}
+    },
+    "TC121": {
+      "topology_roles": "3N1S；node0 连续写入，node1 跨节点抽样读取，node2 参与同步。",
+      "phases": "64-line cold stream → 每 4 条一次抽样读取 → 场景完成。",
+      "pressure_working_set": "64 条低复用连续压力线。",
+      "completion_boundary": "完整场景 workload_total 发布。",
+      "demonstrated_capability": "低复用溢出条件下目录策略保持完成性。",
+      "measurements": {"naive_total_ticks": 29147.33, "spill_noopt_total_ticks": 28897.67, "optimized_total_ticks": 28898.67, "spill_noopt_reduction_pct": 0.86, "optimized_reduction_pct": 0.85, "retained_path_ticks_per_op": 348.625, "retained_path_ns_per_op": 13853.112857}
+    },
+    "TC122": {
+      "topology_roles": "3N1S；node0 建立热点并施加冷数据压力，node1 首次共享，node2 压力后重读。",
+      "phases": "24 hot populate/share → 128 cold pressure → 24 hot reuse。",
+      "pressure_working_set": "24 hot + 128 cold lines。",
+      "completion_boundary": "完整场景 workload_total；重用阶段在 24 次 hot reads 后完成。",
+      "demonstrated_capability": "目录压力后共享热点信息和数据可继续复用。",
+      "measurements": {"naive_total_ticks": 25265.33, "spill_noopt_total_ticks": 25270.33, "optimized_total_ticks": 25266.67, "spill_noopt_reduction_pct": -0.02, "optimized_reduction_pct": -0.01, "retained_path_ticks_per_op": 73.125, "retained_path_ns_per_op": 2905.726433, "retained_hot_share_ticks_per_op": 74.583333, "retained_hot_share_ns_per_op": 2963.675393}
+    },
+    "TC123": {
+      "topology_roles": "3N1S；node0 初始化并施压，node1/node2 共享读取，node1 周期性升级写入，node2 验证。",
+      "phases": "init_hot → shared_read → directory_pressure → periodic_upgrade → verify_upgrade。",
+      "pressure_working_set": "16 hot + 96 cold lines。",
+      "completion_boundary": "完整场景 workload_total，在 node2 验证升级值后发布。",
+      "demonstrated_capability": "共享热点在目录压力后可完成 shared-to-writer 升级并收敛。",
+      "measurements": {"naive_total_ticks": 29124.33, "spill_noopt_total_ticks": 29125.0, "optimized_total_ticks": 29126.67, "spill_noopt_reduction_pct": 0.0, "optimized_reduction_pct": -0.01, "retained_node1_ticks_per_op": 75.8125, "retained_node2_ticks_per_op": 77.125, "retained_mean_ticks_per_op": 76.46875}
+    },
+    "TC124": {
+      "topology_roles": "3N1S；owner=node2、Home=node1、requester=node0。",
+      "phases": "node2 写 32 lines → node0 读取并校验 32 lines。",
+      "pressure_working_set": "32 lines；角色三方分离。",
+      "completion_boundary": "32 次 requester 读取全部完成。",
+      "demonstrated_capability": "owner、Home、requester 分离时数据和权限正确收敛。",
+      "measurements": {"naive_total_ticks": 15031.67, "spill_noopt_total_ticks": 15038.33, "optimized_total_ticks": 15032.33, "spill_noopt_reduction_pct": -0.04, "optimized_reduction_pct": 0.0, "retained_path_ticks_per_op": 95.15625, "retained_path_ns_per_op": 3781.169653}
+    },
+    "TC125": {
+      "topology_roles": "3N1S；node0 初始化，node1/node2 共享，node1 在元数据换出后触发换入，node2 更新，node0 终读。",
+      "phases": "init V0 → shared reads → drain/spill → read onload → write V1 → final read。",
+      "pressure_working_set": "1 个目标行 + 2 条冲突冷线；1-way ResidentDir。",
+      "completion_boundary": "目标元数据 fill 完成且 node0 读回 V1。",
+      "demonstrated_capability": "共享读元数据 offload/onload 生命周期完成。",
+      "measurements": {"naive": null, "optimized": null, "retained_spill_path_ticks_per_op": 8.0, "retained_spill_path_ns_per_op": 317.891439, "status": "PASS for applicable spill profiles"}
+    },
+    "TC126": {
+      "topology_roles": "3N1S；node0 初始化，node1/node2 共享，node1 在 resident fill 后升级，node2 终读。",
+      "phases": "share → spill → fill/waiter → Upgrade replay → final verification。",
+      "pressure_working_set": "目标行 + 2 条冲突冷线；1-way ResidentDir。",
+      "completion_boundary": "Upgrade 以原语义提交一次，node2 读回 0x1260BEEF。",
+      "demonstrated_capability": "resident waiter 保持 Upgrade 语义并完成重放。",
+      "measurements": {"naive": null, "optimized": null, "retained_spill_path_ticks_per_op": 51.0, "retained_spill_path_ns_per_op": 2026.557922, "status": "PASS for applicable spill profiles"}
+    },
+    "TC127": {
+      "topology_roles": "3N1S；node0 持有 dirty V0，node1/node2 在写回和换入后读取。",
+      "phases": "dirty seed → conflict pressure → flush/writeback → metadata onload → two readers verify。",
+      "pressure_working_set": "目标 dirty line + 2 条冲突冷线。",
+      "completion_boundary": "写回数据持久化、fill 完成且两次读取匹配。",
+      "demonstrated_capability": "dirty writeback 数据与目录元数据可跨 offload/onload 保持一致。",
+      "measurements": {"naive": null, "optimized": null, "retained_flush_ticks": 61996.0, "retained_flush_ns": 2463499.704997, "status": "PASS for applicable spill profiles"}
+    },
+    "TC128": {
+      "topology_roles": "3N1S；三节点共享目标行，node1 清理本地副本后重读。",
+      "phases": "share → drain → cold pressure → clean evict → onload/revisit。",
+      "pressure_working_set": "共享目标行 + 冲突冷线；1-way ResidentDir。",
+      "completion_boundary": "元数据 fill 完成且 node1 重读值正确。",
+      "demonstrated_capability": "clean/shared 元数据换出后可恢复并继续读取。",
+      "measurements": {"naive": null, "optimized": null, "retained_spill_path_ticks_per_op": 64.0, "retained_spill_path_ns_per_op": 2543.13151, "status": "PASS for applicable spill profiles"}
+    },
+    "TC129": {
+      "topology_roles": "3N1S；node0 初始化，node1 第一次换入并更新，node2 第二次换入，node0 终读。",
+      "phases": "V0 → spill/fill cycle 1 → ownership change to V1 → spill/fill cycle 2 → final read。",
+      "pressure_working_set": "同一目标行经历两轮冲突换出/换入。",
+      "completion_boundary": "两轮 fill 均完成，node2/node0 最终读回 V1。",
+      "demonstrated_capability": "长序列 spill/fill 与所有权迁移可重复完成。",
+      "measurements": {"naive": null, "optimized": null, "retained_read_v0_ticks_per_op": 61.0, "retained_read_v0_ns_per_op": 2423.922221, "retained_read_v1_ticks_per_op": 79.0, "retained_read_v1_ns_per_op": 3139.177958, "status": "PASS for applicable spill profiles"}
+    },
+    "TC130": {
+      "topology_roles": "3N1S；node0 建立热点并施加压力，其他节点共享与复用热点。",
+      "phases": "hot populate/share → 192-line pressure → 4×24 hot reuse。",
+      "pressure_working_set": "24 hot + 192 pressure lines。",
+      "completion_boundary": "完整场景完成；主 phase 为 96 次 post-pressure hot reuse。",
+      "demonstrated_capability": "目录溢出后保留热点副本并降低重用路径成本。",
+      "measurements": {"scenario_total_ticks": {"naive": 38616.67, "spill_noopt": 32331.67, "optimized": 32329.67}, "post_pressure_hot_reuse_ticks_per_op": {"naive": 110.64, "spill_noopt": 46.82, "optimized": 46.82}, "primary_reduction_pct": 57.68}
+    },
+    "TC131": {
+      "topology_roles": "8N1S；Home 位于 node0，node1/node2 扫描和复用 catalog，node1 执行跨 L2 升级。",
+      "phases": "seed 4096 hot → 98304 pressure full scan → 8192 catalog reuse → 256 exclusive upgrades。",
+      "pressure_working_set": "4096 hot + 98304 pressure lines；512 KiB 目录角色。",
+      "completion_boundary": "容量按去重目录覆盖完成值；延迟按全部已完成 Outer 事件；guest phase 按各自操作数。",
+      "demonstrated_capability": "达到 1.515× 等效追踪容量，并隔离 spill-512K 相对 IdealDir 的 Outer 增量。",
+      "measurements": {"capacity": {"naive": 65536, "spill": 99293, "ratio": 1.5150909423828125}, "scenario_total_ticks": {"naive": 2401101.0, "spill_noopt": 2419188.67, "optimized": 2419319.0}, "catalog_reuse_ticks_per_op": {"naive": 6.54, "spill_noopt": 6.4, "optimized": 6.42}, "exclusive_upgrade_ticks_per_op": {"naive": 9358.8, "spill_noopt": 9429.41, "optimized": 9429.93}, "primary_reduction_pct": 1.84, "outer_arms": {"spill_512k": {"mean_ns": 169.7694905650195, "p50_ns": 11.0, "p95_ns": 1720.0, "p99_ns": 1732.5, "max_ns": 2617.0, "samples": 111182}, "ideal_dir": {"mean_ns": 159.23491239746727, "p50_ns": 11.0, "p95_ns": 1720.0, "p99_ns": 1722.5, "max_ns": 2601.5, "samples": 111184}, "delta_mean_ns": 10.53457816755224, "delta_cycles_2ghz": 21.06915633510448}}
+    },
+    "TC132": {
+      "topology_roles": "3N1S；node1 写 active checkpoint 数据，node0 写压力流，node2 恢复读取。",
+      "phases": "8192 dirty seed → 65536 pressure writes → 8192 checkpoint recover reads。",
+      "pressure_working_set": "8192 active + 65536 pressure lines。",
+      "completion_boundary": "完整场景完成；主 phase 在 8192 次恢复读取后发布。",
+      "demonstrated_capability": "dirty metadata 与数据可经 Backstore 恢复，同时披露恢复成本。",
+      "measurements": {"scenario_total_ticks": {"naive": 1393393.67, "spill_noopt": 1430794.33, "optimized": 1430796.0}, "checkpoint_recover_ticks_per_op": {"naive": 48.73, "spill_noopt": 67.97, "optimized": 67.98}, "primary_reduction_pct": -39.49}
+    },
+    "TC133": {
+      "topology_roles": "8N1S；node0 seed/pressure，node1-node7 共享并复用 frontier。",
+      "phases": "4096 hot seed/share → 65536 pressure → 4096 frontier reuse。",
+      "pressure_working_set": "4096 hot + 65536 pressure lines。",
+      "completion_boundary": "完整场景完成；主 phase 为 4096 次 pressure 后 frontier reuse。",
+      "demonstrated_capability": "8 节点共享 frontier 在目录压力后保持可复用。",
+      "measurements": {"scenario_total_ticks": {"naive": 725467.38, "spill_noopt": 736140.75, "optimized": 736044.0}, "frontier_reuse_ticks_per_op": {"naive": 7.09, "spill_noopt": 6.6, "optimized": 6.58}, "primary_reduction_pct": 7.17}
+    },
+    "TC134": {
+      "topology_roles": "8N2S；16 个 plane 参与，plane0 seed，各 socket1 共享，socket0 写压力，socket1 重用。",
+      "phases": "seed/share → 每个 socket0 写 8192 lines → socket1 sliding-window reuse。",
+      "pressure_working_set": "16 planes；滑动窗口容量压力。",
+      "completion_boundary": "完整场景完成；主 phase 为 4096 次 window reuse。",
+      "demonstrated_capability": "双 socket、8 节点下保留窗口状态并显著降低重用成本。",
+      "measurements": {"scenario_total_ticks": {"naive": 932512.13, "spill_noopt": 742830.69, "optimized": 742591.44}, "window_reuse_ticks_per_op": {"naive": 41.67, "spill_noopt": 9.78, "optimized": 9.83}, "primary_reduction_pct": 76.42}
+    },
+    "TC135": {"topology_roles": "3N1S；node0 seed/pressure，node1 保留 sharer 并重访。", "phases": "seed → share → pressure → 24 first-revisit loads。", "pressure_working_set": "24 hot + 192 pressure lines。", "completion_boundary": "24 个 first-load 样本完成。", "demonstrated_capability": "保留 sharer 可缩短压力后的首次重访。", "measurements": {"naive_ns": 2344.4493611653647, "spill_noopt_ns": 39.736429850260414, "optimized_ns": 39.736429850260414, "optimized_reduction_pct": 98.30508474576271}},
+    "TC136": {"topology_roles": "3N1S；node1 为 dirty owner，node0 施压，node2 验证终值。", "phases": "dirty seed → pressure → 24 owner stores → final reads。", "pressure_working_set": "24 hot + 192 pressure lines。", "completion_boundary": "24 次 writer-visible store completion。", "demonstrated_capability": "保留 owner 状态可直接服务重复写入。", "measurements": {"naive_ns": 2384.185791015625, "spill_noopt_ns": 79.47285970052083, "optimized_ns": 79.47285970052083, "optimized_reduction_pct": 96.66666666666666}},
+    "TC137": {"topology_roles": "3N1S；node0 seed/pressure，node1 先共享，node2 为新 requester。", "phases": "seed → node1 share → pressure → node2 24 first loads。", "pressure_working_set": "24 hot + 192 pressure lines。", "completion_boundary": "新 requester 的 24 个首次 load 样本完成。", "demonstrated_capability": "spilled shared metadata 可服务新请求者。", "measurements": {"naive_ns": 2384.185791015625, "spill_noopt_ns": 1788.1393432617188, "optimized_ns": 1788.1393432617188, "optimized_reduction_pct": 25.0}},
+    "TC138": {"topology_roles": "3N1S；node1 为 dirty owner，node0 施压，node2 成为新 writer。", "phases": "dirty seed → pressure → 24 ownership-handoff stores → node0 verify。", "pressure_working_set": "24 hot + 192 pressure lines。", "completion_boundary": "24 次 handoff store completion。", "demonstrated_capability": "完整执行 dirty owner 回收与新写者授权，并量化机制权衡。", "measurements": {"naive_ns": 2384.185791015625, "spill_noopt_ns": 2702.0772298177085, "optimized_ns": 2702.0772298177085, "optimized_reduction_pct": -13.33333333333334}},
+    "TC139": {"topology_roles": "3N1S；node0 seed/pressure，node1 执行混合批，node2 终验。", "phases": "seed/share/owner acquisition → pressure → 16×16 mixed ops → verify。", "pressure_working_set": "16 hot + 192 pressure lines；256 useful operations。", "completion_boundary": "每个 16-op batch 完成，共 16 samples。", "demonstrated_capability": "保留 sharer/owner 状态可摊薄混合批控制路径。", "measurements": {"naive_ns": 23563.702901204426, "spill_noopt_ns": 635.7828776041666, "optimized_ns": 635.7828776041666, "optimized_reduction_pct": 97.30185497470488}},
+    "TC140": {"topology_roles": "3N1S；node0 内两个 L2 cluster 协作写入，node2 读取验证。", "phases": "remote-owned setup → 24 cross-L2 owner stores → verify。", "pressure_working_set": "24 lines；无容量压力主张。", "completion_boundary": "24 个 cross-L2 store 样本完成。", "demonstrated_capability": "同节点跨 L2 的 owner store 正确完成；作为低时延控制项。", "measurements": {"naive_ns": 119.20928955078125, "spill_noopt_ns": 119.20928955078125, "optimized_ns": 119.20928955078125, "optimized_reduction_pct": 0.0}},
+    "TC141": {"topology_roles": "3N1S；node0 seed，node1 share/写入，node2 验证。", "phases": "seed 16 → share → pressure 192 → fill/release → node1 writes → node2 verifies。", "pressure_working_set": "16 hot + 192 pressure lines。", "completion_boundary": "shared release、fill 和原 reqId UpgradeResp 完成，32 reads 匹配。", "demonstrated_capability": "spill 后 shared-to-writer recovery 保持活性与目标集合正确性。", "measurements": {"naive": null, "optimized": null, "retained_workload_total_ticks": {"node0": 36814.0, "node1": 36825.0, "node2": 36825.0}, "status": "PASS for spill-noopt and optimized"}},
+    "TC142": {"topology_roles": "16N1S；每节点一个独立 OLTP plane，Home0 提供全局目录。", "phases": "seed → pressure → 32 batches，每批 28 reads + 4 updates。", "pressure_working_set": "每 plane 32 hot pages；p150 总目标 98304 lines。", "completion_boundary": "每 plane 1024 useful ops 的 end-to-end 完成。", "demonstrated_capability": "16 节点 OLTP buffer-pool 读写混合可扩展执行。", "measurements": {"naive_ns_per_op": 5200.314, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 4437.245, "optimized_reduction_pct": 14.674}},
+    "TC143": {"topology_roles": "16N1S；每节点一个 B-tree shard。", "phases": "seed → pressure → root/internal/leaf/record traversal + sparse updates。", "pressure_working_set": "每 plane 137 hot lines；p150 总目标 98304 lines。", "completion_boundary": "每 plane 2048 memory ops 的 end-to-end 完成。", "demonstrated_capability": "层次化共享读取与稀疏写升级可在 16 节点执行。", "measurements": {"naive_ns_per_op": 3051.768, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 2267.77, "optimized_reduction_pct": 25.69}},
+    "TC144": {"topology_roles": "16N1S；每节点维护 WAL 与 dirty data page。", "phases": "seed → pressure → WAL store → data-page store → checkpoint verification。", "pressure_working_set": "每 plane 192 hot lines；p150 总目标 98304 lines。", "completion_boundary": "每 plane 1024 stores 且最终 WAL/data pair 一致。", "demonstrated_capability": "有序脏写和 checkpoint 语义在 16 节点容量压力下完成。", "measurements": {"naive_ns_per_op": 5294.067, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 4400.848, "optimized_reduction_pct": 16.872}},
+    "TC145": {"topology_roles": "16N1S；每节点一个 FaaS warm-container plane。", "phases": "runtime/tenant warmup → package pressure → 32 invocation batches。", "pressure_working_set": "每 plane 136 hot lines；p150 总目标 98304 lines。", "completion_boundary": "每 plane 2048 ops 的 warm-invocation end-to-end 完成。", "demonstrated_capability": "高偏斜 runtime 读取与重复 result 写入可在 16 节点扩展。", "measurements": {"naive_ns_per_op": 2886.169, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 2291.965, "optimized_reduction_pct": 20.588}},
+    "TC146": {"topology_roles": "16N1S；每节点一个 graph frontier plane。", "phases": "frontier seed → pressure → adjacency/property expansion + sparse updates。", "pressure_working_set": "每 plane 192 hot lines；p150 总目标 98304 lines。", "completion_boundary": "每 plane 2048 graph operations 完成。", "demonstrated_capability": "共享 frontier/adjacency 与 property 写入可在 16 节点扩展。", "measurements": {"naive_ns_per_op": 3184.057, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 2266.781, "optimized_reduction_pct": 28.808}},
+    "TC147": {"topology_roles": "16N1S；每节点一个 feature-store plane。", "phases": "embedding warmup → pressure → skewed lookups + accumulator updates。", "pressure_working_set": "每 plane 136 hot lines；p150 总目标 98304 lines。", "completion_boundary": "每 plane 2048 operations 的 end-to-end 完成。", "demonstrated_capability": "高偏斜共享查找与稀疏累加写可在 16 节点扩展。", "measurements": {"naive_ns_per_op": 2892.318, "spill_noopt_ns_per_op": null, "optimized_ns_per_op": 2321.671, "optimized_reduction_pct": 19.73}},
+    "TC217": {"topology_roles": "2N1S；node0 提供 catalog，node1 执行 read-mostly batch。", "phases": "catalog seed → 每批 80 pressure + 14 reads + 2 updates，共 8 batches。", "pressure_working_set": "16 keys + 640 pressure lines。", "completion_boundary": "16-op catalog batch 完成，主值按 16 ops 摊销。", "demonstrated_capability": "容量压力下 read-mostly catalog 批处理保留状态收益。", "measurements": {"naive_ns": 4132.588704427083, "spill_noopt_ns": 635.7828776041666, "optimized_ns": 635.7828776041666, "optimized_reduction_pct": 84.61538461538461}},
+    "TC228": {"topology_roles": "2N1S；requester 与权威数据源分离，Home 仲裁。", "phases": "request → Home lookup → source data → Home update → requester completion。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "remote-read 根操作数据与共享授权可见。", "demonstrated_capability": "权威数据定位与共享授权。", "metric3": {"p100": {"ubcc": 23.9375, "ha_vi": 24.0125, "delta": 0.075}}},
+    "TC229": {"topology_roles": "2N1S；旧 owner、Home、新 requester 分离。", "phases": "new-owner request → old-owner recall/release → latest data return → new-owner grant。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "新 owner 获得最新数据和独占权限。", "demonstrated_capability": "完整 ownership handoff。", "metric3": {"p100": {"ubcc": 24.66875, "ha_vi": 47.03125, "delta": 22.3625}}},
+    "TC230": {"topology_roles": "2N1S；多个 sharer 与新 writer，由 Home 冻结目标集合。", "phases": "writer request → invalidates → Ack convergence → writer grant。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "全部目标 Ack 收敛且单写者授权可见。", "demonstrated_capability": "精确 shared-to-writer 收敛。", "metric3": {"p100": {"ubcc": 45.7125, "ha_vi": 46.9875, "delta": 1.275}}},
+    "TC231": {"topology_roles": "2N1S；clean shared line 在两个 participant 间复用。", "phases": "seed/share → pressure → clean shared control read。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "clean shared read service timer 完成。", "demonstrated_capability": "干净共享控制路径复用。", "metric3": {"p100": {"ubcc": 2.494140625, "ha_vi": 2.56171875, "delta": 0.067578125}}},
+    "TC232": {"topology_roles": "2N1S；两个 participant 对 hot key 执行读写混合。", "phases": "32 reads + 16 writes；分别计时后按 2/3 read + 1/3 write 合成。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "read/write 服务事件分别完成，复合主值只计一次 testcase 权重。", "demonstrated_capability": "热点读写组合下的综合协议成本。", "metric3": {"p100": {"composite": {"ubcc": 15.2375, "ha_vi": 16.979166666666664, "delta": 1.7416666666666654}, "hot_key_read": {"ubcc": 13.0125, "ha_vi": 12.74375, "delta": -0.26875}, "hot_key_write": {"ubcc": 19.6875, "ha_vi": 25.45, "delta": 5.7625}}}},
+    "TC233": {"topology_roles": "2N1S；producer 发布记录，consumer 读取并确认。", "phases": "produce → publish → consumer load → service completion。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "主值为 producer-consumer service；load latency 为辅助值。", "demonstrated_capability": "跨节点 producer-consumer 服务链。", "metric3": {"p100": {"primary": {"ubcc": 13.853125, "ha_vi": 14.41875, "delta": 0.565625}, "load_aux": {"ubcc": 24.0, "ha_vi": 24.0, "delta": 0.0}}}},
+    "TC234": {"topology_roles": "2N1S；ordered token 在 participant 间排队交接。", "phases": "enqueue/wait → token store → ordered observation → end-to-end completion。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "主值为 queued-token end-to-end；store 为辅助阶段。", "demonstrated_capability": "有序排队 token 交接。", "metric3": {"p100": {"primary": {"ubcc": 342.25, "ha_vi": 352.85, "delta": 10.6}, "store_aux": {"ubcc": 23.5, "ha_vi": 23.0125, "delta": -0.4875}}}},
+    "TC235": {"topology_roles": "2N1S；catalog/KV 请求跨 participant 执行 lookup 与 sparse update。", "phases": "catalog lookup/update service → batch synchronization → end-to-end completion。", "pressure_working_set": "256 KiB L3；100% pressure；五对 AB/BA。", "completion_boundary": "主值为最慢 participant 的 catalog-KV end-to-end；service 为辅助值。", "demonstrated_capability": "catalog/KV 完整批处理与服务路径。", "metric3": {"p100": {"primary": {"ubcc": 7.052734375, "ha_vi": 8.48828125, "delta": 1.435546875}, "service_aux": {"ubcc": 1.64560546875, "ha_vi": 2.38203125, "delta": 0.73642578125}}}}
+  },
+  "portable_spill_noopt_four_topology": {
+    "TC142": {"3N1S": {"service_ns_per_op": 269.27, "end_to_end_ns_per_op": 13476.17}, "3N2S": {"service_ns_per_op": 271.75, "end_to_end_ns_per_op": 13240.2}, "8N1S": {"service_ns_per_op": 271.7, "end_to_end_ns_per_op": 13164.08}, "8N2S": {"service_ns_per_op": 271.61, "end_to_end_ns_per_op": 13112.36}},
+    "TC143": {"3N1S": {"service_ns_per_op": 185.98, "end_to_end_ns_per_op": 6795.73}, "3N2S": {"service_ns_per_op": 188.43, "end_to_end_ns_per_op": 6675.43}, "8N1S": {"service_ns_per_op": 188.45, "end_to_end_ns_per_op": 6635.93}, "8N2S": {"service_ns_per_op": 188.42, "end_to_end_ns_per_op": 6609.07}},
+    "TC144": {"3N1S": {"service_ns_per_op": 248.07, "end_to_end_ns_per_op": 13471.54}, "3N2S": {"service_ns_per_op": 249.31, "end_to_end_ns_per_op": 13224.06}, "8N1S": {"service_ns_per_op": 249.58, "end_to_end_ns_per_op": 13144.61}, "8N2S": {"service_ns_per_op": 248.88, "end_to_end_ns_per_op": 13091.06}},
+    "TC145": {"3N1S": {"service_ns_per_op": 259.93, "end_to_end_ns_per_op": 6869.9}, "3N2S": {"service_ns_per_op": 262.31, "end_to_end_ns_per_op": 6749.21}, "8N1S": {"service_ns_per_op": 262.35, "end_to_end_ns_per_op": 6709.87}, "8N2S": {"service_ns_per_op": 262.29, "end_to_end_ns_per_op": 6682.98}},
+    "TC146": {"3N1S": {"service_ns_per_op": 198.25, "end_to_end_ns_per_op": 6809.79}, "3N2S": {"service_ns_per_op": 200.73, "end_to_end_ns_per_op": 6688.11}, "8N1S": {"service_ns_per_op": 200.3, "end_to_end_ns_per_op": 6647.99}, "8N2S": {"service_ns_per_op": 200.5, "end_to_end_ns_per_op": 6621.61}},
+    "TC147": {"3N1S": {"service_ns_per_op": 243.7, "end_to_end_ns_per_op": 6853.8}, "3N2S": {"service_ns_per_op": 246.14, "end_to_end_ns_per_op": 6733.15}, "8N1S": {"service_ns_per_op": 246.18, "end_to_end_ns_per_op": 6693.94}, "8N2S": {"service_ns_per_op": 246.13, "end_to_end_ns_per_op": 6666.93}}
+  }
+}

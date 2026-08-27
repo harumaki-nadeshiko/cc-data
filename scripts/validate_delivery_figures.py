@@ -104,7 +104,8 @@ def expected_chart_values(stem, sources):
             "applicable_equal_weight_mean_reduction_pct": float(metric2["equal_weight_mean_reduction_pct"]),
         }
     if stem == "ubcc-ha-vi-comparison":
-        levels = source[sources[0]]["metric3"]["levels"]
+        levels = [level for level in source[sources[0]]["metric3"]["levels"]
+                  if int(level["pressure_level"]) == 100]
         return "expected_values", {
             "groups": [{"pressure_level": level["pressure_level"], "scope": scope,
                         "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]),
@@ -118,6 +119,25 @@ def expected_chart_values(stem, sources):
         labels = [f"Q{i}" for i in range(1, 6)]
         return "derived_values", {"qualification_counts": {label: counts[label] for label in labels},
                                   "total": sum(counts[label] for label in labels)}
+    if stem in {"ubcc-tc120-124-scenarios", "ubcc-tc130-134-pressure", "ubcc-tc142-147-applications", "ubcc-metric3-per-tc-reductions"}:
+        key = {"ubcc-tc120-124-scenarios": "tc120_124", "ubcc-tc130-134-pressure": "tc130_134",
+               "ubcc-tc142-147-applications": "tc142_147", "ubcc-metric3-per-tc-reductions": "metric3_per_tc"}[stem]
+        raw = load_json("docs/design/performance_preview_data.json")
+        cases = raw["testcases"]
+        if key == "metric3_per_tc":
+            def primary(tc, pressure):
+                row = cases[tc]["metric3"][f"p{pressure}"]
+                if "ubcc" in row:
+                    return row
+                return row["composite"] if tc == "TC232" else row["primary"]
+            rows = [{"case": tc[2:], "reduction_pct":
+                     100 * (1 - primary(tc, 100)["ubcc"] / primary(tc, 100)["ha_vi"])}
+                    for tc in ("TC228", "TC229", "TC230", "TC231", "TC232", "TC233", "TC234", "TC235")]
+            return "derived_values", {"rows": rows}
+        tcs = {"tc120_124": ("TC120", "TC121", "TC122", "TC123", "TC124"), "tc130_134": ("TC130", "TC131", "TC132", "TC133", "TC134"), "tc142_147": ("TC142", "TC143", "TC144", "TC145", "TC146", "TC147")}[key]
+        field = "primary_reduction_pct" if key == "tc130_134" else "optimized_reduction_pct"
+        rows = [{"case": tc, "reduction_pct": float(cases[tc]["measurements"][field])} for tc in tcs]
+        return "derived_values", {"rows": rows}
     raise ValueError(f"no chart lineage validator for {stem}")
 
 

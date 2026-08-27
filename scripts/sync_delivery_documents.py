@@ -27,6 +27,12 @@ ASCII_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*(?:-[A-Za
 NARROW_TABLE_IDENTIFIERS = (
     "InvalidateReq", "UpgradeAckNotify", "InvalidateAck", "frontier", "evict",
 )
+DOCUMENT_METADATA = re.compile(r"^(?:\*\*)?(文档版本|交付阶段|项目名称|甲方单位)(?:\*\*)?\s*[：:]")
+TABLE_WIDTH_DIRECTIVE = re.compile(
+    r"<!--\s*(?:table-widths?|列宽)\s*:\s*([^>]+?)\s*-->", re.IGNORECASE)
+DATA_CHART = re.compile(
+    r"(?:metric|performance|latency|reduction|throughput|性能|时延|降幅)",
+    re.IGNORECASE)
 PAIRS = (
     "docs/design/cc_ep_protocol_overview.md",
     "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
@@ -82,6 +88,23 @@ def run(text, bold=False, mono=False, heading=False, size=None,
     return f"<w:r><w:rPr>{props}</w:rPr><w:t xml:space=\"preserve\">{escape(text)}</w:t></w:r>"
 
 
+def inline_runs(text, **run_options):
+    """Render restrained Markdown bold as separate native Word runs."""
+    text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text).replace("`", "")
+    output = []
+    position = 0
+    for match in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__", text):
+        if match.start() > position:
+            output.append(run(text[position:match.start()], **run_options))
+        output.append(run(match.group(1) or match.group(2), bold=True,
+                          **run_options))
+        position = match.end()
+    if position < len(text):
+        output.append(run(text[position:], **run_options))
+    return "".join(output) if output else run(text, **run_options)
+
+
 def paragraph(text="", style=None, bold=False, mono=False, indent=0,
               first_line=0, center=False, keep_next=False,
               protect_tail=False):
@@ -92,26 +115,65 @@ def paragraph(text="", style=None, bold=False, mono=False, indent=0,
         props += '<w:jc w:val="center"/>'
     if keep_next:
         props += '<w:keepNext/>'
-    return (f"<w:p><w:pPr>{props}</w:pPr>"
-            f"{run(text, bold, mono, bool(style and (style == 'Title' or style.startswith('Heading'))), protect_tail=protect_tail)}"
-            "</w:p>")
+    heading = bool(style and (style == "Title" or style.startswith("Heading")))
+    runs = (run(text, bold, mono, heading, protect_tail=protect_tail)
+            if bold or mono or heading else
+            inline_runs(text, protect_tail=protect_tail))
+    return f"<w:p><w:pPr>{props}</w:pPr>{runs}</w:p>"
 
 
-def table(rows, compact=False):
-    cell_top_bottom = 0 if compact else 60
+def parse_table_widths(value, column_count, total_width=9600):
+    if not value:
+        return None
+    parts = [item.strip() for item in re.split(r"[,|]", value) if item.strip()]
+    if len(parts) != column_count:
+        return None
+    try:
+        percentages = all(item.endswith("%") for item in parts)
+        weights = [float(item[:-1] if item.endswith("%") else item)
+                   for item in parts]
+    except ValueError:
+        return None
+    if any(weight <= 0 for weight in weights):
+        return None
+    if not percentages and sum(weights) > total_width / 2:
+        return [int(weight) for weight in weights]
+    total = sum(weights)
+    return [int(total_width * weight / total) for weight in weights]
+
+
+def automatic_table_widths(rows, total_width=9600):
+    width = max((len(row) for row in rows), default=0)
+    if not width:
+        return []
+    weights = []
+    for column in range(width):
+        values = [plain(row[column]) for row in rows if column < len(row)]
+        weights.append(max(6, min(32, max((len(value) for value in values),
+                                          default=6))))
+    minimum = 650
+    available = total_width - minimum * width
+    total = sum(weights)
+    return [minimum + int(available * weight / total) for weight in weights]
+
+
+def table(rows, compact=False, visual_widths=None):
+    cell_top_bottom = 70 if compact else 60
     cell_left_right = 45 if compact else 90
-    line_height = 160 if compact else 320
-    font_size = 16 if compact else 18
+    line_height = 310 if compact else 320
+    font_size = 18
     paragraph_style = "CompactGlossaryText" if compact else "TableText"
     output = [
         '<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>'
-        '<w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="autofit"/>'
+        '<w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/>'
         f'<w:tblCellMar><w:top w:w="{cell_top_bottom}" w:type="dxa"/>'
         f'<w:left w:w="{cell_left_right}" w:type="dxa"/><w:bottom w:w="{cell_top_bottom}" w:type="dxa"/>'
         f'<w:right w:w="{cell_left_right}" w:type="dxa"/></w:tblCellMar></w:tblPr>'
     ]
     width = max((len(row) for row in rows), default=0)
-    column_widths = [1500, 3300, 1500, 3300] if compact and width == 4 else []
+    column_widths = ([1500, 3300, 1500, 3300] if compact and width == 4 else
+                     parse_table_widths(visual_widths, width) or
+                     automatic_table_widths(rows))
     if column_widths:
         output.append('<w:tblGrid>' + ''.join(
             f'<w:gridCol w:w="{value}"/>' for value in column_widths) +
@@ -189,11 +251,11 @@ def parse_image(line):
         return None
     alt, target, attributes = match.groups()
     width = height = None
-    size_match = re.search(r"\s+=([0-9.]+(?:cm|mm|in|pt|px)?)x([0-9.]+(?:cm|mm|in|pt|px)?)\s*$",
+    size_match = re.search(r"\s+=([0-9.]+(?:cm|mm|in|pt|px)?)(?:x([0-9.]+(?:cm|mm|in|pt|px)?)?)?\s*$",
                            target, re.IGNORECASE)
     if size_match:
         width = length_to_emu(size_match.group(1))
-        height = length_to_emu(size_match.group(2))
+        height = length_to_emu(size_match.group(2)) if size_match.group(2) else None
         target = target[:size_match.start()].strip()
     if attributes:
         for key, value in re.findall(r"(width|height)\s*=\s*[\"']?([0-9.]+(?:cm|mm|in|pt|px)?)[\"']?",
@@ -204,6 +266,8 @@ def parse_image(line):
                 height = length_to_emu(value)
     # A quoted Markdown title is not part of the image path.
     target = re.sub(r'\s+["\'][^"\']*["\']\s*$', "", target).strip()
+    if width is None and DATA_CHART.search(f"{alt} {target}"):
+        width = int(13.2 * EMU_PER_CM)
     return alt, target, width, height
 
 
@@ -244,11 +308,21 @@ def convert_markdown(text, md_path):
     index = 0
     code = None
     first_heading = True
+    cover_open = False
     current_heading = ""
+    pending_table_widths = None
+    last_body_paragraph = None
     while index < len(lines):
         line = lines[index]
         if line.strip() == "<!-- PAGEBREAK -->":
             output.append(page_break())
+            cover_open = False
+            last_body_paragraph = None
+            index += 1
+            continue
+        width_directive = TABLE_WIDTH_DIRECTIVE.fullmatch(line.strip())
+        if width_directive:
+            pending_table_widths = width_directive.group(1)
             index += 1
             continue
         if re.fullmatch(r"<!--.*-->", line.strip()):
@@ -256,6 +330,19 @@ def convert_markdown(text, md_path):
             continue
         if line.startswith("```"):
             if code is None:
+                closing = index + 1
+                while closing < len(lines) and not lines[closing].startswith("```"):
+                    closing += 1
+                simple = lines[index + 1:closing]
+                if (closing < len(lines) and len(simple) == 1 and
+                        re.fullmatch(r"\s*[+-]?[0-9]+(?:\.[0-9]+)?%\s*", simple[0]) and
+                        last_body_paragraph is not None):
+                    output_index, previous_text, options = last_body_paragraph
+                    combined = previous_text.rstrip() + " **" + simple[0].strip() + "**"
+                    output[output_index] = paragraph(combined, **options)
+                    last_body_paragraph = (output_index, combined, options)
+                    index = closing + 1
+                    continue
                 code = []
             else:
                 for code_line in code or [""]:
@@ -269,6 +356,9 @@ def convert_markdown(text, md_path):
             continue
         image = parse_image(line)
         if image:
+            if cover_open:
+                output.append(page_break())
+                cover_open = False
             alt, target, hinted_width, hinted_height = image
             path = (md_path.parent / target).resolve()
             width, height = png_size(path)
@@ -290,6 +380,9 @@ def convert_markdown(text, md_path):
             index += 1
             continue
         if line.startswith("|") and line.rstrip().endswith("|"):
+            if cover_open:
+                output.append(page_break())
+                cover_open = False
             rows = []
             while index < len(lines) and lines[index].startswith("|") and lines[index].rstrip().endswith("|"):
                 cells = [item.strip() for item in lines[index].strip().strip("|").split("|")]
@@ -299,7 +392,10 @@ def convert_markdown(text, md_path):
             compact = "术语表" in current_heading
             if compact:
                 rows = compact_glossary_rows(rows)
-            output.append(table(rows, compact=compact))
+            output.append(table(rows, compact=compact,
+                                visual_widths=pending_table_widths))
+            pending_table_widths = None
+            last_body_paragraph = None
             if index < len(lines):
                 caption = re.fullmatch(r"\s*(?:(?:Table|表)\s*[:：]|:)\s*(.+?)\s*",
                                        lines[index], re.IGNORECASE)
@@ -313,20 +409,39 @@ def convert_markdown(text, md_path):
             value = plain(heading.group(2))
             current_heading = value
             style = "Title" if first_heading else f"Heading{min(len(heading.group(1)), 3)}"
+            if not first_heading and cover_open:
+                output.append(page_break())
+                cover_open = False
             output.append(paragraph(value, style, center=first_heading,
                                     keep_next=True))
+            cover_open = first_heading
             first_heading = False
-        elif re.match(r"^\*\*(文档版本|交付阶段|项目名称|甲方单位)：", line):
-            output.append(paragraph(plain(line), center=True))
+            last_body_paragraph = None
+        elif DOCUMENT_METADATA.match(line.strip()):
+            pass
         elif re.match(r"^\s*[-*+]\s+", line):
-            output.append(paragraph("• " + plain(re.sub(r"^\s*[-*+]\s+", "", line)), indent=360))
+            if cover_open:
+                output.append(page_break())
+                cover_open = False
+            value = "• " + re.sub(r"^\s*[-*+]\s+", "", line).strip()
+            output.append(paragraph(value, indent=360))
+            last_body_paragraph = None
         elif line.startswith(">"):
-            output.append(paragraph(plain(line.lstrip("> ")), "Quote", indent=360))
+            if cover_open:
+                output.append(page_break())
+                cover_open = False
+            output.append(paragraph(line.lstrip("> "), "Quote", indent=360))
+            last_body_paragraph = None
         elif re.match(r"^\s*图\s*\d+(?:[-－]\d+)?", line):
             output.append(paragraph(plain(line), "FigureCaption", center=True))
         elif line.strip() and not re.fullmatch(r"\s*[-*_]{3,}\s*", line):
-            output.append(paragraph(plain(line), first_line=420,
-                                    protect_tail=True))
+            if cover_open:
+                output.append(page_break())
+                cover_open = False
+            value = line.strip()
+            options = {"first_line": 420, "protect_tail": True}
+            output.append(paragraph(value, **options))
+            last_body_paragraph = (len(output) - 1, value, options)
         index += 1
     if code is not None:
         for code_line in code or [""]:
@@ -345,7 +460,7 @@ def styles():
 <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0" w:line="300" w:lineRule="exact"/><w:shd w:fill="F2F2F2"/><w:ind w:left="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Microsoft YaHei" w:cs="Consolas"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableText"><w:name w:val="Table Text"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
-<w:style w:type="paragraph" w:styleId="CompactGlossaryText"><w:name w:val="Compact Glossary Text"/><w:basedOn w:val="TableText"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="160" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="CompactGlossaryText"><w:name w:val="Compact Glossary Text"/><w:basedOn w:val="TableText"/><w:pPr><w:jc w:val="left"/><w:spacing w:before="0" w:after="0" w:line="310" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="FigureCaption"><w:name w:val="Figure Caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/><w:keepLines/><w:spacing w:before="0" w:after="120" w:line="320" w:lineRule="exact"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei" w:cs="Calibri"/><w:sz w:val="18"/><w:color w:val="555555"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="TableCaption"><w:name w:val="Table Caption"/><w:basedOn w:val="FigureCaption"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="40" w:after="100" w:line="320" w:lineRule="exact"/></w:pPr></w:style>
 <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:color="B7C9E2" w:sz="4"/><w:left w:val="single" w:color="B7C9E2" w:sz="4"/><w:bottom w:val="single" w:color="B7C9E2" w:sz="4"/><w:right w:val="single" w:color="B7C9E2" w:sz="4"/><w:insideH w:val="single" w:color="D9E2F3" w:sz="4"/><w:insideV w:val="single" w:color="D9E2F3" w:sz="4"/></w:tblBorders></w:tblPr></w:style>
@@ -364,7 +479,8 @@ def build_docx(md_path, docx_path):
                 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
                 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>'
                 + body
-                + '<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/>'
+                + '<w:sectPr><w:titlePg/><w:footerReference w:type="first" r:id="rIdFirstFooter"/>'
+                '<w:footerReference w:type="default" r:id="rIdFooter"/>'
                 '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1134" '
                 'w:bottom="1417" w:left="1134" w:header="567" w:footer="567"/></w:sectPr>'
                 '</w:body></w:document>')
@@ -372,12 +488,13 @@ def build_docx(md_path, docx_path):
     core = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             f'<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>{escape(title)}</dc:title><dc:creator>CC-EP project</dc:creator><dc:description>source_sha256={source_hash}</dc:description><dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified></cp:coreProperties>')
     files = {
-        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/footerFirst.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>',
         "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>',
         "word/_rels/document.xml.rels": ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
             '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
             '<Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
+            '<Relationship Id="rIdFirstFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footerFirst.xml"/>'
             '<Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>'
             + ''.join(f'<Relationship Id="{rel_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{media_name}"/>'
                       for rel_id, media_name, _ in images)
@@ -386,6 +503,7 @@ def build_docx(md_path, docx_path):
         "word/styles.xml": styles(),
         "word/settings.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/><w:defaultTabStop w:val="420"/></w:settings>',
         "word/footer1.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>第 </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t> 页</w:t></w:r></w:p></w:ftr>',
+        "word/footerFirst.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p/></w:ftr>',
         "docProps/core.xml": core,
         "docProps/app.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CC-EP Markdown DOCX Sync</Application></Properties>',
     }

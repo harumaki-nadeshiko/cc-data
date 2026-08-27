@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
   "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="702.559537pt" height="297.897562pt" viewBox="0 0 702.559537 297.897562" xmlns="http://www.w3.org/2000/svg" version="1.1">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="694.3475pt" height="297.897562pt" viewBox="0 0 694.3475 297.897562" xmlns="http://www.w3.org/2000/svg" version="1.1">
  <metadata>
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
@@ -22,8 +22,8 @@
  <g id="figure_1">
   <g id="patch_1">
    <path d="M 0 297.897562
-L 702.559537 297.897562
-L 702.559537 0
+L 694.3475 297.897562
+L 694.3475 0
 L 0 0
 z
 " style="fill: #ffffff"/>
@@ -466,7 +466,7 @@ L 687.1475 25.785312
     <text style="fill: #843c0c; font: 700 12px 'Microsoft YaHei'; text-anchor: middle" x="550.032115" y="58.529562" transform="rotate(-0 550.032115 58.529562)">Spill − IdealDir = +10.535 ns</text>
    </g>
    <g id="text_28">
-    <text style="font: 17px 'Microsoft YaHei'; text-anchor: middle" x="550.032115" y="19.785312" transform="rotate(-0 550.032115 19.785312)">Corrected scope: Outer spill vs IdealDir</text>
+    <text style="font: 17px 'Microsoft YaHei'; text-anchor: middle" x="550.032115" y="19.785312" transform="rotate(-0 550.032115 19.785312)">Outer spill vs IdealDir</text>
    </g>
   </g>
  </g>
