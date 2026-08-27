@@ -44,6 +44,9 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   `baseline -> naive`、`spill-512k/actual -> spill`、`ideal-dir/infinite -> ideal`。省略时 profile=naive
   自动为 naive；Home UBIO `PROCESS-MANIFEST experimental_oversized_resident_dir=1`自动为 ideal；其余
   其余spill-noopt自动为spill；optimized自动为support extension，并产生`METRIC1_ROLE_AUTO_DETECTED`。
+  为兼容旧 run-list/远端调用，Metric1 的`profile=ideal|ideal-dir|infinite`会被显式归一为
+  `profile=spill-noopt + metric1_role=ideal`，并产生`LEGACY_METRIC1_PROFILE_NORMALIZED`。该兼容只修正
+  字段词汇，不绕过 oversized ResidentDir、capacity、fill、exact-live 或 Outer sample 标准门禁。
   正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
   `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
@@ -53,6 +56,8 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   spill/ideal 标准角色至少须有一条 completed Outer。
   旧 node1/node2 `post_pressure_catalog_reuse` GUEST-TIMER 已弃用为描述字段，不参与完整性或 PASS。
   完整时继续输出旧 guest 值；缺失或部分存在仍 ADDED，产生`METRIC1_GUEST_TIMER_MISSING`，描述字段为 null。
+  GUEST-TIMER 字段顺序不影响解析；warning 会列出已发现 simout 数、marker 总数、可见 phase 和最多三条
+  malformed marker，便于区分“文件未发现”“phase 不匹配”和“字段不完整”。
   容量只从Home UBIO目录提取，默认`n0/s0`，兼容`ubio_tc131_n0_s0`与`ubio_n0_s0`；
   非默认Home可在run中填写`home_node/home_socket`。Home 发现依次使用标准目录名、任意布局中的
   `[PROCESS-MANIFEST]`身份、容量 marker 回退；单一回退或多个相同来源产生 WARNING，来源值冲突才拒绝。
@@ -230,6 +235,12 @@ finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 ou
 extension 不改变正式状态。每个成功 run 含`contract_class`、`standard_contract`和结构化
 `contract_warnings`。
 
+报告中的`source_inventory`明确分离三种计数：`logical_runs`是成功解析且未发生 slot 冲突的逻辑
+运行数，`unique_files`是证据文件去重数，`source_references`是 timer、latency、Outer、capacity 等
+marker/source 行引用数。一个 run 可产生数万条 Outer source reference，因此不得把 sources 数当成
+run 数。`NONSTANDARD_CONTRACT`现在包含`failed_gates`，会直接列出 topology、phase、node、samples
+或 Metric1 角色门禁中的不匹配项。
+
 Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubio_tcN_nN_sS`目录、日志内
 `PROCESS-MANIFEST`身份、最后是唯一或数值一致的容量 marker 来源。回退会产生
 `HOME_UBIO_FALLBACK`或`HOME_UBIO_IDENTICAL_MULTIPLE` WARNING；只有多个来源的容量、policy
@@ -245,6 +256,11 @@ Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubi
 两个矩阵可用`merged = left + right`纯内存合并。requirements 做确定性并集，correctness policy 取
 `strict > required > optional`中更严格者；ID 冲突自动改名，逻辑 slot 冲突仍无效。合并不修改操作数，
 也不会访问源路径，因此原始目录已删除后仍可`merged.finalize()`；`m + m`会去重完全相同的 run snapshot。
+
+矩阵可直接使用 Python `pickle` 序列化。pickle 保存的是版本化内存 snapshot，不保存打开的文件、迭代器
+或派生 slot 索引；反序列化会重建 slot 索引，不重新读取任何 raw log。协议0至当前
+`pickle.HIGHEST_PROTOCOL`均支持 round-trip；跨 Python 版本长期保存时应由调用方选择兼容的 pickle protocol。
+pickle 只应用于可信输入，不应加载来源不明的 pickle 文件。
 
 ## 正式结果还原验证
 

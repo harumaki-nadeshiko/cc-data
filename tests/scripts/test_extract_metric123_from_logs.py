@@ -4,7 +4,9 @@ import gzip
 import importlib.util
 import json
 import pathlib
+import pickle
 import shutil
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -14,6 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/extract_metric123_from_logs.py"
 SPEC = importlib.util.spec_from_file_location("extract_metric123_from_logs", SCRIPT)
 MOD = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MOD
 SPEC.loader.exec_module(MOD)
 
 
@@ -295,6 +298,61 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(any(x["code"] == "METRIC1_ROLE_AUTO_DETECTED"
                             for x in result["issues"]))
 
+    def test_metric1_legacy_ideal_profile_normalizes_to_standard_role(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}},
+            base_dir=self.root)
+        run = self.make_formal_m1("legacy-ideal", "ideal", 1000, 0,
+                                  (10000,), explicit_role=False)
+        run["profile"] = "ideal"
+        added = matrix.add(run)
+        self.assertEqual(added["status"], "ADDED")
+        result = matrix.finalize()
+        resolved = result["resolved_runs"][0]
+        self.assertEqual(resolved["profile"], "spill-noopt")
+        self.assertEqual(resolved["metric1_role"], "ideal")
+        self.assertTrue(resolved["standard_contract"])
+        self.assertTrue(any(
+            issue["code"] == "LEGACY_METRIC1_PROFILE_NORMALIZED"
+            for issue in result["issues"]))
+
+    def test_metric1_legacy_ideal_conflicting_role_is_rejected_as_standard(self):
+        run = self.make_formal_m1("legacy-conflict", "ideal", 1000, 0,
+                                  (10000,), explicit_role=False)
+        run.update(profile="ideal", metric1_role="spill")
+        rejected = MOD.Metric123RawLogMatrix(base_dir=self.root).add(run)
+        self.assertEqual(rejected["status"], "REJECTED")
+        self.assertEqual(rejected["issue"]["contract_class"], "standard")
+        self.assertIn("conflicts with metric1_role", rejected["issue"]["message"])
+
+    def test_guest_timer_field_order_is_irrelevant_and_missing_is_diagnostic(self):
+        reordered = self.make_formal_m1("reordered-timer", "naive", 100, None)
+        out = pathlib.Path(reordered["simout_dir"])
+        for node in (1, 2):
+            self.write(out / f"simout_tc131_node{node}.log",
+                       "[GUEST-TIMER] phase=post_pressure_catalog_reuse "
+                       f"counter_frequency_hz=1000000000 node={node} "
+                       "source=arm_cntvct_el0 counter_ticks=1000 "
+                       "unit=counter_ticks operations=10\n")
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(matrix.add(reordered)["status"], "ADDED")
+        self.assertTrue(matrix.finalize()["resolved_runs"][0]["metrics"]
+                        ["guest_timer_complete"])
+
+        diagnostic = self.make_formal_m1("timer-diagnostic", "naive", 100, None)
+        diagnostic_out = pathlib.Path(diagnostic["simout_dir"])
+        self.write(diagnostic_out / "simout_tc131_node1.log",
+                   self.timer(1, "different_phase"))
+        self.write(diagnostic_out / "simout_tc131_node2.log",
+                   "[GUEST-TIMER] node=2 phase=post_pressure_catalog_reuse\n")
+        diagnostic_matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(diagnostic_matrix.add(diagnostic)["status"], "ADDED")
+        issue = next(item for item in diagnostic_matrix.finalize()["issues"]
+                     if item["code"] == "METRIC1_GUEST_TIMER_MISSING")
+        self.assertIn("simout_files=2", issue["message"])
+        self.assertIn("different_phase", issue["message"])
+        self.assertIn("missing_fields", issue["message"])
+
     def test_metric1_optimized_is_support_not_formal_spill(self):
         matrix = MOD.Metric123RawLogMatrix(
             correctness_policy="optional", base_dir=self.root)
@@ -492,7 +550,11 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(m3.add(metric=3, tc=228, repetition="r1", topology="3n1s",
                                 arm="ourcc", pair="p", order="AB",
                                 simulator_log_dir=str(sim3), simout_dir=str(out3))["status"], "ADDED")
-        self.assertEqual(m3.finalize()["resolved_runs"][0]["contract_class"], "extension")
+        final_m3 = m3.finalize()
+        self.assertEqual(final_m3["resolved_runs"][0]["contract_class"], "extension")
+        warning_text = next(item["message"] for item in final_m3["issues"]
+                            if item["code"] == "NONSTANDARD_CONTRACT")
+        self.assertIn("topology=3n1s expected=2n1s", warning_text)
 
     def test_unknown_metric3_requires_specs_and_can_parse_with_specs(self):
         sim, out = self.root / "m3spec/sim", self.root / "m3spec/out"
@@ -551,6 +613,11 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue((self.root / "report/metric_matrix_standard.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_all.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_extension.tsv").is_file())
+        inventory = result["report"]["source_inventory"]
+        self.assertEqual(inventory["logical_runs"], 1)
+        self.assertGreater(inventory["unique_files"], 0)
+        self.assertGreater(inventory["source_references"], 0)
+        self.assertIn("not logical runs", inventory["note"])
 
     def test_incremental_incomplete_requirements_lists_missing_slots(self):
         requirements = {"metric1": {"repetitions": []},
@@ -620,6 +687,33 @@ class ExtractMetric123Test(unittest.TestCase):
         result["slot"][0] = 999
         stored = matrix.finalize()["report"]["ingestion"]["add_results"][0]
         self.assertEqual(stored["slot"][0], 2)
+
+    def test_matrix_pickle_round_trip_is_snapshot_only_for_all_protocols(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        accepted = self.make_m2_run("pickle-accepted", profile="naive")
+        rejected = self.make_m2_run("pickle-rejected", profile="optimized")
+        (pathlib.Path(rejected["simout_dir"]) / "simout_n1").write_text("")
+        self.assertEqual(matrix.add(accepted)["status"], "ADDED")
+        self.assertEqual(matrix.add(rejected)["status"], "REJECTED")
+        before = matrix.finalize()
+        shutil.rmtree(self.root / "pickle-accepted")
+        shutil.rmtree(self.root / "pickle-rejected")
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            restored = pickle.loads(pickle.dumps(matrix, protocol=protocol))
+            with mock.patch.object(MOD, "open_text",
+                                   side_effect=AssertionError("reopened input")):
+                self.assertEqual(restored.finalize(), before)
+            duplicate = self.make_m2_run(
+                f"pickle-duplicate-{protocol}", profile="naive")
+            duplicate["repetition"] = "r1"
+            result = restored.add(duplicate)
+            self.assertEqual(result["status"], "REJECTED")
+            self.assertEqual(result["issue"]["code"], "DUPLICATE_SLOT")
+
+    def test_matrix_pickle_rejects_unknown_state_version(self):
+        matrix = object.__new__(MOD.Metric123RawLogMatrix)
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            matrix.__setstate__({"version": 999})
 
     def make_m3_run(self, run_id, tc, repetition, arm=None, tick_base=100,
                     identity=None, pair=None, order=None):

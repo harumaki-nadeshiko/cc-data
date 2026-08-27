@@ -54,7 +54,7 @@
           "topology": {"type": "string", "pattern": "^[0-9]+n[0-9]+s$"},
           "simulator_log_dir": {"type": "string"},
           "simout_dir": {"type": "string"},
-          "profile": {"enum": ["naive", "spill", "spill-noopt", "optimized"]},
+          "profile": {"enum": ["naive", "spill", "spill-noopt", "optimized", "ideal", "ideal-dir", "infinite"]},
           "metric1_role": {"type": "string", "minLength": 1},
           "arm": {"type": "string", "minLength": 1},
           "pair": {"type": ["string", "integer"]},

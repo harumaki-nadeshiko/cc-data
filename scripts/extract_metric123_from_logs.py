@@ -73,8 +73,7 @@ M3_AGGREGATES = {
 }
 STATE_RE = re.compile(r"\[UBCC-STATE\].*capacity=(\d+).*policy=([A-Za-z0-9_-]+)")
 POLICY_RE = re.compile(r"\[UBIO-POLICY\].*?effective=([A-Za-z0-9_-]+)")
-TIMER_RE = re.compile(r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+operations=(\d+)\s+counter_ticks=(\d+)\s+counter_frequency_hz=(\d+)\s+source=(\S+)\s+unit=(\S+)")
-LAT_RE = re.compile(r"\[PERF-LATENCY\]\s+node=(\d+)\s+phase=(\S+)\s+samples=(\d+)\s+min=(\d+)\s+p50=(\d+)\s+p95=(\d+)\s+p99=(\d+)\s+max=(\d+)\s+mean=(\d+)\s+counter_frequency_hz=(\d+)\s+source=(\S+)\s+unit=(\S+)")
+MARKER_FIELD_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=([^\s,]+)")
 SIMOUT_PATTERNS = (
     re.compile(r"simout_tc(\d+)_node(\d+)\.log(?:\.gz)?$"),
     re.compile(r"simout_n(\d+)(?:\.log)?(?:\.gz)?$"),
@@ -180,6 +179,35 @@ def norm_metric1_role(value):
     if normalized is None:
         raise ExtractError(f"unknown Metric1 role {value!r}")
     return normalized
+
+
+def normalize_legacy_metric1_profile(run):
+    """Translate the old Metric1 ``profile=ideal`` vocabulary to role form."""
+    out = dict(run)
+    try:
+        metric = int(out.get("metric", 0) or 0)
+    except (TypeError, ValueError):
+        return out
+    raw_profile = str(out.get("profile", "")).lower()
+    if metric != 1 or raw_profile not in ("ideal", "ideal-dir", "infinite"):
+        return out
+    if (out.get("metric1_role") is not None and
+            norm_metric1_role(out["metric1_role"]) != "ideal"):
+        raise ExtractError(
+            f"legacy Metric1 profile {raw_profile!r} conflicts with "
+            f"metric1_role={out['metric1_role']!r}")
+    out["profile"] = "spill-noopt"
+    out["metric1_role"] = "ideal"
+    warnings = list(out.get("_contract_warnings", []))
+    if not any(isinstance(item, dict) and
+               item.get("code") == "LEGACY_METRIC1_PROFILE_NORMALIZED"
+               for item in warnings):
+        warnings.append(warning(
+            "LEGACY_METRIC1_PROFILE_NORMALIZED", out.get("id", ""),
+            f"legacy profile={raw_profile!r} normalized to "
+            "profile='spill-noopt', metric1_role='ideal'"))
+    out["_contract_warnings"] = warnings
+    return out
 
 
 def metric1_outer_latency(root):
@@ -469,30 +497,60 @@ def discover_home_ubio_logs(root, tc, node=0, socket=0, run_id="",
     return logs, [warning(code, run_id, message)]
 
 
-def marker_rows(paths, kind, phase=None):
-    regex = TIMER_RE if kind == "timer" else LAT_RE
+def scan_marker_rows(paths, kind, phase=None):
+    """Parse markers independent of field order and return diagnostics."""
+    marker = "[GUEST-TIMER]" if kind == "timer" else "[PERF-LATENCY]"
+    required = ({"node", "phase", "operations", "counter_ticks",
+                 "counter_frequency_hz", "source", "unit"}
+                if kind == "timer" else
+                {"node", "phase", "samples", "min", "p50", "p95", "p99",
+                 "max", "mean", "counter_frequency_hz", "source", "unit"})
     rows = []
+    diagnostics = {"files": [str(path) for path in paths], "marker_lines": 0,
+                   "available_phases": set(), "malformed": []}
     for path in paths:
         with open_text(path) as stream:
             for line_no, line in enumerate(stream, 1):
-                match = regex.search(line)
-                if not match or (phase is not None and match.group(2) != phase):
+                if marker not in line:
+                    continue
+                diagnostics["marker_lines"] += 1
+                fields = dict(MARKER_FIELD_RE.findall(line.split(marker, 1)[1]))
+                marker_phase = fields.get("phase")
+                if marker_phase:
+                    diagnostics["available_phases"].add(marker_phase)
+                missing = sorted(required - set(fields))
+                if missing:
+                    diagnostics["malformed"].append(
+                        {"file": str(path), "line": line_no,
+                         "missing_fields": missing})
+                    continue
+                if phase is not None and marker_phase != phase:
                     continue
                 if kind == "timer":
-                    node, count, ticks, freq, source, unit = (int(match.group(1)), int(match.group(3)),
-                        int(match.group(4)), int(match.group(5)), match.group(6), match.group(7))
+                    node, count, ticks, freq = (int(fields["node"]),
+                        int(fields["operations"]), int(fields["counter_ticks"]),
+                        int(fields["counter_frequency_hz"]))
+                    source, unit = fields["source"], fields["unit"]
                 else:
-                    node, count, ticks, freq, source, unit = (int(match.group(1)), int(match.group(3)),
-                        int(match.group(9)), int(match.group(10)), match.group(11), match.group(12))
-                    ordered = list(map(int, match.group(4, 5, 6, 7, 8)))
+                    node, count, ticks, freq = (int(fields["node"]),
+                        int(fields["samples"]), int(fields["mean"]),
+                        int(fields["counter_frequency_hz"]))
+                    source, unit = fields["source"], fields["unit"]
+                    ordered = [int(fields[name]) for name in
+                               ("min", "p50", "p95", "p99", "max")]
                     if ordered != sorted(ordered) or not ordered[0] <= ticks <= ordered[-1]:
                         raise ExtractError(f"invalid PERF-LATENCY ordering in {path}:{line_no}")
                 if count <= 0 or ticks <= 0 or freq <= 0 or source != "arm_cntvct_el0" or unit != "counter_ticks":
                     raise ExtractError(f"invalid {kind} marker in {path}:{line_no}")
                 rows.append({"file": str(path), "line": line_no, "node": node,
-                             "phase": match.group(2),
-                             "count": count, "ticks": ticks, "frequency_hz": freq})
-    return rows
+                             "phase": marker_phase, "count": count,
+                             "ticks": ticks, "frequency_hz": freq})
+    diagnostics["available_phases"] = sorted(diagnostics["available_phases"])
+    return rows, diagnostics
+
+
+def marker_rows(paths, kind, phase=None):
+    return scan_marker_rows(paths, kind, phase)[0]
 
 
 def aggregate_latency_phase(rows, expected_node=None, expected_samples=None):
@@ -613,6 +671,7 @@ def parse_capacity(paths):
 
 
 def extract_run(run, base, policy):
+    run = normalize_legacy_metric1_profile(run)
     required = {"metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"}
     missing = required - set(run)
     if missing:
@@ -644,7 +703,7 @@ def extract_run(run, base, policy):
         out["profile"] = norm_profile(run.get("profile"))
     if out["metric"] == 1:
         phase = str(run.get("phase", "post_pressure_catalog_reuse"))
-        rows = marker_rows(paths, "timer", phase)
+        rows, timer_diagnostics = scan_marker_rows(paths, "timer", phase)
         by_node = defaultdict(list)
         for row in rows:
             by_node[row["node"]].append(row)
@@ -660,7 +719,11 @@ def extract_run(run, base, policy):
             out["contract_warnings"].append(warning(
                 "METRIC1_GUEST_TIMER_MISSING", out["id"],
                 f"descriptive guest timer absent/partial expected={expected_nodes} "
-                f"counts={dict((n, len(v)) for n, v in by_node.items())}"))
+                f"counts={dict((n, len(v)) for n, v in by_node.items())} "
+                f"simout_files={len(timer_diagnostics['files'])} "
+                f"marker_lines={timer_diagnostics['marker_lines']} "
+                f"available_phases={timer_diagnostics['available_phases']} "
+                f"malformed={timer_diagnostics['malformed'][:3]}"))
         home_node = int(run.get("home_node", 0))
         home_socket = int(run.get("home_socket", 0))
         explicit_home = []
@@ -702,14 +765,33 @@ def extract_run(run, base, policy):
         role = out["metric1_role"]
         common = (out["tc"] == 131 and out["topology"] == "8n1s" and
                   home_node == 0 and home_socket == 0)
+        failed_gates = []
+        if out["tc"] != 131:
+            failed_gates.append(f"tc={out['tc']} expected=131")
+        if out["topology"] != "8n1s":
+            failed_gates.append(f"topology={out['topology']} expected=8n1s")
+        if home_node != 0 or home_socket != 0:
+            failed_gates.append(f"home={home_node}/{home_socket} expected=0/0")
         if role == "naive":
             qualified = (out["profile"] == "naive" and capacity["policy"] == "naive" and
                          capacity["experimental_oversized_resident_dir"] in (None, 0))
+            if out["profile"] != "naive": failed_gates.append("profile must be naive")
+            if capacity["policy"] != "naive": failed_gates.append("UBIO policy must be naive")
+            if capacity["experimental_oversized_resident_dir"] not in (None, 0):
+                failed_gates.append("oversized ResidentDir must be disabled")
         elif role == "spill":
             qualified = (out["profile"] == "spill-noopt" and capacity["policy"] == "spill" and
                           capacity["experimental_oversized_resident_dir"] in (None, 0) and
                           capacity["h64_exact_live_known"] == 1 and
                           outer["samples"] >= 1)
+            if out["profile"] != "spill-noopt": failed_gates.append("profile must be spill-noopt")
+            if capacity["policy"] != "spill": failed_gates.append("UBIO policy must be spill")
+            if capacity["experimental_oversized_resident_dir"] not in (None, 0):
+                failed_gates.append("oversized ResidentDir must be disabled")
+            if capacity["h64_exact_live_known"] != 1:
+                failed_gates.append("h64ExactLiveKnown must equal 1")
+            if outer["samples"] < 1:
+                failed_gates.append("completed Outer samples must be >=1")
         elif role == "ideal":
             ideal_min = int(run.get("ideal_min_capacity", 102656))
             out["ideal_min_capacity"] = ideal_min
@@ -720,14 +802,31 @@ def extract_run(run, base, policy):
                           capacity["h64_exact_live"] == 0 and
                           capacity["h64_exact_live_known"] in (0, 1) and
                           outer["samples"] >= 1)
+            if out["profile"] != "spill-noopt": failed_gates.append("profile must be spill-noopt")
+            if capacity["policy"] != "spill": failed_gates.append("UBIO policy must be spill")
+            if capacity["experimental_oversized_resident_dir"] != 1:
+                failed_gates.append("experimental oversized ResidentDir must be enabled")
+            if capacity["resident_capacity"] < ideal_min:
+                failed_gates.append(
+                    f"resident capacity {capacity['resident_capacity']} < {ideal_min}")
+            if capacity["backstore_found_fills"] != 0:
+                failed_gates.append("Backstore found fills must equal 0")
+            if capacity["h64_exact_live"] != 0:
+                failed_gates.append("h64ExactLiveCount must equal 0")
+            if capacity["h64_exact_live_known"] not in (0, 1):
+                failed_gates.append("h64ExactLiveKnown must be 0 or 1")
+            if outer["samples"] < 1:
+                failed_gates.append("completed Outer samples must be >=1")
         else:
             qualified = False
+            failed_gates.append(f"role={role} is descriptive support only")
         standard = common and qualified
         if not standard:
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric1 descriptive extension role={role} tc={out['tc']} topology={out['topology']} "
-                f"profile={out['profile']} home={home_node}/{home_socket} capacity={capacity}"))
+                f"profile={out['profile']} home={home_node}/{home_socket} "
+                f"failed_gates={failed_gates}"))
     elif out["metric"] == 2:
         registered = out["tc"] in M2
         all_rows = marker_rows(paths, "latency")
@@ -782,12 +881,25 @@ def extract_run(run, base, policy):
         if selected is not None:
             out["metrics"].update(selected)
         standard = (registered and out["topology"] == official_topology and phase == default_phase and
-                     node == default_node and samples == default_samples)
+                    node == default_node and samples == default_samples)
         if not standard:
+            failed_gates = []
+            if not registered:
+                failed_gates.append(f"TC{out['tc']} is not in the standard Metric2 registry")
+            else:
+                if out["topology"] != official_topology:
+                    failed_gates.append(f"topology={out['topology']} expected={official_topology}")
+                if phase != default_phase:
+                    failed_gates.append(f"phase={phase} expected={default_phase}")
+                if node != default_node:
+                    failed_gates.append(f"node={node} expected={default_node}")
+                if samples != default_samples:
+                    failed_gates.append(f"samples={samples} expected={default_samples}")
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric2 descriptive extension tc={out['tc']} topology={out['topology']} "
-                f"phase={phase} node={node} samples={samples}"))
+                f"phase={phase} node={node} samples={samples} "
+                f"failed_gates={failed_gates}"))
     else:
         if run.get("arm") is None:
             out["arm"], evidence = detect_metric3_arm(simulator)
@@ -838,9 +950,15 @@ def extract_run(run, base, policy):
         out["metrics"] = metrics
         standard = registered and out["topology"] == "2n1s"
         if not standard:
+            failed_gates = []
+            if not registered:
+                failed_gates.append(f"TC{out['tc']} is not in the standard Metric3 registry")
+            if out["topology"] != "2n1s":
+                failed_gates.append(f"topology={out['topology']} expected=2n1s")
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
-                f"Metric3 descriptive extension tc={out['tc']} topology={out['topology']}"))
+                f"Metric3 descriptive extension tc={out['tc']} topology={out['topology']} "
+                f"failed_gates={failed_gates}"))
     out["standard_contract"] = bool(standard)
     out["contract_class"] = "standard" if standard else "extension"
     out["status"] = "VALID"
@@ -993,6 +1111,51 @@ def descriptive_view(runs):
             "comparisons": comparisons, "metric3_pairs": m3_pairs,
             "metric1_role_comparisons": m1_role_comparisons,
             "metric3_arm_comparisons": arm_comparisons, "matrix": matrix}
+
+
+def source_inventory(runs):
+    """Separate logical runs, unique files, and per-marker source references."""
+    files = set()
+    source_references = 0
+
+    def add_file(value):
+        if value in (None, ""):
+            return
+        text = str(value)
+        match = re.fullmatch(r"(.+):\d+", text)
+        files.add(match.group(1) if match else text)
+
+    def walk(value, key=None):
+        nonlocal source_references
+        if isinstance(value, dict):
+            if value.get("file"):
+                add_file(value["file"])
+            for child_key, child in value.items():
+                if child_key != "file":
+                    walk(child, child_key)
+        elif isinstance(value, list):
+            if key == "sources":
+                source_references += len(value)
+            for child in value:
+                if key in ("sources", "source_files") and isinstance(child, str):
+                    add_file(child)
+                walk(child)
+        elif key in ("verifier", "path"):
+            add_file(value)
+
+    for run in runs:
+        for path in run.get("simout_by_node", {}).values():
+            add_file(path)
+        for path in run.get("home_ubio_logs", []):
+            add_file(path)
+        correctness_data = run.get("correctness", {})
+        add_file(correctness_data.get("verifier"))
+        for child in correctness_data.get("child_exits", []):
+            add_file(child.get("path"))
+        walk(run.get("metrics", {}))
+    return {"logical_runs": len(runs), "unique_files": len(files),
+            "source_references": source_references,
+            "note": "source references are evidence rows/markers, not logical runs"}
 
 
 def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
@@ -1351,8 +1514,9 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
                "views": {"standard": {"runs": len(standard_resolved), "formal": True},
-                         "all": descriptive_view(all_resolved),
-                         "extension": descriptive_view(extension_resolved)},
+                          "all": descriptive_view(all_resolved),
+                          "extension": descriptive_view(extension_resolved)},
+               "source_inventory": source_inventory(all_resolved),
                "issues": issues,
                "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
                                             "rejected": 0, "duplicate_conflicted": len(bad_ids),
@@ -1393,6 +1557,8 @@ class Metric123RawLogMatrix:
     including attempts later rejected because their evidence is invalid.
     """
 
+    _PICKLE_STATE_VERSION = 1
+
     def __init__(self, requirements=None, correctness_policy="strict", base_dir=None):
         if correctness_policy not in ("strict", "required", "optional"):
             raise ExtractError("correctness_policy must be strict|required|optional")
@@ -1413,6 +1579,39 @@ class Metric123RawLogMatrix:
         self._ids = set()
         self._add_results = []
         self._slot_ids = defaultdict(list)
+
+    def __getstate__(self):
+        """Return a versioned, path-independent snapshot for ``pickle``."""
+        return {"version": self._PICKLE_STATE_VERSION,
+                "correctness_policy": self.correctness_policy,
+                "base_dir": str(self.base_dir),
+                "explicit_requirements": self._explicit_requirements,
+                "requirements": copy.deepcopy(self._requirements),
+                "inferred": copy.deepcopy(self._inferred),
+                "resolved": copy.deepcopy(self._resolved),
+                "issues": copy.deepcopy(self._issues),
+                "ids": set(self._ids),
+                "add_results": copy.deepcopy(self._add_results)}
+
+    def __setstate__(self, state):
+        """Restore a snapshot without reopening any source log path."""
+        if not isinstance(state, dict) or state.get("version") != self._PICKLE_STATE_VERSION:
+            raise ValueError("unsupported Metric123RawLogMatrix pickle state")
+        policy = state.get("correctness_policy")
+        if policy not in ("strict", "required", "optional"):
+            raise ValueError("invalid correctness policy in Metric123RawLogMatrix pickle")
+        self.correctness_policy = policy
+        self.base_dir = pathlib.Path(state["base_dir"]).expanduser().resolve()
+        self._explicit_requirements = bool(state["explicit_requirements"])
+        self._requirements = copy.deepcopy(state["requirements"])
+        self._inferred = copy.deepcopy(state["inferred"])
+        self._resolved = copy.deepcopy(state["resolved"])
+        self._issues = copy.deepcopy(state["issues"])
+        self._ids = set(state["ids"])
+        self._add_results = copy.deepcopy(state["add_results"])
+        self._slot_ids = defaultdict(list)
+        for row in self._resolved:
+            self._slot_ids[logical_slot(row)].append(row["id"])
 
     @staticmethod
     def _identity(raw):
@@ -1501,7 +1700,22 @@ class Metric123RawLogMatrix:
             raw["comparison_mode"] = ("paired" if req.get("mode") == "paired" or
                                       ("mode" not in req and bool(req.get("pairs"))) else
                                       "independent")
+        normalization_error = None
+        legacy_identity = None
+        try:
+            raw = normalize_legacy_metric1_profile(raw)
+        except (ExtractError, TypeError, ValueError) as error:
+            normalization_error = error
+            try:
+                if (int(raw.get("metric", 0) or 0) == 1 and
+                        str(raw.get("profile", "")).lower() in
+                        ("ideal", "ideal-dir", "infinite")):
+                    legacy_identity = (1, str(raw["repetition"]), int(raw["tc"]),
+                                       "ideal", "spill-noopt")
+            except (KeyError, TypeError, ValueError):
+                pass
         run_id, slot = self._identity(raw)
+        slot = slot or legacy_identity
         official_candidate = self._official_requirement_candidate(raw, slot)
         if official_candidate:
             self._infer(slot)
@@ -1512,6 +1726,8 @@ class Metric123RawLogMatrix:
         if rename_warning:
             raw.setdefault("_contract_warnings", []).append(rename_warning)
         try:
+            if normalization_error is not None:
+                raise normalization_error
             parsed = extract_run(raw, self.base_dir, self.correctness_policy)
         except (ExtractError, OSError, ValueError, TypeError) as error:
             message = str(error)
@@ -1725,10 +1941,13 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
              "Metric3 仅表示冻结可执行参考模型范围；delta = HA-VI - OurCC，严格大于 0 才通过。",
              "不执行 t-test，不生成 p-value，不做笛卡尔配对。", "",
              "## 视图", "",
-             f"- Standard runs: {report['views']['standard']['runs']}",
-             f"- All parsed runs: {report['views']['all']['runs']}",
-             f"- Extension runs: {report['views']['extension']['runs']}",
-             "", "## 标准矩阵", "",
+              f"- Standard runs: {report['views']['standard']['runs']}",
+              f"- All parsed runs: {report['views']['all']['runs']}",
+              f"- Extension runs: {report['views']['extension']['runs']}",
+              f"- Unique evidence files: {report['source_inventory']['unique_files']}",
+              f"- Source references/marker rows: {report['source_inventory']['source_references']}",
+              "- Source references are not logical runs and must not be used as a parsed-run count.",
+              "", "## 标准矩阵", "",
              "| Metric | Level | Identity | TC | Value | Unit | Status |", "|---|---|---|---|---:|---|---|"]
     for row in matrix:
         value = "N/A" if row["value"] is None else f"{row['value']:.9g}" if isinstance(row["value"], (int, float)) else str(row["value"])
