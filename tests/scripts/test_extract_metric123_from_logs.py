@@ -1352,6 +1352,40 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(all(run["contract_class"] == "extension" and run["formal_contract"]
                             for run in result["resolved_runs"]))
 
+    def test_brief_and_detail_show_metric1_qualification_when_standard_is_na(self):
+        qualification = {"id": "m1-tc142-detail", "metric": 1,
+                         "coordinates": [{"tc": 142, "topology": "3n1s",
+                                           "home_node": 0, "home_socket": 0}],
+                         "min_samples": 1, "ideal_min_capacity": 1000}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"qualification_sets": [qualification]}, base_dir=self.root)
+        for role, capacity, exact, outer in (
+                ("naive", 100, None, ()), ("spill", 100, 160, (12000,)),
+                ("ideal", 1000, 0, (10000,))):
+            run = self.make_formal_m1(f"detail-142-{role}", role, capacity,
+                                      exact, outer)
+            sim = pathlib.Path(run["simulator_log_dir"])
+            run.update(tc=142, topology="3n1s")
+            for path in list(sim.rglob("*")):
+                if path.is_file():
+                    path.write_text(path.read_text().replace("tc131", "tc142")
+                                    .replace('"tc": 131', '"tc": 142'))
+            (sim / "verify_tc131.log").unlink()
+            shutil.rmtree(sim / "child_status_tc131")
+            self.correctness(sim, 142, "3n1s")
+            matrix.add(run)
+        output = self.root / "m1-detail-output"
+        matrix.finalize(output)
+        brief = (output / "report_brief_zh.md").read_text()
+        detail = json.loads((output / "metric_detail_by_tc_topology.json").read_text())
+        row = detail["metric1"][0]
+        self.assertIn("Metric1 Standard 为 N/A", brief)
+        self.assertEqual(row["scope"], "Formal qualification")
+        self.assertEqual(row["contract"], "m1-tc142-detail")
+        self.assertEqual(row["tc"], 142)
+        self.assertEqual(row["capacity_ratio"], 1.6)
+        self.assertEqual(row["outer_delta_cycles"], 4)
+
     def test_opt_in_metric2_exact_topology_phase_and_unregistered_extension(self):
         qualification = {"id": "m2-5n", "metric": 2,
                          "coordinates": [{"tc": 135, "topology": "5n1s",
@@ -1531,6 +1565,36 @@ class ExtractMetric123Test(unittest.TestCase):
                          {"hot_key_read": 2 / 3, "hot_key_write": 1 / 3})
         self.assertEqual(MOD.metric3_primary_weights(232, "3n1s"),
                          {"hot_key_read": 3 / 4, "hot_key_write": 1 / 4})
+
+    def test_brief_and_detail_show_metric3_topology_tc_when_aggregate_is_na(self):
+        qualification = {"id": "m3-detail-3n", "metric": 3,
+                         "mode": "independent", "topologies": ["3n1s"],
+                         "testcases": [228], "arms": ["ourcc", "ha-vi"],
+                         "min_samples": 1}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"qualification_sets": [qualification]}, base_dir=self.root)
+        matrix.add(self.make_m3_run("detail-3n-o", 228, "a", "ourcc", 100,
+                                    topology="3n1s"))
+        matrix.add(self.make_m3_run("detail-3n-h", 228, "b", "ha-vi", 130,
+                                    topology="3n1s"))
+        output = self.root / "m3-detail-output"
+        matrix.finalize(output)
+        brief = (output / "report_brief_zh.md").read_text()
+        detail = json.loads((output / "metric_detail_by_tc_topology.json").read_text())
+        row = detail["metric3"][0]
+        self.assertIn("Core/Representative Standard aggregate 为 N/A", brief)
+        self.assertEqual(row["scope"], "Formal qualification")
+        self.assertEqual(row["topology"], "3n1s")
+        self.assertEqual(row["tc"], 228)
+        self.assertEqual(row["primary_delta_ticks"], 30)
+        self.assertEqual(row["direction"], "OURCC_FASTER")
+        self.assertTrue((output / "metric_detail_by_tc_topology.svg").is_file())
+        try:
+            import matplotlib  # noqa: F401
+        except (ImportError, OSError):
+            pass
+        else:
+            self.assertTrue((output / "metric_detail_by_tc_topology.png").is_file())
 
     def test_metric3_paired_qualification_averages_all_pairs(self):
         qualification = {"id": "m3-two-pairs", "metric": 3, "mode": "paired",

@@ -11,6 +11,7 @@ import copy
 import csv
 import gzip
 import hashlib
+import html
 import json
 import math
 import multiprocessing
@@ -2995,7 +2996,158 @@ def brief_metric_values(report):
     }
 
 
-def render_brief_markdown(report):
+def detail_scope(runs):
+    if any(run.get("standard_contract") for run in runs):
+        return "Standard", STANDARD_CONTRACT_ID
+    contracts = sorted({item for run in runs
+                        for item in run.get("qualified_contracts", [])})
+    return (("Formal qualification", ",".join(contracts)) if contracts else
+            ("Extension descriptive", ""))
+
+
+def build_metric_details(resolved):
+    details = {"metric1": [], "metric2": [], "metric3": []}
+    m1_coordinates = sorted({(run["tc"], run["topology"])
+                             for run in resolved if run["metric"] == 1})
+    for tc, topology in m1_coordinates:
+        runs = [run for run in resolved if run["metric"] == 1 and
+                run["tc"] == tc and run["topology"] == topology]
+        groups = {role: [run for run in runs if run.get("metric1_role") == role]
+                  for role in ("naive", "spill", "ideal")}
+        naive = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                          for run in groups["naive"])
+        spill = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                          for run in groups["spill"])
+        spill_outer = pooled_outer_latency(groups["spill"])
+        ideal_outer = pooled_outer_latency(groups["ideal"])
+        delta_ns = safe_subtract(spill_outer["mean_ns"], ideal_outer["mean_ns"])
+        scope, contract = detail_scope(runs)
+        reasons = []
+        for role, rows in groups.items():
+            if not rows:
+                reasons.append(f"missing role={role}")
+        if groups["naive"] and naive is None:
+            reasons.append("naive capacity unavailable")
+        if groups["spill"] and spill is None:
+            reasons.append("spill capacity unavailable")
+        if groups["spill"] and spill_outer["samples"] == 0:
+            reasons.append("spill completed Outer missing")
+        if groups["ideal"] and ideal_outer["samples"] == 0:
+            reasons.append("ideal completed Outer missing")
+        details["metric1"].append({
+            "scope": scope, "contract": contract, "topology": topology,
+            "tc": tc, "capacity_ratio": safe_divide(spill, naive),
+            "outer_delta_cycles": delta_ns * 2.0 if delta_ns is not None else None,
+            "sample_counts": {role: len(rows) for role, rows in groups.items()},
+            "reason": "; ".join(reasons),
+        })
+
+    m2_coordinates = sorted({(run["tc"], run["topology"],
+                              run["metrics"].get("phase"))
+                             for run in resolved if run["metric"] == 2}, key=str)
+    for tc, topology, phase in m2_coordinates:
+        runs = [run for run in resolved if run["metric"] == 2 and
+                run["tc"] == tc and run["topology"] == topology and
+                run["metrics"].get("phase") == phase]
+        groups = {profile: [run for run in runs if run.get("profile") == profile]
+                  for profile in PROFILES}
+        means = {profile: safe_mean(run["metrics"].get("mean_ns")
+                                    for run in groups[profile])
+                 for profile in PROFILES}
+        reduction = safe_divide(safe_subtract(means["naive"], means["optimized"]),
+                                means["naive"])
+        scope, contract = detail_scope(runs)
+        reasons = [f"missing profile={profile}" for profile, rows in groups.items()
+                   if not rows]
+        reasons.extend(f"{profile} mean unavailable" for profile, value in means.items()
+                       if groups[profile] and value is None)
+        details["metric2"].append({
+            "scope": scope, "contract": contract, "topology": topology,
+            "tc": tc, "phase": phase,
+            "reduction_pct": reduction * 100 if reduction is not None else None,
+            "means_ns": means,
+            "sample_counts": {profile: len(rows) for profile, rows in groups.items()},
+            "reason": "; ".join(reasons),
+        })
+
+    m3_coordinates = sorted({(run["tc"], run["topology"])
+                             for run in resolved if run["metric"] == 3})
+    for tc, topology in m3_coordinates:
+        runs = [run for run in resolved if run["metric"] == 3 and
+                run["tc"] == tc and run["topology"] == topology]
+        values = defaultdict(list)
+        for run in runs:
+            for name, metric in run["metrics"].items():
+                value = finite_number(metric.get("ticks_per_operation"))
+                if value is not None:
+                    values[name, run["arm"]].append(value)
+        metric_deltas = {}
+        for name in M3.get(tc, {}):
+            left, right = values[name, "ourcc"], values[name, "ha-vi"]
+            metric_deltas[name] = (safe_subtract(safe_mean(right), safe_mean(left))
+                                   if left and right else None)
+        weights = metric3_primary_weights(tc, topology) if tc in M3 else {}
+        primary = (safe_weighted_sum((weight, metric_deltas.get(name))
+                                     for name, weight in weights.items())
+                   if weights else None)
+        scope, contract = detail_scope(runs)
+        counts = {arm: sum(run.get("arm") == arm for run in runs)
+                  for arm in ("ourcc", "ha-vi")}
+        reasons = [f"missing arm={arm}" for arm, count in counts.items() if count == 0]
+        reasons.extend(f"metric={name} delta unavailable" for name, value in metric_deltas.items()
+                       if value is None)
+        details["metric3"].append({
+            "scope": scope, "contract": contract, "topology": topology,
+            "tc": tc, "primary_delta_ticks": primary,
+            "direction": metric3_direction(primary), "metric_deltas": metric_deltas,
+            "sample_counts": counts, "reason": "; ".join(reasons),
+        })
+    return details
+
+
+def render_detail_markdown(details):
+    lines = ["# Metric 1/2/3 按拓扑与 TC 明细", "",
+             "`Extension descriptive`表示日志指标已提取，但未进入冻结 Standard 或显式 qualification。", "",
+             "## Metric1", "",
+             "| Scope | Contract | Topology | TC | Capacity ratio | Outer delta cycles | Samples naive/spill/ideal | Reason |",
+             "|---|---|---|---:|---:|---:|---|---|"]
+    for row in details["metric1"]:
+        counts = row["sample_counts"]
+        lines.append(
+            f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
+            f"{brief_number(row['capacity_ratio'])} | {brief_number(row['outer_delta_cycles'])} | "
+            f"{counts['naive']}/{counts['spill']}/{counts['ideal']} | {row['reason'] or '-'} |")
+    if not details["metric1"]:
+        lines.append("| - | - | - | - | N/A | N/A | - | no Metric1 runs |")
+    lines += ["", "## Metric2", "",
+              "| Scope | Contract | Topology | TC | Phase | Reduction % | Naive/Optimized ns | Samples naive/spill/optimized | Reason |",
+              "|---|---|---|---:|---|---:|---|---|---|"]
+    for row in details["metric2"]:
+        counts, means = row["sample_counts"], row["means_ns"]
+        lines.append(
+            f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
+            f"{row['phase']} | {brief_number(row['reduction_pct'])} | "
+            f"{brief_number(means['naive'])}/{brief_number(means['optimized'])} | "
+            f"{counts['naive']}/{counts['spill-noopt']}/{counts['optimized']} | {row['reason'] or '-'} |")
+    if not details["metric2"]:
+        lines.append("| - | - | - | - | - | N/A | N/A | - | no Metric2 runs |")
+    lines += ["", "## Metric3", "",
+              "| Scope | Contract | Topology | TC | Primary delta ticks | Direction | Samples OurCC/HA-VI | Metric deltas | Reason |",
+              "|---|---|---|---:|---:|---|---|---|---|"]
+    for row in details["metric3"]:
+        counts = row["sample_counts"]
+        lines.append(
+            f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
+            f"{brief_number(row['primary_delta_ticks'])} | {row['direction']} | "
+            f"{counts['ourcc']}/{counts['ha-vi']} | {markdown_cell(row['metric_deltas'])} | "
+            f"{row['reason'] or '-'} |")
+    if not details["metric3"]:
+        lines.append("| - | - | - | - | N/A | UNAVAILABLE | - | - | no Metric3 runs |")
+    return "\n".join(lines) + "\n"
+
+
+def render_brief_markdown(report, details=None):
+    details = details or {"metric1": [], "metric2": [], "metric3": []}
     values = brief_metric_values(report)
     missing = {name: [point for point in report[name].get("coverage", [])
                       if not point.get("complete", False)]
@@ -3035,6 +3187,22 @@ def render_brief_markdown(report):
              "Metric3 定义 `delta = HA-VI - OurCC`：正值表示 OurCC 更快，负值表示 HA-VI 更快；"
              "正负方向均保留。", "",
              "![Metric summary](metric_summary_bar_chart.svg)"]
+    detail_counts = {name: len(details[name]) for name in details}
+    lines += ["", "## 按拓扑/TC 已提取点", "",
+              f"- Metric1: {detail_counts['metric1']} 个点。",
+              f"- Metric2: {detail_counts['metric2']} 个点。",
+              f"- Metric3: {detail_counts['metric3']} 个点。",
+              "- 详细数值和图见 `report_detail_by_tc_topology_zh.md` 与 "
+              "`metric_detail_by_tc_topology.svg`。"]
+    if values["metric1_capacity_ratio"] is None and details["metric1"]:
+        lines.append(
+            "- Metric1 Standard 为 N/A，但已提取其他 TC/topology 点；请查看其 scope。"
+            "`Formal qualification`可作为已配置资格结果，`Extension descriptive`仅作描述。")
+    if (values["metric3_core_delta_ticks"] is None or
+            values["metric3_representative_delta_ticks"] is None) and details["metric3"]:
+        lines.append(
+            "- Metric3 Core/Representative Standard aggregate 为 N/A，但已有 TC/topology 明细；"
+            "通常表示冻结 TC228-235 全套 aggregate 尚未形成，或数据属于额外 topology qualification。")
     reasons = []
     for name in ("metric1", "metric2", "metric3"):
         for point in missing[name]:
@@ -3050,6 +3218,113 @@ def render_brief_markdown(report):
         if len(reasons) > 5:
             lines.append(f"- 其余 {len(reasons) - 5} 个缺失点见 `report.md`。")
     return "\n".join(lines) + "\n"
+
+
+def detail_chart_series(details):
+    return [
+        ("Metric1 capacity ratio", details["metric1"], "capacity_ratio", 1.5),
+        ("Metric1 Outer delta cycles", details["metric1"], "outer_delta_cycles", 50.0),
+        ("Metric2 reduction %", details["metric2"], "reduction_pct", 10.0),
+        ("Metric3 primary delta ticks", details["metric3"], "primary_delta_ticks", 0.0),
+    ]
+
+
+def write_detail_svg(path, details):
+    series = detail_chart_series(details)
+    rows_per_panel = [max(1, len(rows)) for _, rows, _, _ in series]
+    panel_heights = [85 + count * 34 for count in rows_per_panel]
+    width, height = 1420, 70 + sum(panel_heights)
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+           '<rect width="100%" height="100%" fill="#f7f4ed"/>',
+           '<style>text{font-family:DejaVu Sans,Arial,sans-serif;fill:#17232b}.title{font-size:22px;font-weight:700}.label{font-size:12px}.value{font-size:11px;font-weight:700}.note{font-size:11px;fill:#53636d}</style>',
+           '<text x="30" y="38" class="title">Metric Detail by Topology / TC</text>']
+    y0 = 60
+    scope_colors = {"Standard": "#247ba0", "Formal qualification": "#2a9d66",
+                    "Extension descriptive": "#9aa1a6"}
+    for (title, rows, field, reference), panel_height in zip(series, panel_heights):
+        svg.append(f'<rect x="25" y="{y0}" width="1370" height="{panel_height - 8}" rx="10" fill="#ffffff" stroke="#d8d3c8"/>')
+        svg.append(f'<text x="45" y="{y0 + 28}" class="title">{html.escape(title)}</text>')
+        values = [abs(row[field]) for row in rows if finite_number(row.get(field)) is not None]
+        scale = max(values + [abs(reference), 1.0]) * 1.15
+        zero = 660 if title.startswith("Metric3") else 380
+        span = 650 if title.startswith("Metric3") else 930
+        display_rows = rows or [{"topology": "-", "tc": "-", "scope": "-", field: None}]
+        for index, row in enumerate(display_rows):
+            y = y0 + 52 + index * 34
+            label = f"{row.get('topology', '-')} / TC{row.get('tc', '-')} / {row.get('scope', '-')}"
+            svg.append(f'<text x="45" y="{y + 19}" class="label">{html.escape(label)}</text>')
+            value = row.get(field)
+            if finite_number(value) is None:
+                svg.append(f'<rect x="{zero}" y="{y}" width="110" height="22" rx="4" fill="#e6e2d9"/>')
+                svg.append(f'<text x="{zero + 8}" y="{y + 16}" class="value">N/A</text>')
+                continue
+            color = scope_colors.get(row.get("scope"), "#9aa1a6")
+            if title.startswith("Metric3"):
+                bar_width = abs(value) / scale * span / 2
+                bar_x = zero if value >= 0 else zero - bar_width
+                svg.append(f'<line x1="{zero}" y1="{y - 3}" x2="{zero}" y2="{y + 25}" stroke="#495057"/>')
+            else:
+                bar_width = max(2, value / scale * span)
+                bar_x = zero
+                ref_x = zero + reference / scale * span
+                svg.append(f'<line x1="{ref_x:.2f}" y1="{y - 3}" x2="{ref_x:.2f}" y2="{y + 25}" stroke="#c65d3b" stroke-width="2"/>')
+            svg.append(f'<rect x="{bar_x:.2f}" y="{y}" width="{bar_width:.2f}" height="22" rx="4" fill="{color}"/>')
+            value_x = max(zero + 5, bar_x + bar_width + 6)
+            svg.append(f'<text x="{value_x:.2f}" y="{y + 16}" class="value">{value:.3f}</text>')
+        y0 += panel_height
+    svg.append('</svg>')
+    path.write_text("\n".join(svg) + "\n")
+
+
+def write_detail_png(path, details):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except (ImportError, OSError):
+        path.unlink(missing_ok=True)
+        return False
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        series = detail_chart_series(details)
+        figure, axes = plt.subplots(4, 1, figsize=(15, max(10, sum(
+            max(1, len(rows)) for _, rows, _, _ in series) * 0.38 + 5)))
+        colors = {"Standard": "#247ba0", "Formal qualification": "#2a9d66",
+                  "Extension descriptive": "#9aa1a6"}
+        for axis, (title, rows, field, reference) in zip(axes, series):
+            display = rows or [{"topology": "-", "tc": "-", "scope": "-", field: None}]
+            labels = [f"{row.get('topology', '-')} / TC{row.get('tc', '-')} / {row.get('scope', '-')}"
+                      for row in display]
+            values = [0 if finite_number(row.get(field)) is None else row[field] for row in display]
+            bar_colors = ["#d8d3c8" if finite_number(row.get(field)) is None else
+                          colors.get(row.get("scope"), "#9aa1a6") for row in display]
+            bars = axis.barh(labels, values, color=bar_colors)
+            axis.axvline(0, color="#495057", linewidth=0.8)
+            if not title.startswith("Metric3"):
+                axis.axvline(reference, color="#c65d3b", linewidth=1.5)
+            axis.set_title(title, fontweight="bold")
+            axis.grid(axis="x", alpha=0.2)
+            axis.invert_yaxis()
+            for bar, row in zip(bars, display):
+                raw = row.get(field)
+                text = "N/A" if finite_number(raw) is None else f"{raw:.3f}"
+                axis.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
+                          text, va="center", ha="left" if bar.get_width() >= 0 else "right",
+                          fontsize=8)
+        figure.suptitle("Metric Detail by Topology / TC", fontsize=16, fontweight="bold")
+        figure.tight_layout()
+        figure.savefig(temporary, format="png", dpi=180, bbox_inches="tight")
+        plt.close(figure)
+        temporary.replace(path)
+        return True
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        temporary.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        return False
 
 
 def write_summary_svg(path, report):
@@ -3171,9 +3446,17 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
               ["run_id", "metric", "tc", "repetition", "profile", "arm", "pair", "order", "value", "unit", "status"])
     write_tsv(output_dir / "issues.tsv", issues,
               ["severity", "code", "run_id", "contract_class", "message"])
-    (output_dir / "report_brief_zh.md").write_text(render_brief_markdown(report))
+    details = build_metric_details(resolved)
+    (output_dir / "metric_detail_by_tc_topology.json").write_text(json.dumps(
+        json_ready(details), indent=2, sort_keys=True, allow_nan=False) + "\n")
+    (output_dir / "report_detail_by_tc_topology_zh.md").write_text(
+        render_detail_markdown(details))
+    (output_dir / "report_brief_zh.md").write_text(
+        render_brief_markdown(report, details))
     write_summary_svg(output_dir / "metric_summary_bar_chart.svg", report)
     write_summary_png(output_dir / "metric_summary_bar_chart.png", report)
+    write_detail_svg(output_dir / "metric_detail_by_tc_topology.svg", details)
+    write_detail_png(output_dir / "metric_detail_by_tc_topology.png", details)
     lines = ["# Metric 1/2/3 原始日志统一报告", "", f"总体状态：**{report['overall_status']}**", "",
              "| 指标 | 状态 |", "|---|---|", f"| Metric1 | {report['metric1']['status']} |",
              f"| Metric2 | {report['metric2']['status']} |", f"| Metric3 | {report['metric3']['status']} |", "",

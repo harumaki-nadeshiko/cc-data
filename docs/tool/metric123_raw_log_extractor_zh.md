@@ -265,6 +265,11 @@ Metric1/2/3 都不要求调用方预分配 repetition 序号。run 同时省略`
 旧`min_repetitions`也是`min_samples`的兼容别名。Metric3 paired 模式仍按 pair/tc/order 配双 arm，
 不受 repetition 变化影响。
 
+Portable Metric1 qualification 的当前坐标是 TC142-TC147，不含 TC141。TC141 是 shared-to-writer recovery
+正确性资格用例，不会自动形成 Metric1 capacity ratio/Outer delta。若将 TC141 作为 Metric1 run 导入，它只会
+进入`Extension descriptive`；只有 workload 和日志同时提供 naive/spill/ideal 三角色、Home capacity marker 和
+spill/ideal completed Outer，详细报告才可能计算描述值，否则会明确显示缺 role 或缺 Outer 的 N/A 原因。
+
 ## 显式资格合同（opt-in）
 
 冻结 standard 合同、`report.metric1/2/3`、`views.standard`和未配置时的退出码/数值完全不变。
@@ -381,8 +386,12 @@ Metric 3 p150 representative    2.8785156250000004 ticks
 output/report.json           完整机器可读报告
 output/report.md             中文摘要和人读矩阵
 output/report_brief_zh.md    交付简阅摘要：状态、关键值、缺失点和主要原因
+output/report_detail_by_tc_topology_zh.md 按 scope/topology/TC 展开的详细结果
+output/metric_detail_by_tc_topology.json 详细结果的机器可读形式
 output/metric_summary_bar_chart.svg 零依赖矢量柱状图，始终生成
 output/metric_summary_bar_chart.png 安装 Matplotlib 后生成的高分辨率柱状图
+output/metric_detail_by_tc_topology.svg 按拓扑/TC 展开的零依赖详细柱状图
+output/metric_detail_by_tc_topology.png 安装 Matplotlib 后生成的详细 PNG
 output/metric_matrix.tsv     run/pair/TC/aggregate 多层矩阵
 output/metric_matrix_standard.tsv  正式冻结合同矩阵；与 metric_matrix.tsv 相同
 output/metric_matrix_all.tsv       全部成功解析的数据点与描述结果
@@ -401,6 +410,11 @@ tools/wheels/aarch64-cp311/
 
 安装命令、固定版本和 SHA256 校验见该目录的`README_zh.md`。未安装 Matplotlib 时 extractor 仍正常工作，
 并始终输出内容等价的 SVG 图。Metric3 图以0为轴同时显示正负 delta，不隐藏 HA-VI 更快的场景。
+
+简报中的 Metric1 数值优先表示冻结 Standard TC131/8N1S；Metric3 Core/Representative 优先表示冻结
+TC228-TC235 Standard aggregate。因此额外 TC/topology 即使单点已解析或 qualification 已 PASS，总览仍可能
+显示 Standard N/A。此时应查看`report_detail_by_tc_topology_zh.md`：它按`Standard`、
+`Formal qualification`、`Extension descriptive`区分 scope，并逐 topology/TC 显示实际数值与 N/A 原因。
 
 `report.md`是首选的人读诊断入口，包含三个中文章节：
 
