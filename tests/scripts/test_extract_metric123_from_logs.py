@@ -1190,6 +1190,21 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(unknown["exit_code"], 2)
         self.assertEqual(required["report"]["overall_status"], "PASS")
 
+    def test_markdown_reports_formal_view_and_qualification_status(self):
+        qualification = {"id": "missing-q", "metric": 3, "mode": "independent",
+                         "topologies": ["8n1s"], "testcases": [228],
+                         "repetitions": ["r1"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": []},
+             "metric2": {"repetitions": [], "testcases": []},
+             "metric3": {"testcases": []},
+             "qualification_sets": [qualification]}, base_dir=self.root)
+        output = self.root / "formal-report"
+        matrix.finalize(output)
+        markdown = (output / "report.md").read_text()
+        self.assertIn("Formal runs (standard + configured qualifications): 0", markdown)
+        self.assertIn("| missing-q | 3 | INCOMPLETE | 0 |", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2454,15 +2454,27 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
              f"| Metric2 | {report['metric2']['status']} |", f"| Metric3 | {report['metric3']['status']} |", "",
              "Metric3 仅表示冻结可执行参考模型范围；delta = HA-VI - OurCC，严格大于 0 才通过。",
              "不执行 t-test，不生成 p-value，不做笛卡尔配对。", "",
-             "## 视图", "",
-              f"- Standard runs: {report['views']['standard']['runs']}",
+              "## 视图", "",
+               f"- Standard runs: {report['views']['standard']['runs']}",
+              f"- Formal runs (standard + configured qualifications): "
+              f"{report['views'].get('formal', {}).get('runs', 0)}",
               f"- All parsed runs: {report['views']['all']['runs']}",
               f"- Extension runs: {report['views']['extension']['runs']}",
               f"- Unique evidence files: {report['source_inventory']['unique_files']}",
               f"- Source references/marker rows: {report['source_inventory']['source_references']}",
               "- Source references are not logical runs and must not be used as a parsed-run count.",
-              "", "## 标准矩阵", "",
-             "| Metric | Level | Identity | TC | Value | Unit | Status |", "|---|---|---|---|---:|---|---|"]
+              "", "## 资格合同", ""]
+    if report.get("qualifications"):
+        lines += ["| Qualification | Metric | Status | Runs | Missing |",
+                  "|---|---:|---|---:|---:|"]
+        for item in report["qualifications"]:
+            lines.append(
+                f"| {item['id']} | {item['metric']} | {item['status']} | "
+                f"{item['runs']} | {len(item['missing_slots'])} |")
+    else:
+        lines.append("未配置 qualification_sets。")
+    lines += ["", "## 标准矩阵", "",
+              "| Metric | Level | Identity | TC | Value | Unit | Status |", "|---|---|---|---|---:|---|---|"]
     for row in matrix:
         value = "N/A" if row["value"] is None else f"{row['value']:.9g}" if isinstance(row["value"], (int, float)) else str(row["value"])
         lines.append(f"| {row['metric']} | {row['level']} | {row['identity']} | {row['tc']} | {value} | {row['unit']} | {row['status']} |")
