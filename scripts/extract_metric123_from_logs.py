@@ -2126,14 +2126,46 @@ class Metric123RawLogMatrix:
         # requirements; never consult source paths during unpickling.
         self._qualification_sets = normalize_qualification_sets(self._requirements)
         self._inferred = copy.deepcopy(state["inferred"])
-        self._inferred.setdefault("metric3", {}).setdefault("min_repetitions", 1)
         self._resolved = copy.deepcopy(state["resolved"])
         self._issues = copy.deepcopy(state["issues"])
         self._ids = set(state["ids"])
         self._add_results = copy.deepcopy(state["add_results"])
+        self._sanitize_inferred_metric3()
         self._slot_ids = defaultdict(list)
         for row in self._resolved:
             self._slot_ids[logical_slot(row)].append(row["id"])
+
+    def _sanitize_inferred_metric3(self):
+        """Migrate Metric3 inference polluted by the pre-05b3446 slot bug."""
+        if self._explicit_requirements:
+            return
+        inferred = self._inferred.setdefault("metric3", {})
+        raw_testcases = inferred.get("testcases", set())
+        if not isinstance(raw_testcases, (set, list, tuple)):
+            raw_testcases = [raw_testcases]
+        testcases, invalid = set(), []
+        for value in raw_testcases:
+            try:
+                testcases.add(int(value))
+            except (TypeError, ValueError):
+                invalid.append(value)
+        arms = set(inferred.get("arms", ("ourcc", "ha-vi")))
+        for row in self._resolved:
+            if row.get("metric") == 3:
+                testcases.add(int(row["tc"]))
+                arms.add(row["arm"])
+        inferred.update({"mode": inferred.get("mode", "independent"),
+                         "repetitions": set(), "min_repetitions": max(
+                             1, int(inferred.get("min_repetitions", 1) or 1)),
+                         "testcases": testcases, "arms": arms})
+        if invalid:
+            item = warning(
+                "LEGACY_METRIC3_INFERENCE_REPAIRED", "matrix",
+                "removed non-integer values from inferred Metric3 testcases "
+                f"created by the legacy slot-index bug: {sorted(map(str, invalid))}",
+                removed_values=sorted(map(str, invalid)))
+            if item not in self._issues:
+                self._issues.append(item)
 
     @staticmethod
     def _identity(raw):
@@ -2364,6 +2396,7 @@ class Metric123RawLogMatrix:
         if self._explicit_requirements:
             requirements = json.loads(json.dumps(self._requirements))
         else:
+            self._sanitize_inferred_metric3()
             requirements = {}
             for name, fields in self._inferred.items():
                 requirements[name] = {key: (sorted(values, key=str)

@@ -633,8 +633,32 @@ class ExtractMetric123Test(unittest.TestCase):
         inferred._inferred["metric3"]["testcases"].update({228, "r0"})
         merged = MOD.merge([inferred, MOD.Metric123RawLogMatrix(base_dir=self.root)])
         self.assertEqual(merged._data()["requirements"]["metric3"]["testcases"], [228])
-        self.assertTrue(any(issue["code"] == "INVALID_INFERRED_REQUIREMENT_IGNORED"
+        self.assertTrue(any(issue["code"] == "LEGACY_METRIC3_INFERENCE_REPAIRED"
                             for issue in merged.finalize()["issues"]))
+
+    def test_legacy_metric3_inference_is_repaired_on_unpickle_and_finalize(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        matrix._inferred["metric3"]["testcases"].update(
+            {228, 229, "r0", "r1", "r2"})
+        state = matrix.__getstate__()
+        restored = object.__new__(MOD.Metric123RawLogMatrix)
+        restored.__setstate__(state)
+        requirements = restored._data()["requirements"]["metric3"]
+        self.assertEqual(requirements["testcases"], [228, 229])
+        self.assertEqual(requirements["repetitions"], [])
+        result = restored.finalize()
+        repaired = [issue for issue in result["issues"]
+                    if issue["code"] == "LEGACY_METRIC3_INFERENCE_REPAIRED"]
+        self.assertEqual(len(repaired), 1)
+        self.assertEqual(repaired[0]["removed_values"], ["r0", "r1", "r2"])
+
+        polluted = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        polluted._inferred["metric3"]["testcases"].update({228, "r0"})
+        self.assertEqual(
+            polluted.finalize()["report"]["metric3"]["missing_slots"][0][0], 228)
+        clone = MOD.merge([polluted])
+        self.assertEqual(clone._data()["requirements"]["metric3"]["testcases"],
+                         [228])
 
     def test_finalize_reports_invalid_testcase_requirement_path(self):
         matrix = MOD.Metric123RawLogMatrix(
