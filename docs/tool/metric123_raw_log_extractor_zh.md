@@ -295,9 +295,25 @@ Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubi
 扩展点解析失败会保留`contract_class=extension`错误供审计，但不会把已完整通过的 standard
 正式视图降为 INVALID；标准数据自身错误仍按原规则判 INVALID。
 
-两个矩阵可用`merged = left + right`纯内存合并。requirements 做确定性并集，correctness policy 取
-`strict > required > optional`中更严格者；ID 冲突自动改名，逻辑 slot 冲突仍无效。合并不修改操作数，
-也不会访问源路径，因此原始目录已删除后仍可`merged.finalize()`；`m + m`会去重完全相同的 run snapshot。
+大量矩阵应使用批量`merge()`纯内存合并：
+
+```python
+from scripts.extract_metric123_from_logs import merge
+
+merged = merge(matrix_list)       # 也接受 generator/iterator
+result = merged.finalize()
+```
+
+`merge()`按输入顺序单次扫描所有 retained snapshot，每条 snapshot 只做一次 fingerprint 和深拷贝；避免
+`m1 + m2 + ... + mN`反复扫描累计结果造成的二次复杂度。空输入抛`ValueError`，单元素输入返回完全隔离的
+snapshot clone。合并后的 Matrix 仍可继续`add()`、`finalize()`和 pickle。
+
+二元`left + right`保留并内部复用`merge((left, right))`。requirements 做确定性并集，scalar 字段按输入
+顺序由后项覆盖，correctness policy 取`strict > required > optional`中更严格者；ID 冲突自动改名，逻辑
+slot 冲突仍无效。最终 qualification registry 会在内存 snapshot 上重新匹配`qualified_contracts`，因此
+registry 与 run 分布在不同 Matrix 时也能正确进入`views.formal`。被拒绝 attempt 的 ID reservation 会保留；
+较宽松 policy 下接受但 correctness 非 PASS 的 snapshot 不能进入较严格合并结果。合并不修改操作数，也不
+访问源路径，因此原始目录已删除后仍可`merged.finalize()`；重复的相同 run snapshot 会去重。
 
 矩阵可直接使用 Python `pickle` 序列化。pickle 保存的是版本化内存 snapshot，不保存打开的文件、迭代器
 或派生 slot 索引；反序列化会重建 slot 索引，不重新读取任何 raw log。协议0至当前
@@ -343,6 +359,19 @@ output/resolved_runs.json    解析后的绝对路径、来源 marker 与 correc
 output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
+
+`report.md`是首选的人读诊断入口，包含三个中文章节：
+
+- `逐测试诊断`：逐 run 列出 Standard、Formal qualification 或 Extension，并展开冻结合同未通过的
+  `failed_gates`、命中的 qualification ID 和其他告警。看到`contract_class=extension`时，应先看这里判断
+  它是已资格化的 formal extension，还是 topology/TC/phase/node/samples/profile/role 等门禁不匹配。
+- `未接纳的测试`：逐条列出`add()`返回 REJECTED 的 run、slot、错误码和具体证据错误；包括日志缺失、
+  correctness 失败、schema 无效及 duplicate slot。
+- `未满足的矩阵要求`：展开 Metric1/2/3 的`missing_slots`、Metric3 不完整 pair，以及每个未 PASS
+  qualification 的缺失槽位、失败结果和 registry 错误。
+
+机器程序仍应读取`report.json`、`resolved_runs.json`和`issues.tsv`。其中 extension 原因也以
+`resolved_runs[*].contract_warnings[*].failed_gates`结构化保存，不需要从 message 文本反向解析。
 
 退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵、
 independent repetition/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会

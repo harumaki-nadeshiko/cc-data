@@ -344,6 +344,59 @@ def qualification_candidates(raw, qualification_sets):
     return matches
 
 
+def qualified_contract_ids(run, candidates):
+    """Return qualification IDs passed by one fully parsed run snapshot."""
+    qualified = []
+    for candidate in candidates:
+        metric = candidate["metric"]
+        passed = False
+        if metric == 1:
+            coordinate = candidate["_coordinate"]
+            role = run.get("metric1_role")
+            capacity = run["metrics"]["capacity"]
+            outer = run["metrics"]["outer_latency"]
+            common = (run["tc"] == coordinate["tc"] and
+                      run["topology"] == coordinate["topology"] and
+                      int(run.get("home_node", 0)) == coordinate["home_node"] and
+                      int(run.get("home_socket", 0)) == coordinate["home_socket"])
+            if role == "naive":
+                passed = (common and run["profile"] == "naive" and
+                          capacity["policy"] == "naive" and
+                          capacity["experimental_oversized_resident_dir"] in (None, 0))
+            elif role == "spill":
+                passed = (common and run["profile"] == "spill-noopt" and
+                          capacity["policy"] == "spill" and
+                          capacity["experimental_oversized_resident_dir"] in (None, 0) and
+                          capacity["h64_exact_live_known"] == 1 and outer["samples"] >= 1)
+            elif role == "ideal":
+                passed = (common and run["profile"] == "spill-noopt" and
+                          capacity["policy"] == "spill" and
+                          capacity["experimental_oversized_resident_dir"] == 1 and
+                          capacity["resident_capacity"] >= candidate["ideal_min_capacity"] and
+                          capacity["backstore_found_fills"] == 0 and
+                          capacity["h64_exact_live"] == 0 and
+                          capacity["h64_exact_live_known"] in (0, 1) and
+                          outer["samples"] >= 1)
+        elif metric == 2:
+            coordinate = candidate["_coordinate"]
+            metrics = run["metrics"]
+            passed = (run["tc"] == coordinate["tc"] and
+                      run["topology"] == coordinate["topology"] and
+                      metrics.get("phase") == coordinate["phase"] and
+                      metrics.get("kind", "latency") == coordinate["kind"] and
+                      metrics.get("reduction", "aggregate") == coordinate["reduction"] and
+                      metrics.get("nodes") == coordinate["expected_nodes"] and
+                      metrics.get("samples") == coordinate["expected_count"] and
+                      run["profile"] in candidate["profiles"])
+        else:
+            passed = (run["tc"] in candidate["testcases"] and
+                      run["topology"] in candidate["topologies"] and
+                      run["arm"] in candidate["arms"])
+        if passed:
+            qualified.append(candidate["id"])
+    return sorted(set(qualified))
+
+
 def normalize_legacy_metric1_profile(run):
     """Translate the old Metric1 ``profile=ideal`` vocabulary to role form."""
     out = dict(run)
@@ -482,9 +535,9 @@ def all_log_files(root):
              if path.is_file() and (path.suffix in (".log", ".out", ".txt", ".gz") or path.name in ("stdout", "stderr"))]
 
 
-def warning(code, run_id, message):
+def warning(code, run_id, message, **details):
     return {"severity": "WARNING", "code": code, "run_id": str(run_id),
-            "message": message}
+            "message": message, **details}
 
 
 def process_manifests(path):
@@ -1019,7 +1072,7 @@ def extract_run(run, base, policy):
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric1 descriptive extension role={role} tc={out['tc']} topology={out['topology']} "
                 f"profile={out['profile']} home={home_node}/{home_socket} "
-                f"failed_gates={failed_gates}"))
+                f"failed_gates={failed_gates}", failed_gates=failed_gates))
     elif out["metric"] == 2:
         registered = out["tc"] in M2
         metric2_candidates = [candidate for candidate in
@@ -1135,7 +1188,7 @@ def extract_run(run, base, policy):
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric2 descriptive extension tc={out['tc']} topology={out['topology']} "
                 f"phase={phase} node={node} samples={samples} "
-                f"failed_gates={failed_gates}"))
+                f"failed_gates={failed_gates}", failed_gates=failed_gates))
     else:
         if run.get("arm") is None:
             out["arm"], evidence = detect_metric3_arm(simulator)
@@ -1194,45 +1247,9 @@ def extract_run(run, base, policy):
             out["contract_warnings"].append(warning(
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric3 descriptive extension tc={out['tc']} topology={out['topology']} "
-                f"failed_gates={failed_gates}"))
-    role_gate_qualified = qualified if out["metric"] == 1 else None
-    qualified_contracts = []
-    for candidate in run.get("_qualification_candidates", []):
-        metric = candidate["metric"]
-        qualified = False
-        if metric == 1:
-            coordinate = candidate["_coordinate"]
-            qualified = (out["tc"] == coordinate["tc"] and
-                         out["topology"] == coordinate["topology"] and
-                         int(run.get("home_node", 0)) == coordinate["home_node"] and
-                         int(run.get("home_socket", 0)) == coordinate["home_socket"] and
-                         role in ("naive", "spill", "ideal") and role_gate_qualified)
-            if role == "ideal":
-                qualified = (out["profile"] == "spill-noopt" and
-                             capacity["policy"] == "spill" and
-                             capacity["experimental_oversized_resident_dir"] == 1 and
-                             capacity["resident_capacity"] >= candidate["ideal_min_capacity"] and
-                             capacity["backstore_found_fills"] == 0 and
-                             capacity["h64_exact_live"] == 0 and
-                             capacity["h64_exact_live_known"] in (0, 1) and
-                             outer["samples"] >= 1)
-        elif metric == 2:
-            coordinate = candidate["_coordinate"]
-            qualified = (out["tc"] == coordinate["tc"] and
-                          out["topology"] == coordinate["topology"] and
-                          out["metrics"].get("phase") == coordinate["phase"] and
-                          out["metrics"].get("kind", "latency") == coordinate["kind"] and
-                          out["metrics"].get("reduction", "aggregate") ==
-                          coordinate["reduction"] and
-                          out["metrics"].get("nodes") == coordinate["expected_nodes"] and
-                          out["metrics"].get("samples") == coordinate["expected_count"] and
-                          out["profile"] in candidate["profiles"])
-        else:
-            qualified = (out["tc"] in candidate["testcases"] and
-                         out["topology"] in candidate["topologies"] and
-                         out["arm"] in candidate["arms"])
-        if qualified:
-            qualified_contracts.append(candidate["id"])
+                f"failed_gates={failed_gates}", failed_gates=failed_gates))
+    qualified_contracts = qualified_contract_ids(
+        out, run.get("_qualification_candidates", []))
     out["standard_contract"] = bool(standard)
     out["qualified_contracts"] = sorted(set(qualified_contracts))
     out["formal_contract"] = bool(standard or qualified_contracts)
@@ -2303,56 +2320,7 @@ class Metric123RawLogMatrix:
     def __add__(self, other):
         if not isinstance(other, Metric123RawLogMatrix):
             return NotImplemented
-        rank = {"optional": 0, "required": 1, "strict": 2}
-        requirements = self._union_requirements(
-            self._data().get("requirements", {}), other._data().get("requirements", {}))
-        merged = Metric123RawLogMatrix(
-            requirements=requirements,
-            correctness_policy=max((self.correctness_policy, other.correctness_policy),
-                                   key=lambda x: rank[x]), base_dir=".")
-        seen_snapshots = set()
-        for source in (self, other):
-            for record in source._resolved:
-                fingerprint = json.dumps(record, sort_keys=True)
-                if fingerprint in seen_snapshots:
-                    continue
-                seen_snapshots.add(fingerprint)
-                row = copy.deepcopy(record)
-                requested = row["id"]
-                effective = requested
-                if effective in merged._ids:
-                    suffix = 2
-                    while f"{requested}-{suffix}" in merged._ids:
-                        suffix += 1
-                    effective = f"{requested}-{suffix}"
-                    item = warning("DUPLICATE_RUN_ID_RENAMED", effective,
-                                   f"merged run id {requested!r} renamed to {effective!r}")
-                    row["id"] = effective
-                    row.setdefault("contract_warnings", []).append(item)
-                    merged._issues.append(item)
-                merged._ids.add(effective)
-                slot = logical_slot(row)
-                merged._infer(slot)
-                merged._resolved.append(row)
-                prior = list(merged._slot_ids[slot])
-                merged._slot_ids[slot].append(effective)
-                result = {"status": "REJECTED" if prior else "ADDED",
-                          "requested_id": requested, "run_id": effective,
-                          "slot": list(slot)}
-                if prior:
-                    result["issue"] = {"severity": "ERROR", "code": "DUPLICATE_SLOT",
-                                       "run_id": ",".join(prior + [effective]),
-                                       "message": f"logical slot already claimed: {slot}"}
-                merged._add_results.append(result)
-        # Preserve rejected attempts and non-run warnings/errors without rereading inputs.
-        for source in (self, other):
-            for issue in source._issues:
-                if issue not in merged._issues:
-                    merged._issues.append(copy.deepcopy(issue))
-            for result in source._add_results:
-                if result.get("status") == "REJECTED" and result.get("issue", {}).get("code") != "DUPLICATE_SLOT":
-                    merged._add_results.append(copy.deepcopy(result))
-        return merged
+        return merge((self, other))
 
     def _data(self):
         if self._explicit_requirements:
@@ -2394,6 +2362,192 @@ class Metric123RawLogMatrix:
                 "per_run_metrics": per_run, "issues": issues, "exit_code": code}
 
 
+def _merge_snapshot_fingerprint(record):
+    """Fingerprint source evidence while excluding registry-derived labels."""
+    value = dict(record)
+    value.pop("qualified_contracts", None)
+    value.pop("formal_contract", None)
+    if isinstance(value.get("correctness"), dict):
+        value["correctness"] = dict(value["correctness"])
+        value["correctness"].pop("policy", None)
+        value["correctness"].pop("required", None)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def merge(matrices):
+    """Merge Matrix snapshots in one pass without reopening source logs.
+
+    Input order is preserved for scalar requirement precedence and deterministic
+    ID renaming.  Empty iterables are rejected; a single input returns an
+    isolated clone.
+    """
+    iterator = iter(matrices)
+    try:
+        first = next(iterator)
+    except StopIteration as error:
+        raise ValueError("merge() requires at least one Metric123RawLogMatrix") from error
+    if not isinstance(first, Metric123RawLogMatrix):
+        raise TypeError("merge() item 0 is not a Metric123RawLogMatrix")
+    sources = [first]
+    for index, item in enumerate(iterator, 1):
+        if not isinstance(item, Metric123RawLogMatrix):
+            raise TypeError(f"merge() item {index} is not a Metric123RawLogMatrix")
+        sources.append(item)
+
+    if len(sources) == 1:
+        cloned = object.__new__(Metric123RawLogMatrix)
+        cloned.__setstate__(first.__getstate__())
+        return cloned
+
+    requirement_fields = {}
+    qualification_sets = {}
+    for source in sources:
+        source_requirements = source._data().get("requirements", {})
+        for item in source._qualification_sets:
+            previous = qualification_sets.get(item["id"])
+            if previous is not None and previous != item:
+                raise ExtractError(
+                    f"conflicting qualification definition for id {item['id']!r}")
+            qualification_sets[item["id"]] = item
+        for metric, fields in source_requirements.items():
+            if metric == "qualification_sets":
+                continue
+            target = requirement_fields.setdefault(metric, {})
+            for field, value in fields.items():
+                if isinstance(value, list):
+                    if target.get(field, (None,))[0] == "list":
+                        target[field][1].update(value)
+                    else:
+                        target[field] = ["list", set(value)]
+                else:
+                    target[field] = ["scalar", copy.deepcopy(value)]
+    requirements = {
+        metric: {
+            field: (sorted(value, key=str) if kind == "list" else value)
+            for field, (kind, value) in sorted(fields.items())
+        }
+        for metric, fields in sorted(requirement_fields.items())
+    }
+    requirements["qualification_sets"] = [
+        copy.deepcopy(qualification_sets[item_id])
+        for item_id in sorted(qualification_sets)]
+    rank = {"optional": 0, "required": 1, "strict": 2}
+    policy = max((source.correctness_policy for source in sources),
+                 key=lambda value: rank[value])
+    all_inferred = all(not source._explicit_requirements for source in sources)
+    merged = Metric123RawLogMatrix(
+        requirements=None if all_inferred else requirements,
+        correctness_policy=policy,
+        base_dir=sources[0].base_dir if len(sources) == 1 else ".")
+    if all_inferred:
+        merged._inferred = {
+            "metric1": {"repetitions": set(requirements.get("metric1", {}).get("repetitions", [])),
+                        "roles": set(requirements.get("metric1", {}).get("roles", ("naive", "spill", "ideal"))),
+                        "ideal_min_capacity": int(requirements.get("metric1", {}).get("ideal_min_capacity", 102656))},
+            "metric2": {"repetitions": set(requirements.get("metric2", {}).get("repetitions", [])),
+                        "testcases": set(requirements.get("metric2", {}).get("testcases", []))},
+            "metric3": {"mode": requirements.get("metric3", {}).get("mode", "independent"),
+                        "repetitions": set(requirements.get("metric3", {}).get("repetitions", [])),
+                        "testcases": set(requirements.get("metric3", {}).get("testcases", [])),
+                        "arms": set(requirements.get("metric3", {}).get("arms", ("ourcc", "ha-vi")))},
+        }
+        merged._requirements = {}
+        merged._qualification_sets = []
+
+    seen_snapshots = set()
+    seen_issues = set()
+    next_suffix = {}
+
+    def add_issue(item):
+        fingerprint = json.dumps(item, sort_keys=True, separators=(",", ":"))
+        if fingerprint not in seen_issues:
+            seen_issues.add(fingerprint)
+            merged._issues.append(copy.deepcopy(item))
+
+    def allocate_id(requested):
+        effective = requested
+        if effective in merged._ids:
+            suffix = next_suffix.get(requested, 2)
+            while f"{requested}-{suffix}" in merged._ids:
+                suffix += 1
+            effective = f"{requested}-{suffix}"
+            next_suffix[requested] = suffix + 1
+        else:
+            next_suffix.setdefault(requested, 2)
+        merged._ids.add(effective)
+        return effective
+
+    for source in sources:
+        for record in source._resolved:
+            fingerprint = _merge_snapshot_fingerprint(record)
+            if fingerprint in seen_snapshots:
+                continue
+            seen_snapshots.add(fingerprint)
+            row = copy.deepcopy(record)
+            requested = row["id"]
+            effective = allocate_id(requested)
+            if effective != requested:
+                item = warning("DUPLICATE_RUN_ID_RENAMED", effective,
+                               f"merged run id {requested!r} renamed to {effective!r}")
+                row["id"] = effective
+                row.setdefault("contract_warnings", []).append(item)
+                add_issue(item)
+            correctness_status = row.get("correctness", {}).get("status")
+            if policy in ("strict", "required") and correctness_status != "PASS":
+                issue = {"severity": "ERROR", "code": "EVIDENCE_INVALID",
+                         "run_id": effective,
+                         "contract_class": ("standard" if row.get("standard_contract")
+                                            else "extension"),
+                         "message": (f"merged correctness policy {policy} requires PASS; "
+                                     f"snapshot status={correctness_status}")}
+                add_issue(issue)
+                merged._add_results.append({"status": "REJECTED",
+                                            "requested_id": requested,
+                                            "run_id": effective, "slot": None,
+                                            "issue": issue})
+                continue
+            row["correctness"]["policy"] = policy
+            row["correctness"]["required"] = policy in ("strict", "required")
+            row["qualified_contracts"] = qualified_contract_ids(
+                row, qualification_candidates(row, merged._qualification_sets))
+            row["formal_contract"] = bool(row.get("standard_contract") or
+                                          row["qualified_contracts"])
+            slot = logical_slot(row)
+            merged._infer(slot)
+            merged._resolved.append(row)
+            prior = list(merged._slot_ids[slot])
+            merged._slot_ids[slot].append(effective)
+            result = {"status": "REJECTED" if prior else "ADDED",
+                      "requested_id": requested, "run_id": effective,
+                      "slot": list(slot)}
+            if prior:
+                result["issue"] = {"severity": "ERROR", "code": "DUPLICATE_SLOT",
+                                   "run_id": ",".join(prior + [effective]),
+                                   "message": f"logical slot already claimed: {slot}"}
+            merged._add_results.append(result)
+        for issue in source._issues:
+            if issue.get("code") != "DUPLICATE_RUN_ID_RENAMED":
+                add_issue(issue)
+        resolved_ids = {record["id"] for record in source._resolved}
+        for result in source._add_results:
+            if (result.get("status") != "REJECTED" or
+                    result.get("issue", {}).get("code") == "DUPLICATE_SLOT" or
+                    result.get("run_id") in resolved_ids):
+                continue
+            copied = copy.deepcopy(result)
+            requested = copied.get("run_id") or copied.get("requested_id") or "run"
+            effective = allocate_id(str(requested))
+            if effective != requested:
+                copied["run_id"] = effective
+                if copied.get("issue"):
+                    copied["issue"]["run_id"] = effective
+                copied["warning"] = warning(
+                    "DUPLICATE_RUN_ID_RENAMED", effective,
+                    f"merged rejected run id {requested!r} renamed to {effective!r}")
+            merged._add_results.append(copied)
+    return merged
+
+
 def analyze(manifest_path, output_dir, require_qualifications=None):
     """Manifest-compatible wrapper implemented through Metric123RawLogMatrix."""
     manifest_path = pathlib.Path(manifest_path)
@@ -2428,6 +2582,42 @@ def write_tsv(path, rows, fields):
         writer.writeheader()
         writer.writerows({key: ("N/A" if value is None else value)
                           for key, value in row.items()} for row in rows)
+
+
+def markdown_cell(value):
+    """Render one compact, table-safe Markdown value."""
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(json_ready(value), ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":"))
+    return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
+def run_contract_diagnostic(run, qualification_sets_configured):
+    """Explain one parsed run's standard/formal/extension classification."""
+    qualified = run.get("qualified_contracts", [])
+    failed_gates = []
+    other_warnings = []
+    for item in run.get("contract_warnings", []):
+        if item.get("code") == "NONSTANDARD_CONTRACT":
+            failed_gates.extend(item.get("failed_gates", []))
+        else:
+            other_warnings.append(f"{item.get('code', 'WARNING')}: {item.get('message', '')}")
+    if run.get("standard_contract"):
+        classification = "标准（Standard）"
+        reason = "满足冻结 standard 合同"
+    elif qualified:
+        classification = "资格正式（Formal qualification）"
+        reason = ("未满足冻结 standard 合同，但命中资格合同：" +
+                  ", ".join(qualified))
+    else:
+        classification = "扩展（Extension）"
+        reason = ("未满足冻结 standard 合同，且未命中已配置 qualification_sets"
+                  if qualification_sets_configured else
+                  "未满足冻结 standard 合同；当前未配置 qualification_sets")
+    if failed_gates:
+        reason += "；冻结合同未通过：" + "；".join(map(str, failed_gates))
+    return {"classification": classification, "reason": reason,
+            "warnings": other_warnings}
 
 
 def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
@@ -2473,6 +2663,93 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
                 f"{item['runs']} | {len(item['missing_slots'])} |")
     else:
         lines.append("未配置 qualification_sets。")
+    lines += ["", "## 逐测试诊断", "",
+              "该表用于判断每条已解析 run 为什么属于标准、资格正式或扩展数据。",
+              "资格正式表示它仍保留 `contract_class=extension`，但已通过显式资格合同并进入正式视图。",
+              "", "| Run | Metric/TC | 坐标 | 归类 | 具体原因 | 其他告警 |",
+              "|---|---|---|---|---|---|"]
+    qualification_sets_configured = bool(report.get("qualifications"))
+    for run in resolved:
+        diagnostic = run_contract_diagnostic(run, qualification_sets_configured)
+        coordinate = {
+            "repetition": run.get("repetition"), "topology": run.get("topology"),
+            "profile": run.get("profile"), "role": run.get("metric1_role"),
+            "arm": run.get("arm"), "pair": run.get("pair"),
+            "order": run.get("order")}
+        coordinate = {key: value for key, value in coordinate.items()
+                      if value not in (None, "")}
+        lines.append(
+            f"| `{markdown_cell(run['id'])}` | Metric{run['metric']}/TC{run['tc']} | "
+            f"{markdown_cell(coordinate)} | {diagnostic['classification']} | "
+            f"{markdown_cell(diagnostic['reason'])} | "
+            f"{markdown_cell(diagnostic['warnings'] or '无')} |")
+    if not resolved:
+        lines.append("| - | - | - | - | 没有成功解析且无 slot 冲突的 run | - |")
+
+    rejected = [item for item in report.get("ingestion", {}).get("add_results", [])
+                if item.get("status") == "REJECTED"]
+    lines += ["", "## 未接纳的测试", ""]
+    if rejected:
+        lines += ["| Run | Slot | 错误码 | 具体原因 |", "|---|---|---|---|"]
+        for item in rejected:
+            issue = item.get("issue", {})
+            lines.append(
+                f"| `{markdown_cell(item.get('run_id') or item.get('requested_id') or '')}` | "
+                f"{markdown_cell(item.get('slot'))} | `{markdown_cell(issue.get('code', 'REJECTED'))}` | "
+                f"{markdown_cell(issue.get('message', '未提供原因'))} |")
+    else:
+        lines.append("没有被拒绝的 add 尝试。")
+
+    lines += ["", "## 未满足的矩阵要求", ""]
+    missing_sections = [
+        ("Metric1", report["metric1"]["status"], report["metric1"].get("missing_slots", [])),
+        ("Metric2", report["metric2"]["status"], report["metric2"].get("missing_slots", [])),
+        ("Metric3", report["metric3"]["status"], report["metric3"].get("missing_slots", [])),
+    ]
+    for name, status, missing in missing_sections:
+        lines.append(f"- **{name}**：状态 `{status}`；缺失槽位：{markdown_cell(missing or '无')}。")
+    failed_m1 = [row for row in report["metric1"].get("comparisons", [])
+                 if not row.get("pass")]
+    failed_m2 = [row for row in report["metric2"].get("repetition_equal_weight", [])
+                 if not row.get("pass")]
+    failed_m3 = [row for row in report["metric3"].get("primary_values", [])
+                 if finite_number(row.get("delta_mean_ticks")) is not None and
+                 row["delta_mean_ticks"] <= 0]
+    failed_m3.extend(row for row in report["metric3"].get("aggregates", [])
+                     if finite_number(row.get("delta_ticks")) is not None and
+                     row["delta_ticks"] <= 0)
+    if failed_m1:
+        lines.append(
+            "- **Metric1 门槛失败**：" + markdown_cell(failed_m1) +
+            "。要求 capacity_ratio >= 1.5 且 outer_delta_cycles < 50。")
+    if failed_m2:
+        lines.append(
+            "- **Metric2 门槛失败**：" + markdown_cell(failed_m2) +
+            "。每轮适用 TC 的等权平均降幅要求 >= 10%。")
+    if report["metric2"].get("repetitions_without_applicable_cases"):
+        lines.append(
+            "- **Metric2 无适用 case 的轮次**：" + markdown_cell(
+                report["metric2"]["repetitions_without_applicable_cases"]) +
+            "。baseline 必须 >= 500 ns 才进入降幅判定。")
+    if not report["metric2"].get("applicable_set_stable", True):
+        lines.append("- **Metric2 适用集合不稳定**：不同 repetition 的 applicable TC 集合不一致。")
+    if failed_m3:
+        lines.append(
+            "- **Metric3 门槛失败**：" + markdown_cell(failed_m3) +
+            "。delta = HA-VI - OurCC，要求严格 > 0。")
+    incomplete_pairs = report["metric3"].get("incomplete_pairs", [])
+    if incomplete_pairs:
+        lines.append(f"- **Metric3 不完整 pair**：{markdown_cell(incomplete_pairs)}。")
+    for item in report.get("qualifications", []):
+        if item["status"] == "PASS":
+            continue
+        failed_results = [row for row in item.get("results", [])
+                          if row.get("status") != "PASS"]
+        lines.append(
+            f"- **资格合同 `{markdown_cell(item['id'])}`**：状态 `{item['status']}`；"
+            f"缺失槽位：{markdown_cell(item.get('missing_slots') or '无')}；"
+            f"未通过结果：{markdown_cell(failed_results or '无')}；"
+            f"registry 错误：{markdown_cell(item.get('errors') or '无')}。")
     lines += ["", "## 标准矩阵", "",
               "| Metric | Level | Identity | TC | Value | Unit | Status |", "|---|---|---|---|---:|---|---|"]
     for row in matrix:

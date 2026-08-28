@@ -599,6 +599,109 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual({r["id"] for r in result["resolved_runs"]}, {"collision", "collision-2"})
         self.assertTrue(any(x["code"] == "DUPLICATE_RUN_ID_RENAMED" for x in result["issues"]))
 
+    def test_matrix_merge_accepts_iterables_and_clones_single_input(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        matrix.add(self.make_m2_run("merge-clone"))
+        clone = MOD.merge(item for item in [matrix])
+        self.assertIsNot(clone, matrix)
+        self.assertEqual(clone.finalize(), matrix.finalize())
+        clone._resolved[0]["id"] = "mutated"
+        self.assertEqual(matrix._resolved[0]["id"], "merge-clone")
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            MOD.merge([])
+        with self.assertRaisesRegex(TypeError, "item 1"):
+            MOD.merge([matrix, object()])
+
+    def test_matrix_merge_scans_each_snapshot_once(self):
+        matrices = []
+        for index in range(8):
+            matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+            matrix.add(self.make_m2_run(
+                f"merge-linear-{index}", repetition=f"r{index}"))
+            matrices.append(matrix)
+        original = MOD._merge_snapshot_fingerprint
+        calls = []
+
+        def counted(record):
+            calls.append(record["id"])
+            return original(record)
+
+        with mock.patch.object(MOD, "_merge_snapshot_fingerprint", side_effect=counted):
+            merged = MOD.merge(matrices)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(merged.finalize()["report"]["ingestion"]["attempted"], 8)
+
+    def test_matrix_merge_deduplicates_same_evidence_across_policies(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        matrix.add(self.make_m2_run("merge-policy-dedupe"))
+        optional = pickle.loads(pickle.dumps(matrix))
+        optional.correctness_policy = "optional"
+        optional._resolved[0]["correctness"]["policy"] = "optional"
+        optional._resolved[0]["correctness"]["required"] = False
+        merged = MOD.merge([matrix, optional])
+        self.assertEqual(len(merged._resolved), 1)
+        self.assertEqual(merged._resolved[0]["correctness"]["policy"], "strict")
+
+    def test_matrix_merge_requalifies_snapshot_from_final_registry(self):
+        run_matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        run = self.make_m3_run("merge-qualified", 228, "r1", "ourcc",
+                               topology="3n1s")
+        self.assertEqual(run_matrix.add(run)["status"], "ADDED")
+        qualification = {"id": "m3-merge-3n1s", "metric": 3,
+                         "mode": "independent", "topologies": ["3n1s"],
+                         "testcases": [228], "arms": ["ourcc", "ha-vi"],
+                         "repetitions": ["r1"]}
+        registry = MOD.Metric123RawLogMatrix(
+            {"qualification_sets": [qualification]},
+            correctness_policy="optional", base_dir=self.root)
+        result = MOD.merge([run_matrix, registry]).finalize()
+        self.assertEqual(result["resolved_runs"][0]["qualified_contracts"],
+                         ["m3-merge-3n1s"])
+        self.assertTrue(result["resolved_runs"][0]["formal_contract"])
+        self.assertEqual(result["report"]["views"]["formal"]["runs"], 1)
+        self.assertEqual(result["report"]["views"]["extension"]["runs"], 0)
+
+    def test_matrix_merge_preserves_rejected_id_reservations(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        bad = self.make_m2_run("merge-rejected")
+        (pathlib.Path(bad["simout_dir"]) / "simout_n1").write_text("")
+        self.assertEqual(matrix.add(bad)["status"], "REJECTED")
+        merged = MOD.merge([matrix, MOD.Metric123RawLogMatrix(base_dir=self.root)])
+        replacement = self.make_m2_run("merge-replacement", repetition="r2")
+        replacement["id"] = "merge-rejected"
+        added = merged.add(replacement)
+        self.assertEqual(added["run_id"], "merge-rejected-2")
+        self.assertEqual(added["warning"]["code"], "DUPLICATE_RUN_ID_RENAMED")
+
+    def test_matrix_merge_applies_stricter_correctness_policy_from_snapshot(self):
+        optional = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        run = self.make_m2_run("merge-optional")
+        shutil.rmtree(pathlib.Path(run["simulator_log_dir"]))
+        pathlib.Path(run["simulator_log_dir"]).mkdir(parents=True)
+        self.assertEqual(optional.add(run)["status"], "ADDED")
+        strict = MOD.Metric123RawLogMatrix(
+            correctness_policy="strict", base_dir=self.root)
+        result = MOD.merge([optional, strict]).finalize()
+        self.assertEqual(result["resolved_runs"], [])
+        self.assertTrue(any(issue["code"] == "EVIDENCE_INVALID"
+                            for issue in result["issues"]))
+
+    def test_matrix_merge_result_pickles_without_source_logs(self):
+        left = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        right = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        left.add(self.make_m2_run("merge-pickle-left", repetition="r1"))
+        right.add(self.make_m2_run("merge-pickle-right", repetition="r2"))
+        merged = MOD.merge([left, right])
+        expected = merged.finalize()
+        shutil.rmtree(self.root / "merge-pickle-left")
+        shutil.rmtree(self.root / "merge-pickle-right")
+        restored = pickle.loads(pickle.dumps(merged))
+        with mock.patch.object(MOD, "open_text",
+                               side_effect=AssertionError("reopened input")):
+            self.assertEqual(restored.finalize(), expected)
+
     def test_incremental_finalize_uses_only_memory_after_add(self):
         run = self.make_m2_run("memory")
         matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
@@ -1204,6 +1307,31 @@ class ExtractMetric123Test(unittest.TestCase):
         markdown = (output / "report.md").read_text()
         self.assertIn("Formal runs (standard + configured qualifications): 0", markdown)
         self.assertIn("| missing-q | 3 | INCOMPLETE | 0 |", markdown)
+        self.assertIn("## 逐测试诊断", markdown)
+        self.assertIn("## 未接纳的测试", markdown)
+        self.assertIn("## 未满足的矩阵要求", markdown)
+        self.assertIn("资格合同 `missing-q`", markdown)
+
+    def test_markdown_explains_extension_and_rejected_run_reasons(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        extension = self.make_m3_run("diagnostic-extension", 228, "r1",
+                                     "ourcc", topology="3n1s")
+        self.assertEqual(matrix.add(extension)["status"], "ADDED")
+        rejected = self.make_m2_run("diagnostic-rejected")
+        (pathlib.Path(rejected["simout_dir"]) / "simout_n1").write_text("")
+        self.assertEqual(matrix.add(rejected)["status"], "REJECTED")
+        output = self.root / "diagnostic-report"
+        matrix.finalize(output)
+        markdown = (output / "report.md").read_text()
+        self.assertIn("`diagnostic-extension`", markdown)
+        self.assertIn("Extension", markdown)
+        self.assertIn("当前未配置 qualification_sets", markdown)
+        self.assertIn("topology=3n1s expected=2n1s", markdown)
+        self.assertIn("`diagnostic-rejected`", markdown)
+        self.assertIn("EVIDENCE_INVALID", markdown)
+        self.assertIn("Metric2 expected exactly one phase=preserved_sharer_first_load, got 0",
+                      markdown)
 
 
 if __name__ == "__main__":
