@@ -1284,6 +1284,22 @@ def requirement(manifest, name, default):
     return value if isinstance(value, dict) else default
 
 
+def integer_requirement_list(requirements, metric, field="testcases"):
+    """Normalize an integer requirement list with a precise contract error."""
+    values = requirements.get(field, [])
+    if not isinstance(values, list):
+        raise ExtractError(f"requirements.{metric}.{field} must be an array")
+    result = []
+    for index, value in enumerate(values):
+        try:
+            result.append(int(value))
+        except (TypeError, ValueError) as error:
+            raise ExtractError(
+                f"requirements.{metric}.{field}[{index}] must be an integer, "
+                f"got {value!r}") from error
+    return result
+
+
 def descriptive_view(runs):
     """Small contract-neutral matrix and useful profile/arm comparisons."""
     matrix, groups = [], defaultdict(list)
@@ -1732,7 +1748,8 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     m2 = [r for r in resolved if r["metric"] == 2]
     m2_req = requirement(data, "metric2", {"repetitions": sorted({r["repetition"] for r in m2}),
                                              "testcases": sorted({r["tc"] for r in m2})})
-    m2_reps, m2_tcs = [str(x) for x in m2_req.get("repetitions", [])], [int(x) for x in m2_req.get("testcases", [])]
+    m2_reps = [str(x) for x in m2_req.get("repetitions", [])]
+    m2_tcs = integer_requirement_list(m2_req, "metric2")
     m2_official_set = set(m2_tcs) == set(M2)
     m2_by = {(r["repetition"], r["tc"], r["profile"]): r for r in m2}
     m2_missing = [(rep, tc, p) for rep in m2_reps for tc in m2_tcs for p in PROFILES if (rep, tc, p) not in m2_by]
@@ -1790,7 +1807,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     paired_mode = (m3_req.get("mode") == "paired" or
                    ("mode" not in m3_req and bool(m3_req.get("pairs"))))
     comparison_mode = "paired" if paired_mode else "independent"
-    tcs_req = [int(x) for x in m3_req.get("testcases", [])]
+    tcs_req = integer_requirement_list(m3_req, "metric3")
     samples, incomplete_pairs, missing_m3 = [], [], []
     m3_metric_incomplete = False
     conflicting_orders = {}
@@ -2402,7 +2419,8 @@ def merge(matrices):
 
     requirement_fields = {}
     qualification_sets = {}
-    for source in sources:
+    inferred_requirement_issues = []
+    for source_index, source in enumerate(sources):
         source_requirements = source._data().get("requirements", {})
         for item in source._qualification_sets:
             previous = qualification_sets.get(item["id"])
@@ -2416,6 +2434,21 @@ def merge(matrices):
             target = requirement_fields.setdefault(metric, {})
             for field, value in fields.items():
                 if isinstance(value, list):
+                    if field == "testcases":
+                        normalized = []
+                        for value_index, item in enumerate(value):
+                            try:
+                                normalized.append(int(item))
+                            except (TypeError, ValueError) as error:
+                                path = (f"merge() item {source_index} requirements."
+                                        f"{metric}.{field}[{value_index}]")
+                                if source._explicit_requirements:
+                                    raise ExtractError(
+                                        f"{path} must be an integer, got {item!r}") from error
+                                inferred_requirement_issues.append(warning(
+                                    "INVALID_INFERRED_REQUIREMENT_IGNORED", "merge",
+                                    f"{path} ignored because it is not an integer: {item!r}"))
+                        value = normalized
                     if target.get(field, (None,))[0] == "list":
                         target[field][1].update(value)
                     else:
@@ -2464,6 +2497,9 @@ def merge(matrices):
         if fingerprint not in seen_issues:
             seen_issues.add(fingerprint)
             merged._issues.append(copy.deepcopy(item))
+
+    for item in inferred_requirement_issues:
+        add_issue(item)
 
     def allocate_id(requested):
         effective = requested

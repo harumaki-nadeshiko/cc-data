@@ -621,6 +621,29 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"],
                          [1, "r2", "r3"])
 
+    def test_matrix_merge_reports_invalid_testcase_requirement_path(self):
+        explicit = MOD.Metric123RawLogMatrix(
+            {"metric3": {"testcases": [228, "r0"]}}, base_dir=self.root)
+        with self.assertRaisesRegex(
+                MOD.ExtractError,
+                r"merge\(\) item 0 requirements\.metric3\.testcases\[1\].*'r0'"):
+            MOD.merge([explicit, MOD.Metric123RawLogMatrix(base_dir=self.root)])
+
+        inferred = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        inferred._inferred["metric3"]["testcases"].update({228, "r0"})
+        merged = MOD.merge([inferred, MOD.Metric123RawLogMatrix(base_dir=self.root)])
+        self.assertEqual(merged._data()["requirements"]["metric3"]["testcases"], [228])
+        self.assertTrue(any(issue["code"] == "INVALID_INFERRED_REQUIREMENT_IGNORED"
+                            for issue in merged.finalize()["issues"]))
+
+    def test_finalize_reports_invalid_testcase_requirement_path(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"testcases": ["r0"]}}, base_dir=self.root)
+        with self.assertRaisesRegex(
+                MOD.ExtractError,
+                r"requirements\.metric3\.testcases\[0\].*'r0'"):
+            matrix.finalize()
+
     def test_matrix_merge_scans_each_snapshot_once(self):
         matrices = []
         for index in range(8):
