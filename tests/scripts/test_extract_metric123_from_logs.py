@@ -616,7 +616,9 @@ class ExtractMetric123Test(unittest.TestCase):
         left = MOD.Metric123RawLogMatrix(base_dir=self.root)
         right = MOD.Metric123RawLogMatrix(base_dir=self.root)
         left._inferred["metric2"]["repetitions"].update({1, "r2"})
+        left._inferred["metric2"]["testcases"].add(135)
         right._inferred["metric2"]["repetitions"].add("r3")
+        right._inferred["metric2"]["testcases"].add(135)
         merged = MOD.merge([left, right])
         self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"],
                          [1, "r2", "r3"])
@@ -655,7 +657,7 @@ class ExtractMetric123Test(unittest.TestCase):
         polluted = MOD.Metric123RawLogMatrix(base_dir=self.root)
         polluted._inferred["metric3"]["testcases"].update({228, "r0"})
         self.assertEqual(
-            polluted.finalize()["report"]["metric3"]["missing_slots"][0][0], 228)
+            polluted.finalize()["report"]["metric3"]["missing_slots"][0]["tc"], 228)
         clone = MOD.merge([polluted])
         self.assertEqual(clone._data()["requirements"]["metric3"]["testcases"],
                          [228])
@@ -980,6 +982,18 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(report["metric3"]["status"], "INCOMPLETE")
         self.assertEqual(len(report["views"]["all"]["metric3_arm_comparisons"]), 1)
 
+    def test_metric3_count_deficit_has_named_missing_fields(self):
+        req = {"metric3": {"mode": "independent", "min_repetitions": 1,
+                           "testcases": [228], "arms": ["ourcc", "ha-vi"]}}
+        matrix = MOD.Metric123RawLogMatrix(req, base_dir=self.root)
+        matrix.add(self.make_m3_run("only-ourcc", 228, "r1", "ourcc", 100))
+        output = self.root / "count-deficit-report"
+        missing = matrix.finalize(output)["report"]["metric3"]["missing_slots"]
+        self.assertIn({"kind": "minimum_samples", "tc": 228, "arm": "ha-vi",
+                       "observed_samples": 0, "required_min_samples": 1}, missing)
+        markdown = (output / "report.md").read_text()
+        self.assertIn("TC228 / arm=ha-vi：实际样本 0，最低要求 1", markdown)
+
     def test_metric2_unknown_phase_discovery_and_weighted_multinode(self):
         sim, out = self.root / "m2-auto/sim", self.root / "m2-auto/out"
         sim.mkdir(parents=True)
@@ -1202,6 +1216,33 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(case["baseline_mean_ns"], 300)
         self.assertEqual(case["result_mean_ns"], 240)
         self.assertAlmostEqual(case["reduction_pct"], 20)
+
+    def test_inferred_metric2_extension_does_not_pollute_standard_missing_slots(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        for profile, mean in (("naive", 1000), ("spill-noopt", 900),
+                              ("optimized", 800)):
+            sim = self.root / f"inferred-multi-{profile}" / "sim"
+            out = self.root / f"inferred-multi-{profile}" / "out"
+            sim.mkdir(parents=True)
+            for node in range(3):
+                self.write(out / f"simout_n{node}", self.latency(
+                    node, "db_oltp_end_to_end", samples=10, mean=mean))
+            self.assertEqual(matrix.add(
+                metric=2, tc=142, repetition="r1", topology="3n1s",
+                profile=profile, phase="db_oltp_end_to_end",
+                simulator_log_dir=str(sim),
+                simout_dir=str(out))["status"], "ADDED")
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["metric2"]["missing_slots"], [])
+        self.assertNotIn(142, matrix._data()["requirements"]["metric2"]["testcases"])
+        self.assertEqual(result["report"]["views"]["extension"]["runs"], 3)
+
+        matrix._inferred["metric2"]["testcases"].add(142)
+        repaired = pickle.loads(pickle.dumps(matrix))
+        self.assertNotIn(142, repaired._data()["requirements"]["metric2"]["testcases"])
+        self.assertTrue(any(issue["code"] == "LEGACY_METRIC2_INFERENCE_REPAIRED"
+                            for issue in repaired.finalize()["issues"]))
 
     def test_metric2_standard_can_also_match_qualification_without_reparse(self):
         phase, topology, node, samples = MOD.M2[135]

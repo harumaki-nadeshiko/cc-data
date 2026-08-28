@@ -382,6 +382,22 @@ output/evidence/metric3/     合成的标准 arm evidence tree
 机器程序仍应读取`report.json`、`resolved_runs.json`和`issues.tsv`。其中 extension 原因也以
 `resolved_runs[*].contract_warnings[*].failed_gates`结构化保存，不需要从 message 文本反向解析。
 
+冻结 standard 与 qualification/extension 的完整性域严格分离。例如 TC142 不在冻结 Metric2 registry，
+所以 run 会提示`TC142 is not in the standard Metric2 registry`；但它不会因此进入标准 Metric2
+`missing_slots`。只有显式注册 TC142 qualification 后，它的缺槽才出现在对应
+`report.qualifications[*].missing_slots`中。旧 pickle 若曾把 TC142 等 extension TC 污染到 inferred standard
+requirements，会自动清理并产生`LEGACY_METRIC2_INFERENCE_REPAIRED`。
+
+Metric3 最低样本数缺槽在 JSON 中使用具名对象，不再输出难以理解的位置数组：
+
+```json
+{"kind":"minimum_samples","tc":228,"arm":"ha-vi","observed_samples":0,"required_min_samples":1}
+```
+
+其含义是 TC228 的 HA-VI arm 当前有0个有效样本，合同最低要求1个；中文 Markdown 显示为
+`TC228 / arm=ha-vi：实际样本 0，最低要求 1`。精确 repetition 模式则使用
+`kind=exact_repetition`及具名的`repetition/tc/arm`字段。
+
 退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵、
 independent repetition/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
 与其他 pair 的 arm 组合。

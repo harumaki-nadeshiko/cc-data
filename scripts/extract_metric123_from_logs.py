@@ -1576,17 +1576,21 @@ def aggregate_qualification(item, runs, issues):
                 present = {(run["repetition"], run["tc"], run["arm"]): run
                            for run in topology_runs}
                 if repetitions:
-                    topology_missing.extend((rep, tc, arm) for rep in repetitions
-                                            for tc in item["testcases"] for arm in item["arms"]
-                                            if (rep, tc, arm) not in present)
+                    topology_missing.extend(
+                        {"kind": "exact_repetition", "repetition": rep,
+                         "tc": tc, "arm": arm}
+                        for rep in repetitions for tc in item["testcases"]
+                        for arm in item["arms"] if (rep, tc, arm) not in present)
                 else:
                     for tc in item["testcases"]:
                         for arm in item["arms"]:
                             count = sum(run["tc"] == tc and run["arm"] == arm
                                         for run in topology_runs)
                             if count < item["min_repetitions"]:
-                                topology_missing.append((tc, arm, count,
-                                                         item["min_repetitions"]))
+                                topology_missing.append({
+                                    "kind": "minimum_samples", "tc": tc,
+                                    "arm": arm, "observed_samples": count,
+                                    "required_min_samples": item["min_repetitions"]})
                 values = defaultdict(list)
                 for run in topology_runs:
                     for name, metric in run["metrics"].items():
@@ -1888,8 +1892,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         values = defaultdict(list)
         present = {(r["repetition"], r["tc"], r["arm"]): r for r in m3}
         if repetitions:
-            missing_m3 = [(rep, tc, arm) for rep in repetitions for tc in tcs_req
-                          for arm in arms_req if (rep, tc, arm) not in present]
+            missing_m3 = [
+                {"kind": "exact_repetition", "repetition": rep,
+                 "tc": tc, "arm": arm}
+                for rep in repetitions for tc in tcs_req for arm in arms_req
+                if (rep, tc, arm) not in present]
         for run in m3:
             for name, metric in run["metrics"].items():
                 value = finite_number(metric.get("ticks_per_operation"))
@@ -1924,9 +1931,12 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                       arm_stats["ourcc"]["mean_ticks"])})
         counts_by_tc_arm = {str(tc): {arm: sum(r["tc"] == tc and r["arm"] == arm for r in m3)
                                       for arm in arms_req} for tc in tcs_req}
-        insufficient = [(tc, arm, counts_by_tc_arm[str(tc)][arm], min_repetitions)
-                        for tc in tcs_req for arm in arms_req
-                        if min_repetitions and counts_by_tc_arm[str(tc)][arm] < min_repetitions]
+        insufficient = [
+            {"kind": "minimum_samples", "tc": tc, "arm": arm,
+             "observed_samples": counts_by_tc_arm[str(tc)][arm],
+             "required_min_samples": min_repetitions}
+            for tc in tcs_req for arm in arms_req
+            if min_repetitions and counts_by_tc_arm[str(tc)][arm] < min_repetitions]
         imbalanced = [{"tc": tc, "counts": counts_by_tc_arm[str(tc)]} for tc in tcs_req
                       if len(set(counts_by_tc_arm[str(tc)].values())) > 1]
         if imbalanced:
@@ -2130,10 +2140,35 @@ class Metric123RawLogMatrix:
         self._issues = copy.deepcopy(state["issues"])
         self._ids = set(state["ids"])
         self._add_results = copy.deepcopy(state["add_results"])
+        self._sanitize_inferred_metric2()
         self._sanitize_inferred_metric3()
         self._slot_ids = defaultdict(list)
         for row in self._resolved:
             self._slot_ids[logical_slot(row)].append(row["id"])
+
+    def _sanitize_inferred_metric2(self):
+        """Keep inferred standard coverage separate from Metric2 extensions."""
+        if self._explicit_requirements:
+            return
+        inferred = self._inferred.setdefault("metric2", {})
+        old_testcases = {int(value) for value in inferred.get("testcases", set())
+                         if str(value).lstrip("-").isdigit()}
+        old_repetitions = set(inferred.get("repetitions", set()))
+        repetitions = old_repetitions if old_testcases & set(M2) else set()
+        testcases = old_testcases & set(M2)
+        for row in self._resolved:
+            if row.get("metric") == 2 and row.get("standard_contract"):
+                repetitions.add(row["repetition"])
+                testcases.add(int(row["tc"]))
+        removed = sorted(old_testcases - testcases)
+        inferred.update({"repetitions": repetitions, "testcases": testcases})
+        if removed:
+            item = warning(
+                "LEGACY_METRIC2_INFERENCE_REPAIRED", "matrix",
+                "removed nonstandard testcases from inferred standard Metric2 "
+                f"requirements: {removed}", removed_testcases=removed)
+            if item not in self._issues:
+                self._issues.append(item)
 
     def _sanitize_inferred_metric3(self):
         """Migrate Metric3 inference polluted by the pre-05b3446 slot bug."""
@@ -2396,6 +2431,7 @@ class Metric123RawLogMatrix:
         if self._explicit_requirements:
             requirements = json.loads(json.dumps(self._requirements))
         else:
+            self._sanitize_inferred_metric2()
             self._sanitize_inferred_metric3()
             requirements = {}
             for name, fields in self._inferred.items():
@@ -2614,7 +2650,7 @@ def merge(matrices):
             if not merged._explicit_requirements:
                 if row["metric"] == 1 and row.get("standard_contract"):
                     merged._inferred["metric1"]["repetitions"].add(row["repetition"])
-                elif row["metric"] == 2:
+                elif row["metric"] == 2 and row.get("standard_contract"):
                     merged._inferred["metric2"]["repetitions"].add(row["repetition"])
                     merged._inferred["metric2"]["testcases"].add(row["tc"])
                 elif row["metric"] == 3:
@@ -2726,6 +2762,25 @@ def run_contract_diagnostic(run, qualification_sets_configured):
             "warnings": other_warnings}
 
 
+def format_missing_slots(missing):
+    """Render named missing-slot records as concise Chinese diagnostics."""
+    if not missing:
+        return "无"
+    rows = []
+    for item in missing:
+        if isinstance(item, dict) and item.get("kind") == "minimum_samples":
+            rows.append(
+                f"TC{item['tc']} / arm={item['arm']}：实际样本 "
+                f"{item['observed_samples']}，最低要求 {item['required_min_samples']}")
+        elif isinstance(item, dict) and item.get("kind") == "exact_repetition":
+            rows.append(
+                f"repetition={item['repetition']} / TC{item['tc']} / "
+                f"arm={item['arm']}：未找到样本")
+        else:
+            rows.append(markdown_cell(item))
+    return "；".join(rows)
+
+
 def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "report.json").write_text(json.dumps(
@@ -2813,7 +2868,9 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
         ("Metric3", report["metric3"]["status"], report["metric3"].get("missing_slots", [])),
     ]
     for name, status, missing in missing_sections:
-        lines.append(f"- **{name}**：状态 `{status}`；缺失槽位：{markdown_cell(missing or '无')}。")
+        lines.append(
+            f"- **{name}**：状态 `{status}`；缺失槽位："
+            f"{format_missing_slots(missing)}。")
     failed_m1 = [row for row in report["metric1"].get("comparisons", [])
                  if not row.get("pass")]
     failed_m2 = [row for row in report["metric2"].get("repetition_equal_weight", [])
