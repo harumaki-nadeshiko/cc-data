@@ -8,7 +8,7 @@ from email.parser import Parser
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-WHEELS = ROOT / "tools/wheels/aarch64-cp38"
+WHEELS = ROOT / "tools/wheels/aarch64-cp311"
 
 
 class Aarch64MatplotlibWheelsTest(unittest.TestCase):
@@ -50,8 +50,8 @@ class Aarch64MatplotlibWheelsTest(unittest.TestCase):
 
     def test_requirements_lock_contains_matplotlib(self):
         requirements = (WHEELS / "requirements.txt").read_text().splitlines()
-        self.assertIn("matplotlib==3.7.5", requirements)
-        self.assertIn("numpy==1.24.4", requirements)
+        self.assertIn("matplotlib==3.10.3", requirements)
+        self.assertIn("numpy==2.2.6", requirements)
         locked = {line.split("==", 1)[0].lower().replace("_", "-"):
                   line.split("==", 1)[1] for line in requirements if "==" in line}
         metadata = {}

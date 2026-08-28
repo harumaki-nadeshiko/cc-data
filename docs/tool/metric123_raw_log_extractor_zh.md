@@ -393,10 +393,10 @@ output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
 
-PNG 柱状图所需的 Ubuntu 20.04 aarch64 / CPython 3.8 离线 wheel 位于：
+PNG 柱状图所需的 Linux aarch64 / CPython 3.11 离线 wheel 位于：
 
 ```text
-tools/wheels/aarch64-cp38/
+tools/wheels/aarch64-cp311/
 ```
 
 安装命令、固定版本和 SHA256 校验见该目录的`README_zh.md`。未安装 Matplotlib 时 extractor 仍正常工作，
