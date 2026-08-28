@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import gzip
+import concurrent.futures
 import importlib.util
 import json
 import pathlib
@@ -760,6 +761,67 @@ class ExtractMetric123Test(unittest.TestCase):
             merged = MOD.merge(matrices)
         self.assertEqual(len(calls), 8)
         self.assertEqual(merged.finalize()["report"]["ingestion"]["attempted"], 8)
+
+    def test_matrix_merge_workers_match_serial_state(self):
+        matrices = []
+        for index in range(6):
+            matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+            matrix.add(self.make_m2_run(
+                f"parallel-merge-{index}", repetition=f"r{index}"))
+            matrices.append(matrix)
+        serial = MOD.merge(matrices, workers=1)
+        parallel = MOD.merge(matrices, workers=2)
+        self.assertEqual(serial.__getstate__(), parallel.__getstate__())
+        self.assertEqual(serial.finalize(), parallel.finalize())
+
+    def test_finalize_workers_match_serial_result(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        matrix.add(self.make_m2_run("parallel-finalize-naive", profile="naive"))
+        matrix.add(self.make_m2_run("parallel-finalize-spill", profile="spill-noopt"))
+        matrix.add(self.make_m2_run("parallel-finalize-optimized", profile="optimized"))
+        self.assertEqual(matrix.finalize(workers=1), matrix.finalize(workers=2))
+
+    def test_finalize_workers_preserve_qualification_order(self):
+        qualifications = [
+            {"id": f"q-{topology}", "metric": 3, "mode": "independent",
+             "topologies": [topology], "testcases": [228],
+             "arms": ["ourcc", "ha-vi"], "min_samples": 1}
+            for topology in ("3n1s", "8n1s", "16n1s")]
+        matrix = MOD.Metric123RawLogMatrix(
+            {"qualification_sets": qualifications},
+            correctness_policy="optional", base_dir=self.root)
+        serial = matrix.finalize(workers=1)
+        parallel = matrix.finalize(workers=3)
+        self.assertEqual(serial, parallel)
+        self.assertEqual([item["id"] for item in parallel["report"]["qualifications"]],
+                         [item["id"] for item in qualifications])
+
+    def test_parallel_calls_do_not_share_worker_context(self):
+        matrices = []
+        for prefix in ("left", "right"):
+            group = []
+            for index in range(3):
+                matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+                matrix.add(self.make_m2_run(
+                    f"{prefix}-parallel-{index}", repetition=f"r{index}"))
+                group.append(matrix)
+            matrices.append(group)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(MOD.merge, group, workers=2)
+                       for group in matrices]
+            results = [future.result() for future in futures]
+        self.assertEqual({run["id"] for run in results[0]._resolved},
+                         {f"left-parallel-{index}" for index in range(3)})
+        self.assertEqual({run["id"] for run in results[1]._resolved},
+                         {f"right-parallel-{index}" for index in range(3)})
+
+    def test_workers_validation(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        for value in (0, -1, True, 1.5, "2"):
+            with self.assertRaisesRegex(ValueError, "workers"):
+                MOD.merge([matrix, matrix], workers=value)
+            with self.assertRaisesRegex(ValueError, "workers"):
+                matrix.finalize(workers=value)
 
     def test_matrix_merge_deduplicates_same_evidence_across_policies(self):
         matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
@@ -1575,6 +1637,43 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertIn("## 未接纳的测试", markdown)
         self.assertIn("## 未满足的矩阵要求", markdown)
         self.assertIn("资格合同 `missing-q`", markdown)
+
+    def test_brief_markdown_and_svg_chart_are_always_emitted(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        run = self.make_m3_run("brief-chart", 228, "unused", "ourcc")
+        run.pop("repetition")
+        matrix.add(run)
+        output = self.root / "brief-output"
+        matrix.finalize(output)
+        brief = (output / "report_brief_zh.md").read_text()
+        svg = (output / "metric_summary_bar_chart.svg").read_text()
+        self.assertIn("# Metric 1/2/3 结果摘要", brief)
+        self.assertIn("主要缺失原因", brief)
+        self.assertIn("Metric summary", brief)
+        self.assertIn("Metric1", svg)
+        self.assertIn("Metric2", svg)
+        self.assertIn("Metric3", svg)
+        self.assertIn("negative: HA-VI faster", svg)
+        try:
+            import matplotlib  # noqa: F401
+        except (ImportError, OSError):
+            pass
+        else:
+            self.assertTrue((output / "metric_summary_bar_chart.png").is_file())
+
+    def test_brief_reports_incomplete_pairs_without_coverage(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"mode": "paired", "pairs": ["p1"],
+                         "testcases": [228]}}, base_dir=self.root)
+        run = self.make_m3_run("brief-pair", 228, "unused", "ourcc",
+                               pair="p1", order="AB")
+        run.pop("repetition")
+        matrix.add(run)
+        output = self.root / "brief-paired-output"
+        matrix.finalize(output)
+        brief = (output / "report_brief_zh.md").read_text()
+        self.assertIn("pair=p1 / TC228", brief)
+        self.assertIn("当前 arm=['ourcc']", brief)
 
     def test_markdown_explains_extension_and_rejected_run_reasons(self):
         matrix = MOD.Metric123RawLogMatrix(

@@ -228,6 +228,18 @@ result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
+大型 Matrix 可显式启用多进程 CPU 并行：
+
+```python
+merged = merge(matrix_list, workers=8)
+result = merged.finalize("/tmp/metric123-report", workers=8)
+```
+
+`workers=1`是默认串行路径。`workers>1`使用 Linux fork 进程池：merge 并行计算 snapshot fingerprint，
+finalize/aggregate 并行计算 formal/all/extension 描述视图、source inventory 和各 qualification；ID 分配、
+首次去重、issue 顺序、标准 Metric1/2/3 公式和最终退出码仍由父进程按固定顺序提交。因此串并行结果逐字段
+一致。小矩阵可能因进程启动开销变慢，建议仅在大量 retained snapshots 或 qualification 较多时启用。
+
 省略`requirements`时，只要 metric/TC/profile/role/arm 等实验身份字段
 可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
 坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
@@ -368,6 +380,9 @@ Metric 3 p150 representative    2.8785156250000004 ticks
 ```text
 output/report.json           完整机器可读报告
 output/report.md             中文摘要和人读矩阵
+output/report_brief_zh.md    交付简阅摘要：状态、关键值、缺失点和主要原因
+output/metric_summary_bar_chart.svg 零依赖矢量柱状图，始终生成
+output/metric_summary_bar_chart.png 安装 Matplotlib 后生成的高分辨率柱状图
 output/metric_matrix.tsv     run/pair/TC/aggregate 多层矩阵
 output/metric_matrix_standard.tsv  正式冻结合同矩阵；与 metric_matrix.tsv 相同
 output/metric_matrix_all.tsv       全部成功解析的数据点与描述结果
@@ -377,6 +392,15 @@ output/resolved_runs.json    解析后的绝对路径、来源 marker 与 correc
 output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
+
+PNG 柱状图所需的 Ubuntu 20.04 aarch64 / CPython 3.8 离线 wheel 位于：
+
+```text
+tools/wheels/aarch64-cp38/
+```
+
+安装命令、固定版本和 SHA256 校验见该目录的`README_zh.md`。未安装 Matplotlib 时 extractor 仍正常工作，
+并始终输出内容等价的 SVG 图。Metric3 图以0为轴同时显示正负 delta，不隐藏 HA-VI 更快的场景。
 
 `report.md`是首选的人读诊断入口，包含三个中文章节：
 

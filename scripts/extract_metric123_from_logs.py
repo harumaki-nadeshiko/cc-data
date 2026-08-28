@@ -6,11 +6,14 @@ tool deliberately emits no confidence interval, t-test, or p-value.
 """
 
 import argparse
+import concurrent.futures
 import copy
 import csv
 import gzip
+import hashlib
 import json
 import math
+import multiprocessing
 import numbers
 import pathlib
 import re
@@ -18,6 +21,10 @@ import statistics
 import sys
 import tempfile
 from collections import defaultdict
+
+
+_MERGE_FINGERPRINT_RECORDS = None
+_AGGREGATE_PARALLEL_CONTEXT = None
 
 
 PROFILES = ("naive", "spill-noopt", "optimized")
@@ -194,6 +201,23 @@ def json_ready(value):
     if isinstance(value, numbers.Real) and not isinstance(value, bool):
         return value if math.isfinite(value) else None
     return value
+
+
+def normalize_workers(workers):
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("workers must be an integer >= 1")
+    return workers
+
+
+def process_pool(max_workers, initializer=None, initargs=()):
+    """Create the Linux fork pool required by snapshot-heavy parallel tasks."""
+    try:
+        context = multiprocessing.get_context("fork")
+    except ValueError as error:
+        raise ExtractError("workers > 1 requires multiprocessing fork support") from error
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers, mp_context=context,
+        initializer=initializer, initargs=initargs)
 
 
 def open_text(path):
@@ -1683,9 +1707,29 @@ def aggregate_qualification(item, runs, issues):
             "results": results, "errors": registry_errors}
 
 
+def _aggregate_parallel_task(task):
+    kind, value = task
+    context = _AGGREGATE_PARALLEL_CONTEXT
+    if kind == "view":
+        return descriptive_view(context[value])
+    if kind == "inventory":
+        return source_inventory(context["all"])
+    if kind == "qualification":
+        return aggregate_qualification(
+            context["qualification_sets"][value], context["all"], context["issues"])
+    raise ValueError(f"unknown aggregate parallel task {kind!r}")
+
+
+def _init_aggregate_worker(context):
+    global _AGGREGATE_PARALLEL_CONTEXT
+    _AGGREGATE_PARALLEL_CONTEXT = context
+
+
 def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
-                      manifest=None, ingestion=None, require_qualifications=None):
+                      manifest=None, ingestion=None, require_qualifications=None,
+                      *, workers=1):
     """Apply the frozen formulas to already parsed, in-memory run records."""
+    workers = normalize_workers(workers)
     issues = list(ingestion_issues)
     # Duplicate logical slots are never silently selected.
     slots = defaultdict(list)
@@ -2025,8 +2069,28 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     m3_status = ("NOT_REQUESTED" if not m3_requested else
                  "INCOMPLETE" if not m3_complete else "COMPLETE")
 
-    qualifications = [aggregate_qualification(item, all_resolved, issues)
-                      for item in normalize_qualification_sets(data.get("requirements", {}))]
+    qualification_sets = normalize_qualification_sets(data.get("requirements", {}))
+    parallel_tasks = [("view", "formal"), ("view", "all"),
+                      ("view", "extension"), ("inventory", None)]
+    parallel_tasks.extend(("qualification", index)
+                          for index in range(len(qualification_sets)))
+    if workers > 1 and len(parallel_tasks) > 1:
+        parallel_context = {
+            "formal": formal_resolved, "all": all_resolved,
+            "extension": extension_resolved, "issues": issues,
+            "qualification_sets": qualification_sets}
+        with process_pool(min(workers, len(parallel_tasks)),
+                          _init_aggregate_worker, (parallel_context,)) as pool:
+            parallel_results = list(pool.map(_aggregate_parallel_task, parallel_tasks))
+        formal_view, all_view, extension_view, inventory = parallel_results[:4]
+        qualifications = parallel_results[4:]
+    else:
+        formal_view = descriptive_view(formal_resolved)
+        all_view = descriptive_view(all_resolved)
+        extension_view = descriptive_view(extension_resolved)
+        inventory = source_inventory(all_resolved)
+        qualifications = [aggregate_qualification(item, all_resolved, issues)
+                          for item in qualification_sets]
     has_errors = any(i["severity"] == "ERROR" and
                       i.get("contract_class", "standard") == "standard"
                      for i in issues)
@@ -2090,11 +2154,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
                "views": {"standard": {"runs": len(standard_resolved), "formal": True},
-                           "formal": descriptive_view(formal_resolved),
-                           "all": descriptive_view(all_resolved),
-                           "extension": descriptive_view(extension_resolved)},
+                            "formal": formal_view,
+                            "all": all_view,
+                            "extension": extension_view},
                "qualifications": qualifications,
-               "source_inventory": source_inventory(all_resolved),
+               "source_inventory": inventory,
                "issues": issues,
                "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
                                             "rejected": 0, "duplicate_conflicted": len(bad_ids),
@@ -2515,7 +2579,7 @@ class Metric123RawLogMatrix:
         return {"schema_version": 1, "correctness_policy": self.correctness_policy,
                 "requirements": requirements}
 
-    def finalize(self, output_dir=None, require_qualifications=None):
+    def finalize(self, output_dir=None, require_qualifications=None, *, workers=1):
         """Return report plus matrices; optionally emit the normal output tree."""
         output = pathlib.Path(output_dir).expanduser().resolve() if output_dir is not None else None
         slot_counts = defaultdict(int)
@@ -2532,7 +2596,8 @@ class Metric123RawLogMatrix:
         issue_snapshot = json.loads(json.dumps(self._issues))
         values = aggregate_results(self._data(), parsed_snapshot, issue_snapshot,
                                    output, ingestion=ingestion,
-                                   require_qualifications=require_qualifications)
+                                   require_qualifications=require_qualifications,
+                                   workers=workers)
         report, resolved, matrix, per_run, issues, code = values
         if output is not None:
             write_outputs(output, report, resolved, matrix, per_run, issues)
@@ -2556,13 +2621,29 @@ def _merge_snapshot_fingerprint(record):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def merge(matrices):
+def _merge_fingerprint_digest(record):
+    canonical = _merge_snapshot_fingerprint(record)
+    return hashlib.sha256(canonical.encode("utf-8")).digest()
+
+
+def _merge_fingerprint_batch(indexes):
+    return [(index, _merge_fingerprint_digest(_MERGE_FINGERPRINT_RECORDS[index]))
+            for index in indexes]
+
+
+def _init_merge_worker(records):
+    global _MERGE_FINGERPRINT_RECORDS
+    _MERGE_FINGERPRINT_RECORDS = records
+
+
+def merge(matrices, *, workers=1):
     """Merge Matrix snapshots in one pass without reopening source logs.
 
     Input order is preserved for scalar requirement precedence and deterministic
     ID renaming.  Empty iterables are rejected; a single input returns an
     isolated clone.
     """
+    workers = normalize_workers(workers)
     iterator = iter(matrices)
     try:
         first = next(iterator)
@@ -2656,7 +2737,22 @@ def merge(matrices):
         merged._requirements = {}
         merged._qualification_sets = []
 
-    seen_snapshots = set()
+    records = [record for source in sources for record in source._resolved]
+    digests = None
+    if workers > 1 and len(records) > 1:
+        chunk_size = max(1, (len(records) + workers * 4 - 1) // (workers * 4))
+        chunks = [range(start, min(start + chunk_size, len(records)))
+                  for start in range(0, len(records), chunk_size)]
+        with process_pool(min(workers, len(chunks)),
+                          _init_merge_worker, (records,)) as pool:
+            batches = pool.map(_merge_fingerprint_batch, chunks)
+            digests = [None] * len(records)
+            for batch in batches:
+                for index, digest in batch:
+                    digests[index] = digest
+
+    seen_snapshot_strings = set()
+    seen_snapshot_digests = defaultdict(list)
     seen_issues = set()
     next_suffix = {}
 
@@ -2682,12 +2778,24 @@ def merge(matrices):
         merged._ids.add(effective)
         return effective
 
+    record_index = 0
     for source in sources:
         for record in source._resolved:
-            fingerprint = _merge_snapshot_fingerprint(record)
-            if fingerprint in seen_snapshots:
-                continue
-            seen_snapshots.add(fingerprint)
+            digest = digests[record_index] if digests is not None else None
+            record_index += 1
+            if digest is None:
+                fingerprint = _merge_snapshot_fingerprint(record)
+                if fingerprint in seen_snapshot_strings:
+                    continue
+                seen_snapshot_strings.add(fingerprint)
+            else:
+                bucket = seen_snapshot_digests[digest]
+                if bucket:
+                    fingerprint = _merge_snapshot_fingerprint(record)
+                    if any(fingerprint == _merge_snapshot_fingerprint(prior)
+                           for prior in bucket):
+                        continue
+                bucket.append(record)
             row = copy.deepcopy(record)
             requested = row["id"]
             effective = allocate_id(requested)
@@ -2764,7 +2872,7 @@ def merge(matrices):
     return merged
 
 
-def analyze(manifest_path, output_dir, require_qualifications=None):
+def analyze(manifest_path, output_dir, require_qualifications=None, *, workers=1):
     """Manifest-compatible wrapper implemented through Metric123RawLogMatrix."""
     manifest_path = pathlib.Path(manifest_path)
     data = json.loads(manifest_path.read_text())
@@ -2787,7 +2895,8 @@ def analyze(manifest_path, output_dir, require_qualifications=None):
                                           "rejected": sum(x["status"] == "REJECTED" for x in matrix._add_results),
                                           "duplicate_conflicted": sum(
                                               count for count in slot_counts.values() if count > 1),
-                                          "add_results": matrix._add_results})
+                                          "add_results": matrix._add_results},
+                               workers=workers)
     # Preserve analyze's historical tuple and its division of writing responsibility.
     return result
 
@@ -2869,6 +2978,180 @@ def format_missing_slots(missing):
     return "；".join(rows)
 
 
+def brief_number(value, suffix=""):
+    value = finite_number(value)
+    return "N/A" if value is None else f"{value:.3f}{suffix}"
+
+
+def brief_metric_values(report):
+    m1 = report["metric1"]["aggregate"]
+    m3 = {row["name"]: row for row in report["metric3"].get("aggregates", [])}
+    return {
+        "metric1_capacity_ratio": m1["capacity_ratio"].get("mean"),
+        "metric1_outer_delta_cycles": m1["outer_delta_cycles"].get("mean"),
+        "metric2_reduction_pct": report["metric2"].get("aggregate_reduction_pct"),
+        "metric3_core_delta_ticks": m3.get("core", {}).get("delta_ticks"),
+        "metric3_representative_delta_ticks": m3.get("representative", {}).get("delta_ticks"),
+    }
+
+
+def render_brief_markdown(report):
+    values = brief_metric_values(report)
+    missing = {name: [point for point in report[name].get("coverage", [])
+                      if not point.get("complete", False)]
+               for name in ("metric1", "metric2", "metric3")}
+    extra_reasons = []
+    extra_missing_counts = {name: 0 for name in ("metric1", "metric2", "metric3")}
+    for name in ("metric1", "metric2", "metric3"):
+        for item in report[name].get("missing_slots", []):
+            if isinstance(item, dict) and item.get("kind") == "required_metrics":
+                extra_missing_counts[name] += 1
+                extra_reasons.append(
+                    f"- **{name.upper()}** 必需指标不可用：{item.get('message', item)}。")
+    for item in report["metric3"].get("incomplete_pairs", []):
+        extra_missing_counts["metric3"] += 1
+        extra_reasons.append(
+            f"- **METRIC3** pair={item.get('pair')} / TC{item.get('tc')}："
+            f"当前 arm={item.get('present_arms', [])}。")
+    for item in report.get("issues", []):
+        if item.get("severity") == "ERROR":
+            extra_reasons.append(
+                f"- **{item.get('code', 'ERROR')}** {item.get('run_id', '')}: "
+                f"{item.get('message', '')}")
+    lines = ["# Metric 1/2/3 结果摘要", "",
+             f"总体状态：**{report['overall_status']}**", "",
+             "| 指标 | 状态 | 关键结果 | 缺失点 |", "|---|---|---|---:|",
+             f"| Metric1 | {report['metric1']['status']} | 容量比 "
+             f"{brief_number(values['metric1_capacity_ratio'])}；Outer delta "
+             f"{brief_number(values['metric1_outer_delta_cycles'], ' cycles')} | "
+             f"{len(missing['metric1']) + extra_missing_counts['metric1']} |",
+             f"| Metric2 | {report['metric2']['status']} | 适用 TC 等权降幅 "
+             f"{brief_number(values['metric2_reduction_pct'], '%')} | "
+             f"{len(missing['metric2']) + extra_missing_counts['metric2']} |",
+             f"| Metric3 | {report['metric3']['status']} | Core delta "
+             f"{brief_number(values['metric3_core_delta_ticks'], ' ticks')}；Representative delta "
+             f"{brief_number(values['metric3_representative_delta_ticks'], ' ticks')} | "
+             f"{len(missing['metric3']) + extra_missing_counts['metric3']} |", "",
+             "Metric3 定义 `delta = HA-VI - OurCC`：正值表示 OurCC 更快，负值表示 HA-VI 更快；"
+             "正负方向均保留。", "",
+             "![Metric summary](metric_summary_bar_chart.svg)"]
+    reasons = []
+    for name in ("metric1", "metric2", "metric3"):
+        for point in missing[name]:
+            coordinate = ", ".join(f"{key}={point[key]}" for key in
+                                   ("tc", "role", "profile", "arm")
+                                   if point.get(key) is not None)
+            reasons.append(
+                f"- **{name.upper()}** {coordinate}: 实际样本 "
+                f"{point['observed_samples']}，最低要求 {point['required_min_samples']}。")
+    reasons.extend(extra_reasons)
+    if reasons:
+        lines += ["", "## 主要缺失原因", ""] + reasons[:5]
+        if len(reasons) > 5:
+            lines.append(f"- 其余 {len(reasons) - 5} 个缺失点见 `report.md`。")
+    return "\n".join(lines) + "\n"
+
+
+def write_summary_svg(path, report):
+    values = brief_metric_values(report)
+    panels = [
+        ("Metric1", [("Capacity ratio", values["metric1_capacity_ratio"], 1.5),
+                     ("Outer delta cycles", values["metric1_outer_delta_cycles"], 50.0)]),
+        ("Metric2", [("Reduction %", values["metric2_reduction_pct"], 10.0)]),
+        ("Metric3", [("Core delta ticks", values["metric3_core_delta_ticks"], 0.0),
+                     ("Representative delta ticks", values["metric3_representative_delta_ticks"], 0.0)]),
+    ]
+    width, height = 1080, 560
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+           '<rect width="100%" height="100%" fill="#f7f4ed"/>',
+           '<style>text{font-family:DejaVu Sans,Arial,sans-serif;fill:#17232b}.title{font-size:24px;font-weight:700}.label{font-size:14px}.value{font-size:13px;font-weight:700}.note{font-size:12px;fill:#53636d}</style>',
+           '<text x="40" y="42" class="title">Metric 1/2/3 Summary</text>']
+    panel_width = 320
+    for panel_index, (title, rows) in enumerate(panels):
+        x0, y0 = 40 + panel_index * 345, 75
+        svg.append(f'<rect x="{x0}" y="{y0}" width="{panel_width}" height="420" rx="12" fill="#ffffff" stroke="#d8d3c8"/>')
+        svg.append(f'<text x="{x0 + 18}" y="{y0 + 32}" class="title">{title}</text>')
+        metric3_values = [abs(value) for _, value, _ in rows
+                          if finite_number(value) is not None]
+        metric3_scale = max(metric3_values + [1.0]) * 1.25
+        for row_index, (label, value, reference) in enumerate(rows):
+            y = y0 + 95 + row_index * 145
+            svg.append(f'<text x="{x0 + 18}" y="{y - 20}" class="label">{label}</text>')
+            if finite_number(value) is None:
+                svg.append(f'<rect x="{x0 + 18}" y="{y}" width="284" height="34" rx="5" fill="#e6e2d9"/>')
+                svg.append(f'<text x="{x0 + 28}" y="{y + 23}" class="value">N/A</text>')
+                continue
+            if title == "Metric3":
+                zero = x0 + 160
+                bar_width = abs(value) / metric3_scale * 130
+                bar_x = zero if value >= 0 else zero - bar_width
+                color = "#247ba0" if value >= 0 else "#c65d3b"
+                svg.append(f'<line x1="{zero}" y1="{y - 8}" x2="{zero}" y2="{y + 42}" stroke="#495057"/>')
+                svg.append(f'<rect x="{bar_x:.2f}" y="{y}" width="{bar_width:.2f}" height="34" rx="5" fill="{color}"/>')
+            else:
+                scale = max(abs(value), abs(reference), 1.0) * 1.2
+                bar_width = max(2, value / scale * 270)
+                svg.append(f'<rect x="{x0 + 18}" y="{y}" width="{bar_width:.2f}" height="34" rx="5" fill="#247ba0"/>')
+                ref_x = x0 + 18 + reference / scale * 270
+                svg.append(f'<line x1="{ref_x:.2f}" y1="{y - 8}" x2="{ref_x:.2f}" y2="{y + 42}" stroke="#c65d3b" stroke-width="3"/>')
+            svg.append(f'<text x="{x0 + 18}" y="{y + 58}" class="value">{value:.3f}</text>')
+        if title == "Metric3":
+            svg.append(f'<text x="{x0 + 18}" y="{y0 + 390}" class="note">positive: OurCC faster; negative: HA-VI faster</text>')
+        else:
+            svg.append(f'<text x="{x0 + 18}" y="{y0 + 390}" class="note">red marker: reference threshold</text>')
+    svg.append('</svg>')
+    path.write_text("\n".join(svg) + "\n")
+
+
+def write_summary_png(path, report):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except (ImportError, OSError):
+        path.unlink(missing_ok=True)
+        return False
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        values = brief_metric_values(report)
+        figure, axes = plt.subplots(1, 3, figsize=(13.5, 4.8))
+        panels = [
+            ("Metric1", ["Capacity ratio", "Outer delta cycles"],
+             [values["metric1_capacity_ratio"], values["metric1_outer_delta_cycles"]]),
+            ("Metric2", ["Reduction %"], [values["metric2_reduction_pct"]]),
+            ("Metric3", ["Core delta", "Representative delta"],
+             [values["metric3_core_delta_ticks"], values["metric3_representative_delta_ticks"]]),
+        ]
+        for axis, (title, labels, raw_values) in zip(axes, panels):
+            plot_values = [0 if finite_number(value) is None else value for value in raw_values]
+            colors = [("#9aa1a6" if finite_number(raw) is None else
+                       "#247ba0" if value >= 0 else "#c65d3b")
+                      for raw, value in zip(raw_values, plot_values)]
+            bars = axis.bar(labels, plot_values, color=colors)
+            axis.axhline(0, color="#495057", linewidth=0.8)
+            axis.set_title(title, fontweight="bold")
+            axis.tick_params(axis="x", rotation=20)
+            axis.grid(axis="y", alpha=0.2)
+            for bar, raw in zip(bars, raw_values):
+                text = "N/A" if finite_number(raw) is None else f"{raw:.3f}"
+                axis.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), text,
+                          ha="center", va="bottom" if bar.get_height() >= 0 else "top", fontsize=9)
+        figure.suptitle("Metric 1/2/3 Summary", fontsize=16, fontweight="bold")
+        figure.tight_layout()
+        figure.savefig(temporary, format="png", dpi=180, bbox_inches="tight")
+        plt.close(figure)
+        temporary.replace(path)
+        return True
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        temporary.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        return False
+
+
 def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "report.json").write_text(json.dumps(
@@ -2888,6 +3171,9 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
               ["run_id", "metric", "tc", "repetition", "profile", "arm", "pair", "order", "value", "unit", "status"])
     write_tsv(output_dir / "issues.tsv", issues,
               ["severity", "code", "run_id", "contract_class", "message"])
+    (output_dir / "report_brief_zh.md").write_text(render_brief_markdown(report))
+    write_summary_svg(output_dir / "metric_summary_bar_chart.svg", report)
+    write_summary_png(output_dir / "metric_summary_bar_chart.png", report)
     lines = ["# Metric 1/2/3 原始日志统一报告", "", f"总体状态：**{report['overall_status']}**", "",
              "| 指标 | 状态 |", "|---|---|", f"| Metric1 | {report['metric1']['status']} |",
              f"| Metric2 | {report['metric2']['status']} |", f"| Metric3 | {report['metric3']['status']} |", "",
@@ -3023,11 +3309,13 @@ def main(argv=None):
     parser.add_argument("--output-dir", default=pathlib.Path("output"), type=pathlib.Path)
     parser.add_argument("--require-qualification", action="append", default=[], metavar="ID",
                         help="also require the named opt-in qualification set to PASS")
+    parser.add_argument("--workers", type=int, default=1, metavar="N",
+                        help="processes for merge/report CPU work (default: 1)")
     args = parser.parse_args(argv)
     manifest, output = args.manifest.expanduser().resolve(), args.output_dir.expanduser().resolve()
     try:
         report, resolved, matrix, per_run, issues, code = analyze(
-            manifest, output, args.require_qualification)
+            manifest, output, args.require_qualification, workers=args.workers)
     except (ExtractError, OSError, ValueError) as error:
         report = {"schema_version": 1, "overall_status": "INVALID", "exit_code": 2,
                   "metric1": {"status": "INVALID"}, "metric2": {"status": "INVALID"},
