@@ -3005,15 +3005,42 @@ def detail_scope(runs):
             ("Extension descriptive", ""))
 
 
-def build_metric_details(resolved):
+def build_metric_details(resolved, report=None):
     details = {"metric1": [], "metric2": [], "metric3": []}
     m1_coordinates = sorted({(run["tc"], run["topology"])
                              for run in resolved if run["metric"] == 1})
     for tc, topology in m1_coordinates:
         runs = [run for run in resolved if run["metric"] == 1 and
                 run["tc"] == tc and run["topology"] == topology]
-        groups = {role: [run for run in runs if run.get("metric1_role") == role]
-                  for role in ("naive", "spill", "ideal")}
+        role_runs = {role: [run for run in runs if run.get("metric1_role") == role]
+                     for role in ("naive", "spill", "ideal")}
+        contract_sets = []
+        for role in ("naive", "spill", "ideal"):
+            tokens = set()
+            for run in role_runs[role]:
+                if run.get("standard_contract"):
+                    tokens.add(STANDARD_CONTRACT_ID)
+                tokens.update(run.get("qualified_contracts", []))
+            contract_sets.append(tokens)
+        common_contracts = set.intersection(*contract_sets) if all(contract_sets) else set()
+        contract = (STANDARD_CONTRACT_ID if STANDARD_CONTRACT_ID in common_contracts else
+                    sorted(common_contracts)[0] if common_contracts else "")
+        groups = {role: [run for run in role_runs[role]
+                         if ((contract == STANDARD_CONTRACT_ID and run.get("standard_contract")) or
+                             contract in run.get("qualified_contracts", []))]
+                  for role in role_runs}
+        complete_contract = bool(contract)
+        if complete_contract and report is not None:
+            if contract == STANDARD_CONTRACT_ID:
+                complete_contract = report["metric1"]["status"] in ("PASS", "FAIL")
+            else:
+                qualification = next((item for item in report.get("qualifications", [])
+                                      if item["id"] == contract), None)
+                coordinate_result = next((item for item in (qualification or {}).get("results", [])
+                                          if item.get("coordinate", {}).get("tc") == tc and
+                                          item.get("coordinate", {}).get("topology") == topology), None)
+                complete_contract = bool(coordinate_result and
+                                         coordinate_result.get("status") in ("PASS", "FAIL"))
         naive = safe_mean(run["metrics"]["capacity"].get("effective_unique")
                           for run in groups["naive"])
         spill = safe_mean(run["metrics"]["capacity"].get("effective_unique")
@@ -3021,7 +3048,8 @@ def build_metric_details(resolved):
         spill_outer = pooled_outer_latency(groups["spill"])
         ideal_outer = pooled_outer_latency(groups["ideal"])
         delta_ns = safe_subtract(spill_outer["mean_ns"], ideal_outer["mean_ns"])
-        scope, contract = detail_scope(runs)
+        scope = ("Standard" if contract == STANDARD_CONTRACT_ID else
+                 "Formal qualification" if contract else "Extension descriptive")
         reasons = []
         for role, rows in groups.items():
             if not rows:
@@ -3034,10 +3062,16 @@ def build_metric_details(resolved):
             reasons.append("spill completed Outer missing")
         if groups["ideal"] and ideal_outer["samples"] == 0:
             reasons.append("ideal completed Outer missing")
+        if not contract:
+            reasons.append("naive/spill/ideal do not share one formal contract")
+        elif not complete_contract:
+            reasons.append("formal coordinate is incomplete")
         details["metric1"].append({
             "scope": scope, "contract": contract, "topology": topology,
-            "tc": tc, "capacity_ratio": safe_divide(spill, naive),
-            "outer_delta_cycles": delta_ns * 2.0 if delta_ns is not None else None,
+            "tc": tc, "capacity_ratio": (safe_divide(spill, naive)
+                                           if complete_contract else None),
+            "outer_delta_cycles": (delta_ns * 2.0
+                                     if complete_contract and delta_ns is not None else None),
             "sample_counts": {role: len(rows) for role, rows in groups.items()},
             "reason": "; ".join(reasons),
         })
@@ -3458,7 +3492,7 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
               ["run_id", "metric", "tc", "repetition", "profile", "arm", "pair", "order", "value", "unit", "status"])
     write_tsv(output_dir / "issues.tsv", issues,
               ["severity", "code", "run_id", "contract_class", "message"])
-    details = build_metric_details(resolved)
+    details = build_metric_details(resolved, report)
     (output_dir / "metric_detail_by_tc_topology.json").write_text(json.dumps(
         json_ready(details), indent=2, sort_keys=True, allow_nan=False) + "\n")
     (output_dir / "report_detail_by_tc_topology_zh.md").write_text(
