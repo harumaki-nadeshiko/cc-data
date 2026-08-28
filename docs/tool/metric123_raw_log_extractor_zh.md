@@ -235,6 +235,48 @@ finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 ou
 extension 不改变正式状态。每个成功 run 含`contract_class`、`standard_contract`和结构化
 `contract_warnings`。
 
+## 显式资格合同（opt-in）
+
+冻结 standard 合同、`report.metric1/2/3`、`views.standard`和未配置时的退出码/数值完全不变。
+额外正式坐标只能由顶层`requirements.qualification_sets`注册；run 自身填写 TC、phase、topology
+等字段不能把自己提升为正式资格点。每个 set 有全局唯一`id`和`metric`：
+
+- Metric1：`coordinates=[{tc,topology,home_node,home_socket}]`、`repetitions`、可选
+  `ideal_min_capacity`和`thresholds`。仍使用`naive/spill/ideal`、现有容量/Outer公式与角色门禁；
+  每个 coordinate 独立聚合，重复名相同也不会碰撞。threshold 默认仍为 ratio `>=1.5`、
+  Outer delta `*2GHz <50 cycles`。
+- Metric2：`coordinates=[{tc,topology,phase,expected_node,expected_samples}]`、`repetitions`；
+  默认 profiles 为三 profile，baseline/result 默认`naive/optimized`，适用门槛500ns、降幅门槛10%。
+  注册的 phase/node/samples 是精确合同；未注册自动发现 phase 仍只是 extension。
+  多 plane workload 可改用`kind=timer|latency`、`reduction=aggregate|max`、`expected_nodes=[...]`
+  和`expected_count`。timer aggregate 使用`sum(counter_ticks)/sum(operations)`；latency aggregate 按
+  samples 加权；节点集合、总 count 和频率都必须精确匹配。若 qualification 与冻结 TC135-140/217
+  合同相同，run 仍先按冻结定义解析并同时命中 qualification，不会从 standard 视图消失。
+- Metric3：只复用 builtin TC228-235 parser、primary和aggregate权重。set 声明
+  `mode=paired|independent`、`topologies`、`testcases`、`arms`，并按模式给出`pairs`或
+  `repetitions/min_repetitions`。完整性、均值和配对始终按 topology 分开，绝不跨 topology 补槽或混合。
+  TC232 的冻结 2N1S 主值仍为`2/3 read + 1/3 write`；额外 topology qualification 按工作负载
+  实际操作数计算，P 个 active plane 时使用`read=P/(P+1)`、`write=1/(P+1)`，代表场景组中的
+  TC232 分量也使用同一拓扑相关权重。paired set 对同一 TC/metric 的多个 pair 先求 delta 均值，
+  再计算 testcase primary 和 tier aggregate；qualification mode 不改写 run 的 standard logical slot。
+  `arms`固定要求恰好包含`ourcc`和`ha-vi`。
+
+解析后的 run 新增`formal_contract`和`qualified_contracts`；为兼容既有消费者，
+`contract_class`仍只有`standard|extension`。成功资格化的非 standard run 保留
+`contract_class=extension`，但进入`views.formal`并从`views.extension`排除；standard run 也可同时
+命中资格 set。报告新增`report.qualifications`，输出新增`metric_matrix_formal.tsv`。
+
+资格缺失/失败默认不改变 standard 的`overall_status/exit_code`。只有显式使用可重复 CLI 参数才组合退出状态：
+
+```bash
+python3 scripts/extract_metric123_from_logs.py --manifest manifest.json \
+  --require-qualification m1-tc132 --require-qualification m3-3n-paired
+```
+
+被要求的 ID 未注册或资格证据无效返回2，缺槽返回3，完整但门槛失败返回1。矩阵合并时，同 ID
+定义必须完全一致，否则拒绝合并。pickle state 已升级为v2；仍接受旧v1，并只从 snapshot 中的
+requirements重建资格 registry，不读取任何原始日志。
+
 报告中的`source_inventory`明确分离三种计数：`logical_runs`是成功解析且未发生 slot 冲突的逻辑
 运行数，`unique_files`是证据文件去重数，`source_references`是 timer、latency、Outer、capacity 等
 marker/source 行引用数。一个 run 可产生数万条 Outer source reference，因此不得把 sources 数当成

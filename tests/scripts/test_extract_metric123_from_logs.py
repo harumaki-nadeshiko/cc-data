@@ -716,9 +716,9 @@ class ExtractMetric123Test(unittest.TestCase):
             matrix.__setstate__({"version": 999})
 
     def make_m3_run(self, run_id, tc, repetition, arm=None, tick_base=100,
-                    identity=None, pair=None, order=None):
+                     identity=None, pair=None, order=None, topology="2n1s"):
         sim, out = self.root / run_id / "sim", self.root / run_id / "out"
-        self.correctness(sim, tc)
+        self.correctness(sim, tc, topology)
         if identity:
             self.write(sim / "identity.log", identity)
         text = ""
@@ -728,7 +728,7 @@ class ExtractMetric123Test(unittest.TestCase):
                      self.latency(0, phase, 10, tick_base + index * 10))
         self.write(out / "simout_n0", text)
         run = {"id": run_id, "metric": 3, "tc": tc, "repetition": repetition,
-               "topology": "2n1s", "simulator_log_dir": str(sim),
+                "topology": topology, "simulator_log_dir": str(sim),
                "simout_dir": str(out)}
         if arm is not None: run["arm"] = arm
         if pair is not None: run["pair"] = pair
@@ -916,6 +916,279 @@ class ExtractMetric123Test(unittest.TestCase):
         resolved_json = json.loads((self.root / "nonfinite-report" /
                                     "resolved_runs.json").read_text())
         self.assertIsNone(resolved_json[0]["metrics"]["mean_ns"])
+
+    def test_opt_in_metric1_additional_coordinate_is_formal_and_isolated(self):
+        qualification = {"id": "m1-tc132", "metric": 1,
+                         "coordinates": [{"tc": 132, "topology": "3n1s",
+                                          "home_node": 0, "home_socket": 0}],
+                         "repetitions": ["r1"], "ideal_min_capacity": 1000}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": []}, "qualification_sets": [qualification]},
+            base_dir=self.root)
+        specs = (("naive", 100, None, ()), ("spill", 100, 160, (12000,)),
+                 ("ideal", 1000, 0, (10000,)))
+        for role, capacity, exact, outer in specs:
+            run = self.make_formal_m1("q1-" + role, role, capacity, exact, outer)
+            old_sim, old_out = pathlib.Path(run["simulator_log_dir"]), pathlib.Path(run["simout_dir"])
+            run.update(tc=132, topology="3n1s")
+            for path in old_sim.rglob("*"):
+                if path.is_file():
+                    path.write_text(path.read_text().replace("tc131", "tc132").replace('"tc": 131', '"tc": 132'))
+            verifier = old_sim / "verify_tc131.log"
+            verifier.rename(old_sim / "verify_tc132.log")
+            exits = old_sim / "child_status_tc131"
+            shutil.rmtree(exits)
+            self.correctness(old_sim, 132, "3n1s")
+            for path in list(old_out.rglob("*tc131*")):
+                path.rename(path.with_name(path.name.replace("tc131", "tc132")))
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        result = matrix.finalize(require_qualifications=["m1-tc132"])
+        self.assertEqual(result["report"]["qualifications"][0]["status"], "PASS")
+        self.assertEqual(result["report"]["metric1"]["status"], "NOT_REQUESTED")
+        self.assertEqual(result["report"]["views"]["formal"]["runs"], 3)
+        self.assertEqual(result["report"]["views"]["extension"]["runs"], 0)
+        self.assertTrue(all(run["contract_class"] == "extension" and run["formal_contract"]
+                            for run in result["resolved_runs"]))
+
+    def test_opt_in_metric2_exact_topology_phase_and_unregistered_extension(self):
+        qualification = {"id": "m2-5n", "metric": 2,
+                         "coordinates": [{"tc": 135, "topology": "5n1s",
+                                          "phase": "formal_phase", "expected_node": 4,
+                                          "expected_samples": 7}], "repetitions": ["r1"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric2": {"repetitions": [], "testcases": []},
+             "qualification_sets": [qualification]}, correctness_policy="optional",
+            base_dir=self.root)
+        for profile, mean in (("naive", 1000), ("spill-noopt", 900), ("optimized", 800)):
+            sim, out = self.root / ("q2-" + profile) / "sim", self.root / ("q2-" + profile) / "out"
+            sim.mkdir(parents=True)
+            self.write(out / "simout_n4", self.latency(4, "formal_phase", 7, mean))
+            matrix.add(metric=2, tc=135, repetition="r1", topology="5n1s", profile=profile,
+                       phase="formal_phase", expected_node=4, expected_samples=7,
+                       simulator_log_dir=str(sim), simout_dir=str(out))
+        unknown = self.make_m2_run("still-extension")
+        unknown.update(tc=999, topology="3n1s", phase=MOD.M2[135][0])
+        matrix.add(unknown)
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["qualifications"][0]["status"], "PASS")
+        self.assertEqual(sum(bool(run["qualified_contracts"]) for run in result["resolved_runs"]), 3)
+        self.assertEqual(result["report"]["views"]["extension"]["runs"], 1)
+
+    def test_opt_in_metric2_multiplane_timer_contract(self):
+        qualification = {"id": "m2-portable", "metric": 2,
+                         "coordinates": [{"tc": 142, "topology": "3n1s",
+                                          "phase": "db_oltp_end_to_end",
+                                          "kind": "timer", "reduction": "aggregate",
+                                          "expected_nodes": [0, 1, 2],
+                                          "expected_count": 30}],
+                         "repetitions": ["r1"],
+                         "thresholds": {"baseline_applicable_min_ns": 0,
+                                        "reduction_pct_min": 10}}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric2": {"repetitions": [], "testcases": []},
+             "qualification_sets": [qualification]}, correctness_policy="optional",
+            base_dir=self.root)
+        for profile, ticks in (("naive", 3000), ("spill-noopt", 2700),
+                               ("optimized", 2400)):
+            sim = self.root / f"multi-{profile}" / "sim"
+            out = self.root / f"multi-{profile}" / "out"
+            sim.mkdir(parents=True)
+            for node in range(3):
+                self.write(out / f"simout_n{node}", self.timer(
+                    node, "db_oltp_end_to_end", ticks=ticks, count=10))
+            added = matrix.add(
+                metric=2, tc=142, repetition="r1", topology="3n1s",
+                profile=profile, phase="db_oltp_end_to_end",
+                simulator_log_dir=str(sim), simout_dir=str(out))
+            self.assertEqual(added["status"], "ADDED")
+        result = matrix.finalize(require_qualifications=["m2-portable"])
+        qualification_result = result["report"]["qualifications"][0]
+        self.assertEqual(qualification_result["status"], "PASS")
+        case = qualification_result["results"][0]["cases"][0]
+        self.assertEqual(case["baseline_mean_ns"], 300)
+        self.assertEqual(case["result_mean_ns"], 240)
+        self.assertAlmostEqual(case["reduction_pct"], 20)
+
+    def test_metric2_standard_can_also_match_qualification_without_reparse(self):
+        phase, topology, node, samples = MOD.M2[135]
+        qualification = {"id": "m2-standard-shadow", "metric": 2,
+                         "coordinates": [{"tc": 135, "topology": topology,
+                                          "phase": phase, "expected_node": node,
+                                          "expected_samples": samples}],
+                         "repetitions": ["r1"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric2": {"repetitions": ["r1"], "testcases": [135]},
+             "qualification_sets": [qualification]}, base_dir=self.root)
+        for profile, mean in (("naive", 1000), ("spill-noopt", 900),
+                              ("optimized", 800)):
+            matrix.add(self.make_m2_run("shadow-" + profile, profile=profile,
+                                        mean=mean))
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["views"]["standard"]["runs"], 3)
+        self.assertEqual(result["report"]["qualifications"][0]["status"], "PASS")
+        self.assertTrue(all(run["standard_contract"] and run["formal_contract"]
+                            for run in result["resolved_runs"]))
+
+    def test_qualification_schema_is_under_requirements(self):
+        schema = json.loads((ROOT / "scripts/metric123_raw_manifest.schema.json")
+                            .read_text())
+        requirements = schema["properties"]["requirements"]["properties"]
+        run_properties = schema["properties"]["runs"]["items"]["properties"]
+        self.assertIn("qualification_sets", requirements)
+        self.assertNotIn("qualification_sets", run_properties)
+
+    def test_opt_in_metric3_topologies_never_mix_and_missing_is_per_topology(self):
+        paired = {"id": "m3-3n-paired", "metric": 3, "mode": "paired",
+                  "topologies": ["3n1s"], "testcases": [228],
+                  "arms": ["ourcc", "ha-vi"], "pairs": ["p1"]}
+        independent = {"id": "m3-8n-independent", "metric": 3,
+                       "mode": "independent", "topologies": ["8n1s"],
+                       "testcases": [228], "arms": ["ourcc", "ha-vi"],
+                       "repetitions": ["r1", "r2"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"testcases": []},
+             "qualification_sets": [paired, independent]}, base_dir=self.root)
+        matrix.add(self.make_m3_run("p-o", 228, "r1", "ourcc", 100,
+                                    pair="p1", order="AB", topology="3n1s"))
+        matrix.add(self.make_m3_run("p-h", 228, "r1", "ha-vi", 130,
+                                    pair="p1", order="AB", topology="3n1s"))
+        for rep, base in (("r1", 200), ("r2", 220)):
+            matrix.add(self.make_m3_run("i-o-" + rep, 228, rep, "ourcc", base,
+                                        topology="8n1s"))
+        result = matrix.finalize()
+        by_id = {item["id"]: item for item in result["report"]["qualifications"]}
+        self.assertEqual(by_id["m3-3n-paired"]["status"], "PASS")
+        self.assertEqual(by_id["m3-3n-paired"]["results"][0]["primary_values"][0]
+                         ["delta_mean_ticks"], 30)
+        self.assertEqual(by_id["m3-8n-independent"]["status"], "INCOMPLETE")
+        self.assertTrue(all(item["topology"] == "8n1s"
+                            for item in by_id["m3-8n-independent"]["missing_slots"]))
+
+    def test_metric3_tc232_qualification_uses_topology_operation_mix(self):
+        qualifications = [
+            {"id": "m3-2n", "metric": 3, "mode": "paired",
+             "topologies": ["2n1s"], "testcases": [232],
+             "arms": ["ourcc", "ha-vi"], "pairs": ["p1"]},
+            {"id": "m3-3n", "metric": 3, "mode": "paired",
+             "topologies": ["3n1s"], "testcases": [232],
+             "arms": ["ourcc", "ha-vi"], "pairs": ["p1"]},
+        ]
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"testcases": []}, "qualification_sets": qualifications},
+            base_dir=self.root)
+        for topology in ("2n1s", "3n1s"):
+            matrix.add(self.make_m3_run(
+                f"{topology}-o", 232, "r1", "ourcc", 100,
+                pair="p1", order="AB", topology=topology))
+            matrix.add(self.make_m3_run(
+                f"{topology}-h", 232, "r1", "ha-vi", 130,
+                pair="p1", order="AB", topology=topology))
+        for run in matrix._resolved:
+            read = run["metrics"]["hot_key_read"]
+            write = run["metrics"]["hot_key_write"]
+            if run["arm"] == "ourcc":
+                read["ticks_per_operation"] = 10
+                write["ticks_per_operation"] = 20
+            else:
+                read["ticks_per_operation"] = 20
+                write["ticks_per_operation"] = 60
+        report = matrix.finalize()["report"]
+        by_id = {item["id"]: item for item in report["qualifications"]}
+        delta_2n = by_id["m3-2n"]["results"][0]["primary_values"][0]["delta_mean_ticks"]
+        delta_3n = by_id["m3-3n"]["results"][0]["primary_values"][0]["delta_mean_ticks"]
+        self.assertAlmostEqual(delta_2n, 20)
+        self.assertAlmostEqual(delta_3n, 17.5)
+        self.assertEqual(MOD.metric3_primary_weights(232, "2n1s"),
+                         {"hot_key_read": 2 / 3, "hot_key_write": 1 / 3})
+        self.assertEqual(MOD.metric3_primary_weights(232, "3n1s"),
+                         {"hot_key_read": 3 / 4, "hot_key_write": 1 / 4})
+
+    def test_metric3_paired_qualification_averages_all_pairs(self):
+        qualification = {"id": "m3-two-pairs", "metric": 3, "mode": "paired",
+                         "topologies": ["3n1s"], "testcases": [228],
+                         "arms": ["ourcc", "ha-vi"], "pairs": ["p1", "p2"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"testcases": []}, "qualification_sets": [qualification]},
+            base_dir=self.root)
+        for pair, ourcc, havi in (("p1", 100, 110), ("p2", 100, 130)):
+            matrix.add(self.make_m3_run(
+                pair + "-o", 228, pair, "ourcc", ourcc,
+                pair=pair, order="AB", topology="3n1s"))
+            matrix.add(self.make_m3_run(
+                pair + "-h", 228, pair, "ha-vi", havi,
+                pair=pair, order="AB", topology="3n1s"))
+        item = matrix.finalize()["report"]["qualifications"][0]
+        self.assertEqual(item["status"], "PASS")
+        self.assertEqual(item["results"][0]["primary_values"][0]
+                         ["delta_mean_ticks"], 20)
+
+    def test_paired_qualification_does_not_change_standard_independent_slots(self):
+        qualification = {"id": "m3-paired-shadow", "metric": 3, "mode": "paired",
+                         "topologies": ["2n1s"], "testcases": [228],
+                         "arms": ["ourcc", "ha-vi"], "pairs": ["p1"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric3": {"mode": "independent", "repetitions": ["r1", "r2"],
+                         "testcases": [228], "arms": ["ourcc", "ha-vi"]},
+             "qualification_sets": [qualification]}, base_dir=self.root)
+        for repetition in ("r1", "r2"):
+            for arm, base in (("ourcc", 100), ("ha-vi", 130)):
+                matrix.add(self.make_m3_run(
+                    f"{repetition}-{arm}", 228, repetition, arm, base))
+        result = matrix.finalize()
+        self.assertFalse(any(issue["code"] == "DUPLICATE_SLOT"
+                             for issue in result["issues"]))
+        self.assertEqual(result["report"]["views"]["standard"]["runs"], 4)
+        self.assertEqual(result["report"]["metric3"]["comparison_mode"],
+                         "independent")
+
+    def test_metric3_qualification_requires_exact_two_arms(self):
+        bad = {"qualification_sets": [{"id": "bad-arms", "metric": 3,
+               "mode": "independent", "topologies": ["3n1s"],
+               "testcases": [228], "arms": ["ourcc"],
+               "repetitions": ["r1"]}]}
+        with self.assertRaisesRegex(MOD.ExtractError, "exactly ourcc and ha-vi"):
+            MOD.Metric123RawLogMatrix(bad)
+
+    def test_qualification_registry_merge_conflict_and_pickle_v1_v2(self):
+        left_req = {"qualification_sets": [{"id": "same", "metric": 2,
+                    "coordinates": [{"tc": 135, "topology": "3n1s", "phase": "a",
+                                     "expected_node": 1, "expected_samples": 2}],
+                    "repetitions": ["r1"]}]}
+        right_req = json.loads(json.dumps(left_req))
+        right_req["qualification_sets"][0]["coordinates"][0]["phase"] = "b"
+        with self.assertRaisesRegex(MOD.ExtractError, "conflicting qualification"):
+            MOD.Metric123RawLogMatrix(left_req) + MOD.Metric123RawLogMatrix(right_req)
+        matrix = MOD.Metric123RawLogMatrix(left_req, base_dir=self.root)
+        state2 = matrix.__getstate__()
+        self.assertEqual(state2["version"], 2)
+        restored2 = pickle.loads(pickle.dumps(matrix))
+        self.assertEqual(restored2._qualification_sets, matrix._qualification_sets)
+        state1 = dict(state2, version=1)
+        state1.pop("qualification_sets")
+        restored1 = object.__new__(MOD.Metric123RawLogMatrix)
+        with mock.patch.object(MOD, "open_text", side_effect=AssertionError("source read")):
+            restored1.__setstate__(state1)
+        self.assertEqual(restored1._qualification_sets, matrix._qualification_sets)
+
+    def test_qualification_is_nonintrusive_until_explicitly_required(self):
+        qualification = {"id": "missing-q", "metric": 3, "mode": "independent",
+                         "topologies": ["8n1s"], "testcases": [228],
+                         "repetitions": ["r1"]}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"repetitions": []},
+             "metric2": {"repetitions": [], "testcases": []},
+             "metric3": {"testcases": []},
+             "qualification_sets": [qualification]}, base_dir=self.root)
+        ordinary = matrix.finalize()
+        required = matrix.finalize(require_qualifications=["missing-q"])
+        unknown = matrix.finalize(require_qualifications=["not-registered"])
+        self.assertEqual(ordinary["exit_code"], 0)
+        self.assertEqual(ordinary["report"]["overall_status"], "PASS")
+        self.assertEqual(ordinary["report"]["qualifications"][0]["status"],
+                         "INCOMPLETE")
+        self.assertEqual(required["exit_code"], 3)
+        self.assertEqual(unknown["exit_code"], 2)
+        self.assertEqual(required["report"]["overall_status"], "PASS")
 
 
 if __name__ == "__main__":

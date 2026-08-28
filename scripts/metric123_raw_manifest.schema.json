@@ -38,6 +38,60 @@
             },
             "pairs": {"type": "array", "items": {"type": ["string", "integer"]}, "uniqueItems": true}
           }
+        },
+        "qualification_sets": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object", "required": ["id", "metric", "coordinates", "repetitions"],
+                "properties": {
+                  "id": {"type": "string", "minLength": 1}, "metric": {"const": 1},
+                  "coordinates": {"type": "array", "minItems": 1, "items": {
+                    "type": "object", "required": ["tc", "topology", "home_node", "home_socket"],
+                    "properties": {"tc": {"type": "integer"}, "topology": {"type": "string", "pattern": "^[0-9]+n[0-9]+s$"}, "home_node": {"type": "integer", "minimum": 0}, "home_socket": {"type": "integer", "minimum": 0}}
+                  }},
+                  "repetitions": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true},
+                  "ideal_min_capacity": {"type": "integer", "minimum": 1},
+                  "thresholds": {"type": "object", "properties": {"capacity_ratio_min": {"type": "number"}, "outer_delta_cycles_strict_max": {"type": "number"}, "cycles_per_ns": {"type": "number"}}}
+                }
+              },
+              {
+                "type": "object", "required": ["id", "metric", "coordinates", "repetitions"],
+                "properties": {
+                  "id": {"type": "string", "minLength": 1}, "metric": {"const": 2},
+                  "coordinates": {"type": "array", "minItems": 1, "items": {
+                    "type": "object", "required": ["tc", "topology", "phase"],
+                    "oneOf": [
+                      {"required": ["expected_node", "expected_samples"]},
+                      {"required": ["expected_nodes", "expected_count"]}
+                    ],
+                    "properties": {"tc": {"type": "integer"}, "topology": {"type": "string", "pattern": "^[0-9]+n[0-9]+s$"}, "phase": {"type": "string", "minLength": 1}, "kind": {"enum": ["timer", "latency"]}, "reduction": {"enum": ["aggregate", "max"]}, "expected_node": {"type": "integer", "minimum": 0}, "expected_samples": {"type": "integer", "minimum": 1}, "expected_nodes": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0}, "uniqueItems": true}, "expected_count": {"type": "integer", "minimum": 1}}
+                  }},
+                  "repetitions": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true},
+                  "profiles": {"type": "array", "items": {"enum": ["naive", "spill", "spill-noopt", "optimized"]}, "uniqueItems": true},
+                  "baseline_profile": {"enum": ["naive", "spill", "spill-noopt", "optimized"]}, "result_profile": {"enum": ["naive", "spill", "spill-noopt", "optimized"]},
+                  "thresholds": {"type": "object", "properties": {"baseline_applicable_min_ns": {"type": "number"}, "reduction_pct_min": {"type": "number"}}}
+                }
+              },
+              {
+                "type": "object", "required": ["id", "metric", "mode", "topologies", "testcases"],
+                "allOf": [
+                  {"if": {"properties": {"mode": {"const": "paired"}}}, "then": {"required": ["pairs"]}},
+                  {"if": {"properties": {"mode": {"const": "independent"}}}, "then": {"anyOf": [{"required": ["repetitions"]}, {"required": ["min_repetitions"]}]}}
+                ],
+                "properties": {
+                  "id": {"type": "string", "minLength": 1}, "metric": {"const": 3}, "mode": {"enum": ["paired", "independent"]},
+                  "topologies": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9]+n[0-9]+s$"}, "uniqueItems": true},
+                  "testcases": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 228, "maximum": 235}, "uniqueItems": true},
+                  "arms": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"enum": ["ourcc", "ubcc", "lossless-oneway", "ha-vi", "havi", "ha_vi"]}, "uniqueItems": true},
+                  "pairs": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true},
+                  "repetitions": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true}, "min_repetitions": {"type": "integer", "minimum": 1},
+                  "thresholds": {"type": "object", "properties": {"delta_ticks_strict_min": {"type": "number"}}}
+                }
+              }
+            ]
+          }
         }
       }
     },

@@ -21,6 +21,7 @@ from collections import defaultdict
 
 
 PROFILES = ("naive", "spill-noopt", "optimized")
+STANDARD_CONTRACT_ID = "standard"
 M2 = {
     135: ("preserved_sharer_first_load", "3n1s", 1, 24),
     136: ("preserved_owner_store_complete", "3n1s", 1, 24),
@@ -71,6 +72,26 @@ M3_AGGREGATES = {
                                     (234, "queued_token_end_to_end"): 1 / 5,
                                     (235, "catalog_kv_end_to_end"): 1 / 5},
 }
+
+
+def metric3_primary_weights(tc, topology="2n1s"):
+    """Return TC primary weights, preserving the frozen 2N1S definition."""
+    if tc != 232:
+        return M3_PRIMARY[tc]
+    nodes, sockets = topology_size(topology)
+    planes = nodes * sockets
+    return {"hot_key_read": planes / (planes + 1),
+            "hot_key_write": 1 / (planes + 1)}
+
+
+def metric3_aggregate_weights(topology="2n1s"):
+    """Return equal-TC tier weights with topology-correct TC232 composition."""
+    result = {name: dict(weights) for name, weights in M3_AGGREGATES.items()}
+    tc232 = metric3_primary_weights(232, topology)
+    representative = result["representative_equal_weight"]
+    representative[(232, "hot_key_read")] = tc232["hot_key_read"] / 5
+    representative[(232, "hot_key_write")] = tc232["hot_key_write"] / 5
+    return result
 STATE_RE = re.compile(r"\[UBCC-STATE\].*capacity=(\d+).*policy=([A-Za-z0-9_-]+)")
 POLICY_RE = re.compile(r"\[UBIO-POLICY\].*?effective=([A-Za-z0-9_-]+)")
 MARKER_FIELD_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=([^\s,]+)")
@@ -179,6 +200,148 @@ def norm_metric1_role(value):
     if normalized is None:
         raise ExtractError(f"unknown Metric1 role {value!r}")
     return normalized
+
+
+def normalize_qualification_sets(requirements):
+    """Validate and canonicalize the explicit formal-contract registry."""
+    raw_sets = (requirements or {}).get("qualification_sets", [])
+    if raw_sets is None:
+        raw_sets = []
+    if not isinstance(raw_sets, list):
+        raise ExtractError("requirements.qualification_sets must be an array")
+    result, ids = [], set()
+    for raw in raw_sets:
+        if not isinstance(raw, dict) or not raw.get("id"):
+            raise ExtractError("each qualification set requires a non-empty id")
+        item = copy.deepcopy(raw)
+        item["id"] = str(item["id"])
+        if item["id"] == STANDARD_CONTRACT_ID or item["id"] in ids:
+            raise ExtractError(f"duplicate/reserved qualification id {item['id']!r}")
+        ids.add(item["id"])
+        try:
+            item["metric"] = int(item["metric"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ExtractError(f"qualification {item['id']!r} requires metric=1|2|3") from error
+        if item["metric"] not in (1, 2, 3):
+            raise ExtractError(f"qualification {item['id']!r} requires metric=1|2|3")
+        coordinates = item.get("coordinates")
+        if item["metric"] in (1, 2):
+            if not isinstance(coordinates, list) or not coordinates:
+                raise ExtractError(f"qualification {item['id']!r} requires coordinates")
+            normalized = []
+            for coordinate in coordinates:
+                if not isinstance(coordinate, dict):
+                    raise ExtractError(f"qualification {item['id']!r} has invalid coordinate")
+                coordinate = copy.deepcopy(coordinate)
+                try:
+                    coordinate["tc"] = int(coordinate["tc"])
+                    coordinate["topology"] = str(coordinate["topology"]).lower()
+                    if item["metric"] == 1:
+                        coordinate["home_node"] = int(coordinate["home_node"])
+                        coordinate["home_socket"] = int(coordinate["home_socket"])
+                    else:
+                        coordinate["phase"] = str(coordinate["phase"])
+                        coordinate["kind"] = str(coordinate.get("kind", "latency"))
+                        coordinate["reduction"] = str(coordinate.get("reduction", "aggregate"))
+                        if coordinate["kind"] not in ("timer", "latency"):
+                            raise ValueError("kind must be timer|latency")
+                        if coordinate["reduction"] not in ("aggregate", "max"):
+                            raise ValueError("reduction must be aggregate|max")
+                        raw_nodes = coordinate.get("expected_nodes")
+                        if raw_nodes is None:
+                            raw_nodes = [coordinate["expected_node"]]
+                        coordinate["expected_nodes"] = sorted({int(node) for node in raw_nodes})
+                        if not coordinate["expected_nodes"]:
+                            raise ValueError("expected_nodes must not be empty")
+                        coordinate["expected_count"] = int(coordinate.get(
+                            "expected_count", coordinate.get("expected_samples")))
+                        # Retain legacy aliases in the normalized definition.
+                        coordinate["expected_node"] = (coordinate["expected_nodes"][0]
+                                                       if len(coordinate["expected_nodes"]) == 1
+                                                       else None)
+                        coordinate["expected_samples"] = coordinate["expected_count"]
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ExtractError(f"qualification {item['id']!r} has incomplete coordinate") from error
+                normalized.append(coordinate)
+            item["coordinates"] = normalized
+            item["repetitions"] = [str(x) for x in item.get("repetitions", [])]
+            if not item["repetitions"]:
+                raise ExtractError(f"qualification {item['id']!r} requires repetitions")
+        thresholds = item.get("thresholds", {})
+        if not isinstance(thresholds, dict):
+            raise ExtractError(f"qualification {item['id']!r} thresholds must be an object")
+        if item["metric"] == 1:
+            item["ideal_min_capacity"] = int(item.get("ideal_min_capacity", 102656))
+            item["thresholds"] = {
+                "capacity_ratio_min": float(thresholds.get("capacity_ratio_min", 1.5)),
+                "outer_delta_cycles_strict_max": float(
+                    thresholds.get("outer_delta_cycles_strict_max", 50.0)),
+                "cycles_per_ns": float(thresholds.get("cycles_per_ns", 2.0)),
+            }
+        elif item["metric"] == 2:
+            item["profiles"] = [norm_profile(x) for x in item.get("profiles", PROFILES)]
+            item["baseline_profile"] = norm_profile(item.get("baseline_profile", "naive"))
+            item["result_profile"] = norm_profile(item.get("result_profile", "optimized"))
+            if item["baseline_profile"] not in item["profiles"] or item["result_profile"] not in item["profiles"]:
+                raise ExtractError(f"qualification {item['id']!r} baseline/result must be in profiles")
+            item["thresholds"] = {
+                "baseline_applicable_min_ns": float(
+                    thresholds.get("baseline_applicable_min_ns", 500.0)),
+                "reduction_pct_min": float(thresholds.get("reduction_pct_min", 10.0)),
+            }
+        else:
+            item["mode"] = str(item.get("mode", "independent"))
+            if item["mode"] not in ("paired", "independent"):
+                raise ExtractError(f"qualification {item['id']!r} mode must be paired|independent")
+            item["topologies"] = [str(x).lower() for x in item.get("topologies", [])]
+            item["testcases"] = [int(x) for x in item.get("testcases", [])]
+            if not item["topologies"] or not item["testcases"] or not set(item["testcases"]) <= set(M3):
+                raise ExtractError(f"qualification {item['id']!r} requires topologies and builtin TC228-235 testcases")
+            item["arms"] = [norm_arm(x) for x in item.get("arms", ("ourcc", "ha-vi"))]
+            if set(item["arms"]) != {"ourcc", "ha-vi"} or len(item["arms"]) != 2:
+                raise ExtractError(
+                    f"qualification {item['id']!r} Metric3 arms must be exactly ourcc and ha-vi")
+            item["thresholds"] = {"delta_ticks_strict_min": float(
+                thresholds.get("delta_ticks_strict_min", 0.0))}
+            if item["mode"] == "paired":
+                item["pairs"] = [str(x) for x in item.get("pairs", [])]
+                if not item["pairs"]:
+                    raise ExtractError(f"qualification {item['id']!r} paired mode requires pairs")
+            else:
+                item["repetitions"] = [str(x) for x in item.get("repetitions", [])]
+                item["min_repetitions"] = int(item.get("min_repetitions", 0) or 0)
+                if not item["repetitions"] and item["min_repetitions"] < 1:
+                    raise ExtractError(f"qualification {item['id']!r} independent mode requires repetitions or min_repetitions")
+        result.append(item)
+    return result
+
+
+def qualification_candidates(raw, qualification_sets):
+    """Return only registry entries whose declared coordinate matches a run."""
+    try:
+        metric, tc = int(raw.get("metric")), int(raw.get("tc"))
+        topology = str(raw.get("topology", "")).lower()
+    except (TypeError, ValueError):
+        return []
+    matches = []
+    for item in qualification_sets:
+        if item["metric"] != metric:
+            continue
+        if metric == 3:
+            if tc in item["testcases"] and topology in item["topologies"]:
+                matches.append(item)
+            continue
+        for index, coordinate in enumerate(item["coordinates"]):
+            if coordinate["tc"] != tc or coordinate["topology"] != topology:
+                continue
+            if (metric == 2 and raw.get("phase") is not None and
+                    str(raw["phase"]) != coordinate["phase"]):
+                continue
+            if metric == 1 and (int(raw.get("home_node", 0)) != coordinate["home_node"] or
+                                int(raw.get("home_socket", 0)) != coordinate["home_socket"]):
+                continue
+            matches.append({**item, "_coordinate_index": index, "_coordinate": coordinate})
+    return matches
 
 
 def normalize_legacy_metric1_profile(run):
@@ -574,6 +737,36 @@ def aggregate_latency_phase(rows, expected_node=None, expected_samples=None):
             "source": rows[0] if len(rows) == 1 else None}
 
 
+def aggregate_configured_metric2(rows, kind, reduction, expected_nodes,
+                                 expected_count):
+    if not rows:
+        raise ExtractError("configured Metric2 phase has no records")
+    frequencies = {row["frequency_hz"] for row in rows}
+    if len(frequencies) != 1:
+        raise ExtractError("configured Metric2 counter frequency mismatch")
+    nodes = sorted({row["node"] for row in rows})
+    if nodes != sorted(expected_nodes):
+        raise ExtractError(
+            f"configured Metric2 requires nodes={sorted(expected_nodes)}, got {nodes}")
+    total = sum(row["count"] for row in rows)
+    if total != expected_count:
+        raise ExtractError(
+            f"configured Metric2 requires total count={expected_count}, got {total}")
+    if reduction == "max":
+        value = max((row["ticks"] / row["count"] if kind == "timer"
+                     else row["ticks"]) for row in rows)
+    elif kind == "timer":
+        value = sum(row["ticks"] for row in rows) / total
+    else:
+        value = sum(row["ticks"] * row["count"] for row in rows) / total
+    frequency = next(iter(frequencies))
+    return {"phase": rows[0]["phase"], "kind": kind, "reduction": reduction,
+            "node": nodes[0] if len(nodes) == 1 else None, "nodes": nodes,
+            "samples": total, "records": len(rows), "mean_ticks": value,
+            "frequency_hz": frequency, "mean_ns": value * 1e9 / frequency,
+            "sources": rows, "source": rows[0] if len(rows) == 1 else None}
+
+
 def correctness(run, simulator_dir, policy):
     tc = run["tc"]
     verifiers = [p for p in simulator_dir.rglob(f"verify_tc{tc}.log*") if p.is_file()]
@@ -764,7 +957,7 @@ def extract_run(run, base, policy):
                           "guest_timer_complete": timer_complete}
         role = out["metric1_role"]
         common = (out["tc"] == 131 and out["topology"] == "8n1s" and
-                  home_node == 0 and home_socket == 0)
+                   home_node == 0 and home_socket == 0)
         failed_gates = []
         if out["tc"] != 131:
             failed_gates.append(f"tc={out['tc']} expected=131")
@@ -829,11 +1022,47 @@ def extract_run(run, base, policy):
                 f"failed_gates={failed_gates}"))
     elif out["metric"] == 2:
         registered = out["tc"] in M2
-        all_rows = marker_rows(paths, "latency")
+        metric2_candidates = [candidate for candidate in
+                              run.get("_qualification_candidates", [])
+                              if candidate["metric"] == 2]
+        candidate_specs = {(candidate["_coordinate"]["kind"],
+                            candidate["_coordinate"]["phase"],
+                            candidate["_coordinate"]["reduction"],
+                            tuple(candidate["_coordinate"]["expected_nodes"]),
+                            candidate["_coordinate"]["expected_count"])
+                           for candidate in metric2_candidates}
+        if len(candidate_specs) > 1:
+            raise ExtractError(
+                f"Metric2 qualification contracts disagree for run {out['id']}: "
+                f"{sorted(candidate_specs, key=str)}")
+        configured_spec = next(iter(candidate_specs)) if candidate_specs else None
+        frozen_contract_requested = False
+        if registered:
+            frozen_phase, frozen_topology, frozen_node, frozen_samples = M2[out["tc"]]
+            frozen_contract_requested = (
+                out["topology"] == frozen_topology and
+                str(run.get("phase", frozen_phase)) == frozen_phase and
+                int(run.get("expected_node", frozen_node)) == frozen_node and
+                int(run.get("expected_samples", frozen_samples)) == frozen_samples)
+        if frozen_contract_requested:
+            configured_spec = None
+        parse_kind = configured_spec[0] if configured_spec else "latency"
+        all_rows = marker_rows(paths, parse_kind)
         by_phase = defaultdict(list)
         for row in all_rows:
             by_phase[row["phase"]].append(row)
-        if registered:
+        if configured_spec is not None:
+            kind, phase, reduction, expected_nodes, expected_count = configured_spec
+            rows = by_phase.get(phase, [])
+            selected = aggregate_configured_metric2(
+                rows, kind, reduction, expected_nodes, expected_count)
+            official_topology = M2[out["tc"]][1] if registered else None
+            default_phase, default_node, default_samples = (
+                (M2[out["tc"]][0], M2[out["tc"]][2], M2[out["tc"]][3])
+                if registered else (None, None, None))
+            node = selected["node"]
+            samples = selected["samples"]
+        elif registered:
             default_phase, official_topology, default_node, default_samples = M2[out["tc"]]
             phase = str(run.get("phase", default_phase))
             node = int(run.get("expected_node", default_node))
@@ -867,10 +1096,16 @@ def extract_run(run, base, policy):
                     f"Metric2 retained multiple independent phases: {sorted(by_phase)}"))
             else:
                 raise ExtractError("Metric2 found no PERF-LATENCY records")
-        latency_phases = {name: aggregate_latency_phase(
-                              rows, node if not registered else None,
-                              samples if not registered and len(by_phase) == 1 else None)
-                          for name, rows in sorted(by_phase.items())}
+        latency_phases = {
+            name: (aggregate_configured_metric2(
+                       rows, configured_spec[0], configured_spec[2],
+                       configured_spec[3], configured_spec[4])
+                   if configured_spec is not None and name == configured_spec[1]
+                   else aggregate_latency_phase(
+                       rows, node if not registered and configured_spec is None else None,
+                       samples if not registered and configured_spec is None and
+                       len(by_phase) == 1 else None))
+            for name, rows in sorted(by_phase.items())}
         if registered:
             extras = sorted(set(by_phase) - {phase})
             if extras:
@@ -880,7 +1115,8 @@ def extract_run(run, base, policy):
         out["metrics"] = {"latency_phases": latency_phases}
         if selected is not None:
             out["metrics"].update(selected)
-        standard = (registered and out["topology"] == official_topology and phase == default_phase and
+        standard = (registered and configured_spec is None and
+                    out["topology"] == official_topology and phase == default_phase and
                     node == default_node and samples == default_samples)
         if not standard:
             failed_gates = []
@@ -959,8 +1195,49 @@ def extract_run(run, base, policy):
                 "NONSTANDARD_CONTRACT", out["id"],
                 f"Metric3 descriptive extension tc={out['tc']} topology={out['topology']} "
                 f"failed_gates={failed_gates}"))
+    role_gate_qualified = qualified if out["metric"] == 1 else None
+    qualified_contracts = []
+    for candidate in run.get("_qualification_candidates", []):
+        metric = candidate["metric"]
+        qualified = False
+        if metric == 1:
+            coordinate = candidate["_coordinate"]
+            qualified = (out["tc"] == coordinate["tc"] and
+                         out["topology"] == coordinate["topology"] and
+                         int(run.get("home_node", 0)) == coordinate["home_node"] and
+                         int(run.get("home_socket", 0)) == coordinate["home_socket"] and
+                         role in ("naive", "spill", "ideal") and role_gate_qualified)
+            if role == "ideal":
+                qualified = (out["profile"] == "spill-noopt" and
+                             capacity["policy"] == "spill" and
+                             capacity["experimental_oversized_resident_dir"] == 1 and
+                             capacity["resident_capacity"] >= candidate["ideal_min_capacity"] and
+                             capacity["backstore_found_fills"] == 0 and
+                             capacity["h64_exact_live"] == 0 and
+                             capacity["h64_exact_live_known"] in (0, 1) and
+                             outer["samples"] >= 1)
+        elif metric == 2:
+            coordinate = candidate["_coordinate"]
+            qualified = (out["tc"] == coordinate["tc"] and
+                          out["topology"] == coordinate["topology"] and
+                          out["metrics"].get("phase") == coordinate["phase"] and
+                          out["metrics"].get("kind", "latency") == coordinate["kind"] and
+                          out["metrics"].get("reduction", "aggregate") ==
+                          coordinate["reduction"] and
+                          out["metrics"].get("nodes") == coordinate["expected_nodes"] and
+                          out["metrics"].get("samples") == coordinate["expected_count"] and
+                          out["profile"] in candidate["profiles"])
+        else:
+            qualified = (out["tc"] in candidate["testcases"] and
+                         out["topology"] in candidate["topologies"] and
+                         out["arm"] in candidate["arms"])
+        if qualified:
+            qualified_contracts.append(candidate["id"])
     out["standard_contract"] = bool(standard)
+    out["qualified_contracts"] = sorted(set(qualified_contracts))
+    out["formal_contract"] = bool(standard or qualified_contracts)
     out["contract_class"] = "standard" if standard else "extension"
+    out.pop("_qualification_candidates", None)
     out["status"] = "VALID"
     return out
 
@@ -1158,8 +1435,184 @@ def source_inventory(runs):
             "note": "source references are evidence rows/markers, not logical runs"}
 
 
+def aggregate_qualification(item, runs, issues):
+    """Aggregate one opt-in contract without feeding it into frozen standards."""
+    selected = [run for run in runs if item["id"] in run.get("qualified_contracts", [])]
+    registry_errors = [issue for issue in issues
+                       if item["id"] in issue.get("qualification_contracts", [])]
+    missing, results = [], []
+    status = "INCOMPLETE"
+    if item["metric"] == 1:
+        by = {(run["tc"], run["topology"], int(run.get("home_node", 0)),
+               int(run.get("home_socket", 0)), run["repetition"],
+               run.get("metric1_role")): run for run in selected}
+        thresholds = item["thresholds"]
+        for coordinate in item["coordinates"]:
+            key0 = (coordinate["tc"], coordinate["topology"],
+                    coordinate["home_node"], coordinate["home_socket"])
+            comparisons = []
+            coordinate_missing = []
+            for rep in item["repetitions"]:
+                absent = [role for role in ("naive", "spill", "ideal")
+                          if key0 + (rep, role) not in by]
+                if absent:
+                    coordinate_missing.extend((rep, role) for role in absent)
+                    continue
+                naive, spill, ideal = (by[key0 + (rep, role)]
+                                       for role in ("naive", "spill", "ideal"))
+                ratio = safe_divide(spill["metrics"]["capacity"].get("effective_unique"),
+                                    naive["metrics"]["capacity"].get("effective_unique"))
+                delta_ns = safe_subtract(spill["metrics"]["outer_latency"].get("mean_ns"),
+                                         ideal["metrics"]["outer_latency"].get("mean_ns"))
+                cycles = (delta_ns * thresholds["cycles_per_ns"]
+                          if delta_ns is not None else None)
+                passed = (ratio is not None and cycles is not None and
+                          ratio >= thresholds["capacity_ratio_min"] and
+                          cycles < thresholds["outer_delta_cycles_strict_max"])
+                comparisons.append({"repetition": rep, "capacity_ratio": ratio,
+                                    "outer_delta_ns": delta_ns,
+                                    "outer_delta_cycles": cycles, "pass": passed})
+            missing.extend([{**coordinate, "repetition": rep, "role": role}
+                            for rep, role in coordinate_missing])
+            results.append({"coordinate": coordinate, "missing_slots": coordinate_missing,
+                            "comparisons": comparisons,
+                            "status": ("INCOMPLETE" if coordinate_missing else
+                                       "PASS" if comparisons and all(x["pass"] for x in comparisons)
+                                       else "FAIL")})
+    elif item["metric"] == 2:
+        thresholds = item["thresholds"]
+        by = {(run["tc"], run["topology"], run["metrics"].get("phase"),
+               run["metrics"].get("kind", "latency"),
+               run["metrics"].get("reduction", "aggregate"),
+               tuple(run["metrics"].get("nodes", [])), run["metrics"].get("samples"),
+               run["repetition"], run["profile"]): run for run in selected}
+        for coordinate in item["coordinates"]:
+            key0 = (coordinate["tc"], coordinate["topology"], coordinate["phase"],
+                    coordinate["kind"], coordinate["reduction"],
+                    tuple(coordinate["expected_nodes"]), coordinate["expected_count"])
+            cases, coordinate_missing = [], []
+            for rep in item["repetitions"]:
+                absent = [profile for profile in item["profiles"]
+                          if key0 + (rep, profile) not in by]
+                if absent:
+                    coordinate_missing.extend((rep, profile) for profile in absent)
+                    continue
+                baseline = by[key0 + (rep, item["baseline_profile"])]["metrics"].get("mean_ns")
+                result = by[key0 + (rep, item["result_profile"])]["metrics"].get("mean_ns")
+                reduction = safe_divide(safe_subtract(baseline, result), baseline)
+                reduction = reduction * 100 if reduction is not None else None
+                applicable = (finite_number(baseline) is not None and
+                              baseline >= thresholds["baseline_applicable_min_ns"])
+                cases.append({"repetition": rep, "baseline_mean_ns": baseline,
+                              "result_mean_ns": result, "reduction_pct": reduction,
+                              "applicable": applicable,
+                              "pass": bool(applicable and reduction is not None and
+                                           reduction >= thresholds["reduction_pct_min"])})
+            missing.extend([{**coordinate, "repetition": rep, "profile": profile}
+                            for rep, profile in coordinate_missing])
+            results.append({"coordinate": coordinate, "missing_slots": coordinate_missing,
+                            "cases": cases,
+                            "status": ("INCOMPLETE" if coordinate_missing else
+                                       "PASS" if cases and all(x["pass"] for x in cases)
+                                       else "FAIL")})
+    else:
+        threshold = item["thresholds"]["delta_ticks_strict_min"]
+        for topology in item["topologies"]:
+            topology_runs = [run for run in selected if run["topology"] == topology]
+            samples, topology_missing = [], []
+            if item["mode"] == "paired":
+                by = defaultdict(dict)
+                for run in topology_runs:
+                    if run.get("pair") is not None and run.get("order") is not None:
+                        by[(run["pair"], run["tc"], run["order"])][run["arm"]] = run
+                for pair in item["pairs"]:
+                    for tc in item["testcases"]:
+                        candidates = [(key, arms) for key, arms in by.items()
+                                      if key[0] == pair and key[1] == tc]
+                        if len(candidates) != 1 or set(candidates[0][1]) != set(item["arms"]):
+                            topology_missing.append((pair, tc, "pair"))
+                            continue
+                        _, arms = candidates[0]
+                        for name in M3[tc]:
+                            delta = safe_subtract(arms["ha-vi"]["metrics"][name].get("ticks_per_operation"),
+                                                  arms["ourcc"]["metrics"][name].get("ticks_per_operation"))
+                            samples.append({"pair": pair, "tc": tc, "metric": name,
+                                            "delta_ticks": delta})
+            else:
+                repetitions = item.get("repetitions", [])
+                present = {(run["repetition"], run["tc"], run["arm"]): run
+                           for run in topology_runs}
+                if repetitions:
+                    topology_missing.extend((rep, tc, arm) for rep in repetitions
+                                            for tc in item["testcases"] for arm in item["arms"]
+                                            if (rep, tc, arm) not in present)
+                else:
+                    for tc in item["testcases"]:
+                        for arm in item["arms"]:
+                            count = sum(run["tc"] == tc and run["arm"] == arm
+                                        for run in topology_runs)
+                            if count < item["min_repetitions"]:
+                                topology_missing.append((tc, arm, count,
+                                                         item["min_repetitions"]))
+                values = defaultdict(list)
+                for run in topology_runs:
+                    for name, metric in run["metrics"].items():
+                        values[(run["tc"], name, run["arm"])].append(
+                            metric.get("ticks_per_operation"))
+                for tc in item["testcases"]:
+                    for name in M3[tc]:
+                        left, right = values[(tc, name, "ourcc")], values[(tc, name, "ha-vi")]
+                        if left and right:
+                            samples.append({"tc": tc, "metric": name,
+                                            "delta_ticks": safe_subtract(safe_mean(right), safe_mean(left))})
+            summary_groups = defaultdict(list)
+            for row in samples:
+                summary_groups[row["tc"], row["metric"]].append(row["delta_ticks"])
+            summaries = {(tc, metric): {"tc": tc, "metric": metric,
+                                        "delta_ticks": safe_mean(values)}
+                         for (tc, metric), values in summary_groups.items()}
+            primary = []
+            for tc in item["testcases"]:
+                definition = metric3_primary_weights(tc, topology)
+                if all((tc, name) in summaries for name in definition):
+                    delta = safe_weighted_sum((weight, summaries[tc, name]["delta_ticks"])
+                                              for name, weight in definition.items())
+                    primary.append({"tc": tc, "delta_mean_ticks": delta,
+                                    "pass": delta is not None and delta > threshold})
+                else:
+                    topology_missing.append((tc, "primary"))
+            aggregates = []
+            for aggregate_name, weights in metric3_aggregate_weights(topology).items():
+                if all(key in summaries for key in weights):
+                    delta = safe_weighted_sum(
+                        (weight, summaries[key]["delta_ticks"])
+                        for key, weight in weights.items())
+                    aggregates.append({"name": aggregate_name, "delta_ticks": delta,
+                                       "pass": delta is not None and delta > threshold})
+            missing.extend([{"topology": topology, "slot": slot}
+                            for slot in topology_missing])
+            pass_rows = primary + aggregates
+            results.append({"topology": topology, "missing_slots": topology_missing,
+                            "samples": samples, "primary_values": primary,
+                            "aggregates": aggregates,
+                            "status": ("INCOMPLETE" if topology_missing else
+                                       "PASS" if pass_rows and all(x["pass"] for x in pass_rows)
+                                       else "FAIL")})
+    if registry_errors:
+        status = "INVALID"
+    elif any(row["status"] == "INCOMPLETE" for row in results):
+        status = "INCOMPLETE"
+    elif any(row["status"] == "FAIL" for row in results):
+        status = "FAIL"
+    elif results and all(row["status"] == "PASS" for row in results):
+        status = "PASS"
+    return {"id": item["id"], "metric": item["metric"], "status": status,
+            "definition": item, "runs": len(selected), "missing_slots": missing,
+            "results": results, "errors": registry_errors}
+
+
 def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
-                      manifest=None, ingestion=None):
+                      manifest=None, ingestion=None, require_qualifications=None):
     """Apply the frozen formulas to already parsed, in-memory run records."""
     issues = list(ingestion_issues)
     # Duplicate logical slots are never silently selected.
@@ -1171,12 +1624,23 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     for key, rows in slots.items():
         if len(rows) > 1:
             bad_ids.update(row["id"] for row in rows)
-            issues.append({"severity": "ERROR", "code": "DUPLICATE_SLOT", "run_id": ",".join(row["id"] for row in rows),
-                           "message": f"duplicate logical slot {key}"})
+            issue = {"severity": "ERROR", "code": "DUPLICATE_SLOT",
+                     "run_id": ",".join(row["id"] for row in rows),
+                     "message": f"duplicate logical slot {key}"}
+            qualification_ids = sorted({item for row in rows
+                                        for item in row.get("qualified_contracts", [])})
+            if qualification_ids:
+                issue["qualification_contracts"] = qualification_ids
+                issue["contract_class"] = "extension"
+            issues.append(issue)
     resolved = [row for row in resolved if row["id"] not in bad_ids]
     all_resolved = list(resolved)
     standard_resolved = [row for row in all_resolved if row.get("standard_contract", True)]
-    extension_resolved = [row for row in all_resolved if not row.get("standard_contract", True)]
+    formal_resolved = [row for row in all_resolved if row.get("formal_contract",
+                                                               row.get("standard_contract", True))]
+    extension_resolved = [row for row in all_resolved
+                          if not row.get("standard_contract", True) and
+                          not row.get("qualified_contracts")]
     resolved = standard_resolved
 
     matrix, per_run = [], []
@@ -1475,8 +1939,10 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                  "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if len(aggregates) == 2 and all(a["delta_ticks"] > 0 for a in aggregates)
                  else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)")
 
+    qualifications = [aggregate_qualification(item, all_resolved, issues)
+                      for item in normalize_qualification_sets(data.get("requirements", {}))]
     has_errors = any(i["severity"] == "ERROR" and
-                     i.get("contract_class", "standard") == "standard"
+                      i.get("contract_class", "standard") == "standard"
                      for i in issues)
     incomplete = m1_status == "INCOMPLETE" or m2_status == "INCOMPLETE" or m3_status == "INCOMPLETE"
     failed = m1_status == "FAIL" or m2_status == "FAIL" or m3_status.startswith("FAIL")
@@ -1514,8 +1980,10 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                           "primary_values": primary, "aggregates": aggregates,
                           "inference": {"t_test": None, "pvalue": None}},
                "views": {"standard": {"runs": len(standard_resolved), "formal": True},
-                          "all": descriptive_view(all_resolved),
-                          "extension": descriptive_view(extension_resolved)},
+                           "formal": descriptive_view(formal_resolved),
+                           "all": descriptive_view(all_resolved),
+                           "extension": descriptive_view(extension_resolved)},
+               "qualifications": qualifications,
                "source_inventory": source_inventory(all_resolved),
                "issues": issues,
                "ingestion": ingestion or {"attempted": len(resolved), "added": len(resolved),
@@ -1527,6 +1995,19 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         "metric2": report["metric2"],
         "metric3": report["metric3"],
     })
+    required_ids = list(require_qualifications or [])
+    if required_ids:
+        by_id = {item["id"]: item for item in qualifications}
+        required_statuses = {item_id: (by_id[item_id]["status"] if item_id in by_id
+                                      else "UNREGISTERED") for item_id in required_ids}
+        report["required_qualifications"] = required_statuses
+        if any(status != "PASS" for status in required_statuses.values()):
+            rank = {0: 0, 1: 1, 3: 2, 2: 3}
+            qcode = (2 if any(status in ("INVALID", "UNREGISTERED")
+                              for status in required_statuses.values()) else
+                     3 if any(status == "INCOMPLETE" for status in required_statuses.values()) else 1)
+            code = max((code, qcode), key=lambda value: rank[value])
+            report["exit_code"] = code
     # Standard TSV/report compatibility is preserved, but per-run diagnostics
     # expose every successfully parsed, non-conflicted run.
     per_run = []
@@ -1557,7 +2038,7 @@ class Metric123RawLogMatrix:
     including attempts later rejected because their evidence is invalid.
     """
 
-    _PICKLE_STATE_VERSION = 1
+    _PICKLE_STATE_VERSION = 2
 
     def __init__(self, requirements=None, correctness_policy="strict", base_dir=None):
         if correctness_policy not in ("strict", "required", "optional"):
@@ -1568,6 +2049,7 @@ class Metric123RawLogMatrix:
         self.base_dir = pathlib.Path(base_dir or ".").expanduser().resolve()
         self._explicit_requirements = requirements is not None
         self._requirements = json.loads(json.dumps(requirements or {}))
+        self._qualification_sets = normalize_qualification_sets(self._requirements)
         self._inferred = {"metric1": {"repetitions": set(),
                                        "roles": {"naive", "spill", "ideal"},
                                        "ideal_min_capacity": 102656},
@@ -1587,6 +2069,7 @@ class Metric123RawLogMatrix:
                 "base_dir": str(self.base_dir),
                 "explicit_requirements": self._explicit_requirements,
                 "requirements": copy.deepcopy(self._requirements),
+                "qualification_sets": copy.deepcopy(self._qualification_sets),
                 "inferred": copy.deepcopy(self._inferred),
                 "resolved": copy.deepcopy(self._resolved),
                 "issues": copy.deepcopy(self._issues),
@@ -1595,7 +2078,7 @@ class Metric123RawLogMatrix:
 
     def __setstate__(self, state):
         """Restore a snapshot without reopening any source log path."""
-        if not isinstance(state, dict) or state.get("version") != self._PICKLE_STATE_VERSION:
+        if not isinstance(state, dict) or state.get("version") not in (1, 2):
             raise ValueError("unsupported Metric123RawLogMatrix pickle state")
         policy = state.get("correctness_policy")
         if policy not in ("strict", "required", "optional"):
@@ -1604,6 +2087,9 @@ class Metric123RawLogMatrix:
         self.base_dir = pathlib.Path(state["base_dir"]).expanduser().resolve()
         self._explicit_requirements = bool(state["explicit_requirements"])
         self._requirements = copy.deepcopy(state["requirements"])
+        # v1 had no compiled registry.  Rebuild exclusively from the snapshot's
+        # requirements; never consult source paths during unpickling.
+        self._qualification_sets = normalize_qualification_sets(self._requirements)
         self._inferred = copy.deepcopy(state["inferred"])
         self._resolved = copy.deepcopy(state["resolved"])
         self._issues = copy.deepcopy(state["issues"])
@@ -1692,9 +2178,21 @@ class Metric123RawLogMatrix:
         else:
             effective_id, rename_warning = candidate, None
         raw["id"] = effective_id
+        raw["_qualification_candidates"] = qualification_candidates(
+            raw, self._qualification_sets)
         if int(raw.get("metric", 0) or 0) == 1 and self._explicit_requirements:
-            raw.setdefault("ideal_min_capacity", int(
-                self._requirements.get("metric1", {}).get("ideal_min_capacity", 102656)))
+            standard_coordinate = (int(raw.get("tc", 0)) == 131 and
+                                   str(raw.get("topology", "")).lower() == "8n1s" and
+                                   int(raw.get("home_node", 0)) == 0 and
+                                   int(raw.get("home_socket", 0)) == 0)
+            m1_candidates = [item for item in raw["_qualification_candidates"]
+                             if item["metric"] == 1]
+            if standard_coordinate:
+                raw.setdefault("ideal_min_capacity", int(
+                    self._requirements.get("metric1", {}).get("ideal_min_capacity", 102656)))
+            elif m1_candidates:
+                raw.setdefault("ideal_min_capacity", min(
+                    item["ideal_min_capacity"] for item in m1_candidates))
         if int(raw.get("metric", 0) or 0) == 3:
             req = self._requirements.get("metric3", {}) if self._explicit_requirements else {}
             raw["comparison_mode"] = ("paired" if req.get("mode") == "paired" or
@@ -1740,6 +2238,9 @@ class Metric123RawLogMatrix:
             issue = {"severity": "ERROR", "code": code, "run_id": fallback_id,
                       "contract_class": "standard" if official_candidate else "extension",
                       "message": message}
+            if raw.get("_qualification_candidates"):
+                issue["qualification_contracts"] = sorted(
+                    {item["id"] for item in raw["_qualification_candidates"]})
             result["issue"] = issue
             self._issues.append(issue)
             self._add_results.append(result)
@@ -1779,8 +2280,13 @@ class Metric123RawLogMatrix:
 
     @staticmethod
     def _union_requirements(left, right):
+        left_sets = {item["id"]: item for item in normalize_qualification_sets(left)}
+        right_sets = {item["id"]: item for item in normalize_qualification_sets(right)}
+        for item_id in set(left_sets) & set(right_sets):
+            if left_sets[item_id] != right_sets[item_id]:
+                raise ExtractError(f"conflicting qualification definition for id {item_id!r}")
         result = {}
-        for metric in sorted(set(left) | set(right)):
+        for metric in sorted((set(left) | set(right)) - {"qualification_sets"}):
             result[metric] = {}
             lfields, rfields = left.get(metric, {}), right.get(metric, {})
             for field in sorted(set(lfields) | set(rfields)):
@@ -1789,6 +2295,9 @@ class Metric123RawLogMatrix:
                     result[metric][field] = sorted(set(lv) | set(rv), key=str)
                 else:
                     result[metric][field] = copy.deepcopy(rv if field in rfields else lv)
+        result["qualification_sets"] = [copy.deepcopy(
+            (right_sets.get(item_id) or left_sets[item_id]))
+            for item_id in sorted(set(left_sets) | set(right_sets))]
         return result
 
     def __add__(self, other):
@@ -1856,7 +2365,7 @@ class Metric123RawLogMatrix:
         return {"schema_version": 1, "correctness_policy": self.correctness_policy,
                 "requirements": requirements}
 
-    def finalize(self, output_dir=None):
+    def finalize(self, output_dir=None, require_qualifications=None):
         """Return report plus matrices; optionally emit the normal output tree."""
         output = pathlib.Path(output_dir).expanduser().resolve() if output_dir is not None else None
         slot_counts = defaultdict(int)
@@ -1872,18 +2381,20 @@ class Metric123RawLogMatrix:
         parsed_snapshot = json.loads(json.dumps(self._resolved))
         issue_snapshot = json.loads(json.dumps(self._issues))
         values = aggregate_results(self._data(), parsed_snapshot, issue_snapshot,
-                                   output, ingestion=ingestion)
+                                   output, ingestion=ingestion,
+                                   require_qualifications=require_qualifications)
         report, resolved, matrix, per_run, issues, code = values
         if output is not None:
             write_outputs(output, report, resolved, matrix, per_run, issues)
         return {"report": report, "resolved_runs": resolved, "matrix": matrix,
                 "matrices": {"standard": matrix,
-                             "all": report["views"]["all"]["matrix"],
+                              "formal": report["views"]["formal"]["matrix"],
+                              "all": report["views"]["all"]["matrix"],
                              "extension": report["views"]["extension"]["matrix"]},
                 "per_run_metrics": per_run, "issues": issues, "exit_code": code}
 
 
-def analyze(manifest_path, output_dir):
+def analyze(manifest_path, output_dir, require_qualifications=None):
     """Manifest-compatible wrapper implemented through Metric123RawLogMatrix."""
     manifest_path = pathlib.Path(manifest_path)
     data = json.loads(manifest_path.read_text())
@@ -1900,6 +2411,7 @@ def analyze(manifest_path, output_dir):
         slot_counts[logical_slot(row)] += 1
     result = aggregate_results(matrix._data(), list(matrix._resolved), list(matrix._issues),
                                output, manifest=manifest_path,
+                               require_qualifications=require_qualifications,
                                ingestion={"attempted": len(matrix._add_results),
                                           "added": sum(x["status"] == "ADDED" for x in matrix._add_results),
                                           "rejected": sum(x["status"] == "REJECTED" for x in matrix._add_results),
@@ -1931,6 +2443,8 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
               report["views"]["all"]["matrix"], matrix_fields)
     write_tsv(output_dir / "metric_matrix_extension.tsv",
               report["views"]["extension"]["matrix"], matrix_fields)
+    write_tsv(output_dir / "metric_matrix_formal.tsv",
+              report["views"].get("formal", {"matrix": []})["matrix"], matrix_fields)
     write_tsv(output_dir / "per-run_metrics.tsv", per_run,
               ["run_id", "metric", "tc", "repetition", "profile", "arm", "pair", "order", "value", "unit", "status"])
     write_tsv(output_dir / "issues.tsv", issues,
@@ -1961,10 +2475,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=pathlib.Path)
     parser.add_argument("--output-dir", default=pathlib.Path("output"), type=pathlib.Path)
+    parser.add_argument("--require-qualification", action="append", default=[], metavar="ID",
+                        help="also require the named opt-in qualification set to PASS")
     args = parser.parse_args(argv)
     manifest, output = args.manifest.expanduser().resolve(), args.output_dir.expanduser().resolve()
     try:
-        report, resolved, matrix, per_run, issues, code = analyze(manifest, output)
+        report, resolved, matrix, per_run, issues, code = analyze(
+            manifest, output, args.require_qualification)
     except (ExtractError, OSError, ValueError) as error:
         report = {"schema_version": 1, "overall_status": "INVALID", "exit_code": 2,
                   "metric1": {"status": "INVALID"}, "metric2": {"status": "INVALID"},
