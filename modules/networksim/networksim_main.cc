@@ -482,10 +482,10 @@ void NetworkSim::step() {
 }
 
 void NetworkSim::run(int maxSteps) {
-    int s = 0;
+    uint64_t s = 0;
     while (!g_shutdownRequested &&
            (_donePorts.size() < _ports.size() || !_fifo.empty()) &&
-           (maxSteps < 0 || s < maxSteps)) {
+           (maxSteps < 0 || s < static_cast<uint64_t>(maxSteps))) {
         step();
         s++;
 
