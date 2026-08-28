@@ -81,7 +81,8 @@ class ExtractMetric123Test(unittest.TestCase):
                          "profile": profile, "simulator_log_dir": str(sim.relative_to(self.root)), "simout_dir": str(out.relative_to(self.root))})
         report, resolved, _, _, issues, code = MOD.analyze(self.manifest(runs, {"metric1": {"repetitions": ["r1"]}, "metric2": {"repetitions": [], "testcases": []}, "metric3": {"pairs": [], "testcases": []}}), self.root / "output")
         self.assertEqual(report["metric1"]["status"], "INCOMPLETE")
-        self.assertIn(("r1", "ideal"), report["metric1"]["missing_slots"])
+        self.assertTrue(any(slot.get("role") == "ideal" for slot in
+                            report["metric1"]["missing_slots"]))
         self.assertTrue(all(x["severity"] == "WARNING" for x in issues))
         self.assertTrue(all(item["metrics"]["capacity"]["resident_capacity"] == 100
                             for item in resolved))
@@ -131,7 +132,7 @@ class ExtractMetric123Test(unittest.TestCase):
         report, _, _, _, _, code = MOD.analyze(self.manifest(runs, {"metric1": {"repetitions": []}, "metric2": {"repetitions": [], "testcases": []}, "metric3": {"pairs": ["p1", "p2"], "testcases": [228]}}), self.root / "output")
         self.assertEqual(code, 3)
         self.assertEqual(report["metric3"]["samples"], [])
-        self.assertEqual(len(report["metric3"]["incomplete_pairs"]), 2)
+        self.assertEqual(len(report["metric3"]["incomplete_pairs"]), 16)
 
     def test_optional_correctness_allows_absent_but_rejects_present_failure(self):
         phase, topology, node, samples = MOD.M2[135]
@@ -276,6 +277,76 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(sum(x["code"] == "METRIC1_GUEST_TIMER_MISSING"
                              for x in result["issues"]), 3)
 
+    def test_metric1_pools_samples_without_repetition(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        runs = [
+            self.make_formal_m1("pool-n1", "naive", 100, None),
+            self.make_formal_m1("pool-n2", "naive", 300, None),
+            self.make_formal_m1("pool-s1", "spill", 200, 250, (20000,)),
+            self.make_formal_m1("pool-s2", "spill", 300, 350,
+                                (30000, 30000, 30000)),
+            self.make_formal_m1("pool-i1", "ideal", 102656, 0, (10000,)),
+            self.make_formal_m1("pool-i2", "ideal", 102656, 0,
+                                (10000, 10000, 10000)),
+        ]
+        for run in runs:
+            run.pop("repetition")
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        report = matrix.finalize()["report"]
+        comparison = report["metric1"]["comparisons"][0]
+        self.assertEqual(report["metric1"]["aggregation_mode"], "pooled-samples")
+        self.assertEqual(report["metric1"]["sample_counts"],
+                         {"naive": 2, "spill": 2, "ideal": 2})
+        expected_ratio = comparison["capacity_role_means"]["spill"] / 200
+        self.assertEqual(comparison["capacity_ratio"], expected_ratio)
+        self.assertEqual(comparison["spill_outer_mean_ns"], 27.5)
+        self.assertEqual(comparison["ideal_outer_mean_ns"], 10)
+
+    def test_metric2_pools_samples_without_repetition(self):
+        requirements = {"metric2": {"testcases": list(MOD.M2),
+                                     "min_samples": 2}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for tc in MOD.M2:
+            phase, topology, node, samples = MOD.M2[tc]
+            for profile, means in (("naive", (1000, 1200)),
+                                   ("spill-noopt", (900, 1100)),
+                                   ("optimized", (800, 1000))):
+                for index, mean in enumerate(means):
+                    run_id = f"pooled-m2-{tc}-{profile}-{index}"
+                    sim, out = self.root / run_id / "sim", self.root / run_id / "out"
+                    self.correctness(sim, tc, topology)
+                    self.write(out / f"simout_n{node}",
+                               self.latency(node, phase, samples, mean))
+                    self.assertEqual(matrix.add(
+                        id=run_id, metric=2, tc=tc, topology=topology,
+                        profile=profile, simulator_log_dir=str(sim),
+                        simout_dir=str(out))["status"], "ADDED")
+        report = matrix.finalize()["report"]
+        self.assertEqual(report["metric2"]["aggregation_mode"], "pooled-samples")
+        self.assertEqual(report["metric2"]["status"], "PASS")
+        first = next(row for row in report["metric2"]["cases"] if row["tc"] == 135)
+        self.assertEqual(first["means_ns"]["naive"], 1100)
+        self.assertAlmostEqual(first["optimized_reduction_pct"], 200 / 1100 * 100)
+
+    def test_incomplete_report_lists_every_missing_standard_point(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        run = self.make_m3_run("coverage-only-ourcc", 228, "unused", "ourcc")
+        run.pop("repetition")
+        matrix.add(run)
+        output = self.root / "coverage-report"
+        report = matrix.finalize(output)["report"]
+        missing = [point for point in report["metric3"]["coverage"]
+                   if not point["complete"]]
+        self.assertEqual(len(missing), 15)
+        self.assertIn({"tc": 228, "arm": "ha-vi", "observed_samples": 0,
+                       "required_min_samples": 1, "complete": False}, missing)
+        self.assertIn({"tc": 235, "arm": "ourcc", "observed_samples": 0,
+                       "required_min_samples": 1, "complete": False}, missing)
+        markdown = (output / "report.md").read_text()
+        self.assertIn("### INCOMPLETE 直接原因", markdown)
+        self.assertIn("tc=228 / arm=ha-vi：实际样本 0，最低要求 1", markdown)
+        self.assertIn("tc=235 / arm=ourcc：实际样本 0，最低要求 1", markdown)
+
     def test_metric1_role_alias_auto_detection_and_three_roles_coexist(self):
         matrix = MOD.Metric123RawLogMatrix(
             {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}},
@@ -376,7 +447,8 @@ class ExtractMetric123Test(unittest.TestCase):
             self.assertEqual(added["status"], "ADDED")
             result = matrix.finalize()
             self.assertEqual(result["report"]["metric1"]["status"], "INCOMPLETE")
-            self.assertIn(("r1", "ideal"), result["report"]["metric1"]["missing_slots"])
+            self.assertTrue(any(slot.get("role") == "ideal" for slot in
+                                result["report"]["metric1"]["missing_slots"]))
         missing = MOD.Metric123RawLogMatrix(
             {"metric1": {"repetitions": ["r1"]}}, base_dir=self.root)
         missing.add(self.make_formal_m1("mn", "naive", 100, None))
@@ -620,8 +692,7 @@ class ExtractMetric123Test(unittest.TestCase):
         right._inferred["metric2"]["repetitions"].add("r3")
         right._inferred["metric2"]["testcases"].add(135)
         merged = MOD.merge([left, right])
-        self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"],
-                         [1, "r2", "r3"])
+        self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"], [])
 
     def test_matrix_merge_reports_invalid_testcase_requirement_path(self):
         explicit = MOD.Metric123RawLogMatrix(
@@ -634,7 +705,8 @@ class ExtractMetric123Test(unittest.TestCase):
         inferred = MOD.Metric123RawLogMatrix(base_dir=self.root)
         inferred._inferred["metric3"]["testcases"].update({228, "r0"})
         merged = MOD.merge([inferred, MOD.Metric123RawLogMatrix(base_dir=self.root)])
-        self.assertEqual(merged._data()["requirements"]["metric3"]["testcases"], [228])
+        self.assertEqual(merged._data()["requirements"]["metric3"]["testcases"],
+                         list(MOD.M3))
         self.assertTrue(any(issue["code"] == "LEGACY_METRIC3_INFERENCE_REPAIRED"
                             for issue in merged.finalize()["issues"]))
 
@@ -646,7 +718,7 @@ class ExtractMetric123Test(unittest.TestCase):
         restored = object.__new__(MOD.Metric123RawLogMatrix)
         restored.__setstate__(state)
         requirements = restored._data()["requirements"]["metric3"]
-        self.assertEqual(requirements["testcases"], [228, 229])
+        self.assertEqual(requirements["testcases"], list(MOD.M3))
         self.assertEqual(requirements["repetitions"], [])
         result = restored.finalize()
         repaired = [issue for issue in result["issues"]
@@ -660,7 +732,7 @@ class ExtractMetric123Test(unittest.TestCase):
             polluted.finalize()["report"]["metric3"]["missing_slots"][0]["tc"], 228)
         clone = MOD.merge([polluted])
         self.assertEqual(clone._data()["requirements"]["metric3"]["testcases"],
-                         [228])
+                         list(MOD.M3))
 
     def test_finalize_reports_invalid_testcase_requirement_path(self):
         matrix = MOD.Metric123RawLogMatrix(
@@ -788,7 +860,9 @@ class ExtractMetric123Test(unittest.TestCase):
         matrix.add(self.make_m2_run("only-naive"))
         report = matrix.finalize()["report"]
         self.assertEqual(report["overall_status"], "INCOMPLETE")
-        self.assertIn(("r1", 135, "spill-noopt"), report["metric2"]["missing_slots"])
+        self.assertTrue(any(slot.get("tc") == 135 and
+                            slot.get("profile") == "spill-noopt"
+                            for slot in report["metric2"]["missing_slots"]))
 
     def test_incremental_rejected_add_does_not_stop_later_ingestion(self):
         bad = self.make_m2_run("bad")
@@ -806,13 +880,10 @@ class ExtractMetric123Test(unittest.TestCase):
         matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
         self.assertEqual(matrix.add(self.make_m2_run("first"))["status"], "ADDED")
         duplicate = matrix.add(self.make_m2_run("second"))
-        self.assertEqual(duplicate["status"], "REJECTED")
-        self.assertEqual(duplicate["issue"]["code"], "DUPLICATE_SLOT")
+        self.assertEqual(duplicate["status"], "ADDED")
         result = matrix.finalize()
-        self.assertEqual(result["report"]["overall_status"], "INVALID")
-        self.assertEqual(result["resolved_runs"], [])
-        self.assertEqual(result["report"]["ingestion"]["duplicate_conflicted"], 2)
-        self.assertTrue(any(x["code"] == "DUPLICATE_SLOT" for x in result["issues"]))
+        self.assertEqual(len(result["resolved_runs"]), 2)
+        self.assertEqual(result["report"]["ingestion"]["duplicate_conflicted"], 0)
 
     def test_incremental_metric3_incomplete_pair(self):
         sim, out = self.root / "m3" / "sim", self.root / "m3" / "out"
@@ -868,8 +939,7 @@ class ExtractMetric123Test(unittest.TestCase):
                 f"pickle-duplicate-{protocol}", profile="naive")
             duplicate["repetition"] = "r1"
             result = restored.add(duplicate)
-            self.assertEqual(result["status"], "REJECTED")
-            self.assertEqual(result["issue"]["code"], "DUPLICATE_SLOT")
+            self.assertEqual(result["status"], "ADDED")
 
     def test_matrix_pickle_rejects_unknown_state_version(self):
         matrix = object.__new__(MOD.Metric123RawLogMatrix)
@@ -970,7 +1040,7 @@ class ExtractMetric123Test(unittest.TestCase):
         resolved = matrix.finalize()["resolved_runs"][0]
         self.assertEqual(resolved["repetition"], "auto-repetition")
         self.assertEqual(resolved["repetition_source"], "auto-run-id")
-        self.assertTrue(any(item["code"] == "METRIC3_REPETITION_AUTO_ASSIGNED"
+        self.assertTrue(any(item["code"] == "REPETITION_AUTO_ASSIGNED"
                             for item in resolved["contract_warnings"]))
         requirements = matrix._data()["requirements"]["metric3"]
         self.assertEqual(requirements["repetitions"], [])

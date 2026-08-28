@@ -38,7 +38,7 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
 
 ## 三项提取口径
 
-- Metric1：TC131/8N1S 正式合同改为每轮三个显式角色：`naive`（512KiB naive，只提供容量分母）、
+- Metric1：TC131/8N1S 正式合同使用三个显式角色：`naive`（512KiB naive，只提供容量分母）、
   `spill`（512KiB spill-noopt，提供容量分子和真实 Outer 延迟）、`ideal`（spill-noopt、实验性超大
   ResidentDir，无容量 eviction/offload，提供 Outer 反事实基线）。`metric1_role`别名包括
   `baseline -> naive`、`spill-512k/actual -> spill`、`ideal-dir/infinite -> ideal`。省略时 profile=naive
@@ -49,8 +49,9 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   字段词汇，不绕过 oversized ResidentDir、capacity、fill、exact-live 或 Outer sample 标准门禁。
   正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
-  `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
-  跨轮报告 ratio/delta 的等权 mean、stdev、CV，不按 Outer sample 数给轮次加权。
+  `cycles = ns * 2GHz`。所有有效样本先按 role 池化：容量对每个 role 的 run 值等权求均值后作
+  spill/naive 比值；Outer 合并 spill/ideal 的全部 completed Outer source sample 后求均值差。
+  pooled ratio>=1.5 且 delta cycles<50 才 PASS。
   simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，不存在时才确定性回退
   全部日志，并去除 stdout/stderr 中完全相同的复制行；保留 source files、samples、mean、p50/p95/p99/max。
   spill/ideal 标准角色至少须有一条 completed Outer。
@@ -66,7 +67,8 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   spill-noopt、policy=spill、oversized=1、resident capacity>=`requirements.metric1.ideal_min_capacity`
   （默认102656）、found fills=0、H64 exact-live=0。spill 要求 spill-noopt/policy=spill/oversized=0；
   naive 要求 naive/policy=naive/oversized=0。门禁失败只进入 extension，正式角色槽保持缺失，绝不静默使用。
-  `requirements.metric1`支持`repetitions`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
+  `requirements.metric1`支持`min_samples`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
+  旧`repetitions`只兼容换算为最低样本数，不按名字配对。
   旧 manifest 没有 ideal 时可正常解析（timer 缺失也不会拒绝），但标准 Metric1 为 INCOMPLETE。
   下游`scripts/generate_metric123_report.py`必须通过`--metric1-json`读取本提取器的`report.json`或
   `run_metric1_outer_ideal_matrix.py`的`summary.json`。旧Metric1/2 JSON中的`guest_delta_*`只保留历史
@@ -78,7 +80,7 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
 
 ### Metric1 裸进程 argv 合同
 
-正式矩阵固定为`TC131 / 8N1S / O3 / 3 repetitions x 3 roles`。外部launcher负责把每个物理运行
+正式矩阵固定为`TC131 / 8N1S / O3 / 每角色至少3个独立样本`。外部launcher负责把每个物理运行
 登记到raw manifest的`tc=131`和对应`metric1_role`；gem5与UBIO进程argv中的`--tc=131`均可省略。
 Port/IPC/PDES参数不属于Metric1提取合同。
 
@@ -135,16 +137,17 @@ gem5或UBIO：`PORTABLE_PRESSURE_LINES=98208`、`PORTABLE_TARGET_FOOTPRINT_LINES
   `metrics.latency_phases`，产生`METRIC2_MULTIPLE_PHASES`并按 phase 输出描述矩阵。显式`phase`聚合所有
   同名记录；频率必须一致，mean 按 samples 加权，保留 nodes、records、total samples。正式 run 的额外
   phase 只作 extension 描述和 WARNING，不改变冻结正式值。
-  每个 repetition 的 applicable case 等权均值都必须达到 10%，且 applicable case 集合跨 repetition 稳定。
+  每个 TC/profile 的有效 run 先等权池化 profile mean，再计算 optimized 降幅；适用 TC 之间等权，
+  aggregate reduction 必须达到10%。不按 repetition 配对，也不要求 repetition 名字或 applicable 集合对齐。
   少于完整 TC135-140/217 集合时仍输出已提取值，但 Metric2 总状态为 INCOMPLETE。
 - Metric3：直接解析 TC228-235 的 GUEST-TIMER/PERF-LATENCY；这些 TC 即使 topology 非 2n1s 也可
   解析为 extension。未知 TC 必须提供`metric_specs`，每项含`kind=timer|latency`、`phase`和
   `reduction=aggregate|max`，否则报`PARSER_SPEC_REQUIRED`。默认是 independent：每个 run 以
-  `repetition/tc/topology/arm/metric spec names`为独立身份，不要求 pair/order，不构造配对或 ABBA；
+  最终 run ID/tc/topology/arm/metric spec names 为独立样本身份，不要求 pair/order，不构造配对或 ABBA；
   每个 TC/metric/arm 对全部 independent run 计算 mean、stdev、count，delta 为两个 arm mean 之差。
-  `requirements.metric3`支持`mode=independent`（默认）、`repetitions`或正整数`min_repetitions`、
-  `testcases`和默认双 arm 的`arms`。显式 repetitions 要求每个 TC/arm/repetition 恰有一个有效 run；
-  arm 数量不平衡时仍输出描述比较，但正式状态为 INCOMPLETE。完整正式 PASS 仍要求 TC228-235 和双 arm。
+  `requirements.metric3`支持`mode=independent`（默认）、`min_samples`、`testcases`和默认双 arm 的`arms`。
+  旧`repetitions/min_repetitions`只兼容换算为最低样本数。arm 数量不平衡只产生 WARNING；只要每个
+  TC/arm 都达到最低样本数即可。完整正式结果仍要求 TC228-235 和双 arm。
 
   `arm`可省略；工具递归读取 simulator 日志中的`EPBACKEND-PROFILE ha_endpoint_profile=ubcc|ha-vi`、
   UBIO `PROCESS-MANIFEST home_controller=ubcc|ha-vi`或`UBIO-HA-MANIFEST controller=ha-vi`。证据一致时
@@ -191,12 +194,12 @@ run 字典或与 manifest run schema 同名的关键字参数，并在返回前�
 from scripts.extract_metric123_from_logs import Metric123RawLogMatrix
 
 matrix = Metric123RawLogMatrix(
-    requirements=None,              # 从所有 add 尝试推断覆盖需求
+    requirements=None,              # 自动推断冻结坐标，按参数池化样本
     correctness_policy="strict",
     base_dir="/archive/runs",
 )
 status = matrix.add(
-    id="tc135-r1-naive", metric=2, tc=135, repetition="r1",
+    id="tc135-sample-a", metric=2, tc=135,
     topology="3n1s", profile="naive",
     simulator_log_dir="tc135/r1/naive/simulator",
     simout_dir="tc135/r1/naive/simout",
@@ -205,7 +208,7 @@ assert status["status"] in ("ADDED", "REJECTED")
 
 # Metric1 每轮三个角色；spill 与 ideal 虽同为 spill-noopt，role 使二者 slot 可共存。
 status = matrix.add(
-    id="tc131-r1-ideal", metric=1, tc=131, repetition="r1",
+    id="tc131-ideal-a", metric=1, tc=131,
     topology="8n1s", profile="spill-noopt", metric1_role="ideal",
     simulator_log_dir="tc131/r1/ideal/simulator",
     simout_dir="tc131/r1/ideal/simout",
@@ -225,7 +228,7 @@ result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
-省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 TC/arm 等身份字段
+省略`requirements`时，只要 metric/TC/profile/role/arm 等实验身份字段
 可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
 坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
 `id`可省略，工具按 add 顺序稳定生成`run-000001`。重复请求 ID 自动改为`id-2/id-3`并产生
@@ -235,17 +238,20 @@ report = result["report"]
 finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 output_dir 时不写文件，返回
 含`report`、`resolved_runs`、`matrix`、`matrices`、`per_run_metrics`、`issues`和`exit_code`的字典。
 `matrix`兼容别名始终指正式 standard matrix；`matrices`同时提供`standard/all/extension`，报告中的
-`views.all`和`views.extension`含按 metric/TC/topology/repetition/profile(或 arm)的描述统计与可形成的比较。
+`views.all`和`views.extension`含按 metric/TC/topology/profile(或 role/arm)的描述统计与可形成的比较。
 extension 不改变正式状态。每个成功 run 含`contract_class`、`standard_contract`和结构化
 `contract_warnings`。
 
-Metric3 independent 模式不要求调用方预分配 repetition 序号。run 同时省略`id`和`repetition`时，
-Matrix 先分配`run-000001`，再将其作为内部样本身份，并标记
-`repetition_source=auto-run-id`。不同 worker 都可从`run-000001`开始；批量`merge()`发生 ID 冲突改名时
-会同步更新自动样本身份，因此不需要跨 worker 的共享计数器。自动推断 requirements 使用
-`min_repetitions=1`按每个 TC/arm 检查样本数量，不把自动 ID 建成 repetition 笛卡尔积。若需要至少 N 个
-样本，只配置`metric3.min_repetitions=N`即可。Metric1/Metric2 仍要求 repetition，因为它们需要按轮对齐
-naive/spill/ideal 或三个 profile 后再计算比较值。
+Metric1/2/3 都不要求调用方预分配 repetition 序号。run 同时省略`id`和`repetition`时，Matrix 先分配
+`run-000001`，再将其作为内部样本身份，并标记`repetition_source=auto-run-id`。不同 worker 都可从
+`run-000001`开始；批量`merge()`发生 ID 冲突改名时会同步更新自动样本身份，因此不需要跨 worker 的
+共享计数器。显式传入的 repetition 只保留作审计，不参与分组、配对、缺槽或加权。
+
+三个指标均按真实实验参数池化：Metric1 按 role 聚合，Metric2 按 TC/profile 聚合，Metric3 independent
+按 TC/topology/arm/metric 聚合。推荐使用`min_samples=N`声明每个 role/profile/arm 的最低样本数；旧
+`repetitions=[...]`仅兼容解释为`min_samples=len(repetitions)`，名字本身不再形成笛卡尔矩阵。Metric3 的
+旧`min_repetitions`也是`min_samples`的兼容别名。Metric3 paired 模式仍按 pair/tc/order 配双 arm，
+不受 repetition 变化影响。
 
 ## 显式资格合同（opt-in）
 
@@ -253,11 +259,11 @@ naive/spill/ideal 或三个 profile 后再计算比较值。
 额外正式坐标只能由顶层`requirements.qualification_sets`注册；run 自身填写 TC、phase、topology
 等字段不能把自己提升为正式资格点。每个 set 有全局唯一`id`和`metric`：
 
-- Metric1：`coordinates=[{tc,topology,home_node,home_socket}]`、`repetitions`、可选
+- Metric1：`coordinates=[{tc,topology,home_node,home_socket}]`、`min_samples`、可选
   `ideal_min_capacity`和`thresholds`。仍使用`naive/spill/ideal`、现有容量/Outer公式与角色门禁；
   每个 coordinate 独立聚合，重复名相同也不会碰撞。threshold 默认仍为 ratio `>=1.5`、
   Outer delta `*2GHz <50 cycles`。
-- Metric2：`coordinates=[{tc,topology,phase,expected_node,expected_samples}]`、`repetitions`；
+- Metric2：`coordinates=[{tc,topology,phase,expected_node,expected_samples}]`、`min_samples`；
   默认 profiles 为三 profile，baseline/result 默认`naive/optimized`，适用门槛500ns、降幅门槛10%。
   注册的 phase/node/samples 是精确合同；未注册自动发现 phase 仍只是 extension。
   多 plane workload 可改用`kind=timer|latency`、`reduction=aggregate|max`、`expected_nodes=[...]`
@@ -266,7 +272,7 @@ naive/spill/ideal 或三个 profile 后再计算比较值。
   合同相同，run 仍先按冻结定义解析并同时命中 qualification，不会从 standard 视图消失。
 - Metric3：只复用 builtin TC228-235 parser、primary和aggregate权重。set 声明
   `mode=paired|independent`、`topologies`、`testcases`、`arms`，并按模式给出`pairs`或
-  `repetitions/min_repetitions`。完整性、均值和配对始终按 topology 分开，绝不跨 topology 补槽或混合。
+  `min_samples`。完整性、均值和配对始终按 topology 分开，绝不跨 topology 补槽或混合。
   TC232 的冻结 2N1S 主值仍为`2/3 read + 1/3 write`；额外 topology qualification 按工作负载
   实际操作数计算，P 个 active plane 时使用`read=P/(P+1)`、`write=1/(P+1)`，代表场景组中的
   TC232 分量也使用同一拓扑相关权重。paired set 对同一 TC/metric 的多个 pair 先求 delta 均值，
@@ -398,9 +404,9 @@ Metric3 最低样本数缺槽在 JSON 中使用具名对象，不再输出难以
 ```
 
 其含义是 TC228 的 HA-VI arm 当前有0个有效样本，合同最低要求1个；中文 Markdown 显示为
-`TC228 / arm=ha-vi：实际样本 0，最低要求 1`。精确 repetition 模式则使用
-`kind=exact_repetition`及具名的`repetition/tc/arm`字段。
+`TC228 / arm=ha-vi：实际样本 0，最低要求 1`。Metric1/2/3 pooled coverage 同样使用具名的
+role/profile/arm、observed_samples 和 required_min_samples 字段。
 
 退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵、
-independent repetition/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
+independent 样本/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
 与其他 pair 的 arm 组合。

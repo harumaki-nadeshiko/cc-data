@@ -167,6 +167,24 @@ def metric3_direction(delta):
     return "OURCC_FASTER" if value > 0 else "HA_VI_FASTER" if value < 0 else "TIE"
 
 
+def minimum_samples(requirements):
+    """Resolve pooled sample count, accepting old repetition-based contracts."""
+    repetitions = requirements.get("repetitions", [])
+    legacy = requirements.get("min_repetitions", 0)
+    requested = requirements.get("min_samples", legacy)
+    return max(1, int(requested or len(repetitions) or 1))
+
+
+def pooled_outer_latency(runs):
+    """Pool completed Outer observations across runs without reopening logs."""
+    values = [finite_number(source.get("latency_ps"))
+              for run in runs
+              for source in run["metrics"]["outer_latency"].get("sources", [])]
+    values = [value for value in values if value is not None]
+    return {"samples": len(values),
+            "mean_ns": safe_mean(value / 1000.0 for value in values)}
+
+
 def json_ready(value):
     """Recursively map non-finite numeric leaves to JSON null."""
     if isinstance(value, dict):
@@ -273,8 +291,7 @@ def normalize_qualification_sets(requirements):
                 normalized.append(coordinate)
             item["coordinates"] = normalized
             item["repetitions"] = [str(x) for x in item.get("repetitions", [])]
-            if not item["repetitions"]:
-                raise ExtractError(f"qualification {item['id']!r} requires repetitions")
+            item["min_samples"] = minimum_samples(item)
         thresholds = item.get("thresholds", {})
         if not isinstance(thresholds, dict):
             raise ExtractError(f"qualification {item['id']!r} thresholds must be an object")
@@ -317,9 +334,8 @@ def normalize_qualification_sets(requirements):
                     raise ExtractError(f"qualification {item['id']!r} paired mode requires pairs")
             else:
                 item["repetitions"] = [str(x) for x in item.get("repetitions", [])]
-                item["min_repetitions"] = int(item.get("min_repetitions", 0) or 0)
-                if not item["repetitions"] and item["min_repetitions"] < 1:
-                    raise ExtractError(f"qualification {item['id']!r} independent mode requires repetitions or min_repetitions")
+                item["min_samples"] = minimum_samples(item)
+                item["min_repetitions"] = item["min_samples"]
         result.append(item)
     return result
 
@@ -1281,20 +1297,20 @@ def extract_run(run, base, policy):
 def logical_slot(run):
     """Identity of one experiment coordinate, including extension dimensions."""
     if run["metric"] == 1:
-        return (1, run["repetition"], run["tc"], run["topology"],
+        return (1, run["id"], run["tc"], run["topology"],
                 run.get("metric1_role"), run["profile"],
                 run["metrics"].get("phase"),
                 tuple(item["node"] for item in (run["metrics"].get("timers") or [])),
                 int(run.get("home_node", 0)), int(run.get("home_socket", 0)))
     if run["metric"] == 2:
-        return (2, run["repetition"], run["tc"], run["topology"], run["profile"],
+        return (2, run["id"], run["tc"], run["topology"], run["profile"],
                 run["metrics"].get("phase"), run["metrics"].get("node"),
                 run["metrics"].get("samples"))
     names = tuple(sorted(run["metrics"]))
     if run.get("comparison_mode") == "paired":
         return (3, "paired", run.get("pair"), run["tc"], run["topology"],
                 run.get("order"), run["arm"], names)
-    return (3, "independent", run["repetition"], run["tc"], run["topology"],
+    return (3, "independent", run["id"], run["tc"], run["topology"],
             run["arm"], names)
 
 
@@ -1495,37 +1511,43 @@ def aggregate_qualification(item, runs, issues):
     missing, results = [], []
     status = "INCOMPLETE"
     if item["metric"] == 1:
-        by = {(run["tc"], run["topology"], int(run.get("home_node", 0)),
-               int(run.get("home_socket", 0)), run["repetition"],
-               run.get("metric1_role")): run for run in selected}
         thresholds = item["thresholds"]
         for coordinate in item["coordinates"]:
             key0 = (coordinate["tc"], coordinate["topology"],
                     coordinate["home_node"], coordinate["home_socket"])
+            coordinate_runs = [run for run in selected
+                               if (run["tc"], run["topology"],
+                                   int(run.get("home_node", 0)),
+                                   int(run.get("home_socket", 0))) == key0]
+            groups = {role: [run for run in coordinate_runs
+                             if run.get("metric1_role") == role]
+                      for role in ("naive", "spill", "ideal")}
+            coordinate_missing = [
+                {"kind": "minimum_samples", "dimension": "role", "role": role,
+                 "observed_samples": len(groups[role]),
+                 "required_min_samples": item["min_samples"]}
+                for role in groups if len(groups[role]) < item["min_samples"]]
             comparisons = []
-            coordinate_missing = []
-            for rep in item["repetitions"]:
-                absent = [role for role in ("naive", "spill", "ideal")
-                          if key0 + (rep, role) not in by]
-                if absent:
-                    coordinate_missing.extend((rep, role) for role in absent)
-                    continue
-                naive, spill, ideal = (by[key0 + (rep, role)]
-                                       for role in ("naive", "spill", "ideal"))
-                ratio = safe_divide(spill["metrics"]["capacity"].get("effective_unique"),
-                                    naive["metrics"]["capacity"].get("effective_unique"))
-                delta_ns = safe_subtract(spill["metrics"]["outer_latency"].get("mean_ns"),
-                                         ideal["metrics"]["outer_latency"].get("mean_ns"))
+            if not coordinate_missing:
+                naive_mean = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                                       for run in groups["naive"])
+                spill_mean = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                                       for run in groups["spill"])
+                ratio = safe_divide(spill_mean, naive_mean)
+                spill_outer, ideal_outer = (pooled_outer_latency(groups[role])
+                                             for role in ("spill", "ideal"))
+                delta_ns = safe_subtract(spill_outer["mean_ns"], ideal_outer["mean_ns"])
                 cycles = (delta_ns * thresholds["cycles_per_ns"]
                           if delta_ns is not None else None)
                 passed = (ratio is not None and cycles is not None and
                           ratio >= thresholds["capacity_ratio_min"] and
                           cycles < thresholds["outer_delta_cycles_strict_max"])
-                comparisons.append({"repetition": rep, "capacity_ratio": ratio,
-                                    "outer_delta_ns": delta_ns,
+                comparisons.append({"aggregation_id": "pooled", "repetition": None,
+                                    "sample_counts": {role: len(rows)
+                                                      for role, rows in groups.items()},
+                                    "capacity_ratio": ratio, "outer_delta_ns": delta_ns,
                                     "outer_delta_cycles": cycles, "pass": passed})
-            missing.extend([{**coordinate, "repetition": rep, "role": role}
-                            for rep, role in coordinate_missing])
+            missing.extend([{**coordinate, **slot} for slot in coordinate_missing])
             results.append({"coordinate": coordinate, "missing_slots": coordinate_missing,
                             "comparisons": comparisons,
                             "status": ("INCOMPLETE" if coordinate_missing else
@@ -1533,35 +1555,43 @@ def aggregate_qualification(item, runs, issues):
                                        else "FAIL")})
     elif item["metric"] == 2:
         thresholds = item["thresholds"]
-        by = {(run["tc"], run["topology"], run["metrics"].get("phase"),
-               run["metrics"].get("kind", "latency"),
-               run["metrics"].get("reduction", "aggregate"),
-               tuple(run["metrics"].get("nodes", [])), run["metrics"].get("samples"),
-               run["repetition"], run["profile"]): run for run in selected}
         for coordinate in item["coordinates"]:
             key0 = (coordinate["tc"], coordinate["topology"], coordinate["phase"],
                     coordinate["kind"], coordinate["reduction"],
                     tuple(coordinate["expected_nodes"]), coordinate["expected_count"])
-            cases, coordinate_missing = [], []
-            for rep in item["repetitions"]:
-                absent = [profile for profile in item["profiles"]
-                          if key0 + (rep, profile) not in by]
-                if absent:
-                    coordinate_missing.extend((rep, profile) for profile in absent)
-                    continue
-                baseline = by[key0 + (rep, item["baseline_profile"])]["metrics"].get("mean_ns")
-                result = by[key0 + (rep, item["result_profile"])]["metrics"].get("mean_ns")
+            coordinate_runs = [run for run in selected if (
+                run["tc"], run["topology"], run["metrics"].get("phase"),
+                run["metrics"].get("kind", "latency"),
+                run["metrics"].get("reduction", "aggregate"),
+                tuple(run["metrics"].get("nodes", [])),
+                run["metrics"].get("samples")) == key0]
+            groups = {profile: [run for run in coordinate_runs
+                                if run["profile"] == profile]
+                      for profile in item["profiles"]}
+            coordinate_missing = [
+                {"kind": "minimum_samples", "dimension": "profile",
+                 "profile": profile, "observed_samples": len(groups[profile]),
+                 "required_min_samples": item["min_samples"]}
+                for profile in groups if len(groups[profile]) < item["min_samples"]]
+            cases = []
+            if not coordinate_missing:
+                baseline = safe_mean(run["metrics"].get("mean_ns")
+                                     for run in groups[item["baseline_profile"]])
+                result = safe_mean(run["metrics"].get("mean_ns")
+                                   for run in groups[item["result_profile"]])
                 reduction = safe_divide(safe_subtract(baseline, result), baseline)
                 reduction = reduction * 100 if reduction is not None else None
                 applicable = (finite_number(baseline) is not None and
                               baseline >= thresholds["baseline_applicable_min_ns"])
-                cases.append({"repetition": rep, "baseline_mean_ns": baseline,
+                cases.append({"aggregation_id": "pooled", "repetition": None,
+                              "sample_counts": {profile: len(rows)
+                                                for profile, rows in groups.items()},
+                              "baseline_mean_ns": baseline,
                               "result_mean_ns": result, "reduction_pct": reduction,
                               "applicable": applicable,
                               "pass": bool(applicable and reduction is not None and
                                            reduction >= thresholds["reduction_pct_min"])})
-            missing.extend([{**coordinate, "repetition": rep, "profile": profile}
-                            for rep, profile in coordinate_missing])
+            missing.extend([{**coordinate, **slot} for slot in coordinate_missing])
             results.append({"coordinate": coordinate, "missing_slots": coordinate_missing,
                             "cases": cases,
                             "status": ("INCOMPLETE" if coordinate_missing else
@@ -1590,25 +1620,15 @@ def aggregate_qualification(item, runs, issues):
                             samples.append({"pair": pair, "tc": tc, "metric": name,
                                             "delta_ticks": delta})
             else:
-                repetitions = item.get("repetitions", [])
-                present = {(run["repetition"], run["tc"], run["arm"]): run
-                           for run in topology_runs}
-                if repetitions:
-                    topology_missing.extend(
-                        {"kind": "exact_repetition", "repetition": rep,
-                         "tc": tc, "arm": arm}
-                        for rep in repetitions for tc in item["testcases"]
-                        for arm in item["arms"] if (rep, tc, arm) not in present)
-                else:
-                    for tc in item["testcases"]:
-                        for arm in item["arms"]:
-                            count = sum(run["tc"] == tc and run["arm"] == arm
-                                        for run in topology_runs)
-                            if count < item["min_repetitions"]:
-                                topology_missing.append({
-                                    "kind": "minimum_samples", "tc": tc,
-                                    "arm": arm, "observed_samples": count,
-                                    "required_min_samples": item["min_repetitions"]})
+                for tc in item["testcases"]:
+                    for arm in item["arms"]:
+                        count = sum(run["tc"] == tc and run["arm"] == arm
+                                    for run in topology_runs)
+                        if count < item["min_samples"]:
+                            topology_missing.append({
+                                "kind": "minimum_samples", "tc": tc,
+                                "arm": arm, "observed_samples": count,
+                                "required_min_samples": item["min_samples"]})
                 values = defaultdict(list)
                 for run in topology_runs:
                     for name, metric in run["metrics"].items():
@@ -1708,33 +1728,40 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                        "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op" if value is not None else "multiple",
                        "status": run["status"], "detail": run.get("profile", run.get("arm", ""))})
 
-    # Metric 1 comparisons and completeness.
+    # Metric 1 pools independent samples by role; repetition is audit-only.
     m1 = [r for r in resolved if r["metric"] == 1]
-    m1_req = requirement(data, "metric1", {"repetitions": sorted({r["repetition"] for r in m1}),
-                                             "roles": ["naive", "spill", "ideal"],
-                                             "ideal_min_capacity": 102656})
-    m1_reps = [str(x) for x in m1_req.get("repetitions", [])]
+    m1_req = requirement(data, "metric1", {
+        "min_samples": 1, "roles": ["naive", "spill", "ideal"],
+        "ideal_min_capacity": 102656})
+    m1_min_samples = minimum_samples(m1_req)
     m1_roles = [norm_metric1_role(x) for x in m1_req.get("roles", ["naive", "spill", "ideal"])]
-    m1_by = {(r["repetition"], r["metric1_role"]): r for r in m1}
-    m1_missing = [(rep, role) for rep in m1_reps for role in m1_roles
-                  if (rep, role) not in m1_by]
+    m1_groups = {role: [run for run in m1 if run.get("metric1_role") == role]
+                 for role in m1_roles}
+    m1_counts = {role: len(rows) for role, rows in m1_groups.items()}
+    m1_missing = [{"kind": "minimum_samples", "dimension": "role",
+                   "role": role, "observed_samples": m1_counts[role],
+                   "required_min_samples": m1_min_samples}
+                  for role in m1_roles if m1_counts[role] < m1_min_samples]
     m1_comp = []
-    for rep in m1_reps:
-        if all((rep, role) in m1_by for role in ("naive", "spill", "ideal")):
-            naive, spill, ideal = (m1_by[rep, role] for role in ("naive", "spill", "ideal"))
-            ratio = safe_divide(spill["metrics"]["capacity"].get("effective_unique"),
-                                naive["metrics"]["capacity"].get("effective_unique"))
-            spill_outer = spill["metrics"]["outer_latency"]
-            ideal_outer = ideal["metrics"]["outer_latency"]
-            delta_ns = safe_subtract(spill_outer.get("mean_ns"), ideal_outer.get("mean_ns"))
-            if ratio is None or delta_ns is None:
-                m1_missing.append((rep, "required_metrics"))
-                continue
+    if not m1_missing and all(role in m1_groups for role in ("naive", "spill", "ideal")):
+        capacity_means = {role: safe_mean(
+            finite_number(run["metrics"]["capacity"].get("effective_unique"))
+            for run in m1_groups[role]) for role in ("naive", "spill")}
+        ratio = safe_divide(capacity_means["spill"], capacity_means["naive"])
+        spill_outer = pooled_outer_latency(m1_groups["spill"])
+        ideal_outer = pooled_outer_latency(m1_groups["ideal"])
+        delta_ns = safe_subtract(spill_outer["mean_ns"], ideal_outer["mean_ns"])
+        if ratio is None or delta_ns is None:
+            m1_missing.append({"kind": "required_metrics",
+                               "message": "pooled capacity or Outer metric unavailable"})
+        else:
             capacity_pass, latency_pass = ratio >= 1.5, delta_ns * 2.0 < 50
-            guest_values = {role: finite_number(
-                                m1_by[rep, role]["metrics"].get("mean_ns_per_operation"))
-                            for role in ("naive", "spill", "ideal")}
-            row = {"repetition": rep, "capacity_ratio": ratio,
+            guest_values = {role: safe_mean(
+                finite_number(run["metrics"].get("mean_ns_per_operation"))
+                for run in m1_groups[role]) for role in ("naive", "spill", "ideal")}
+            row = {"aggregation_id": "pooled", "repetition": None,
+                   "sample_counts": m1_counts, "capacity_role_means": capacity_means,
+                   "capacity_ratio": ratio,
                    "spill_outer_samples": spill_outer["samples"],
                    "ideal_outer_samples": ideal_outer["samples"],
                    "spill_outer_mean_ns": spill_outer["mean_ns"],
@@ -1743,14 +1770,13 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                    "capacity_pass": capacity_pass, "latency_pass": latency_pass,
                    "pass": capacity_pass and latency_pass,
                    "legacy_guest_descriptive": {"means_ns_per_operation": guest_values,
-                                                  "spill_minus_naive_ns":
-                                                  (guest_values["spill"] - guest_values["naive"])
-                                                  if guest_values["spill"] is not None and
-                                                  guest_values["naive"] is not None else None}}
+                                                  "spill_minus_naive_ns": safe_subtract(
+                                                      guest_values["spill"], guest_values["naive"])}}
             m1_comp.append(row)
-            matrix.append({"metric": "Metric1", "level": "repetition", "identity": rep, "tc": "TC131",
-                            "value": ratio, "unit": "capacity-ratio", "status": "PASS" if row["pass"] else "FAIL",
-                            "detail": f"outer_delta_ns={delta_ns:.9g}; roles=naive/spill/ideal"})
+            matrix.append({"metric": "Metric1", "level": "pooled", "identity": "all samples", "tc": "TC131",
+                           "value": ratio, "unit": "capacity-ratio",
+                           "status": "PASS" if row["pass"] else "FAIL",
+                           "detail": f"outer_delta_ns={delta_ns:.9g}; roles=naive/spill/ideal"})
     ratios = [row["capacity_ratio"] for row in m1_comp]
     deltas = [row["outer_delta_ns"] for row in m1_comp]
     def distribution(values):
@@ -1759,74 +1785,81 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         stdev = safe_stdev(values)
         return {"count": len(values), "mean": mean, "stdev": stdev,
                 "cv": safe_divide(stdev, abs(mean) if mean is not None else None)}
-    m1_status = ("NOT_REQUESTED" if not m1_reps and not m1 else
-                  "INCOMPLETE" if m1_missing or not m1_reps else
+    m1_status = ("NOT_REQUESTED" if not m1 else
+                  "INCOMPLETE" if m1_missing else
                   "PASS" if all(r["pass"] for r in m1_comp) else "FAIL")
 
-    # Metric 2 per repetition/case and equal-weight aggregate.
+    # Metric 2 pools independent runs by TC/profile, then equal-weights TCs.
     m2 = [r for r in resolved if r["metric"] == 2]
-    m2_req = requirement(data, "metric2", {"repetitions": sorted({r["repetition"] for r in m2}),
+    m2_req = requirement(data, "metric2", {"min_samples": 1,
                                              "testcases": sorted({r["tc"] for r in m2})})
-    m2_reps = [str(x) for x in m2_req.get("repetitions", [])]
-    m2_tcs = integer_requirement_list(m2_req, "metric2")
-    m2_official_set = set(m2_tcs) == set(M2)
-    m2_by = {(r["repetition"], r["tc"], r["profile"]): r for r in m2}
-    m2_missing = [(rep, tc, p) for rep in m2_reps for tc in m2_tcs for p in PROFILES if (rep, tc, p) not in m2_by]
-    m2_cases, rep_means, applicable_sets = [], defaultdict(list), {}
-    for rep in m2_reps:
-        for tc in m2_tcs:
-            if all((rep, tc, p) in m2_by for p in PROFILES):
-                means = {p: finite_number(m2_by[rep, tc, p]["metrics"].get("mean_ns"))
-                         for p in PROFILES}
-                reduction = safe_divide(safe_subtract(means["naive"], means["optimized"]),
-                                        means["naive"])
-                if reduction is None:
-                    m2_missing.append((rep, tc, "required_metrics"))
-                    m2_cases.append({"repetition": rep, "tc": tc, "means_ns": means,
-                                     "optimized_reduction_pct": None, "applicable": None})
-                    matrix.append({"metric": "Metric2", "level": "TC", "identity": rep,
-                                   "tc": f"TC{tc}", "value": None, "unit": "%",
-                                   "status": "INCOMPLETE", "detail": "required mean unavailable"})
-                    continue
-                reduction *= 100
-                applicable = means["naive"] >= 500
-                row = {"repetition": rep, "tc": tc, "means_ns": means,
-                       "optimized_reduction_pct": reduction, "applicable": applicable}
-                m2_cases.append(row)
-                if applicable:
-                    rep_means[rep].append(reduction)
-                matrix.append({"metric": "Metric2", "level": "TC", "identity": rep, "tc": f"TC{tc}",
-                               "value": reduction, "unit": "%", "status": "APPLICABLE" if applicable else "NOT_APPLICABLE",
-                               "detail": f"naive_ns={means['naive']:.9g}"})
-        applicable_sets[rep] = tuple(
-            row["tc"] for row in m2_cases
-            if row["repetition"] == rep and row["applicable"])
-    empty_applicable = [rep for rep in m2_reps if not rep_means.get(rep)]
-    m2_rep = [{"repetition": rep, "mean_reduction_pct": safe_mean(rep_means[rep]),
-               "cases": len(rep_means[rep]),
-               "pass": safe_mean(rep_means[rep]) >= 10}
-              for rep in m2_reps if rep_means.get(rep)]
-    m2_value = safe_mean(row["mean_reduction_pct"] for row in m2_rep)
-    applicable_stable = (not m2_reps or
-                         len({applicable_sets.get(rep, ()) for rep in m2_reps}) == 1)
-    m2_status = ("NOT_REQUESTED" if not m2_reps and not m2_tcs and not m2 else
-                  "INCOMPLETE" if m2_missing or not m2_reps or not m2_tcs or
-                  not m2_official_set else
-                  "FAIL" if empty_applicable or not applicable_stable else
-                  "PASS" if m2_rep and all(row["pass"] for row in m2_rep) else "FAIL")
+    m2_min_samples = minimum_samples(m2_req)
+    requested_m2_tcs = integer_requirement_list(m2_req, "metric2")
+    m2_tcs = sorted(M2) if requested_m2_tcs or m2 else []
+    m2_official_set = not m2_tcs or set(m2_tcs) == set(M2)
+    m2_groups = {(tc, profile): [run for run in m2
+                                 if run["tc"] == tc and run["profile"] == profile]
+                 for tc in m2_tcs for profile in PROFILES}
+    m2_counts = {str(tc): {profile: len(m2_groups[tc, profile]) for profile in PROFILES}
+                 for tc in m2_tcs}
+    m2_missing = [{"kind": "minimum_samples", "dimension": "profile",
+                   "tc": tc, "profile": profile,
+                   "observed_samples": len(m2_groups[tc, profile]),
+                   "required_min_samples": m2_min_samples}
+                  for tc in m2_tcs for profile in PROFILES
+                  if len(m2_groups[tc, profile]) < m2_min_samples]
+    m2_cases, applicable_values = [], []
+    for tc in m2_tcs:
+        if any(len(m2_groups[tc, profile]) < m2_min_samples for profile in PROFILES):
+            continue
+        means = {profile: safe_mean(
+            finite_number(run["metrics"].get("mean_ns"))
+            for run in m2_groups[tc, profile]) for profile in PROFILES}
+        reduction = safe_divide(safe_subtract(means["naive"], means["optimized"]), means["naive"])
+        if reduction is None:
+            m2_missing.append({"kind": "required_metrics", "tc": tc,
+                               "message": "pooled profile mean unavailable"})
+            m2_cases.append({"aggregation_id": "pooled", "repetition": None,
+                             "tc": tc, "means_ns": means,
+                             "sample_counts": m2_counts[str(tc)],
+                             "optimized_reduction_pct": None,
+                             "applicable": None, "status": "INCOMPLETE",
+                             "reason": "pooled profile mean unavailable"})
+            matrix.append({"metric": "Metric2", "level": "TC",
+                           "identity": "all samples", "tc": f"TC{tc}",
+                           "value": None, "unit": "%", "status": "INCOMPLETE",
+                           "detail": "pooled profile mean unavailable"})
+            continue
+        reduction *= 100
+        applicable = means["naive"] >= 500
+        row = {"aggregation_id": "pooled", "repetition": None, "tc": tc,
+               "means_ns": means, "sample_counts": m2_counts[str(tc)],
+               "optimized_reduction_pct": reduction, "applicable": applicable}
+        m2_cases.append(row)
+        if applicable:
+            applicable_values.append(reduction)
+        matrix.append({"metric": "Metric2", "level": "TC", "identity": "all samples",
+                       "tc": f"TC{tc}", "value": reduction, "unit": "%",
+                       "status": "APPLICABLE" if applicable else "NOT_APPLICABLE",
+                       "detail": f"pooled naive_ns={means['naive']:.9g}"})
+    m2_value = safe_mean(applicable_values)
+    empty_applicable = bool(m2_tcs and not applicable_values)
+    m2_status = ("NOT_REQUESTED" if not m2_tcs and not m2 else
+                 "INCOMPLETE" if m2_missing or not m2_tcs or not m2_official_set else
+                 "FAIL" if empty_applicable or m2_value is None or m2_value < 10 else "PASS")
     if m2_value is not None:
         matrix.append({"metric": "Metric2", "level": "aggregate", "identity": "applicable-case equal weight",
                        "tc": "ALL", "value": m2_value, "unit": "%", "status": m2_status, "detail": "no sample weighting"})
 
     # Metric 3 supports independent repeats by default and strict legacy pairing.
     m3 = [r for r in resolved if r["metric"] == 3]
-    default_req = {"repetitions": sorted({r["repetition"] for r in m3}),
-                   "testcases": sorted({r["tc"] for r in m3})}
+    default_req = {"min_samples": 1, "testcases": sorted({r["tc"] for r in m3})}
     m3_req = requirement(data, "metric3", default_req)
     paired_mode = (m3_req.get("mode") == "paired" or
                    ("mode" not in m3_req and bool(m3_req.get("pairs"))))
     comparison_mode = "paired" if paired_mode else "independent"
-    tcs_req = integer_requirement_list(m3_req, "metric3")
+    requested_m3_tcs = integer_requirement_list(m3_req, "metric3")
+    tcs_req = sorted(M3) if requested_m3_tcs or m3 else []
     samples, incomplete_pairs, missing_m3 = [], [], []
     m3_metric_incomplete = False
     conflicting_orders = {}
@@ -1901,17 +1934,9 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                        not conflicting_orders and not m3_metric_incomplete and
                        set(tcs_req) == set(M3))
     else:
-        repetitions = [str(x) for x in m3_req.get("repetitions", [])]
-        min_repetitions = int(m3_req.get("min_repetitions", 0) or 0)
+        min_repetitions = minimum_samples(m3_req)
         arms_req = [norm_arm(x) for x in m3_req.get("arms", ["ourcc", "ha-vi"])]
         values = defaultdict(list)
-        present = {(r["repetition"], r["tc"], r["arm"]): r for r in m3}
-        if repetitions:
-            missing_m3 = [
-                {"kind": "exact_repetition", "repetition": rep,
-                 "tc": tc, "arm": arm}
-                for rep in repetitions for tc in tcs_req for arm in arms_req
-                if (rep, tc, arm) not in present]
         for run in m3:
             for name, metric in run["metrics"].items():
                 value = finite_number(metric.get("ticks_per_operation"))
@@ -1958,7 +1983,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             issues.append(warning("M3_ARM_COUNT_IMBALANCE", "metric3",
                                   f"independent arm counts are imbalanced: {imbalanced}"))
         missing_m3.extend(insufficient)
-        m3_complete = (bool(tcs_req) and not missing_m3 and not imbalanced and
+        m3_complete = (bool(tcs_req) and not missing_m3 and
                        not m3_metric_incomplete and set(tcs_req) == set(M3) and
                        set(arms_req) == {"ourcc", "ha-vi"})
     by_summary = {(r["tc"], r["metric"]): r for r in summaries}
@@ -2011,7 +2036,14 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     report = {"schema_version": 1, "manifest": str(manifest) if manifest is not None else None,
               "correctness_policy": data.get("correctness_policy", "strict"),
               "overall_status": overall, "exit_code": code,
-              "metric1": {"status": m1_status, "definition": {
+              "metric1": {"status": m1_status, "aggregation_mode": "pooled-samples",
+                            "min_samples": m1_min_samples, "sample_counts": m1_counts,
+                            "coverage": [{"role": role,
+                                          "observed_samples": m1_counts[role],
+                                          "required_min_samples": m1_min_samples,
+                                          "complete": m1_counts[role] >= m1_min_samples}
+                                         for role in m1_roles],
+                            "definition": {
                                 "capacity_ratio": "spill effective_unique / naive effective_unique",
                                 "outer_delta_ns": "mean(spill completed Outer) - mean(ideal completed Outer)",
                                 "cycles_per_ns": 2.0, "capacity_threshold": 1.5,
@@ -2022,15 +2054,32 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                            "aggregate": {"capacity_ratio": distribution(ratios),
                                          "outer_delta_ns": distribution(deltas),
                                          "outer_delta_cycles": distribution([x * 2.0 for x in deltas]),
-                                         "pass_policy": "every repetition passes"}},
-              "metric2": {"status": m2_status, "missing_slots": m2_missing, "cases": m2_cases,
-                           "repetition_equal_weight": m2_rep,
-                           "applicable_cases_by_repetition": applicable_sets,
-                           "applicable_set_stable": applicable_stable,
-                           "official_testcase_set_complete": m2_official_set,
-                           "repetitions_without_applicable_cases": empty_applicable,
-                           "aggregate_reduction_pct": m2_value},
-               "metric3": {"status": m3_status, "executable_reference_model": True,
+                                          "pass_policy": "single pooled estimate passes"}},
+              "metric2": {"status": m2_status, "aggregation_mode": "pooled-samples",
+                            "min_samples": m2_min_samples,
+                            "sample_counts_by_tc_profile": m2_counts,
+                            "coverage": [{"tc": tc, "profile": profile,
+                                          "observed_samples": m2_counts[str(tc)][profile],
+                                          "required_min_samples": m2_min_samples,
+                                          "complete": m2_counts[str(tc)][profile] >= m2_min_samples}
+                                         for tc in m2_tcs for profile in PROFILES],
+                            "missing_slots": m2_missing, "cases": m2_cases,
+                            "repetition_equal_weight": [],
+                            "applicable_cases_by_repetition": {},
+                            "applicable_set_stable": None,
+                            "official_testcase_set_complete": m2_official_set,
+                            "repetitions_without_applicable_cases": [],
+                            "aggregate_reduction_pct": m2_value},
+               "metric3": {"status": m3_status, "aggregation_mode": (
+                                "paired" if paired_mode else "pooled-samples"),
+                            "min_samples": None if paired_mode else min_repetitions,
+                            "coverage": ([] if paired_mode else [
+                                {"tc": tc, "arm": arm,
+                                 "observed_samples": counts_by_tc_arm[str(tc)][arm],
+                                 "required_min_samples": min_repetitions,
+                                 "complete": counts_by_tc_arm[str(tc)][arm] >= min_repetitions}
+                                for tc in tcs_req for arm in arms_req]),
+                            "executable_reference_model": True,
                            "comparison_mode": comparison_mode,
                            "comparison_policy": ("pair/tc/order identity-only; never Cartesian" if paired_mode else
                                                  "arm means; no pairing/ABBA"),
@@ -2112,9 +2161,11 @@ class Metric123RawLogMatrix:
         self._requirements = json.loads(json.dumps(requirements or {}))
         self._qualification_sets = normalize_qualification_sets(self._requirements)
         self._inferred = {"metric1": {"repetitions": set(),
+                                       "min_samples": 1,
                                        "roles": {"naive", "spill", "ideal"},
                                        "ideal_min_capacity": 102656},
-                          "metric2": {"repetitions": set(), "testcases": set()},
+                          "metric2": {"repetitions": set(), "min_samples": 1,
+                                      "testcases": set()},
                           "metric3": {"mode": "independent", "repetitions": set(),
                                       "min_repetitions": 1,
                                       "testcases": set(), "arms": {"ourcc", "ha-vi"}}}
@@ -2170,15 +2221,15 @@ class Metric123RawLogMatrix:
         inferred = self._inferred.setdefault("metric2", {})
         old_testcases = {int(value) for value in inferred.get("testcases", set())
                          if str(value).lstrip("-").isdigit()}
-        old_repetitions = set(inferred.get("repetitions", set()))
-        repetitions = old_repetitions if old_testcases & set(M2) else set()
+        repetitions = set()
         testcases = old_testcases & set(M2)
         for row in self._resolved:
             if row.get("metric") == 2 and row.get("standard_contract"):
                 repetitions.add(row["repetition"])
-                testcases.add(int(row["tc"]))
+                testcases.update(M2)
         removed = sorted(old_testcases - testcases)
-        inferred.update({"repetitions": repetitions, "testcases": testcases})
+        inferred.update({"repetitions": set(), "min_samples": max(
+            1, int(inferred.get("min_samples", 1) or 1)), "testcases": testcases})
         if removed:
             item = warning(
                 "LEGACY_METRIC2_INFERENCE_REPAIRED", "matrix",
@@ -2202,10 +2253,12 @@ class Metric123RawLogMatrix:
             except (TypeError, ValueError):
                 invalid.append(value)
         arms = set(inferred.get("arms", ("ourcc", "ha-vi")))
+        standard_present = False
         for row in self._resolved:
-            if row.get("metric") == 3:
-                testcases.add(int(row["tc"]))
+            if row.get("metric") == 3 and row.get("standard_contract"):
+                standard_present = True
                 arms.add(row["arm"])
+        testcases = set(M3) if standard_present or testcases & set(M3) else set()
         inferred.update({"mode": inferred.get("mode", "independent"),
                          "repetitions": set(), "min_repetitions": max(
                              1, int(inferred.get("min_repetitions", 1) or 1)),
@@ -2245,10 +2298,10 @@ class Metric123RawLogMatrix:
         if self._explicit_requirements or slot is None:
             return
         if slot[0] == 1:
-            self._inferred["metric1"]["repetitions"].add(slot[1])
+            self._inferred["metric1"]["repetitions"].clear()
         elif slot[0] == 2:
-            self._inferred["metric2"]["repetitions"].add(slot[1])
-            self._inferred["metric2"]["testcases"].add(slot[2])
+            self._inferred["metric2"]["repetitions"].clear()
+            self._inferred["metric2"]["testcases"].update(M2)
         else:
             # _identity() uses (3, repetition, tc, arm), while logical_slot()
             # includes the comparison mode before repetition. Metric3 inference
@@ -2299,19 +2352,14 @@ class Metric123RawLogMatrix:
         else:
             effective_id, rename_warning = candidate, None
         raw["id"] = effective_id
-        try:
-            metric = int(raw.get("metric", 0) or 0)
-        except (TypeError, ValueError):
-            metric = 0
-        if metric == 3:
-            if raw.get("repetition") in (None, ""):
-                raw["repetition"] = effective_id
-                raw["repetition_source"] = "auto-run-id"
-                raw.setdefault("_contract_warnings", []).append(warning(
-                    "METRIC3_REPETITION_AUTO_ASSIGNED", effective_id,
-                    f"Metric3 sample identity auto-assigned from run id {effective_id!r}"))
-            else:
-                raw.setdefault("repetition_source", "explicit")
+        if raw.get("repetition") in (None, ""):
+            raw["repetition"] = effective_id
+            raw["repetition_source"] = "auto-run-id"
+            raw.setdefault("_contract_warnings", []).append(warning(
+                "REPETITION_AUTO_ASSIGNED", effective_id,
+                f"sample identity auto-assigned from run id {effective_id!r}"))
+        else:
+            raw.setdefault("repetition_source", "explicit-audit-only")
         raw["_qualification_candidates"] = qualification_candidates(
             raw, self._qualification_sets)
         if int(raw.get("metric", 0) or 0) == 1 and self._explicit_requirements:
@@ -2388,7 +2436,7 @@ class Metric123RawLogMatrix:
         parsed_slot = logical_slot(parsed)
         if (not self._explicit_requirements and parsed["metric"] == 1 and
                 parsed.get("standard_contract")):
-            self._inferred["metric1"]["repetitions"].add(parsed["repetition"])
+            self._inferred["metric1"]["repetitions"].clear()
         if not self._explicit_requirements and parsed["metric"] == 3:
             self._inferred["metric3"]["testcases"].add(parsed["tc"])
             self._inferred["metric3"]["arms"].add(parsed["arm"])
@@ -2455,6 +2503,12 @@ class Metric123RawLogMatrix:
                 requirements[name] = {key: (sorted(values, key=str)
                                              if isinstance(values, set) else values)
                                       for key, values in fields.items()}
+            requirements["metric1"]["repetitions"] = []
+            requirements["metric1"]["min_samples"] = max(
+                1, int(requirements["metric1"].get("min_samples", 1)))
+            requirements["metric2"]["repetitions"] = []
+            requirements["metric2"]["min_samples"] = max(
+                1, int(requirements["metric2"].get("min_samples", 1)))
             requirements["metric3"]["repetitions"] = []
             requirements["metric3"]["min_repetitions"] = max(
                 1, int(requirements["metric3"].get("min_repetitions", 1)))
@@ -2585,10 +2639,12 @@ def merge(matrices):
         base_dir=sources[0].base_dir if len(sources) == 1 else ".")
     if all_inferred:
         merged._inferred = {
-            "metric1": {"repetitions": set(requirements.get("metric1", {}).get("repetitions", [])),
+            "metric1": {"repetitions": set(), "min_samples": minimum_samples(
+                            requirements.get("metric1", {})),
                         "roles": set(requirements.get("metric1", {}).get("roles", ("naive", "spill", "ideal"))),
                         "ideal_min_capacity": int(requirements.get("metric1", {}).get("ideal_min_capacity", 102656))},
-            "metric2": {"repetitions": set(requirements.get("metric2", {}).get("repetitions", [])),
+            "metric2": {"repetitions": set(), "min_samples": minimum_samples(
+                            requirements.get("metric2", {})),
                         "testcases": set(requirements.get("metric2", {}).get("testcases", []))},
             "metric3": {"mode": requirements.get("metric3", {}).get("mode", "independent"),
                         "repetitions": set(),
@@ -2666,13 +2722,14 @@ def merge(matrices):
             slot = logical_slot(row)
             if not merged._explicit_requirements:
                 if row["metric"] == 1 and row.get("standard_contract"):
-                    merged._inferred["metric1"]["repetitions"].add(row["repetition"])
+                    merged._inferred["metric1"]["repetitions"].clear()
                 elif row["metric"] == 2 and row.get("standard_contract"):
-                    merged._inferred["metric2"]["repetitions"].add(row["repetition"])
-                    merged._inferred["metric2"]["testcases"].add(row["tc"])
+                    merged._inferred["metric2"]["repetitions"].clear()
+                    merged._inferred["metric2"]["testcases"].update(M2)
                 elif row["metric"] == 3:
-                    merged._inferred["metric3"]["testcases"].add(row["tc"])
-                    merged._inferred["metric3"]["arms"].add(row["arm"])
+                    if row.get("standard_contract"):
+                        merged._inferred["metric3"]["testcases"].update(M3)
+                        merged._inferred["metric3"]["arms"].add(row["arm"])
             merged._resolved.append(row)
             prior = list(merged._slot_ids[slot])
             merged._slot_ids[slot].append(effective)
@@ -2786,13 +2843,27 @@ def format_missing_slots(missing):
     rows = []
     for item in missing:
         if isinstance(item, dict) and item.get("kind") == "minimum_samples":
+            coordinate = []
+            if item.get("topology") is not None:
+                coordinate.append(f"topology={item['topology']}")
+            if item.get("tc") is not None:
+                coordinate.append(f"TC{item['tc']}")
+            if item.get("role") is not None:
+                coordinate.append(f"role={item['role']}")
+            if item.get("profile") is not None:
+                coordinate.append(f"profile={item['profile']}")
+            if item.get("arm") is not None:
+                coordinate.append(f"arm={item['arm']}")
             rows.append(
-                f"TC{item['tc']} / arm={item['arm']}：实际样本 "
-                f"{item['observed_samples']}，最低要求 {item['required_min_samples']}")
+                f"{' / '.join(coordinate)}：实际样本 {item['observed_samples']}，"
+                f"最低要求 {item['required_min_samples']}")
         elif isinstance(item, dict) and item.get("kind") == "exact_repetition":
             rows.append(
                 f"repetition={item['repetition']} / TC{item['tc']} / "
                 f"arm={item['arm']}：未找到样本")
+        elif isinstance(item, dict) and item.get("kind") == "required_metrics":
+            coordinate = f"TC{item['tc']} / " if item.get("tc") is not None else ""
+            rows.append(f"{coordinate}必需指标不可用：{item.get('message', '未说明')}")
         else:
             rows.append(markdown_cell(item))
     return "；".join(rows)
@@ -2889,6 +2960,21 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
         lines.append(
             f"- **{name}**：状态 `{status}`；缺失槽位："
             f"{format_missing_slots(missing)}。")
+    incomplete_points = []
+    for name in ("metric1", "metric2", "metric3"):
+        for point in report[name].get("coverage", []):
+            if not point.get("complete", False):
+                incomplete_points.append({"metric": name.upper(), **point})
+    if incomplete_points:
+        lines += ["", "### INCOMPLETE 直接原因", ""]
+        for point in incomplete_points:
+            coordinate = []
+            for key in ("topology", "tc", "role", "profile", "arm"):
+                if point.get(key) is not None:
+                    coordinate.append(f"{key}={point[key]}")
+            lines.append(
+                f"- **{point['metric']}** {' / '.join(coordinate)}：实际样本 "
+                f"{point['observed_samples']}，最低要求 {point['required_min_samples']}。")
     failed_m1 = [row for row in report["metric1"].get("comparisons", [])
                  if not row.get("pass")]
     failed_m2 = [row for row in report["metric2"].get("repetition_equal_weight", [])
