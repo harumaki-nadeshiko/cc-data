@@ -890,6 +890,41 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(summary["delta_mean_ticks"], 30)
         self.assertEqual(summary["ourcc_count"], 2)
 
+    def test_metric3_repetition_is_optional_and_auto_assigned(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            correctness_policy="optional", base_dir=self.root)
+        run = self.make_m3_run("auto-repetition", 228, "unused", "ourcc")
+        run.pop("repetition")
+        result = matrix.add(run)
+        self.assertEqual(result["status"], "ADDED")
+        resolved = matrix.finalize()["resolved_runs"][0]
+        self.assertEqual(resolved["repetition"], "auto-repetition")
+        self.assertEqual(resolved["repetition_source"], "auto-run-id")
+        self.assertTrue(any(item["code"] == "METRIC3_REPETITION_AUTO_ASSIGNED"
+                            for item in resolved["contract_warnings"]))
+        requirements = matrix._data()["requirements"]["metric3"]
+        self.assertEqual(requirements["repetitions"], [])
+        self.assertEqual(requirements["min_repetitions"], 1)
+
+    def test_metric3_workers_need_no_shared_id_or_repetition_allocator(self):
+        matrices = []
+        for index, arm in enumerate(("ourcc", "ha-vi")):
+            matrix = MOD.Metric123RawLogMatrix(
+                correctness_policy="optional", base_dir=self.root)
+            run = self.make_m3_run(f"auto-worker-{index}", 228, "unused", arm)
+            run.pop("id")
+            run.pop("repetition")
+            self.assertEqual(matrix.add(run)["run_id"], "run-000001")
+            matrices.append(matrix)
+        merged = MOD.merge(matrices)
+        resolved = merged.finalize()["resolved_runs"]
+        self.assertEqual({row["id"] for row in resolved},
+                         {"run-000001", "run-000001-2"})
+        self.assertEqual({row["repetition"] for row in resolved},
+                         {"run-000001", "run-000001-2"})
+        self.assertFalse(any(issue["code"] == "DUPLICATE_SLOT"
+                             for issue in merged.finalize()["issues"]))
+
     def test_metric3_arm_auto_detection_conflict_and_missing(self):
         for label, marker, expected in (
                 ("our", "[EPBACKEND-PROFILE] node=0 ha_endpoint_profile=ubcc\n", "ourcc"),

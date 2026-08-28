@@ -208,9 +208,10 @@ status = matrix.add(
     simout_dir="tc131/r1/ideal/simout",
 )
 
-# Metric3 independent run：无需 pair/order，arm 也可由 simulator 日志自动识别。
+# Metric3 independent run：无需预分配 repetition；省略时使用最终 run ID
+# 作为内部样本身份。arm 也可由 simulator 日志自动识别。
 status = matrix.add(
-    id="tc228-r1-auto", metric=3, tc=228, repetition="r1",
+    metric=3, tc=228,
     topology="2n1s",
     simulator_log_dir="tc228/r1/simulator",
     simout_dir="tc228/r1/simout",
@@ -221,7 +222,7 @@ result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
-省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 repetition/TC/arm 等身份字段
+省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 TC/arm 等身份字段
 可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
 坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
 `id`可省略，工具按 add 顺序稳定生成`run-000001`。重复请求 ID 自动改为`id-2/id-3`并产生
@@ -234,6 +235,14 @@ finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 ou
 `views.all`和`views.extension`含按 metric/TC/topology/repetition/profile(或 arm)的描述统计与可形成的比较。
 extension 不改变正式状态。每个成功 run 含`contract_class`、`standard_contract`和结构化
 `contract_warnings`。
+
+Metric3 independent 模式不要求调用方预分配 repetition 序号。run 同时省略`id`和`repetition`时，
+Matrix 先分配`run-000001`，再将其作为内部样本身份，并标记
+`repetition_source=auto-run-id`。不同 worker 都可从`run-000001`开始；批量`merge()`发生 ID 冲突改名时
+会同步更新自动样本身份，因此不需要跨 worker 的共享计数器。自动推断 requirements 使用
+`min_repetitions=1`按每个 TC/arm 检查样本数量，不把自动 ID 建成 repetition 笛卡尔积。若需要至少 N 个
+样本，只配置`metric3.min_repetitions=N`即可。Metric1/Metric2 仍要求 repetition，因为它们需要按轮对齐
+naive/spill/ideal 或三个 profile 后再计算比较值。
 
 ## 显式资格合同（opt-in）
 

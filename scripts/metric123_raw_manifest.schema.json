@@ -99,7 +99,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"],
+        "required": ["metric", "tc", "topology", "simulator_log_dir", "simout_dir"],
+        "allOf": [
+          {
+            "if": {"properties": {"metric": {"enum": [1, 2]}}},
+            "then": {"required": ["repetition"]}
+          }
+        ],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "metric": {"enum": [1, 2, 3]},

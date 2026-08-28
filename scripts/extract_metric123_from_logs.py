@@ -2089,6 +2089,7 @@ class Metric123RawLogMatrix:
                                        "ideal_min_capacity": 102656},
                           "metric2": {"repetitions": set(), "testcases": set()},
                           "metric3": {"mode": "independent", "repetitions": set(),
+                                      "min_repetitions": 1,
                                       "testcases": set(), "arms": {"ourcc", "ha-vi"}}}
         self._resolved = []
         self._issues = []
@@ -2125,6 +2126,7 @@ class Metric123RawLogMatrix:
         # requirements; never consult source paths during unpickling.
         self._qualification_sets = normalize_qualification_sets(self._requirements)
         self._inferred = copy.deepcopy(state["inferred"])
+        self._inferred.setdefault("metric3", {}).setdefault("min_repetitions", 1)
         self._resolved = copy.deepcopy(state["resolved"])
         self._issues = copy.deepcopy(state["issues"])
         self._ids = set(state["ids"])
@@ -2164,9 +2166,10 @@ class Metric123RawLogMatrix:
             self._inferred["metric2"]["repetitions"].add(slot[1])
             self._inferred["metric2"]["testcases"].add(slot[2])
         else:
-            self._inferred["metric3"]["repetitions"].add(slot[1])
-            self._inferred["metric3"]["testcases"].add(slot[2])
-            self._inferred["metric3"]["arms"].add(slot[3])
+            # _identity() uses (3, repetition, tc, arm), while logical_slot()
+            # includes the comparison mode before repetition. Metric3 inference
+            # is updated from normalized raw/parsed fields at the call sites.
+            return
 
     @staticmethod
     def _official_requirement_candidate(raw, slot):
@@ -2212,6 +2215,19 @@ class Metric123RawLogMatrix:
         else:
             effective_id, rename_warning = candidate, None
         raw["id"] = effective_id
+        try:
+            metric = int(raw.get("metric", 0) or 0)
+        except (TypeError, ValueError):
+            metric = 0
+        if metric == 3:
+            if raw.get("repetition") in (None, ""):
+                raw["repetition"] = effective_id
+                raw["repetition_source"] = "auto-run-id"
+                raw.setdefault("_contract_warnings", []).append(warning(
+                    "METRIC3_REPETITION_AUTO_ASSIGNED", effective_id,
+                    f"Metric3 sample identity auto-assigned from run id {effective_id!r}"))
+            else:
+                raw.setdefault("repetition_source", "explicit")
         raw["_qualification_candidates"] = qualification_candidates(
             raw, self._qualification_sets)
         if int(raw.get("metric", 0) or 0) == 1 and self._explicit_requirements:
@@ -2251,6 +2267,12 @@ class Metric123RawLogMatrix:
         official_candidate = self._official_requirement_candidate(raw, slot)
         if official_candidate:
             self._infer(slot)
+            if slot[0] == 3:
+                self._inferred["metric3"]["testcases"].add(int(raw["tc"]))
+                try:
+                    self._inferred["metric3"]["arms"].add(norm_arm(raw["arm"]))
+                except (KeyError, ExtractError):
+                    pass
         fallback_id = run_id
         result = {"status": "REJECTED", "requested_id": requested_id,
                   "run_id": fallback_id, "slot": list(slot) if slot else None}
@@ -2284,7 +2306,6 @@ class Metric123RawLogMatrix:
                 parsed.get("standard_contract")):
             self._inferred["metric1"]["repetitions"].add(parsed["repetition"])
         if not self._explicit_requirements and parsed["metric"] == 3:
-            self._inferred["metric3"]["repetitions"].add(parsed["repetition"])
             self._inferred["metric3"]["testcases"].add(parsed["tc"])
             self._inferred["metric3"]["arms"].add(parsed["arm"])
         self._issues.extend(copy.deepcopy(parsed.get("contract_warnings", [])))
@@ -2348,6 +2369,9 @@ class Metric123RawLogMatrix:
                 requirements[name] = {key: (sorted(values, key=str)
                                              if isinstance(values, set) else values)
                                       for key, values in fields.items()}
+            requirements["metric3"]["repetitions"] = []
+            requirements["metric3"]["min_repetitions"] = max(
+                1, int(requirements["metric3"].get("min_repetitions", 1)))
         return {"schema_version": 1, "correctness_policy": self.correctness_policy,
                 "requirements": requirements}
 
@@ -2481,7 +2505,9 @@ def merge(matrices):
             "metric2": {"repetitions": set(requirements.get("metric2", {}).get("repetitions", [])),
                         "testcases": set(requirements.get("metric2", {}).get("testcases", []))},
             "metric3": {"mode": requirements.get("metric3", {}).get("mode", "independent"),
-                        "repetitions": set(requirements.get("metric3", {}).get("repetitions", [])),
+                        "repetitions": set(),
+                        "min_repetitions": max(
+                            1, int(requirements.get("metric3", {}).get("min_repetitions", 1))),
                         "testcases": set(requirements.get("metric3", {}).get("testcases", [])),
                         "arms": set(requirements.get("metric3", {}).get("arms", ("ourcc", "ha-vi")))},
         }
@@ -2527,6 +2553,8 @@ def merge(matrices):
                 item = warning("DUPLICATE_RUN_ID_RENAMED", effective,
                                f"merged run id {requested!r} renamed to {effective!r}")
                 row["id"] = effective
+                if row.get("repetition_source") == "auto-run-id":
+                    row["repetition"] = effective
                 row.setdefault("contract_warnings", []).append(item)
                 add_issue(item)
             correctness_status = row.get("correctness", {}).get("status")
@@ -2550,7 +2578,15 @@ def merge(matrices):
             row["formal_contract"] = bool(row.get("standard_contract") or
                                           row["qualified_contracts"])
             slot = logical_slot(row)
-            merged._infer(slot)
+            if not merged._explicit_requirements:
+                if row["metric"] == 1 and row.get("standard_contract"):
+                    merged._inferred["metric1"]["repetitions"].add(row["repetition"])
+                elif row["metric"] == 2:
+                    merged._inferred["metric2"]["repetitions"].add(row["repetition"])
+                    merged._inferred["metric2"]["testcases"].add(row["tc"])
+                elif row["metric"] == 3:
+                    merged._inferred["metric3"]["testcases"].add(row["tc"])
+                    merged._inferred["metric3"]["arms"].add(row["arm"])
             merged._resolved.append(row)
             prior = list(merged._slot_ids[slot])
             merged._slot_ids[slot].append(effective)
