@@ -3186,6 +3186,13 @@ def render_brief_markdown(report, details=None):
              f"{len(missing['metric3']) + extra_missing_counts['metric3']} |", "",
              "Metric3 定义 `delta = HA-VI - OurCC`：正值表示 OurCC 更快，负值表示 HA-VI 更快；"
              "正负方向均保留。", "",
+             "## 读图规则", "",
+             "- Metric1 Capacity ratio：越大越好，参考门槛 `>= 1.5`。",
+             "- Metric1 Outer delta：`spill - ideal`，越小越好，参考门槛 `< 50 cycles`；"
+             "负值表示 spill 的 completed-Outer mean 低于 IdealDir，不是负延迟。",
+             "- Metric2 Reduction：`(naive - optimized) / naive`，越大越好；负值表示 optimized 更慢。",
+             "- Metric3 Delta：`HA-VI - OurCC`，正值表示 OurCC 更快，负值表示 HA-VI 更快；"
+             "不以正负作为统一 PASS 门槛。", "",
              "![Metric summary](metric_summary_bar_chart.svg)"]
     detail_counts = {name: len(details[name]) for name in details}
     lines += ["", "## 按拓扑/TC 已提取点", "",
@@ -3392,18 +3399,23 @@ def write_summary_png(path, report):
         figure, axes = plt.subplots(1, 3, figsize=(13.5, 4.8))
         panels = [
             ("Metric1", ["Capacity ratio", "Outer delta cycles"],
-             [values["metric1_capacity_ratio"], values["metric1_outer_delta_cycles"]]),
-            ("Metric2", ["Reduction %"], [values["metric2_reduction_pct"]]),
+             [values["metric1_capacity_ratio"], values["metric1_outer_delta_cycles"]],
+             [1.5, 50.0]),
+            ("Metric2", ["Reduction %"], [values["metric2_reduction_pct"]], [10.0]),
             ("Metric3", ["Core delta", "Representative delta"],
-             [values["metric3_core_delta_ticks"], values["metric3_representative_delta_ticks"]]),
+             [values["metric3_core_delta_ticks"], values["metric3_representative_delta_ticks"]],
+             [0.0, 0.0]),
         ]
-        for axis, (title, labels, raw_values) in zip(axes, panels):
+        for axis, (title, labels, raw_values, references) in zip(axes, panels):
             plot_values = [0 if finite_number(value) is None else value for value in raw_values]
             colors = [("#9aa1a6" if finite_number(raw) is None else
                        "#247ba0" if value >= 0 else "#c65d3b")
                       for raw, value in zip(raw_values, plot_values)]
             bars = axis.bar(labels, plot_values, color=colors)
             axis.axhline(0, color="#495057", linewidth=0.8)
+            for reference in references:
+                if reference:
+                    axis.axhline(reference, color="#c65d3b", linewidth=1.2)
             axis.set_title(title, fontweight="bold")
             axis.tick_params(axis="x", rotation=20)
             axis.grid(axis="y", alpha=0.2)

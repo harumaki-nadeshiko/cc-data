@@ -416,6 +416,11 @@ TC228-TC235 Standard aggregate。因此额外 TC/topology 即使单点已解析�
 显示 Standard N/A。此时应查看`report_detail_by_tc_topology_zh.md`：它按`Standard`、
 `Formal qualification`、`Extension descriptive`区分 scope，并逐 topology/TC 显示实际数值与 N/A 原因。
 
+图表方向：Metric1 capacity ratio 越大越好，门槛`>=1.5`；Metric1 Outer delta 定义为`spill-ideal`，
+越小越好，门槛`<50 cycles`，负值表示 spill mean 低于 IdealDir mean，不是负延迟；Metric2 reduction
+定义为`(naive-optimized)/naive`，越大越好，负值表示 optimized 更慢；Metric3 delta 定义为
+`HA-VI-OurCC`，正值表示 OurCC 更快、负值表示 HA-VI 更快，不以正负作为统一 PASS 门槛。
+
 `report.md`是首选的人读诊断入口，包含三个中文章节：
 
 - `逐测试诊断`：逐 run 列出 Standard、Formal qualification 或 Extension，并展开冻结合同未通过的
