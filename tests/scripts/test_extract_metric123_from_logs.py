@@ -612,6 +612,15 @@ class ExtractMetric123Test(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "item 1"):
             MOD.merge([matrix, object()])
 
+    def test_matrix_merge_accepts_legacy_mixed_inferred_types(self):
+        left = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        right = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        left._inferred["metric2"]["repetitions"].update({1, "r2"})
+        right._inferred["metric2"]["repetitions"].add("r3")
+        merged = MOD.merge([left, right])
+        self.assertEqual(merged._data()["requirements"]["metric2"]["repetitions"],
+                         [1, "r2", "r3"])
+
     def test_matrix_merge_scans_each_snapshot_once(self):
         matrices = []
         for index in range(8):

@@ -2328,7 +2328,8 @@ class Metric123RawLogMatrix:
         else:
             requirements = {}
             for name, fields in self._inferred.items():
-                requirements[name] = {key: (sorted(values) if isinstance(values, set) else values)
+                requirements[name] = {key: (sorted(values, key=str)
+                                             if isinstance(values, set) else values)
                                       for key, values in fields.items()}
         return {"schema_version": 1, "correctness_policy": self.correctness_policy,
                 "requirements": requirements}
