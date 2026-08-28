@@ -157,8 +157,11 @@ gem5或UBIO：`PORTABLE_PRESSURE_LINES=98208`、`PORTABLE_TARGET_FOOTPRINT_LINES
   无论模式如何，描述视图都提供`metric3_arm_comparisons`；只有实际带 pair/order 的 run 才进入
   `metric3_pairs`。PERF-LATENCY 多节点聚合按 samples 对 mean 加权。
 
-Metric3 定义`delta = HA-VI - OurCC`，严格`delta > 0`才是可执行参考模型范围 PASS。该状态
-不是物理甲方硅片测量声明。重复只作描述性汇总；工具不计算 t-test、置信区间或 p-value。
+Metric3 定义`delta = HA-VI - OurCC`，正值报告`OURCC_FASTER`，负值报告`HA_VI_FASTER`，零值报告
+`TIE`。所有方向都是真实统计结果，不做筛选，也不以`delta > 0`作为状态或退出码门槛。`COMPLETE`
+只表示证据、arm 和矩阵完整，不表示所有场景均强于 HA-VI。旧 qualification 中的
+`thresholds.delta_ticks_strict_min`仅为输入兼容字段，不再执行。重复只作描述性汇总；工具不计算
+t-test、置信区间或 p-value。
 
 ## 执行
 

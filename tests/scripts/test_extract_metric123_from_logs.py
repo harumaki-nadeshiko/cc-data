@@ -907,7 +907,7 @@ class ExtractMetric123Test(unittest.TestCase):
                 matrix.add(self.make_m3_run(f"o-{tc}-{rep}", tc, rep, "lossless-oneway", 100 + offset))
                 matrix.add(self.make_m3_run(f"h-{tc}-{rep}", tc, rep, "HaVi", 130 + offset))
         report = matrix.finalize()["report"]
-        self.assertEqual(report["metric3"]["status"], "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)")
+        self.assertEqual(report["metric3"]["status"], "COMPLETE")
         self.assertEqual(report["metric3"]["comparison_mode"], "independent")
         summary = next(x for x in report["metric3"]["metric_summaries"]
                        if x["tc"] == 228)
@@ -915,6 +915,50 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(summary["ha_vi_mean_ticks"], 140)
         self.assertEqual(summary["delta_mean_ticks"], 30)
         self.assertEqual(summary["ourcc_count"], 2)
+
+    def test_metric3_negative_delta_is_complete_and_preserved(self):
+        requirements = {"metric3": {"mode": "independent",
+                                     "repetitions": ["r1"],
+                                     "testcases": list(MOD.M3),
+                                     "arms": ["ourcc", "ha-vi"]}}
+        matrix = MOD.Metric123RawLogMatrix(requirements, base_dir=self.root)
+        for tc in MOD.M3:
+            matrix.add(self.make_m3_run(f"negative-o-{tc}", tc, "r1",
+                                        "ourcc", 140))
+            matrix.add(self.make_m3_run(f"negative-h-{tc}", tc, "r1",
+                                        "ha-vi", 100))
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["metric3"]["status"], "COMPLETE")
+        self.assertEqual(result["report"]["overall_status"], "PASS")
+        self.assertTrue(all(row["delta_mean_ticks"] < 0 and
+                            row["direction"] == "HA_VI_FASTER"
+                            for row in result["report"]["metric3"]["primary_values"]))
+        self.assertTrue(all(row["delta_ticks"] < 0 and
+                            row["direction"] == "HA_VI_FASTER" and
+                            row["status"] == "COMPLETE"
+                            for row in result["report"]["metric3"]["aggregates"]))
+        self.assertFalse(any(row["status"] == "FAIL"
+                             for row in result["matrix"] if row["metric"] == "Metric3"))
+
+    def test_metric3_qualification_negative_delta_is_complete(self):
+        qualification = {"id": "m3-negative", "metric": 3,
+                         "mode": "independent", "topologies": ["3n1s"],
+                         "testcases": [228], "arms": ["ourcc", "ha-vi"],
+                         "min_repetitions": 1,
+                         "thresholds": {"delta_ticks_strict_min": 999}}
+        matrix = MOD.Metric123RawLogMatrix(
+            {"qualification_sets": [qualification]},
+            correctness_policy="optional", base_dir=self.root)
+        matrix.add(self.make_m3_run("negative-q-o", 228, "r1", "ourcc",
+                                    140, topology="3n1s"))
+        matrix.add(self.make_m3_run("negative-q-h", 228, "r1", "ha-vi",
+                                    100, topology="3n1s"))
+        item = matrix.finalize(require_qualifications=["m3-negative"])["report"][
+            "qualifications"][0]
+        self.assertEqual(item["status"], "PASS")
+        self.assertLess(item["results"][0]["primary_values"][0]["delta_mean_ticks"], 0)
+        self.assertEqual(item["results"][0]["primary_values"][0]["direction"],
+                         "HA_VI_FASTER")
 
     def test_metric3_repetition_is_optional_and_auto_assigned(self):
         matrix = MOD.Metric123RawLogMatrix(
@@ -931,6 +975,24 @@ class ExtractMetric123Test(unittest.TestCase):
         requirements = matrix._data()["requirements"]["metric3"]
         self.assertEqual(requirements["repetitions"], [])
         self.assertEqual(requirements["min_repetitions"], 1)
+
+    def test_extract_run_directly_allows_metric3_without_repetition(self):
+        run = self.make_m3_run("direct-no-repetition", 228, "unused", "ourcc")
+        run.pop("repetition")
+        parsed = MOD.extract_run(run, self.root, "optional")
+        self.assertEqual(parsed["repetition"], "direct-no-repetition")
+        self.assertEqual(parsed["repetition_source"], "auto-run-id")
+
+    def test_metric3_add_without_repetition_can_auto_detect_arm(self):
+        marker = "[EPBACKEND-PROFILE] node=0 ha_endpoint_profile=ubcc\n"
+        run = self.make_m3_run("no-repetition-auto-arm", 228, "unused",
+                               identity=marker)
+        run.pop("repetition")
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        self.assertEqual(matrix.add(run)["status"], "ADDED")
+        parsed = matrix.finalize()["resolved_runs"][0]
+        self.assertEqual(parsed["repetition"], "no-repetition-auto-arm")
+        self.assertEqual(parsed["arm"], "ourcc")
 
     def test_metric3_workers_need_no_shared_id_or_repetition_allocator(self):
         matrices = []

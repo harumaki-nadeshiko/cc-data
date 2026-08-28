@@ -159,6 +159,14 @@ def safe_weighted_sum(weighted_values):
     return sum(weight * value for weight, value in weighted_values)
 
 
+def metric3_direction(delta):
+    """Classify a real Metric3 delta without turning direction into a gate."""
+    value = finite_number(delta)
+    if value is None:
+        return "UNAVAILABLE"
+    return "OURCC_FASTER" if value > 0 else "HA_VI_FASTER" if value < 0 else "TIE"
+
+
 def json_ready(value):
     """Recursively map non-finite numeric leaves to JSON null."""
     if isinstance(value, dict):
@@ -918,7 +926,13 @@ def parse_capacity(paths):
 
 def extract_run(run, base, policy):
     run = normalize_legacy_metric1_profile(run)
-    required = {"metric", "tc", "repetition", "topology", "simulator_log_dir", "simout_dir"}
+    try:
+        metric = int(run.get("metric", 0) or 0)
+    except (TypeError, ValueError):
+        metric = 0
+    required = {"metric", "tc", "topology", "simulator_log_dir", "simout_dir"}
+    if metric in (1, 2):
+        required.add("repetition")
     missing = required - set(run)
     if missing:
         raise ExtractError(f"missing fields {sorted(missing)}")
@@ -926,7 +940,12 @@ def extract_run(run, base, policy):
     if "id" not in run:
         raise ExtractError("internal run id was not assigned")
     out["id"], out["metric"], out["tc"] = str(run["id"]), int(run["metric"]), int(run["tc"])
-    out["repetition"], out["topology"] = str(run["repetition"]), str(run["topology"]).lower()
+    if out["metric"] == 3 and run.get("repetition") in (None, ""):
+        out["repetition"] = out["id"]
+        out["repetition_source"] = "auto-run-id"
+    else:
+        out["repetition"] = str(run["repetition"])
+    out["topology"] = str(run["topology"]).lower()
     if out["metric"] not in (1, 2, 3):
         raise ExtractError("metric must be 1, 2, or 3")
     simulator = resolve(base, run["simulator_log_dir"])
@@ -1549,7 +1568,6 @@ def aggregate_qualification(item, runs, issues):
                                        "PASS" if cases and all(x["pass"] for x in cases)
                                        else "FAIL")})
     else:
-        threshold = item["thresholds"]["delta_ticks_strict_min"]
         for topology in item["topologies"]:
             topology_runs = [run for run in selected if run["topology"] == topology]
             samples, topology_missing = [], []
@@ -1615,7 +1633,7 @@ def aggregate_qualification(item, runs, issues):
                     delta = safe_weighted_sum((weight, summaries[tc, name]["delta_ticks"])
                                               for name, weight in definition.items())
                     primary.append({"tc": tc, "delta_mean_ticks": delta,
-                                    "pass": delta is not None and delta > threshold})
+                                    "direction": metric3_direction(delta)})
                 else:
                     topology_missing.append((tc, "primary"))
             aggregates = []
@@ -1625,16 +1643,13 @@ def aggregate_qualification(item, runs, issues):
                         (weight, summaries[key]["delta_ticks"])
                         for key, weight in weights.items())
                     aggregates.append({"name": aggregate_name, "delta_ticks": delta,
-                                       "pass": delta is not None and delta > threshold})
+                                       "direction": metric3_direction(delta)})
             missing.extend([{"topology": topology, "slot": slot}
                             for slot in topology_missing])
-            pass_rows = primary + aggregates
             results.append({"topology": topology, "missing_slots": topology_missing,
                             "samples": samples, "primary_values": primary,
                             "aggregates": aggregates,
-                            "status": ("INCOMPLETE" if topology_missing else
-                                       "PASS" if pass_rows and all(x["pass"] for x in pass_rows)
-                                       else "FAIL")})
+                            "status": "INCOMPLETE" if topology_missing else "PASS"})
     if registry_errors:
         status = "INVALID"
     elif any(row["status"] == "INCOMPLETE" for row in results):
@@ -1873,7 +1888,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                     "delta_ticks": delta, "frequency_hz": left["counter_frequency_hz"]})
                     matrix.append({"metric": "Metric3", "level": "pair", "identity": pair,
                                    "tc": f"TC{tc}", "value": delta, "unit": f"ticks/op:{name}",
-                                   "status": "OURCC_FASTER" if delta > 0 else "FAIL",
+                                   "status": metric3_direction(delta),
                                    "detail": f"order={order}; delta=HA-VI-OurCC"})
         summaries = []
         for key in sorted({(r["tc"], r["metric"]) for r in samples}):
@@ -1960,9 +1975,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                 m3_complete = False
                 missing_m3.append((tc, "primary_required_metrics"))
                 continue
-            primary.append({"tc": tc, "ourcc_mean_ticks": ourcc, "ha_vi_mean_ticks": havi, "delta_mean_ticks": delta})
+            primary.append({"tc": tc, "ourcc_mean_ticks": ourcc,
+                            "ha_vi_mean_ticks": havi, "delta_mean_ticks": delta,
+                            "direction": metric3_direction(delta)})
             matrix.append({"metric": "Metric3", "level": "TC", "identity": f"{comparison_mode} arm mean", "tc": f"TC{tc}",
-                           "value": delta, "unit": "ticks/op", "status": "OURCC_FASTER" if delta > 0 else "FAIL",
+                           "value": delta, "unit": "ticks/op", "status": metric3_direction(delta),
                            "detail": "frozen primary-value formula"})
     aggregates = []
     for name, weights in M3_AGGREGATES.items():
@@ -1974,14 +1991,14 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                 missing_m3.append((name, "aggregate_required_metrics"))
                 continue
             aggregates.append({"name": name, "delta_ticks": delta,
-                               "status": "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if delta > 0 else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)"})
+                               "direction": metric3_direction(delta),
+                               "status": "COMPLETE"})
             matrix.append({"metric": "Metric3", "level": "aggregate", "identity": name, "tc": "ALL",
                            "value": delta, "unit": "ticks/op", "status": aggregates[-1]["status"],
-                           "detail": "frozen weights; strict GT 0"})
+                           "detail": f"frozen weights; direction={aggregates[-1]['direction']}"})
     m3_requested = bool(tcs_req or m3)
-    m3_status = ("NOT_REQUESTED" if not m3_requested else "INCOMPLETE" if not m3_complete else
-                 "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if len(aggregates) == 2 and all(a["delta_ticks"] > 0 for a in aggregates)
-                 else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)")
+    m3_status = ("NOT_REQUESTED" if not m3_requested else
+                 "INCOMPLETE" if not m3_complete else "COMPLETE")
 
     qualifications = [aggregate_qualification(item, all_resolved, issues)
                       for item in normalize_qualification_sets(data.get("requirements", {}))]
@@ -2803,7 +2820,8 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
     lines = ["# Metric 1/2/3 原始日志统一报告", "", f"总体状态：**{report['overall_status']}**", "",
              "| 指标 | 状态 |", "|---|---|", f"| Metric1 | {report['metric1']['status']} |",
              f"| Metric2 | {report['metric2']['status']} |", f"| Metric3 | {report['metric3']['status']} |", "",
-             "Metric3 仅表示冻结可执行参考模型范围；delta = HA-VI - OurCC，严格大于 0 才通过。",
+              "Metric3 仅表示冻结可执行参考模型范围；delta = HA-VI - OurCC，正负方向均如实保留。",
+              "Metric3 的 COMPLETE 只表示证据与矩阵完整，不表示所有场景均强于 HA-VI。",
              "不执行 t-test，不生成 p-value，不做笛卡尔配对。", "",
               "## 视图", "",
                f"- Standard runs: {report['views']['standard']['runs']}",
@@ -2875,12 +2893,6 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
                  if not row.get("pass")]
     failed_m2 = [row for row in report["metric2"].get("repetition_equal_weight", [])
                  if not row.get("pass")]
-    failed_m3 = [row for row in report["metric3"].get("primary_values", [])
-                 if finite_number(row.get("delta_mean_ticks")) is not None and
-                 row["delta_mean_ticks"] <= 0]
-    failed_m3.extend(row for row in report["metric3"].get("aggregates", [])
-                     if finite_number(row.get("delta_ticks")) is not None and
-                     row["delta_ticks"] <= 0)
     if failed_m1:
         lines.append(
             "- **Metric1 门槛失败**：" + markdown_cell(failed_m1) +
@@ -2896,10 +2908,6 @@ def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
             "。baseline 必须 >= 500 ns 才进入降幅判定。")
     if not report["metric2"].get("applicable_set_stable", True):
         lines.append("- **Metric2 适用集合不稳定**：不同 repetition 的 applicable TC 集合不一致。")
-    if failed_m3:
-        lines.append(
-            "- **Metric3 门槛失败**：" + markdown_cell(failed_m3) +
-            "。delta = HA-VI - OurCC，要求严格 > 0。")
     incomplete_pairs = report["metric3"].get("incomplete_pairs", [])
     if incomplete_pairs:
         lines.append(f"- **Metric3 不完整 pair**：{markdown_cell(incomplete_pairs)}。")

@@ -87,7 +87,7 @@
                   "arms": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"enum": ["ourcc", "ubcc", "lossless-oneway", "ha-vi", "havi", "ha_vi"]}, "uniqueItems": true},
                   "pairs": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true},
                   "repetitions": {"type": "array", "minItems": 1, "items": {"type": ["string", "integer"]}, "uniqueItems": true}, "min_repetitions": {"type": "integer", "minimum": 1},
-                  "thresholds": {"type": "object", "properties": {"delta_ticks_strict_min": {"type": "number"}}}
+                  "thresholds": {"type": "object", "properties": {"delta_ticks_strict_min": {"type": "number", "deprecated": true, "description": "Accepted for compatibility but not enforced; Metric3 reports both delta directions."}}}
                 }
               }
             ]
