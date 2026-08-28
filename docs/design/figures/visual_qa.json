@@ -28,7 +28,9 @@
           "max_expected_page_height": true,
           "approved_drawio_font": true,
           "minimum_font_size": true,
-          "no_core_networksim_component": true
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
         }
       },
       "checks": {
@@ -45,6 +47,8 @@
         "approved_drawio_font": true,
         "minimum_font_size": true,
         "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
         "diagram_document_references": true
       },
       "status": "PASS"
@@ -70,7 +74,9 @@
           "max_expected_page_height": true,
           "approved_drawio_font": true,
           "minimum_font_size": true,
-          "no_core_networksim_component": true
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
         }
       },
       "checks": {
@@ -87,6 +93,8 @@
         "approved_drawio_font": true,
         "minimum_font_size": true,
         "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
         "diagram_document_references": true
       },
       "status": "PASS"
@@ -112,7 +120,9 @@
           "max_expected_page_height": true,
           "approved_drawio_font": true,
           "minimum_font_size": true,
-          "no_core_networksim_component": true
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
         }
       },
       "checks": {
@@ -129,6 +139,8 @@
         "approved_drawio_font": true,
         "minimum_font_size": true,
         "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
         "diagram_document_references": true
       },
       "status": "PASS"
@@ -154,7 +166,9 @@
           "max_expected_page_height": true,
           "approved_drawio_font": true,
           "minimum_font_size": true,
-          "no_core_networksim_component": true
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
         }
       },
       "checks": {
@@ -171,6 +185,8 @@
         "approved_drawio_font": true,
         "minimum_font_size": true,
         "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
         "diagram_document_references": true
       },
       "status": "PASS"
@@ -196,7 +212,9 @@
           "max_expected_page_height": true,
           "approved_drawio_font": true,
           "minimum_font_size": true,
-          "no_core_networksim_component": true
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
         }
       },
       "checks": {
@@ -213,6 +231,192 @@
         "approved_drawio_font": true,
         "minimum_font_size": true,
         "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
+        "diagram_document_references": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-protocol-authority-comparison",
+      "kind": "diagram",
+      "width": 2362,
+      "height": 999,
+      "svg_report": {
+        "bytes": 11966,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": {
+        "page_width": 1240,
+        "page_height": 570,
+        "label_count": 8,
+        "minimum_font_size": 13.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
+        }
+      },
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
+        "diagram_document_references": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-path-central-vs-direct",
+      "kind": "diagram",
+      "width": 2962,
+      "height": 1117,
+      "svg_report": {
+        "bytes": 25503,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": {
+        "page_width": 1540,
+        "page_height": 620,
+        "label_count": 20,
+        "minimum_font_size": 13.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
+        }
+      },
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
+        "diagram_document_references": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-metadata-fanout-scaling",
+      "kind": "diagram",
+      "width": 2962,
+      "height": 1043,
+      "svg_report": {
+        "bytes": 14223,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": {
+        "page_width": 1540,
+        "page_height": 590,
+        "label_count": 9,
+        "minimum_font_size": 12.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
+        }
+      },
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
+        "diagram_document_references": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-inner-chi-outer-boundary",
+      "kind": "diagram",
+      "width": 2965,
+      "height": 1185,
+      "svg_report": {
+        "bytes": 16469,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": {
+        "page_width": 1540,
+        "page_height": 650,
+        "label_count": 12,
+        "minimum_font_size": 13.0,
+        "checks": {
+          "editable_content": true,
+          "wide_aspect_ratio": true,
+          "max_expected_page_height": true,
+          "approved_drawio_font": true,
+          "minimum_font_size": true,
+          "no_core_networksim_component": true,
+          "square_or_minimal_radius_boxes": true,
+          "reviewed_connector_anchors": true
+        }
+      },
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "drawio_present": true,
+        "editable_content": true,
+        "wide_aspect_ratio": true,
+        "max_expected_page_height": true,
+        "approved_drawio_font": true,
+        "minimum_font_size": true,
+        "no_core_networksim_component": true,
+        "square_or_minimal_radius_boxes": true,
+        "reviewed_connector_anchors": true,
         "diagram_document_references": true
       },
       "status": "PASS"

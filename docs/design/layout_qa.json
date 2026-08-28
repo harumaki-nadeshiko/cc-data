@@ -23,7 +23,7 @@
   "documents": [
     {
       "document": "docs/design/cc_ep_protocol_overview.pdf",
-      "page_count": 12,
+      "page_count": 18,
       "pages": [
         {
           "page": 1,
@@ -41,8 +41,8 @@
           "page": 2,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.012476,
-          "text_characters": 106,
+          "non_white_ratio": 0.027202,
+          "text_characters": 268,
           "front_matter_density_exempt": true,
           "image_page_fractions": [],
           "minimum_text_size_points": 10.01,
@@ -53,8 +53,8 @@
           "page": 3,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.111203,
-          "text_characters": 779,
+          "non_white_ratio": 0.111296,
+          "text_characters": 785,
           "front_matter_density_exempt": true,
           "image_page_fractions": [],
           "minimum_text_size_points": 8.68,
@@ -65,8 +65,8 @@
           "page": 4,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.1486,
-          "text_characters": 665,
+          "non_white_ratio": 0.148466,
+          "text_characters": 667,
           "front_matter_density_exempt": false,
           "image_page_fractions": [
             0.1164
@@ -91,7 +91,7 @@
           "page": 6,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.128298,
+          "non_white_ratio": 0.12826,
           "text_characters": 427,
           "front_matter_density_exempt": false,
           "image_page_fractions": [
@@ -105,7 +105,7 @@
           "page": 7,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.091726,
+          "non_white_ratio": 0.09171,
           "text_characters": 624,
           "front_matter_density_exempt": false,
           "image_page_fractions": [
@@ -131,10 +131,12 @@
           "page": 9,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.113628,
-          "text_characters": 852,
+          "non_white_ratio": 0.108518,
+          "text_characters": 722,
           "front_matter_density_exempt": false,
-          "image_page_fractions": [],
+          "image_page_fractions": [
+            0.115
+          ],
           "minimum_text_size_points": 8.68,
           "issues": [],
           "status": "PASS"
@@ -143,8 +145,8 @@
           "page": 10,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.183729,
-          "text_characters": 973,
+          "non_white_ratio": 0.131132,
+          "text_characters": 1235,
           "front_matter_density_exempt": false,
           "image_page_fractions": [],
           "minimum_text_size_points": 8.68,
@@ -155,11 +157,13 @@
           "page": 11,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.164025,
-          "text_characters": 701,
+          "non_white_ratio": 0.148267,
+          "text_characters": 1034,
           "front_matter_density_exempt": false,
-          "image_page_fractions": [],
-          "minimum_text_size_points": 8.01,
+          "image_page_fractions": [
+            0.1022
+          ],
+          "minimum_text_size_points": 8.68,
           "issues": [],
           "status": "PASS"
         },
@@ -167,8 +171,84 @@
           "page": 12,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.101791,
-          "text_characters": 547,
+          "non_white_ratio": 0.124795,
+          "text_characters": 1114,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0958
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 13,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.135972,
+          "text_characters": 1688,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 14,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.135266,
+          "text_characters": 960,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1086
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 15,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.11958,
+          "text_characters": 950,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 16,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.183013,
+          "text_characters": 1035,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 17,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.160791,
+          "text_characters": 743,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 18,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.059578,
+          "text_characters": 337,
           "front_matter_density_exempt": false,
           "image_page_fractions": [],
           "minimum_text_size_points": 8.68,
@@ -212,7 +292,7 @@
           "page": 3,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.111764,
+          "non_white_ratio": 0.111828,
           "text_characters": 643,
           "front_matter_density_exempt": true,
           "image_page_fractions": [
@@ -262,7 +342,7 @@
           "page": 7,
           "width_points": 595.304,
           "height_points": 842.235,
-          "non_white_ratio": 0.125163,
+          "non_white_ratio": 0.125159,
           "text_characters": 781,
           "front_matter_density_exempt": false,
           "image_page_fractions": [

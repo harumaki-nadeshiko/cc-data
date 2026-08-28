@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import hashlib
 import json
 import pathlib
 import unittest
@@ -54,6 +55,31 @@ class FigureMetadataTest(unittest.TestCase):
         self.assertEqual({entry["name"] for entry in self.inventory["diagrams"]}, set(GENERATOR.DIAGRAM_STEMS))
         for diagram in self.inventory["diagrams"]:
             self.assertTrue(all(VALIDATOR.validate_diagram_metadata(diagram).values()))
+
+    def test_protocol_selection_figures_use_square_boxes_and_explicit_anchors(self):
+        stems = {
+            "ubcc-protocol-authority-comparison", "ubcc-path-central-vs-direct",
+            "ubcc-metadata-fanout-scaling", "ubcc-inner-chi-outer-boundary",
+        }
+        self.assertTrue(stems.issubset(set(GENERATOR.DIAGRAM_STEMS)))
+        for stem in stems:
+            report = VALIDATOR.inspect_drawio(
+                ROOT / "docs/design/figures" / f"{stem}.drawio", stem)
+            self.assertTrue(report["checks"]["square_or_minimal_radius_boxes"], stem)
+            self.assertTrue(report["checks"]["reviewed_connector_anchors"], stem)
+
+    def test_math_figures_declare_stix_math(self):
+        for stem in ("ubcc-path-central-vs-direct", "ubcc-metadata-fanout-scaling"):
+            text = (ROOT / "docs/design/figures" / f"{stem}.drawio").read_text()
+            self.assertIn("fontFamily=STIX Two Math", text)
+
+    def test_math_font_asset_and_license_are_pinned(self):
+        font = ROOT / "docs/fonts/stix-math/STIXTwoMath-Regular.ttf"
+        license_path = ROOT / "docs/fonts/stix-math/OFL.txt"
+        self.assertEqual(hashlib.sha256(font.read_bytes()).hexdigest(),
+                         "562551b15b836e6e01d1b7350909baf3c8c8d83260c1190fbf4544333e6936de")
+        self.assertIn("SIL OPEN FONT LICENSE",
+                      license_path.read_text(errors="replace"))
 
 
 if __name__ == "__main__":

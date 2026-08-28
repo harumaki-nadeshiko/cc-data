@@ -23,6 +23,7 @@ DEFAULT_IMAGE_MAX_HEIGHT = int(11.5 * EMU_PER_CM)
 # changing the visible identifier.  LibreOffice treats U+FEFF as a removable
 # byte-order mark in DOCX text, so it does not reliably protect table content.
 WORD_JOINER = "\u2060"
+MATH_FONT = "STIX Two Math"
 ASCII_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)(?![A-Za-z0-9_])")
 NARROW_TABLE_IDENTIFIERS = (
     "InvalidateReq", "UpgradeAckNotify", "InvalidateAck", "frontier", "evict",
@@ -52,7 +53,15 @@ def sha256(path):
 def plain(text):
     text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\$(.+?)\$", r"\1", text)
     return text.replace("**", "").replace("__", "").replace("`", "").strip()
+
+
+def inline_source(text):
+    """Remove links/code markers while retaining bold and inline-math spans."""
+    text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text)
+    return text.replace("`", "").strip()
 
 
 def prevent_ascii_identifier_breaks(text):
@@ -73,12 +82,12 @@ def prevent_short_line_tail(text, protected_characters=6):
 
 
 def run(text, bold=False, mono=False, heading=False, size=None,
-        nonbreaking_identifiers=False, protect_tail=False):
-    font = "Consolas" if mono else "Calibri"
-    east_asia = "Microsoft YaHei" if mono or not heading else "SimHei"
-    if nonbreaking_identifiers:
+        nonbreaking_identifiers=False, protect_tail=False, math=False):
+    font = MATH_FONT if math else "Consolas" if mono else "Calibri"
+    east_asia = MATH_FONT if math else "Microsoft YaHei" if mono or not heading else "SimHei"
+    if nonbreaking_identifiers and not math:
         text = prevent_ascii_identifier_breaks(text)
-    if protect_tail:
+    if protect_tail and not math:
         text = prevent_short_line_tail(text)
     props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" '
              f'w:eastAsia="{east_asia}" w:cs="{font}"/>'
@@ -89,16 +98,19 @@ def run(text, bold=False, mono=False, heading=False, size=None,
 
 
 def inline_runs(text, **run_options):
-    """Render restrained Markdown bold as separate native Word runs."""
+    """Render restrained bold and explicit math spans as native Word runs."""
     text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text).replace("`", "")
     output = []
     position = 0
-    for match in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__", text):
+    for match in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__|\$(.+?)\$", text):
         if match.start() > position:
             output.append(run(text[position:match.start()], **run_options))
-        output.append(run(match.group(1) or match.group(2), bold=True,
-                          **run_options))
+        if match.group(3) is not None:
+            output.append(run(match.group(3), math=True, **run_options))
+        else:
+            output.append(run(match.group(1) or match.group(2), bold=True,
+                              **run_options))
         position = match.end()
     if position < len(text):
         output.append(run(text[position:], **run_options))
@@ -185,7 +197,7 @@ def table(rows, compact=False, visual_widths=None):
         row_props += '</w:trPr>'
         output.append(f"<w:tr>{row_props}")
         for cell_index, cell in enumerate(row + [""] * (width - len(row))):
-            cell_text = plain(cell)
+            cell_text = plain(cell) if row_index == 0 else inline_source(cell)
             cell_font_size = (16 if not compact and any(
                 identifier in cell_text for identifier in NARROW_TABLE_IDENTIFIERS)
                               else font_size)
@@ -197,9 +209,13 @@ def table(rows, compact=False, visual_widths=None):
                 f'<w:pStyle w:val="{paragraph_style}"/><w:jc w:val="left"/>'
                 '<w:wordWrap w:val="0"/>'
                 f'<w:spacing w:before="0" w:after="0" w:line="{line_height}" w:lineRule="exact"/>'
-                '</w:pPr>' + run(cell_text, row_index == 0,
-                                 heading=row_index == 0, size=cell_font_size,
-                                 nonbreaking_identifiers=True) + '</w:p></w:tc>')
+                '</w:pPr>' + (run(cell_text, row_index == 0,
+                                  heading=row_index == 0, size=cell_font_size,
+                                  nonbreaking_identifiers=True)
+                                if row_index == 0 else
+                                inline_runs(cell_text, size=cell_font_size,
+                                            nonbreaking_identifiers=True)) +
+                '</w:p></w:tc>')
         output.append("</w:tr>")
     output.append("</w:tbl>")
     return "".join(output)

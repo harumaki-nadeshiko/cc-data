@@ -178,6 +178,24 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
             self.assertEqual(["".join(item.itertext()) for item in bold_runs],
                              [bold_text])
 
+    def test_explicit_math_span_uses_stix_math_run(self):
+        body, _ = MOD.convert_markdown(
+            "普通正文与 $T ≈ K_crossnode × τ_link + T_dir$ 共存。\n\n"
+            "| 模型 | 公式 |\n|---|---|\n| 时延 | $C_verify ∝ Stable × Transient$ |\n",
+            self.markdown)
+        document = ET.fromstring(
+            '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+            body + '</w:body>')
+        math_runs = []
+        for item in document.findall(f".//{W}r"):
+            fonts = item.find(f"{W}rPr/{W}rFonts")
+            if fonts is not None and fonts.get(f"{W}ascii") == MOD.MATH_FONT:
+                math_runs.append("".join(item.itertext()))
+                self.assertEqual(fonts.get(f"{W}hAnsi"), MOD.MATH_FONT)
+                self.assertEqual(fonts.get(f"{W}eastAsia"), MOD.MATH_FONT)
+        self.assertEqual(math_runs, ["T ≈ K_crossnode × τ_link + T_dir",
+                                     "C_verify ∝ Stable × Transient"])
+
     def test_single_percentage_code_fence_becomes_bold_in_previous_sentence(self):
         body, _ = MOD.convert_markdown(
             "聚合结果为：\n\n```text\n64.759%\n```\n", self.markdown)

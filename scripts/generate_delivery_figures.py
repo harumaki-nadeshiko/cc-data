@@ -33,6 +33,9 @@ except ModuleNotFoundError:  # Metadata-only validation does not require renderi
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs/design/figures"
 FONT = "Microsoft YaHei"
+MATH_FONT = "STIX Two Math"
+MATH_FONT_PATH = ROOT / "docs/fonts/stix-math/STIXTwoMath-Regular.ttf"
+FONTCONFIG_FILE = ROOT / "docs/fonts/fonts.conf"
 NAVY, BLUE, TEAL, GREEN = "#17365D", "#4F81BD", "#168795", "#57965C"
 AMBER, ORANGE, GRAY = "#BF9000", "#C55A11", "#7F7F7F"
 PALE_BLUE, PALE_GREEN = "#D9EAF7", "#E2F0D9"
@@ -44,6 +47,10 @@ DIAGRAM_STEMS = (
     "ubcc-protocol-paths",
     "ubcc-verification-stack",
     "ubcc-two-phase-commit",
+    "ubcc-protocol-authority-comparison",
+    "ubcc-path-central-vs-direct",
+    "ubcc-metadata-fanout-scaling",
+    "ubcc-inner-chi-outer-boundary",
 )
 CHART_STEMS = (
     "ubcc-metric1-capacity-latency",
@@ -107,6 +114,10 @@ DIAGRAM_DOCUMENT_REFERENCES = {
     "ubcc-protocol-paths": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 5-1"}],
     "ubcc-verification-stack": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 1-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 1-1"}],
     "ubcc-two-phase-commit": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 4-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 4-1"}],
+    "ubcc-protocol-authority-comparison": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 7-1"}],
+    "ubcc-path-central-vs-direct": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 7-2"}],
+    "ubcc-metadata-fanout-scaling": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 7-3"}],
+    "ubcc-inner-chi-outer-boundary": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 7-4"}],
 }
 CHART_DOCUMENT_REFERENCES = {
     "ubcc-metric1-capacity-latency": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-1"}],
@@ -132,6 +143,7 @@ class Box:
     dashed: bool = False
     rounded: bool = True
     container: bool = False
+    font_family: str = FONT
 
 
 @dataclass(frozen=True)
@@ -306,10 +318,100 @@ def two_phase_diagram():
     return Diagram("ubcc-two-phase-commit", "UBCC 两阶段目录提交", 1500, 390, tuple(boxes), tuple(edges))
 
 
+def authority_comparison_diagram():
+    boxes = (
+        Box("states", "稳定状态族\nVI / MSI / MESI / MOESI / MESIF", 45, 105, 310, 92, PALE_BLUE, BLUE, NAVY, 14, True, False, False),
+        Box("statejob", "副本可读/可写吗？\n是否脏？是否有 owner/forwarder？", 45, 255, 310, 100, "#FFFFFF", BLUE, NAVY, 13, False, False, False),
+        Box("chi", "CHI 端到端事务/承载协议", 455, 105, 310, 92, PALE_AMBER, AMBER, "#7F6000", 14, True, False, False),
+        Box("chijob", "谁发 Req/Snp/Rsp/Dat？\n如何路由、排序、重试与流控？", 455, 255, 310, 100, "#FFFFFF", AMBER, NAVY, 13, False, False, False),
+        Box("ubcc", "UBCC：本地 CHI + Outer 目录", 865, 105, 330, 92, PALE_GREEN, GREEN, "#375623", 14, True, False, False),
+        Box("ubccjob", "authority：Home UBCC\ndata：memory / owner / requester\ncommit：Home outstanding + Clear", 865, 255, 330, 118, "#FFFFFF", GREEN, NAVY, 13, False, False, False),
+        Box("rule", "状态族定义稳定权限；CHI 定义事务语言和承载；UBCC 定义跨节点权威、目录和提交边界。", 190, 445, 860, 68, PALE_GRAY, GRAY, "#404040", 13, True, False, False),
+    )
+    edges = (
+        Edge("states", "statejob", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("chi", "chijob", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("ubcc", "ubccjob", source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("statejob", "rule", color=BLUE, source_x=.5, source_y=1, target_x=.18, target_y=0, waypoints=((200, 405), (345, 405))),
+        Edge("chijob", "rule", color=AMBER, source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("ubccjob", "rule", color=GREEN, source_x=.5, source_y=1, target_x=.82, target_y=0, waypoints=((1030, 405), (895, 405))),
+    )
+    return Diagram("ubcc-protocol-authority-comparison", "状态、事务承载与全局权威的职责分离", 1240, 570, boxes, edges)
+
+
+def central_direct_diagram():
+    boxes = (
+        Box("central", "A  当前 UBCC：Home 中心转送", 35, 80, 720, 245, "#F8FBFE", BLUE, NAVY, 14, True, False, False, True),
+        Box("cr", "Requester", 75, 175, 145, 58, PALE_BLUE, BLUE, NAVY, 13, True, False, False),
+        Box("ch", "Home UBCC\nauthority + commit", 315, 155, 180, 98, PALE_GREEN, GREEN, "#375623", 13, True, False, False),
+        Box("co", "Old owner", 595, 175, 125, 58, PALE_AMBER, AMBER, "#7F6000", 13, True, False, False),
+        Box("direct", "B  候选优化：Home 授权，owner 直接送数", 785, 80, 720, 245, "#F8FBFE", TEAL, NAVY, 14, True, False, False, True),
+        Box("dr", "Requester", 825, 175, 145, 58, PALE_BLUE, BLUE, NAVY, 13, True, False, False),
+        Box("dh", "Home UBCC\nauthority + commit", 1065, 155, 180, 98, PALE_GREEN, GREEN, "#375623", 13, True, False, False),
+        Box("do", "Old owner", 1345, 175, 125, 58, PALE_AMBER, AMBER, "#7F6000", 13, True, False, False),
+        Box("cost1", "K_crossnode ≈ 4; D = 2\nReq → Home → Owner → Home → Requester", 95, 385, 570, 72, PALE_ORANGE, ORANGE, "#843C0C", 13, True, False, False, False, MATH_FONT),
+        Box("cost2", "candidate data path ≈ 3; D = 1\nT_visible = max(T_data, T_authority)", 845, 385, 570, 72, PALE_GREEN, GREEN, "#375623", 13, True, False, False, False, MATH_FONT),
+        Box("boundary", "直接送数只改变 data location/path，不转移 authority；B 为可演进候选，不是当前能力声明。", 300, 510, 940, 62, PALE_GRAY, GRAY, "#404040", 13, True, False, False),
+    )
+    edges = (
+        Edge("cr", "ch", "1 Req", BLUE, source_x=1, source_y=.35, target_x=0, target_y=.35), Edge("ch", "co", "2 Recall", AMBER, source_x=1, source_y=.28, target_x=0, target_y=.28),
+        Edge("co", "ch", "3 Data", TEAL, source_x=0, source_y=.75, target_x=1, target_y=.75), Edge("ch", "cr", "4 Data + Grant", GREEN, source_x=0, source_y=.82, target_x=1, target_y=.82),
+        Edge("dr", "dh", "1 Req", BLUE, source_x=1, source_y=.35, target_x=0, target_y=.35), Edge("dh", "do", "2 Recall + route", AMBER, source_x=1, source_y=.28, target_x=0, target_y=.28),
+        Edge("do", "dr", "3 Data", TEAL, source_x=.5, source_y=1, target_x=.5, target_y=1, waypoints=((1408, 285), (898, 285))),
+        Edge("dh", "dr", "Grant", GREEN, source_x=0, source_y=.78, target_x=1, target_y=.78),
+        Edge("ch", "cost1", source_x=.5, source_y=1, target_x=.5, target_y=0), Edge("dh", "cost2", source_x=.5, source_y=1, target_x=.5, target_y=0),
+    )
+    return Diagram("ubcc-path-central-vs-direct", "跨节点数据路径：中心转送与直接转发", 1540, 620, boxes, edges)
+
+
+def metadata_scaling_diagram():
+    boxes = (
+        Box("formula", "B_dir = N + b_owner + b_state\n+ b_epoch + b_ctrl + b_tag\nb_owner/tag may be zero by organization", 35, 90, 450, 105, PALE_BLUE, BLUE, NAVY, 13, True, False, False, False, MATH_FONT),
+        Box("fanout", "M ≈ 2S + 2; K_crossnode ≈ 4\nfanout width = S", 545, 90, 450, 95, PALE_AMBER, AMBER, "#7F6000", 14, True, False, False, False, MATH_FONT),
+        Box("h64", "当前 H64 codec：12 B / 96 bit\n44 PA + 2 MESI + 2 slot + 16 sharers\n+24 epoch + 8 integrity", 1055, 90, 450, 95, PALE_GREEN, GREEN, "#375623", 14, True, False, False),
+        Box("scale", "同一概念模型按 N 扩展", 570, 215, 400, 48, PALE_GRAY, GRAY, "#404040", 12, True, False, False),
+        Box("n2", "N=2\nbitmap: 2 bit/line\n2^20 entries: 0.25 MiB\nworst M≈4", 90, 300, 330, 112, "#FFFFFF", BLUE, NAVY, 13, True, False, False),
+        Box("n8", "N=8\nbitmap: 8 bit/line\n2^20 entries: 1 MiB\nworst M≈16", 605, 300, 330, 112, "#FFFFFF", AMBER, NAVY, 13, True, False, False),
+        Box("n16", "N=16\nbitmap: 16 bit/line\n2^20 entries: 2 MiB\nworst M≈32", 1120, 300, 330, 112, "#FFFFFF", GREEN, NAVY, 13, True, False, False),
+        Box("tbe", "瞬态/TBE：target mask N + ack mask N，至少 2N bit/事务；64 B 数据缓冲为 512 bit。", 250, 465, 1040, 70, PALE_GRAY, GRAY, "#404040", 13, True, False, False),
+    )
+    edges = (
+        Edge("formula", "scale", color=BLUE, source_x=.5, source_y=1, target_x=.15, target_y=0),
+        Edge("fanout", "scale", color=AMBER, source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("h64", "scale", color=GREEN, source_x=.5, source_y=1, target_x=.85, target_y=0),
+        Edge("scale", "n2", color=BLUE, source_x=.2, source_y=1, target_x=.5, target_y=0, waypoints=((650, 280), (255, 280))),
+        Edge("scale", "n8", color=AMBER, source_x=.5, source_y=1, target_x=.5, target_y=0),
+        Edge("scale", "n16", color=GREEN, source_x=.8, source_y=1, target_x=.5, target_y=0, waypoints=((890, 280), (1285, 280))),
+        Edge("n2", "tbe", color=BLUE, source_x=.5, source_y=1, target_x=.2, target_y=0, waypoints=((255, 425), (458, 425))), Edge("n8", "tbe", color=AMBER, source_x=.5, source_y=1, target_x=.5, target_y=0), Edge("n16", "tbe", color=GREEN, source_x=.5, source_y=1, target_x=.8, target_y=0, waypoints=((1285, 425), (1082, 425))),
+    )
+    return Diagram("ubcc-metadata-fanout-scaling", "目录元数据、失效扇出与瞬态成本随 N 扩展", 1540, 590, boxes, edges)
+
+
+def inner_outer_boundary_diagram():
+    boxes = (
+        Box("current", "当前选择", 30, 75, 720, 420, "#F8FBFE", BLUE, NAVY, 15, True, False, False, True),
+        Box("inner", "每节点本地 CHI 域\nRN-F / HN-F / SN-F", 75, 150, 250, 85, PALE_BLUE, BLUE, NAVY, 14, True, False, False),
+        Box("ep", "EP / UBAdapter\n语义与身份边界\n双向 Outer request / recall", 405, 150, 250, 95, PALE_AMBER, AMBER, "#7F6000", 13, True, False, False),
+        Box("outer", "Outer UBCC\nowner/sharer directory\nepoch + reqId + Clear commit", 240, 320, 310, 105, PALE_GREEN, GREEN, "#375623", 14, True, False, False),
+        Box("future", "假设的 Outer CHI（候选）", 790, 75, 720, 420, "#FFF9F1", AMBER, NAVY, 15, True, True, False, True),
+        Box("agents", "全局 CHI agents\nRN / HN / SN / bridges", 835, 150, 250, 85, PALE_BLUE, BLUE, NAVY, 14, True, False, False),
+        Box("fabric", "CHI fabric\nReq/Rsp/Snp/Dat + credits", 1165, 150, 250, 85, PALE_AMBER, AMBER, "#7F6000", 14, True, False, False),
+        Box("cost", "新增全局 ID、通道排序、credit、\n重试代理、bridge 与验证组合", 1000, 320, 310, 105, PALE_ORANGE, ORANGE, "#843C0C", 13, True, False, False),
+        Box("decision", "Outer CHI 适合已有全局 CHI fabric/IP 和标准 agent 互操作；当前 UBCC 优先选择更窄的目录/消息边界。", 235, 540, 1070, 66, PALE_GRAY, GRAY, "#404040", 13, True, False, False),
+    )
+    edges = (
+        Edge("inner", "ep", "local CHI", BLUE, source_x=1, source_y=.5, target_x=0, target_y=.5),
+        Edge("ep", "outer", color=GREEN, source_x=.68, source_y=1, target_x=.72, target_y=0),
+        Edge("outer", "ep", color=AMBER, source_x=.28, source_y=0, target_x=.32, target_y=1),
+        Edge("agents", "fabric", "CHI channels", BLUE, bidirectional=True, source_x=1, source_y=.5, target_x=0, target_y=.5), Edge("fabric", "cost", source_x=.5, source_y=1, target_x=.75, target_y=0), Edge("agents", "cost", source_x=.5, source_y=1, target_x=.25, target_y=0),
+    )
+    return Diagram("ubcc-inner-chi-outer-boundary", "本地 CHI 与假设 Outer CHI 的边界及成本", 1540, 650, boxes, edges)
+
+
 def style_string(box):
     return (f"rounded={1 if box.rounded else 0};whiteSpace=wrap;html=1;fillColor={box.fill};"
             f"strokeColor={box.stroke};fontColor={box.font};fontSize={box.size};"
-            f"fontStyle={1 if box.bold else 0};fontFamily={FONT};spacing=6;"
+            f"fontStyle={1 if box.bold else 0};fontFamily={box.font_family};spacing=6;"
             f"dashed={1 if box.dashed else 0};dashPattern=6 4;"
             f"verticalAlign={'top' if box.container else 'middle'};align={'left' if box.container else 'center'};"
             f"spacingTop={10 if box.container else 6};spacingLeft={12 if box.container else 6};")
@@ -363,6 +465,8 @@ def configure_plot():
     for extension in ("ttf", "ttc", "otf"):
         candidates.extend(Path("/usr/share/fonts").glob(f"**/*YaHei*.{extension}"))
         candidates.extend(Path("/usr/local/share/fonts").glob(f"**/*YaHei*.{extension}"))
+    if MATH_FONT_PATH.is_file():
+        candidates.append(MATH_FONT_PATH)
     for path in candidates:
         try:
             font_manager.fontManager.addfont(str(path))
@@ -388,7 +492,8 @@ def render_fallback(diagram):
         ax.add_patch(patch)
         ax.text(box.x + (12 if box.container else box.w / 2), box.y + (18 if box.container else box.h / 2), box.label,
                 ha="left" if box.container else "center", va="top" if box.container else "center", fontsize=box.size,
-                fontweight="bold" if box.bold else "normal", color=box.font, linespacing=1.25)
+                fontweight="bold" if box.bold else "normal", color=box.font,
+                fontfamily=box.font_family, linespacing=1.25)
     for edge in diagram.edges:
         a, z = by_id[edge.source], by_id[edge.target]
         sx, sy, tx, ty = a.x + a.w / 2, a.y + a.h / 2, z.x + z.w / 2, z.y + z.h / 2
@@ -424,6 +529,8 @@ def export_drawio(diagram):
     source = OUT / f"{diagram.stem}.drawio"
     env = dict(os.environ)
     env.setdefault("ELECTRON_DISABLE_GPU", "1")
+    if FONTCONFIG_FILE.is_file():
+        env["FONTCONFIG_FILE"] = str(FONTCONFIG_FILE)
     try:
         for fmt in ("svg", "png"):
             target = OUT / f"{diagram.stem}.{fmt}"
@@ -667,7 +774,9 @@ def main():
         print(f"updated metadata for {len(diagrams) + len(charts)} figures in {OUT}")
         return
     remove_obsolete()
-    diagrams = (architecture_diagram(), gem5_diagram(), protocol_diagram(), verification_diagram(), two_phase_diagram())
+    diagrams = (architecture_diagram(), gem5_diagram(), protocol_diagram(), verification_diagram(), two_phase_diagram(),
+                authority_comparison_diagram(), central_direct_diagram(), metadata_scaling_diagram(),
+                inner_outer_boundary_diagram())
     export_rows = []
     for diagram in diagrams:
         write_drawio(diagram)

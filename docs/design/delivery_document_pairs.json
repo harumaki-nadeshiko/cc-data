@@ -2,21 +2,21 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "0a916a97d9387b518537b2f67a6ef1c25d391b9a91f25471b367ffc5529d657c",
-      "embedded_source_sha256": "f2d89b2024def800c48c97c8073268180931d4ff74eb195e362215c23c8843c9",
+      "docx_sha256": "4cc460f20b674e2aaf24531732ba157123ec703f31b9a19649e53d48ca1fe0d2",
+      "embedded_source_sha256": "500951c7640f0655cecb831ee76da61b34ebb5cda6aab1296f368a67d38ce229",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
-      "markdown_sha256": "f2d89b2024def800c48c97c8073268180931d4ff74eb195e362215c23c8843c9"
+      "markdown_sha256": "500951c7640f0655cecb831ee76da61b34ebb5cda6aab1296f368a67d38ce229"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "2490fea28367458250ae13fb71b4ba62f7841f5079f7539f76b97b42291f79ad",
+      "docx_sha256": "f8e101837d69ae6c4b9a42400d410e4c38757132ed70b17bb70c376fc01f5389",
       "embedded_source_sha256": "5e5a1dcbab8d4158f9ffa5cc50f3fc63f8d02ec0d1c30eab4e0cb646c5afb77c",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
       "markdown_sha256": "5e5a1dcbab8d4158f9ffa5cc50f3fc63f8d02ec0d1c30eab4e0cb646c5afb77c"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "51d4bbb41d1fcf725ae3f2d50ae6df42f195fa3acb77e058582b9c2e002bb67c",
+      "docx_sha256": "4ed5250bf45ca5201e85fe68d87a0fcf32b802ac19c8fb7b7146fca36b6881c2",
       "embedded_source_sha256": "a2e6ff5d242774478420483ac9c088ffd0dd1af378c9985a1a5036321f551c9c",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
       "markdown_sha256": "a2e6ff5d242774478420483ac9c088ffd0dd1af378c9985a1a5036321f551c9c"

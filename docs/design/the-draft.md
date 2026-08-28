@@ -31,7 +31,7 @@
 | ResidentDir | UBCC 的 SRAM 驻留目录 |
 | Backstore | ResidentDir 冷元数据的后备存储 |
 | HA-VI | 指标 3 使用的 VI 协议可执行参考模型 |
-| Inner 域 | 节点内标准 CHI 一致性域 |
+| Inner 域 | 节点内 gem5 CHI 一致性域 |
 | Outer 域 | 由 UBCC 管理的跨节点一致性域 |
 | 单向完成语义 | 根操作不以同步 ClearResp 作为完成条件的冻结语义 |
 | 核心场景组 | TC228-TC230 等权聚合 |
@@ -441,3 +441,20 @@ Visual Round 5 重点关闭剩余硬伤：合并稀疏术语尾页、阻止英�
   范围，不继续扩大图形改动；
 - 封面、目录和空白术语定义保持用户要求；
 - 本轮后以 PDF 文本敏感词跨行检查、自动布局 QA 和字体嵌入结果作为收口门槛。
+
+## 17. 跨节点协议选择分析扩展
+
+本轮仅扩展交付件 1 的第 7 节及其图形资产，不修改交付件 2/3 或 DOCX 生成器。正式叙事固定
+分开三类概念：VI/MSI/MESI/MOESI/MESIF 是稳定状态族；CHI 是端到端事务、agent 与承载
+协议；当前 UBCC 是本地 CHI 加 Outer 全局 owner/sharer 目录及 Home 提交权威。
+
+新增四张 Draw.io 图：职责/权威比较、中心转送与直接数据候选、元数据/扇出随 N 扩展、
+本地 CHI 与假设 Outer CHI 边界。图形使用方角框和显式 connector anchor。正式文档明确：
+
+1. 当前 H64 codec 的 12-byte/96-bit 编码覆盖 16-bit sharer mask；旧 CompactCodec 同为 12 B，
+   但只有 10-bit sharer 和 84 bit 有效字段，正式正文必须区分两者；
+2. MOESI Owned、MESIF Forward、owner→requester 直接数据路径和 Outer CHI 均为候选或未来
+   方向，不是已实现能力；
+3. Outer 不直接使用 CHI 是当前资源隔离、容量、重试身份和验证复杂度的架构选择，不构成
+   “CHI 不适合跨节点”的一般性判断；已有全局 CHI fabric、第三方 agent 互操作或标准硬件
+   flow-control 需求时，Outer CHI 可重新成为合理候选。

@@ -65,6 +65,42 @@
           "figure": "图 4-1"
         }
       ]
+    },
+    {
+      "name": "ubcc-protocol-authority-comparison",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 7-1"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-path-central-vs-direct",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 7-2"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-metadata-fanout-scaling",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 7-3"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-inner-chi-outer-boundary",
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_protocol_overview.md",
+          "figure": "图 7-4"
+        }
+      ]
     }
   ],
   "charts": [
@@ -450,6 +486,26 @@
     },
     {
       "name": "ubcc-two-phase-commit",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-protocol-authority-comparison",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-path-central-vs-direct",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-metadata-fanout-scaling",
+      "renderer": "draw.io CLI",
+      "drawio_cli_blocker": ""
+    },
+    {
+      "name": "ubcc-inner-chi-outer-boundary",
       "renderer": "draw.io CLI",
       "drawio_cli_blocker": ""
     }

@@ -14,6 +14,8 @@ FIGURES = ROOT / "docs/design/figures"
 REPORT = FIGURES / "visual_qa.json"
 INVENTORY = FIGURES / "figure_inventory.json"
 FONT = "Microsoft YaHei"
+MATH_FONT = "STIX Two Math"
+MATH_FIGURES = {"ubcc-path-central-vs-direct", "ubcc-metadata-fanout-scaling"}
 MAX_PAGE_HEIGHT = 750
 MIN_FONT = 11
 OBSOLETE = "ubcc-metric-summary"
@@ -39,12 +41,19 @@ def inspect_drawio(path, stem):
     cells = root.findall(".//mxCell")
     labels = [cell.get("value", "") for cell in cells if cell.get("value")]
     fonts, sizes = [], []
+    rounded_vertices = []
+    edge_anchor_checks = []
     for cell in cells:
         style = cell.get("style", "")
         family = style_value(style, "fontFamily")
         size = style_value(style, "fontSize")
         if family: fonts.append(family)
         if size: sizes.append(float(size))
+        if cell.get("vertex") == "1" and cell.get("id") not in {"title", "note"}:
+            rounded_vertices.append(style_value(style, "rounded") == "1")
+        if cell.get("edge") == "1":
+            edge_anchor_checks.append(all(style_value(style, key) is not None
+                                          for key in ("exitX", "exitY", "entryX", "entryY")))
     page_w, page_h = int(graph.get("pageWidth")), int(graph.get("pageHeight"))
     vertex_networksim = any("NetworkSim" in cell.get("value", "") and "not a project component" not in cell.get("value", "")
                             for cell in cells if cell.get("vertex") == "1")
@@ -52,9 +61,16 @@ def inspect_drawio(path, stem):
         "editable_content": len(labels) >= 5,
         "wide_aspect_ratio": page_w / page_h >= (2.0 if stem in {"ubcc-verification-stack", "ubcc-two-phase-commit"} else 1.9),
         "max_expected_page_height": page_h <= MAX_PAGE_HEIGHT,
-        "approved_drawio_font": bool(fonts) and set(fonts) == {FONT},
+        "approved_drawio_font": (bool(fonts) and set(fonts) <= {FONT, MATH_FONT} and
+                                  (MATH_FONT in fonts if stem in MATH_FIGURES else True)),
         "minimum_font_size": bool(sizes) and min(sizes) >= MIN_FONT,
         "no_core_networksim_component": not vertex_networksim,
+        "square_or_minimal_radius_boxes": not any(rounded_vertices) if stem.startswith("ubcc-") and stem in {
+            "ubcc-protocol-authority-comparison", "ubcc-path-central-vs-direct",
+            "ubcc-metadata-fanout-scaling", "ubcc-inner-chi-outer-boundary"} else True,
+        "reviewed_connector_anchors": (bool(edge_anchor_checks) and all(edge_anchor_checks)) if stem in {
+            "ubcc-protocol-authority-comparison", "ubcc-path-central-vs-direct",
+            "ubcc-metadata-fanout-scaling", "ubcc-inner-chi-outer-boundary"} else True,
     }
     return {"page_width": page_w, "page_height": page_h, "label_count": len(labels),
             "minimum_font_size": min(sizes) if sizes else None, "checks": checks}
