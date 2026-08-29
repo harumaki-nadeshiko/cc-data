@@ -3127,6 +3127,25 @@ def build_metric_details(resolved, report=None):
             "outer_delta_cycles": (delta_ns * 2.0
                                      if complete_contract and delta_ns is not None else None),
             "sample_counts": {role: len(rows) for role, rows in groups.items()},
+            "role_details": {
+                role: [{"run_id": run["id"], "profile": run["profile"],
+                        "metric1_role": run.get("metric1_role"),
+                        "role_source": run.get("role_source"),
+                        "capacity_policy": run["metrics"]["capacity"].get("policy"),
+                        "effective_unique_lines": run["metrics"]["capacity"].get("effective_unique"),
+                        "resident_capacity": run["metrics"]["capacity"].get("resident_capacity"),
+                        "h64_exact_live_known": run["metrics"]["capacity"].get("h64_exact_live_known"),
+                        "h64_exact_live": run["metrics"]["capacity"].get("h64_exact_live"),
+                        "oversized": run["metrics"]["capacity"].get(
+                            "experimental_oversized_resident_dir"),
+                        "backstore_found_fills": run["metrics"]["capacity"].get(
+                            "backstore_found_fills"),
+                        "outer_samples": run["metrics"]["outer_latency"].get("samples"),
+                        "outer_mean_ns": run["metrics"]["outer_latency"].get("mean_ns"),
+                        "qualified_contracts": run.get("qualified_contracts", []),
+                        "contract_warnings": run.get("contract_warnings", [])}
+                       for run in role_runs[role]]
+                for role in ("naive", "spill", "ideal")},
             "reason": "; ".join(reasons),
         })
 
@@ -3205,6 +3224,16 @@ def render_detail_markdown(details):
             f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
             f"{brief_number(row['capacity_ratio'])} | {brief_number(row['outer_delta_cycles'])} | "
             f"{counts['naive']}/{counts['spill']}/{counts['ideal']} | {row['reason'] or '-'} |")
+        for role in ("naive", "spill", "ideal"):
+            for item in row["role_details"][role]:
+                lines.append(
+                    f"| ↳ {role} | {item['run_id']} | profile={item['profile']} | - | "
+                    f"capacity={brief_number(item['effective_unique_lines'])} lines | "
+                    f"Outer={brief_number(item['outer_mean_ns'])} ns | "
+                    f"policy={item['capacity_policy']}, oversized={item['oversized']}, "
+                    f"exact={item['h64_exact_live_known']}/{item['h64_exact_live']}, "
+                    f"samples={item['outer_samples']} | "
+                    f"qualified={item['qualified_contracts']} |")
     if not details["metric1"]:
         lines.append("| - | - | - | - | N/A | N/A | - | no Metric1 runs |")
     lines += ["", "## Metric2", "",

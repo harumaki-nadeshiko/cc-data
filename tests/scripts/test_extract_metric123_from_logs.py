@@ -372,6 +372,29 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(any(x["code"] == "METRIC1_ROLE_AUTO_DETECTED"
                             for x in result["issues"]))
 
+    def test_metric1_detail_exposes_role_profile_and_outer_inputs(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"min_samples": 1, "ideal_min_capacity": 1000}},
+            base_dir=self.root)
+        for run in (
+                self.make_formal_m1("detail-naive", "naive", 100, None),
+                self.make_formal_m1("detail-spill", "spill", 100, 160, (72000,)),
+                self.make_formal_m1("detail-ideal", "ideal", 1000, 0, (69000,))):
+            matrix.add(run)
+        output = self.root / "metric1-role-detail"
+        matrix.finalize(output)
+        detail = json.loads((output / "metric_detail_by_tc_topology.json").read_text())
+        row = detail["metric1"][0]
+        spill = row["role_details"]["spill"][0]
+        ideal = row["role_details"]["ideal"][0]
+        self.assertEqual(spill["profile"], "spill-noopt")
+        self.assertEqual(spill["metric1_role"], "spill")
+        self.assertEqual(ideal["profile"], "spill-noopt")
+        self.assertEqual(ideal["metric1_role"], "ideal")
+        self.assertEqual(spill["outer_mean_ns"], 72)
+        self.assertEqual(ideal["outer_mean_ns"], 69)
+        self.assertEqual(row["outer_delta_cycles"], 6)
+
     def test_metric1_legacy_ideal_profile_normalizes_to_standard_role(self):
         matrix = MOD.Metric123RawLogMatrix(
             {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}},

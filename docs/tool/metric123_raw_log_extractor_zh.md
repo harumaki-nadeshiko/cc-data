@@ -208,12 +208,25 @@ status = matrix.add(
 )
 assert status["status"] in ("ADDED", "REJECTED")
 
-# Metric1 每轮三个角色；spill 与 ideal 虽同为 spill-noopt，role 使二者 slot 可共存。
-status = matrix.add(
-    id="tc131-ideal-a", metric=1, tc=131,
-    topology="8n1s", profile="spill-noopt", metric1_role="ideal",
-    simulator_log_dir="tc131/r1/ideal/simulator",
-    simout_dir="tc131/r1/ideal/simout",
+# Metric1 三角色。spill 与 ideal 的 profile 都是 spill-noopt，
+# 必须通过 metric1_role 区分实验职责。
+matrix.add(
+    id="tc131-naive-a", metric=1, tc=131, topology="8n1s",
+    profile="naive", metric1_role="naive",
+    simulator_log_dir="tc131/naive/simulator",
+    simout_dir="tc131/naive/simout",
+)
+matrix.add(
+    id="tc131-spill-a", metric=1, tc=131, topology="8n1s",
+    profile="spill-noopt", metric1_role="spill",
+    simulator_log_dir="tc131/spill/simulator",
+    simout_dir="tc131/spill/simout",
+)
+matrix.add(
+    id="tc131-ideal-a", metric=1, tc=131, topology="8n1s",
+    profile="spill-noopt", metric1_role="ideal",
+    simulator_log_dir="tc131/ideal/simulator",
+    simout_dir="tc131/ideal/simout",
 )
 
 # Metric3 independent run：无需预分配 repetition；省略时使用最终 run ID
