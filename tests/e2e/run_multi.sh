@@ -64,6 +64,7 @@ EP_SUPERVISOR_INTERVAL="${EP_SUPERVISOR_INTERVAL:-30}"
 EP_SUPERVISOR_LOG_CEIL_GB="${EP_SUPERVISOR_LOG_CEIL_GB:-20}"
 EP_SUPERVISOR_DISK_FREE_GB="${EP_SUPERVISOR_DISK_FREE_GB:-50}"
 EP_SUPERVISOR_PROGRESS_STALL_SEC="${EP_SUPERVISOR_PROGRESS_STALL_SEC:-600}"
+EP_SUPERVISOR_STARTUP_STALL_SEC="${EP_SUPERVISOR_STARTUP_STALL_SEC:-120}"
 
 # C5: PDES sync interval (ps).  Lower values improve time-resolution but
 # increase IPC overhead.  Target: 2.5ns (2500 ps) per solve_latency_params.py --x-ns 2.5.
@@ -740,6 +741,7 @@ _supervisor_start() {
         echo "DISK_FREE_GB=$EP_SUPERVISOR_DISK_FREE_GB"
         echo "INTERVAL=$EP_SUPERVISOR_INTERVAL"
         echo "PROGRESS_STALL_SEC=$EP_SUPERVISOR_PROGRESS_STALL_SEC"
+        echo "STARTUP_STALL_SEC=$EP_SUPERVISOR_STARTUP_STALL_SEC"
         echo "TRACE_PERF=$EP_TRACE_PERF first_n=$EP_TRACE_PERF_FIRST_N every=$EP_TRACE_PERF_EVERY max=$EP_TRACE_PERF_MAX"
         echo "PORT_HWM=$EP_PORT_HWM NSIM_MAX_PENDING=$EP_NSIM_MAX_PENDING"
     } > "$manifest"
@@ -754,7 +756,10 @@ _supervisor_start() {
         local guest_stall_count=0
         local protocol_stall_count=0
         local stall_limit=$((EP_SUPERVISOR_PROGRESS_STALL_SEC / interval))
+        local startup_limit=$((EP_SUPERVISOR_STARTUP_STALL_SEC / interval))
         [ "$stall_limit" -gt 0 ] 2>/dev/null || stall_limit=1
+        [ "$startup_limit" -gt 0 ] 2>/dev/null || startup_limit=1
+        local ever_progressed=0
 
         while true; do
             sleep "$interval"
@@ -806,6 +811,9 @@ _supervisor_start() {
             done
             local current_protocol_tick
             current_protocol_tick=$(_aggregate_protocol_tick)
+            if [ "$current_guest_progress" -gt 0 ] || [ "$current_protocol_tick" -gt 0 ]; then
+                ever_progressed=1
+            fi
             if [ "$current_guest_progress" -ne "$prev_guest_progress" ] || \
                [ "$current_protocol_tick" -gt "$prev_protocol_tick" ]; then
                 prev_guest_progress="$current_guest_progress"
@@ -813,6 +821,16 @@ _supervisor_start() {
                 guest_stall_count=0
             else
                 guest_stall_count=$((guest_stall_count + 1))
+                if [ "$ever_progressed" -eq 0 ] && \
+                   [ "$guest_stall_count" -ge "$startup_limit" ]; then
+                    local ts; ts=$(date +%s)
+                    echo "FAULT ${ts} startup_stall: guest_bytes=0 protocol_tick=0 for $((guest_stall_count * interval))s" >> "$status_file"
+                    echo "[supervisor] FAULT: no startup progress for $((guest_stall_count * interval))s"
+                    for pid in $gem5_pids $ubio_pids $nsim_pid; do
+                        kill -9 "$pid" 2>/dev/null || true
+                    done
+                    exit 1
+                fi
                 if [ "$guest_stall_count" -ge "$stall_limit" ]; then
                     local ts; ts=$(date +%s)
                     echo "FAULT ${ts} progress_stall: guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} for $((guest_stall_count * interval))s" >> "$status_file"
@@ -1012,7 +1030,7 @@ run_tc() {
         done
     done
     local n_ubio; n_ubio=$(echo $UBIO_PIDS | wc -w)
-    echo "[launch] waiting for $n_ubio ubio receive ports..."
+    echo "[launch] waiting for $n_ubio ubio run loops..."
     local ubio_index=0 ubio_pid ubio_nid ubio_sid ubio_exit
     for ubio_pid in $UBIO_PIDS; do
         ubio_nid=$((ubio_index / NUM_SOCKETS))
@@ -1020,7 +1038,7 @@ run_tc() {
         local ubio_log="$LOG_BASE/ubio_tc${tc}_n${ubio_nid}_s${ubio_sid}/stdout.log"
         local ubio_ready=0
         for _ in $(seq 1 300); do
-            if grep -q '\[UBIO-IPC\]' "$ubio_log" 2>/dev/null; then
+            if grep -q '\[UBIO-RUNLOOP-READY\]' "$ubio_log" 2>/dev/null; then
                 ubio_ready=1
                 break
             fi

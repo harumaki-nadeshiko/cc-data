@@ -132,6 +132,7 @@ struct Port {
     std::uint64_t linkLatency = 2500;
     std::uint64_t lastSyncTimestamp = 0;
     bool hasEmittedSync = false;
+    std::uint32_t stalledSyncPolls = 0;
     std::uint64_t lastReceiveTimestamp = 0;
     bool open = false;
     bool pending = false;
@@ -388,6 +389,7 @@ const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
             incoming.targetIdSet = true;
         }
         port->lastReceiveTimestamp = incoming.header.timestamp;
+        port->stalledSyncPolls = 0;
         if (incoming.header.timestamp > currentTimestamp) {
             port->pending = true;
             port->pendingTimestamp = incoming.header.timestamp;
@@ -418,8 +420,16 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
         LogAssertIf(currentTimestamp >= port->lastSyncTimestamp, "framework",
                     "sync timestamp {} precedes last sync timestamp {}",
                     currentTimestamp, port->lastSyncTimestamp);
-        if (currentTimestamp - port->lastSyncTimestamp < port->syncInterval)
-            return true;
+        if (currentTimestamp - port->lastSyncTimestamp < port->syncInterval) {
+            if (port->lastReceiveTimestamp > currentTimestamp)
+                return true;
+            // A tick-zero heartbeat can be locally queued before the peer is
+            // fully connected. Periodically retransmit while the peer has not
+            // advertised a future timestamp, otherwise both conservative-PDES
+            // endpoints can remain at the same tick forever.
+            if (++port->stalledSyncPolls % 1024 != 0)
+                return true;
+        }
     }
     Message sync;
     sync.header.timestamp = currentTimestamp + port->linkLatency;

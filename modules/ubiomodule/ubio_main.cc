@@ -4349,6 +4349,9 @@ main(int argc, char **argv)
         }
     };
 
+    LogInfo("UBIO", "[UBIO-RUNLOOP-READY] node={} socket={} tick={} "
+            "gem5_port=1 network_port={} h64={}", nid, sid, tick,
+            netPort ? 1 : 0, host && host->_h64Host ? 1 : 0);
     uint64_t loop_count = 0;
     while (!(gem5Done && (netPort == nullptr || netDone))) {
         loop_count++;
