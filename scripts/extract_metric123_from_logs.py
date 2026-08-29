@@ -2224,6 +2224,8 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         "metric2": report["metric2"],
         "metric3": report["metric3"],
     })
+    if not qualification_sets:
+        report["views"]["formal"] = copy.deepcopy(report["views"]["standard"])
     required_ids = list(require_qualifications or [])
     if required_ids:
         by_id = {item["id"]: item for item in qualifications}
@@ -3120,12 +3122,27 @@ def build_metric_details(resolved, report=None):
             reasons.append("naive/spill/ideal do not share one formal contract")
         elif not complete_contract:
             reasons.append("formal coordinate is incomplete")
+        display_complete = complete_contract
+        descriptive_ratio = safe_divide(
+            safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                      for run in role_runs["spill"]),
+            safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                      for run in role_runs["naive"]))
+        descriptive_spill_outer = pooled_outer_latency(role_runs["spill"])
+        descriptive_ideal_outer = pooled_outer_latency(role_runs["ideal"])
+        descriptive_delta = safe_subtract(
+            descriptive_spill_outer["mean_ns"], descriptive_ideal_outer["mean_ns"])
         details["metric1"].append({
             "scope": scope, "contract": contract, "topology": topology,
-            "tc": tc, "capacity_ratio": (safe_divide(spill, naive)
-                                           if complete_contract else None),
-            "outer_delta_cycles": (delta_ns * 2.0
-                                     if complete_contract and delta_ns is not None else None),
+            "tc": tc,
+            "coordinate_status": ("FORMAL_COMPLETE" if display_complete else
+                                  "DESCRIPTIVE_PARTIAL"),
+            "capacity_ratio": (safe_divide(spill, naive) if display_complete else
+                               descriptive_ratio),
+            "outer_delta_cycles": ((delta_ns * 2.0 if delta_ns is not None else None)
+                                     if display_complete else
+                                     (descriptive_delta * 2.0
+                                      if descriptive_delta is not None else None)),
             "sample_counts": {role: len(rows) for role, rows in groups.items()},
             "role_details": {
                 role: [{"run_id": run["id"], "profile": run["profile"],

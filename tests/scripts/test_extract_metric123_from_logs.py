@@ -279,6 +279,8 @@ class ExtractMetric123Test(unittest.TestCase):
                          row["spill_outer_mean_ns"] - row["ideal_outer_mean_ns"])
         self.assertEqual(sum(x["code"] == "METRIC1_GUEST_TIMER_MISSING"
                              for x in result["issues"]), 3)
+        self.assertEqual(result["report"]["views"]["formal"],
+                         result["report"]["views"]["standard"])
 
     def test_metric1_pools_samples_without_repetition(self):
         matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
@@ -538,6 +540,10 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual({row["unit"] for row in result["matrices"]["all"]},
                          {"lines", "ns"})
         self.assertEqual(result["resolved_runs"][0]["contract_class"], "extension")
+        details = MOD.build_metric_details(result["resolved_runs"], result["report"])
+        self.assertEqual(details["metric1"][0]["scope"], "Extension descriptive")
+        self.assertEqual(details["metric1"][0]["coordinate_status"],
+                         "DESCRIPTIVE_PARTIAL")
 
     def test_standard_formal_result_unchanged_when_extension_is_added(self):
         requirements = {"metric1": {"repetitions": []},

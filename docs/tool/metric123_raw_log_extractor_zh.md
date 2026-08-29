@@ -243,6 +243,28 @@ result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
+TC142-TC147 portable Metric1 qualification 可直接加载仓库固定配置，不需要 planner 日志目录：
+
+```python
+import json
+
+requirements = json.loads(open(
+    "configs/metric1_portable_qualification_sets.json",
+    encoding="utf-8",
+).read())
+
+matrix = Metric123RawLogMatrix(
+    requirements=requirements,
+    correctness_policy="strict",
+    base_dir="/archive/runs",
+)
+```
+
+没有配置 qualification 时，`views.formal`与`views.standard`完全相同。只测 TC131 时二者必须逐字段一致；
+若不一致，说明使用了旧版本报告。配置 qualification 后，Formal 表示 Standard 加额外资格坐标，不能把不同
+TC/topology 的 run-level descriptive mean 与 Standard TC131 直接比较，应查看`report.qualifications`及
+`report_detail_by_tc_topology_zh.md`。
+
 大型 Matrix 可显式启用多进程 CPU 并行：
 
 ```python

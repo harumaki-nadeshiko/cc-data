@@ -1,0 +1,98 @@
+{
+  "metric1": {
+    "repetitions": []
+  },
+  "metric2": {
+    "repetitions": [],
+    "testcases": []
+  },
+  "metric3": {
+    "testcases": []
+  },
+  "qualification_sets": [
+    {
+      "id": "m1-portable-2n1s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "2n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "2n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "2n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "2n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "2n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "2n1s", "home_node": 0, "home_socket": 0}
+      ]
+    },
+    {
+      "id": "m1-portable-3n1s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "3n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "3n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "3n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "3n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "3n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "3n1s", "home_node": 0, "home_socket": 0}
+      ]
+    },
+    {
+      "id": "m1-portable-3n2s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "3n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "3n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "3n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "3n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "3n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "3n2s", "home_node": 0, "home_socket": 0}
+      ]
+    },
+    {
+      "id": "m1-portable-8n1s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "8n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "8n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "8n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "8n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "8n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "8n1s", "home_node": 0, "home_socket": 0}
+      ]
+    },
+    {
+      "id": "m1-portable-8n2s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "8n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "8n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "8n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "8n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "8n2s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "8n2s", "home_node": 0, "home_socket": 0}
+      ]
+    },
+    {
+      "id": "m1-portable-16n1s",
+      "metric": 1,
+      "min_samples": 1,
+      "ideal_min_capacity": 102656,
+      "coordinates": [
+        {"tc": 142, "topology": "16n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 143, "topology": "16n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 144, "topology": "16n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 145, "topology": "16n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 146, "topology": "16n1s", "home_node": 0, "home_socket": 0},
+        {"tc": 147, "topology": "16n1s", "home_node": 0, "home_socket": 0}
+      ]
+    }
+  ]
+}
