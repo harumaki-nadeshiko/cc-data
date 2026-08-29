@@ -51,6 +51,8 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
   naive 只提供容量分母，绝不参与 Metric1 Outer delta。任何`spill-naive`、`optimized-naive`或 guest timer
   delta 都是旧描述口径，不得作为统一 Metric1 指标。
+  Standard/Formal/All 的 Metric1 主矩阵统一只显示`effective_unique(lines)`、completed Outer mean(ns)、
+  capacity ratio 和`spill-ideal`Outer delta；旧 guest timer 即使存在也不会作为 Metric1 主值进入 matrix。
   `cycles = ns * 2GHz`。所有有效样本先按 role 池化：容量对每个 role 的 run 值等权求均值后作
   spill/naive 比值；Outer 合并 spill/ideal 的全部 completed Outer source sample 后求均值差。
   pooled ratio>=1.5 且 delta cycles<50 才 PASS。

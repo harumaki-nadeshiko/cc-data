@@ -1795,11 +1795,28 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         per_run.append({"run_id": run["id"], "metric": run["metric"], "tc": run["tc"],
                         "repetition": run["repetition"], "profile": run.get("profile", ""),
                         "arm": run.get("arm", ""), "pair": run.get("pair", ""), "order": run.get("order", ""),
-                        "value": value if value is not None else "MULTI", "unit": "ns/op" if value is not None else "multiple",
+                        "value": ("MULTI" if run["metric"] == 1 else
+                                  value if value is not None else "MULTI"),
+                        "unit": ("capacity-lines+outer-ns" if run["metric"] == 1 else
+                                 "ns/op" if value is not None else "multiple"),
                         "status": run["status"]})
-        matrix.append({"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
-                       "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op" if value is not None else "multiple",
-                       "status": run["status"], "detail": run.get("profile", run.get("arm", ""))})
+        if run["metric"] == 1:
+            matrix.extend([
+                {"metric": "Metric1", "level": "run-capacity", "identity": run["id"],
+                 "tc": f"TC{run['tc']}",
+                 "value": finite_number(run["metrics"]["capacity"].get("effective_unique")),
+                 "unit": "lines", "status": run["status"],
+                 "detail": f"role={run.get('metric1_role', '')}; profile={run.get('profile', '')}"},
+                {"metric": "Metric1", "level": "run-outer", "identity": run["id"],
+                 "tc": f"TC{run['tc']}",
+                 "value": finite_number(run["metrics"]["outer_latency"].get("mean_ns")),
+                 "unit": "ns", "status": run["status"],
+                 "detail": f"role={run.get('metric1_role', '')}; profile={run.get('profile', '')}"},
+            ])
+        else:
+            matrix.append({"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
+                           "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op" if value is not None else "multiple",
+                           "status": run["status"], "detail": run.get("profile", run.get("arm", ""))})
 
     # Metric 1 pools independent samples by role; repetition is audit-only.
     m1 = [r for r in resolved if r["metric"] == 1]
@@ -1844,6 +1861,13 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                            "value": ratio, "unit": "capacity-ratio",
                            "status": "PASS" if row["pass"] else "FAIL",
                            "detail": f"outer_delta_ns={delta_ns:.9g}; roles=naive/spill/ideal"})
+            matrix.append({"metric": "Metric1", "level": "pooled-outer-delta",
+                           "identity": "spill - ideal", "tc": "TC131",
+                           "value": delta_ns, "unit": "ns",
+                           "status": "PASS" if latency_pass else "FAIL",
+                           "detail": (f"spill_outer_mean_ns={spill_outer['mean_ns']:.9g}; "
+                                      f"ideal_outer_mean_ns={ideal_outer['mean_ns']:.9g}; "
+                                      f"cycles_2ghz={delta_ns * 2.0:.9g}")})
     ratios = [row["capacity_ratio"] for row in m1_comp]
     deltas = [row["outer_delta_ns"] for row in m1_comp]
     def distribution(values):

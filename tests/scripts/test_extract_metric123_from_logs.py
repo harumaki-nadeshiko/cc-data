@@ -397,6 +397,34 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(ideal["outer_mean_ns"], 69)
         self.assertEqual(row["outer_delta_cycles"], 6)
 
+    def test_metric1_views_never_mix_guest_timer_with_outer_delta(self):
+        matrix = MOD.Metric123RawLogMatrix(
+            {"metric1": {"min_samples": 1, "ideal_min_capacity": 1000}},
+            base_dir=self.root)
+        naive = self.make_formal_m1("mixed-naive", "naive", 100, None)
+        spill = self.make_formal_m1("mixed-spill", "spill", 100, 160, (169000,))
+        ideal = self.make_formal_m1("mixed-ideal", "ideal", 1000, 0, (277000,))
+        for run, guest_ticks in ((naive, 8890), (spill, 720), (ideal, 690)):
+            out = pathlib.Path(run["simout_dir"])
+            for path in out.iterdir():
+                path.write_text(path.read_text().replace("counter_ticks=1000",
+                                                         f"counter_ticks={guest_ticks}"))
+            matrix.add(run)
+        result = matrix.finalize()
+        self.assertEqual(result["report"]["views"]["formal"],
+                         result["report"]["views"]["standard"])
+        standard_rows = result["report"]["views"]["standard"]["matrix"]
+        outer_values = {row["value"] for row in standard_rows
+                        if row["level"] == "run-outer"}
+        self.assertEqual(outer_values, {169, 277, None})
+        self.assertFalse(any(row["unit"] == "ns/op" and row["metric"] == "Metric1"
+                             for row in standard_rows))
+        comparison = result["report"]["metric1"]["comparisons"][0]
+        self.assertEqual(comparison["spill_outer_mean_ns"], 169)
+        self.assertEqual(comparison["ideal_outer_mean_ns"], 277)
+        self.assertEqual(comparison["outer_delta_ns"], -108)
+        self.assertEqual(comparison["outer_delta_cycles"], -216)
+
     def test_metric1_legacy_ideal_profile_normalizes_to_standard_role(self):
         matrix = MOD.Metric123RawLogMatrix(
             {"metric1": {"repetitions": ["r1"], "ideal_min_capacity": 1000}},
