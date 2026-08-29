@@ -508,8 +508,10 @@ class ExtractMetric123Test(unittest.TestCase):
         result = matrix.finalize()
         self.assertEqual(result["report"]["metric1"]["status"], "NOT_REQUESTED")
         self.assertEqual(len(result["matrices"]["standard"]), 0)
-        self.assertEqual(len(result["matrices"]["all"]), 1)
-        self.assertEqual(len(result["matrices"]["extension"]), 1)
+        self.assertEqual(len(result["matrices"]["all"]), 2)
+        self.assertEqual(len(result["matrices"]["extension"]), 2)
+        self.assertEqual({row["unit"] for row in result["matrices"]["all"]},
+                         {"lines", "ns"})
         self.assertEqual(result["resolved_runs"][0]["contract_class"], "extension")
 
     def test_standard_formal_result_unchanged_when_extension_is_added(self):
@@ -1243,10 +1245,12 @@ class ExtractMetric123Test(unittest.TestCase):
         comparison = result["report"]["views"]["all"]["comparisons"][0]
         self.assertIsNone(comparison["optimized_delta_ns"])
         self.assertEqual(result["report"]["metric1"]["status"], "INCOMPLETE")
-        self.assertTrue(all(row["value"] is None for row in
-                            result["report"]["views"]["all"]["matrix"]))
-        self.assertIn("N/A", (self.root / "missing-m1-report" /
-                              "metric_matrix_all.tsv").read_text())
+        rows = result["report"]["views"]["all"]["matrix"]
+        self.assertEqual({row["unit"] for row in rows}, {"lines", "ns"})
+        self.assertTrue(any(row["unit"] == "lines" and row["value"] is not None
+                            for row in rows))
+        tsv = (self.root / "missing-m1-report" / "metric_matrix_all.tsv").read_text()
+        self.assertNotIn("ticks/op", tsv)
 
     def test_metric2_missing_mean_and_zero_denominator_are_incomplete(self):
         requirements = {"metric1": {"repetitions": []},
@@ -1586,7 +1590,7 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(row["scope"], "Formal qualification")
         self.assertEqual(row["topology"], "3n1s")
         self.assertEqual(row["tc"], 228)
-        self.assertEqual(row["primary_delta_ticks"], 30)
+        self.assertEqual(row["primary_delta_ns"], 30)
         self.assertEqual(row["direction"], "OURCC_FASTER")
         self.assertTrue((output / "metric_detail_by_tc_topology.svg").is_file())
         try:

@@ -1368,7 +1368,20 @@ def descriptive_view(runs):
         if value is None and run["metric"] == 3:
             value = safe_mean(x.get("ns_per_operation") for x in run["metrics"].values())
         value = finite_number(value)
-        if run["metric"] == 2 and run["metrics"].get("latency_phases"):
+        if run["metric"] == 1:
+            capacity = finite_number(run["metrics"]["capacity"].get("effective_unique"))
+            outer = finite_number(run["metrics"]["outer_latency"].get("mean_ns"))
+            matrix.extend([
+                {"metric": "Metric1", "level": "run-capacity", "identity": run["id"],
+                 "tc": f"TC{run['tc']}", "value": capacity, "unit": "lines",
+                 "status": "DESCRIPTIVE",
+                 "detail": f"{run['contract_class']}; role={run.get('metric1_role', '')}"},
+                {"metric": "Metric1", "level": "run-outer", "identity": run["id"],
+                 "tc": f"TC{run['tc']}", "value": outer, "unit": "ns",
+                 "status": "DESCRIPTIVE",
+                 "detail": f"{run['contract_class']}; role={run.get('metric1_role', '')}"},
+            ])
+        elif run["metric"] == 2 and run["metrics"].get("latency_phases"):
             for phase, phase_data in run["metrics"]["latency_phases"].items():
                 matrix.append({"metric": "Metric2", "level": "phase", "identity": run["id"],
                                "tc": f"TC{run['tc']}", "value": finite_number(phase_data.get("mean_ns")),
@@ -1382,7 +1395,7 @@ def descriptive_view(runs):
                      run.get("profile", run.get("arm", "")))
         key = (run["metric"], run["tc"], run["topology"], run.get("repetition"),
                dimension)
-        if finite_number(value) is not None:
+        if run["metric"] != 1 and finite_number(value) is not None:
             groups[key].append(value)
     summaries = []
     for key, values in sorted(groups.items(), key=lambda x: tuple(map(str, x[0]))):
@@ -1434,15 +1447,22 @@ def descriptive_view(runs):
                                  arms["ourcc"]["metrics"][name].get("ticks_per_operation")),
                              "ha_vi_ticks_per_operation": finite_number(
                                  arms["ha-vi"]["metrics"][name].get("ticks_per_operation")),
-                             "delta_ticks": safe_subtract(
-                                 arms["ha-vi"]["metrics"][name].get("ticks_per_operation"),
-                                 arms["ourcc"]["metrics"][name].get("ticks_per_operation"))}
-                             for name in common}})
+                              "delta_ticks": safe_subtract(
+                                  arms["ha-vi"]["metrics"][name].get("ticks_per_operation"),
+                                  arms["ourcc"]["metrics"][name].get("ticks_per_operation")),
+                              "ourcc_ns_per_operation": finite_number(
+                                  arms["ourcc"]["metrics"][name].get("ns_per_operation")),
+                              "ha_vi_ns_per_operation": finite_number(
+                                  arms["ha-vi"]["metrics"][name].get("ns_per_operation")),
+                              "delta_ns": safe_subtract(
+                                  arms["ha-vi"]["metrics"][name].get("ns_per_operation"),
+                                  arms["ourcc"]["metrics"][name].get("ns_per_operation"))}
+                              for name in common}})
     arm_groups = defaultdict(list)
     for run in runs:
         if run["metric"] == 3:
             for name, metric in run["metrics"].items():
-                value = finite_number(metric.get("ticks_per_operation"))
+                value = finite_number(metric.get("ns_per_operation"))
                 if value is not None:
                     arm_groups[(run["tc"], run["topology"], name, run["arm"])].append(value)
     arm_comparisons = []
@@ -1452,13 +1472,13 @@ def descriptive_view(runs):
         for arm in ("ourcc", "ha-vi"):
             values = arm_groups.get((tc, topology, name, arm), [])
             if values:
-                arms[arm] = {"count": len(values), "mean_ticks_per_operation": safe_mean(values),
-                             "stdev_ticks_per_operation": safe_stdev(values)}
+                arms[arm] = {"count": len(values), "mean_ns_per_operation": safe_mean(values),
+                             "stdev_ns_per_operation": safe_stdev(values)}
         arm_comparisons.append({"tc": tc, "topology": topology, "metric": name,
                                 "arms": arms,
-                                "delta_ticks": safe_subtract(
-                                                arms["ha-vi"]["mean_ticks_per_operation"],
-                                                arms["ourcc"]["mean_ticks_per_operation"])
+                                "delta_ns": safe_subtract(
+                                                arms["ha-vi"]["mean_ns_per_operation"],
+                                                arms["ourcc"]["mean_ns_per_operation"])
                                 if set(arms) == {"ourcc", "ha-vi"} else None})
     m1_role_comparisons = []
     role_groups = defaultdict(dict)
@@ -1642,8 +1662,10 @@ def aggregate_qualification(item, runs, issues):
                         for name in M3[tc]:
                             delta = safe_subtract(arms["ha-vi"]["metrics"][name].get("ticks_per_operation"),
                                                   arms["ourcc"]["metrics"][name].get("ticks_per_operation"))
+                            delta_ns = safe_subtract(arms["ha-vi"]["metrics"][name].get("ns_per_operation"),
+                                                     arms["ourcc"]["metrics"][name].get("ns_per_operation"))
                             samples.append({"pair": pair, "tc": tc, "metric": name,
-                                            "delta_ticks": delta})
+                                            "delta_ticks": delta, "delta_ns": delta_ns})
             else:
                 for tc in item["testcases"]:
                     for arm in item["arms"]:
@@ -1657,19 +1679,26 @@ def aggregate_qualification(item, runs, issues):
                 values = defaultdict(list)
                 for run in topology_runs:
                     for name, metric in run["metrics"].items():
-                        values[(run["tc"], name, run["arm"])].append(
-                            metric.get("ticks_per_operation"))
+                        values[(run["tc"], name, run["arm"])].append({
+                            "ticks": metric.get("ticks_per_operation"),
+                            "ns": metric.get("ns_per_operation")})
                 for tc in item["testcases"]:
                     for name in M3[tc]:
                         left, right = values[(tc, name, "ourcc")], values[(tc, name, "ha-vi")]
                         if left and right:
                             samples.append({"tc": tc, "metric": name,
-                                            "delta_ticks": safe_subtract(safe_mean(right), safe_mean(left))})
+                                            "delta_ticks": safe_subtract(
+                                                safe_mean(item["ticks"] for item in right),
+                                                safe_mean(item["ticks"] for item in left)),
+                                            "delta_ns": safe_subtract(
+                                                safe_mean(item["ns"] for item in right),
+                                                safe_mean(item["ns"] for item in left))})
             summary_groups = defaultdict(list)
             for row in samples:
-                summary_groups[row["tc"], row["metric"]].append(row["delta_ticks"])
+                summary_groups[row["tc"], row["metric"]].append(row)
             summaries = {(tc, metric): {"tc": tc, "metric": metric,
-                                        "delta_ticks": safe_mean(values)}
+                                        "delta_ticks": safe_mean(item["delta_ticks"] for item in values),
+                                        "delta_ns": safe_mean(item["delta_ns"] for item in values)}
                          for (tc, metric), values in summary_groups.items()}
             primary = []
             for tc in item["testcases"]:
@@ -1677,8 +1706,11 @@ def aggregate_qualification(item, runs, issues):
                 if all((tc, name) in summaries for name in definition):
                     delta = safe_weighted_sum((weight, summaries[tc, name]["delta_ticks"])
                                               for name, weight in definition.items())
+                    delta_ns = safe_weighted_sum((weight, summaries[tc, name]["delta_ns"])
+                                                 for name, weight in definition.items())
                     primary.append({"tc": tc, "delta_mean_ticks": delta,
-                                    "direction": metric3_direction(delta)})
+                                    "delta_mean_ns": delta_ns,
+                                    "direction": metric3_direction(delta_ns)})
                 else:
                     topology_missing.append((tc, "primary"))
             aggregates = []
@@ -1687,8 +1719,12 @@ def aggregate_qualification(item, runs, issues):
                     delta = safe_weighted_sum(
                         (weight, summaries[key]["delta_ticks"])
                         for key, weight in weights.items())
+                    delta_ns = safe_weighted_sum(
+                        (weight, summaries[key]["delta_ns"])
+                        for key, weight in weights.items())
                     aggregates.append({"name": aggregate_name, "delta_ticks": delta,
-                                       "direction": metric3_direction(delta)})
+                                       "delta_ns": delta_ns,
+                                       "direction": metric3_direction(delta_ns)})
             missing.extend([{"topology": topology, "slot": slot}
                             for slot in topology_missing])
             results.append({"topology": topology, "missing_slots": topology_missing,
@@ -1767,7 +1803,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         per_run.append({"run_id": run["id"], "metric": run["metric"], "tc": run["tc"],
                         "repetition": run["repetition"], "profile": run.get("profile", ""),
                         "arm": run.get("arm", ""), "pair": run.get("pair", ""), "order": run.get("order", ""),
-                        "value": value if value is not None else "MULTI", "unit": "ns/op" if value is not None else "ticks/op",
+                        "value": value if value is not None else "MULTI", "unit": "ns/op" if value is not None else "multiple",
                         "status": run["status"]})
         matrix.append({"metric": f"Metric{run['metric']}", "level": "run", "identity": run["id"],
                        "tc": f"TC{run['tc']}", "value": value, "unit": "ns/op" if value is not None else "multiple",
@@ -1955,18 +1991,24 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                         continue
                     left_value = finite_number(left.get("ticks_per_operation"))
                     right_value = finite_number(right.get("ticks_per_operation"))
+                    left_ns = finite_number(left.get("ns_per_operation"))
+                    right_ns = finite_number(right.get("ns_per_operation"))
                     delta = safe_subtract(right_value, left_value)
-                    if delta is None:
+                    delta_ns = safe_subtract(right_ns, left_ns)
+                    if delta is None or delta_ns is None:
                         m3_metric_incomplete = True
                         missing_m3.append((pair, tc, name, "required_metrics"))
                         continue
                     samples.append({"pair": pair, "tc": tc, "order": order, "metric": name,
                                     "ourcc_ticks": left_value,
                                     "ha_vi_ticks": right_value,
-                                    "delta_ticks": delta, "frequency_hz": left["counter_frequency_hz"]})
+                                    "delta_ticks": delta,
+                                    "ourcc_ns": left_ns, "ha_vi_ns": right_ns,
+                                    "delta_ns": delta_ns,
+                                    "frequency_hz": left["counter_frequency_hz"]})
                     matrix.append({"metric": "Metric3", "level": "pair", "identity": pair,
-                                   "tc": f"TC{tc}", "value": delta, "unit": f"ticks/op:{name}",
-                                   "status": metric3_direction(delta),
+                                   "tc": f"TC{tc}", "value": delta_ns, "unit": f"ns/op:{name}",
+                                   "status": metric3_direction(delta_ns),
                                    "detail": f"order={order}; delta=HA-VI-OurCC"})
         summaries = []
         for key in sorted({(r["tc"], r["metric"]) for r in samples}):
@@ -1974,7 +2016,10 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             summaries.append({"tc": key[0], "metric": key[1], "pairs": len(rows),
                               "ourcc_mean_ticks": safe_mean(r["ourcc_ticks"] for r in rows),
                               "ha_vi_mean_ticks": safe_mean(r["ha_vi_ticks"] for r in rows),
-                              "delta_mean_ticks": safe_mean(r["delta_ticks"] for r in rows)})
+                              "delta_mean_ticks": safe_mean(r["delta_ticks"] for r in rows),
+                              "ourcc_mean_ns": safe_mean(r["ourcc_ns"] for r in rows),
+                              "ha_vi_mean_ns": safe_mean(r["ha_vi_ns"] for r in rows),
+                              "delta_mean_ns": safe_mean(r["delta_ns"] for r in rows)})
         m3_complete = (bool(pairs_req and tcs_req) and not incomplete_pairs and
                        not conflicting_orders and not m3_metric_incomplete and
                        set(tcs_req) == set(M3))
@@ -1984,16 +2029,19 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         values = defaultdict(list)
         for run in m3:
             for name, metric in run["metrics"].items():
-                value = finite_number(metric.get("ticks_per_operation"))
-                if value is None:
+                tick_value = finite_number(metric.get("ticks_per_operation"))
+                ns_value = finite_number(metric.get("ns_per_operation"))
+                if tick_value is None or ns_value is None:
                     m3_metric_incomplete = True
                     missing_m3.append((run["repetition"], run["tc"], run["arm"],
                                        name, "required_metrics"))
                     continue
-                values[(run["tc"], name, run["arm"])].append(value)
+                values[(run["tc"], name, run["arm"])].append({
+                    "ticks": tick_value, "ns": ns_value})
                 samples.append({"run_id": run["id"], "repetition": run["repetition"],
                                 "tc": run["tc"], "arm": run["arm"], "metric": name,
-                                "ticks_per_operation": value,
+                                "ticks_per_operation": tick_value,
+                                "ns_per_operation": ns_value,
                                 "frequency_hz": metric["counter_frequency_hz"]})
         summaries = []
         for tc, name in sorted({key[:2] for key in values}):
@@ -2001,8 +2049,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             for arm in ("ourcc", "ha-vi"):
                 rows = values.get((tc, name, arm), [])
                 if rows:
-                    arm_stats[arm] = {"count": len(rows), "mean_ticks": safe_mean(rows),
-                                      "stdev_ticks": safe_stdev(rows)}
+                    arm_stats[arm] = {"count": len(rows),
+                                      "mean_ticks": safe_mean(item["ticks"] for item in rows),
+                                      "stdev_ticks": safe_stdev(item["ticks"] for item in rows),
+                                      "mean_ns": safe_mean(item["ns"] for item in rows),
+                                      "stdev_ns": safe_stdev(item["ns"] for item in rows)}
             if set(arm_stats) == {"ourcc", "ha-vi"}:
                 summaries.append({"tc": tc, "metric": name,
                                   "ourcc_count": arm_stats["ourcc"]["count"],
@@ -2011,9 +2062,16 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                   "ha_vi_stdev_ticks": arm_stats["ha-vi"]["stdev_ticks"],
                                   "ourcc_mean_ticks": arm_stats["ourcc"]["mean_ticks"],
                                   "ha_vi_mean_ticks": arm_stats["ha-vi"]["mean_ticks"],
+                                  "ourcc_mean_ns": arm_stats["ourcc"]["mean_ns"],
+                                  "ha_vi_mean_ns": arm_stats["ha-vi"]["mean_ns"],
+                                  "ourcc_stdev_ns": arm_stats["ourcc"]["stdev_ns"],
+                                  "ha_vi_stdev_ns": arm_stats["ha-vi"]["stdev_ns"],
                                   "delta_mean_ticks": safe_subtract(
                                       arm_stats["ha-vi"]["mean_ticks"],
-                                      arm_stats["ourcc"]["mean_ticks"])})
+                                      arm_stats["ourcc"]["mean_ticks"]),
+                                  "delta_mean_ns": safe_subtract(
+                                      arm_stats["ha-vi"]["mean_ns"],
+                                      arm_stats["ourcc"]["mean_ns"])})
         counts_by_tc_arm = {str(tc): {arm: sum(r["tc"] == tc and r["arm"] == arm for r in m3)
                                       for arm in arms_req} for tc in tcs_req}
         insufficient = [
@@ -2040,31 +2098,41 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                       for name, weight in definition.items())
             havi = safe_weighted_sum((weight, by_summary[tc, name].get("ha_vi_mean_ticks"))
                                      for name, weight in definition.items())
+            ourcc_ns = safe_weighted_sum((weight, by_summary[tc, name].get("ourcc_mean_ns"))
+                                         for name, weight in definition.items())
+            havi_ns = safe_weighted_sum((weight, by_summary[tc, name].get("ha_vi_mean_ns"))
+                                        for name, weight in definition.items())
             delta = safe_subtract(havi, ourcc)
-            if delta is None:
+            delta_ns = safe_subtract(havi_ns, ourcc_ns)
+            if delta is None or delta_ns is None:
                 m3_complete = False
                 missing_m3.append((tc, "primary_required_metrics"))
                 continue
             primary.append({"tc": tc, "ourcc_mean_ticks": ourcc,
                             "ha_vi_mean_ticks": havi, "delta_mean_ticks": delta,
-                            "direction": metric3_direction(delta)})
+                            "ourcc_mean_ns": ourcc_ns, "ha_vi_mean_ns": havi_ns,
+                            "delta_mean_ns": delta_ns,
+                            "direction": metric3_direction(delta_ns)})
             matrix.append({"metric": "Metric3", "level": "TC", "identity": f"{comparison_mode} arm mean", "tc": f"TC{tc}",
-                           "value": delta, "unit": "ticks/op", "status": metric3_direction(delta),
+                           "value": delta_ns, "unit": "ns/op", "status": metric3_direction(delta_ns),
                            "detail": "frozen primary-value formula"})
     aggregates = []
     for name, weights in M3_AGGREGATES.items():
         if all(key in by_summary for key in weights):
             delta = safe_weighted_sum((weight, by_summary[key].get("delta_mean_ticks"))
                                       for key, weight in weights.items())
-            if delta is None:
+            delta_ns = safe_weighted_sum((weight, by_summary[key].get("delta_mean_ns"))
+                                         for key, weight in weights.items())
+            if delta is None or delta_ns is None:
                 m3_complete = False
                 missing_m3.append((name, "aggregate_required_metrics"))
                 continue
             aggregates.append({"name": name, "delta_ticks": delta,
-                               "direction": metric3_direction(delta),
+                               "delta_ns": delta_ns,
+                               "direction": metric3_direction(delta_ns),
                                "status": "COMPLETE"})
             matrix.append({"metric": "Metric3", "level": "aggregate", "identity": name, "tc": "ALL",
-                           "value": delta, "unit": "ticks/op", "status": aggregates[-1]["status"],
+                           "value": delta_ns, "unit": "ns/op", "status": aggregates[-1]["status"],
                            "detail": f"frozen weights; direction={aggregates[-1]['direction']}"})
     m3_requested = bool(tcs_req or m3)
     m3_status = ("NOT_REQUESTED" if not m3_requested else
@@ -2194,7 +2262,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                         "arm": run.get("arm", ""), "pair": run.get("pair", ""),
                         "order": run.get("order", ""),
                         "value": value if value is not None else "MULTI",
-                        "unit": "ns/op" if value is not None else "ticks/op",
+                        "unit": "ns/op" if value is not None else "multiple",
                         "status": run["status"]})
     return report, all_resolved, matrix, per_run, issues, code
 
@@ -2991,8 +3059,8 @@ def brief_metric_values(report):
         "metric1_capacity_ratio": m1["capacity_ratio"].get("mean"),
         "metric1_outer_delta_cycles": m1["outer_delta_cycles"].get("mean"),
         "metric2_reduction_pct": report["metric2"].get("aggregate_reduction_pct"),
-        "metric3_core_delta_ticks": m3.get("core", {}).get("delta_ticks"),
-        "metric3_representative_delta_ticks": m3.get("representative", {}).get("delta_ticks"),
+        "metric3_core_delta_ns": m3.get("core", {}).get("delta_ns"),
+        "metric3_representative_delta_ns": m3.get("representative", {}).get("delta_ns"),
     }
 
 
@@ -3112,7 +3180,7 @@ def build_metric_details(resolved, report=None):
         values = defaultdict(list)
         for run in runs:
             for name, metric in run["metrics"].items():
-                value = finite_number(metric.get("ticks_per_operation"))
+                value = finite_number(metric.get("ns_per_operation"))
                 if value is not None:
                     values[name, run["arm"]].append(value)
         metric_deltas = {}
@@ -3132,7 +3200,7 @@ def build_metric_details(resolved, report=None):
                        if value is None)
         details["metric3"].append({
             "scope": scope, "contract": contract, "topology": topology,
-            "tc": tc, "primary_delta_ticks": primary,
+            "tc": tc, "primary_delta_ns": primary,
             "direction": metric3_direction(primary), "metric_deltas": metric_deltas,
             "sample_counts": counts, "reason": "; ".join(reasons),
         })
@@ -3166,13 +3234,13 @@ def render_detail_markdown(details):
     if not details["metric2"]:
         lines.append("| - | - | - | - | - | N/A | N/A | - | no Metric2 runs |")
     lines += ["", "## Metric3", "",
-              "| Scope | Contract | Topology | TC | Primary delta ticks | Direction | Samples OurCC/HA-VI | Metric deltas | Reason |",
+              "| Scope | Contract | Topology | TC | Primary delta ns/op | Direction | Samples OurCC/HA-VI | Metric deltas ns/op | Reason |",
               "|---|---|---|---:|---:|---|---|---|---|"]
     for row in details["metric3"]:
         counts = row["sample_counts"]
         lines.append(
             f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
-            f"{brief_number(row['primary_delta_ticks'])} | {row['direction']} | "
+            f"{brief_number(row['primary_delta_ns'])} | {row['direction']} | "
             f"{counts['ourcc']}/{counts['ha-vi']} | {markdown_cell(row['metric_deltas'])} | "
             f"{row['reason'] or '-'} |")
     if not details["metric3"]:
@@ -3215,8 +3283,8 @@ def render_brief_markdown(report, details=None):
              f"{brief_number(values['metric2_reduction_pct'], '%')} | "
              f"{len(missing['metric2']) + extra_missing_counts['metric2']} |",
              f"| Metric3 | {report['metric3']['status']} | Core delta "
-             f"{brief_number(values['metric3_core_delta_ticks'], ' ticks')}；Representative delta "
-             f"{brief_number(values['metric3_representative_delta_ticks'], ' ticks')} | "
+             f"{brief_number(values['metric3_core_delta_ns'], ' ns/op')}；Representative delta "
+             f"{brief_number(values['metric3_representative_delta_ns'], ' ns/op')} | "
              f"{len(missing['metric3']) + extra_missing_counts['metric3']} |", "",
              "Metric3 定义 `delta = HA-VI - OurCC`：正值表示 OurCC 更快，负值表示 HA-VI 更快；"
              "正负方向均保留。", "",
@@ -3239,8 +3307,8 @@ def render_brief_markdown(report, details=None):
         lines.append(
             "- Metric1 Standard 为 N/A，但已提取其他 TC/topology 点；请查看其 scope。"
             "`Formal qualification`可作为已配置资格结果，`Extension descriptive`仅作描述。")
-    if (values["metric3_core_delta_ticks"] is None or
-            values["metric3_representative_delta_ticks"] is None) and details["metric3"]:
+    if (values["metric3_core_delta_ns"] is None or
+            values["metric3_representative_delta_ns"] is None) and details["metric3"]:
         lines.append(
             "- Metric3 Core/Representative Standard aggregate 为 N/A，但已有 TC/topology 明细；"
             "通常表示冻结 TC228-235 全套 aggregate 尚未形成，或数据属于额外 topology qualification。")
@@ -3266,7 +3334,7 @@ def detail_chart_series(details):
         ("Metric1 capacity ratio", details["metric1"], "capacity_ratio", 1.5),
         ("Metric1 Outer delta cycles", details["metric1"], "outer_delta_cycles", 50.0),
         ("Metric2 reduction %", details["metric2"], "reduction_pct", 10.0),
-        ("Metric3 primary delta ticks", details["metric3"], "primary_delta_ticks", 0.0),
+        ("Metric3 primary delta ns/op", details["metric3"], "primary_delta_ns", 0.0),
     ]
 
 
@@ -3374,8 +3442,8 @@ def write_summary_svg(path, report):
         ("Metric1", [("Capacity ratio", values["metric1_capacity_ratio"], 1.5),
                      ("Outer delta cycles", values["metric1_outer_delta_cycles"], 50.0)]),
         ("Metric2", [("Reduction %", values["metric2_reduction_pct"], 10.0)]),
-        ("Metric3", [("Core delta ticks", values["metric3_core_delta_ticks"], 0.0),
-                     ("Representative delta ticks", values["metric3_representative_delta_ticks"], 0.0)]),
+        ("Metric3", [("Core delta ns/op", values["metric3_core_delta_ns"], 0.0),
+                     ("Representative delta ns/op", values["metric3_representative_delta_ns"], 0.0)]),
     ]
     width, height = 1080, 560
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
@@ -3437,7 +3505,7 @@ def write_summary_png(path, report):
              [1.5, 50.0]),
             ("Metric2", ["Reduction %"], [values["metric2_reduction_pct"]], [10.0]),
             ("Metric3", ["Core delta", "Representative delta"],
-             [values["metric3_core_delta_ticks"], values["metric3_representative_delta_ticks"]],
+             [values["metric3_core_delta_ns"], values["metric3_representative_delta_ns"]],
              [0.0, 0.0]),
         ]
         for axis, (title, labels, raw_values, references) in zip(axes, panels):
