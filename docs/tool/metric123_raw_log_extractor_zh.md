@@ -49,6 +49,8 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   字段词汇，不绕过 oversized ResidentDir、capacity、fill、exact-live 或 Outer sample 标准门禁。
   正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
+  naive 只提供容量分母，绝不参与 Metric1 Outer delta。任何`spill-naive`、`optimized-naive`或 guest timer
+  delta 都是旧描述口径，不得作为统一 Metric1 指标。
   `cycles = ns * 2GHz`。所有有效样本先按 role 池化：容量对每个 role 的 run 值等权求均值后作
   spill/naive 比值；Outer 合并 spill/ideal 的全部 completed Outer source sample 后求均值差。
   pooled ratio>=1.5 且 delta cycles<50 才 PASS。

@@ -1406,30 +1406,20 @@ def descriptive_view(runs):
     comparisons = []
     by_profile = defaultdict(dict)
     for run in runs:
-        if run["metric"] in (1, 2):
+        if run["metric"] == 2:
             by_profile[(run["metric"], run["tc"], run["topology"],
-                        run["repetition"])][run["profile"]] = run
+                         run["repetition"])][run["profile"]] = run
     for key, profiles in sorted(by_profile.items(), key=lambda x: tuple(map(str, x[0]))):
         if all(p in profiles for p in PROFILES):
             naive, optimized = profiles["naive"], profiles["optimized"]
-            if key[0] == 1:
-                comparisons.append({"metric": 1, "tc": key[1], "topology": key[2],
-                                    "repetition": key[3],
-                                    "capacity_ratio_spill_to_naive": safe_divide(
-                                        profiles["spill-noopt"]["metrics"]["capacity"].get("effective_unique"),
-                                        naive["metrics"]["capacity"].get("effective_unique")),
-                                    "optimized_delta_ns": safe_subtract(
-                                        optimized["metrics"].get("mean_ns_per_operation"),
-                                        naive["metrics"].get("mean_ns_per_operation"))})
-            else:
-                naive_mean = naive["metrics"].get("mean_ns")
-                optimized_mean = optimized["metrics"].get("mean_ns")
-                comparisons.append({"metric": 2, "tc": key[1], "topology": key[2],
-                                    "repetition": key[3],
-                                    "optimized_reduction_pct": safe_divide(
-                                        safe_subtract(naive_mean, optimized_mean), naive_mean)})
-                if comparisons[-1]["optimized_reduction_pct"] is not None:
-                    comparisons[-1]["optimized_reduction_pct"] *= 100
+            naive_mean = naive["metrics"].get("mean_ns")
+            optimized_mean = optimized["metrics"].get("mean_ns")
+            comparisons.append({"metric": 2, "tc": key[1], "topology": key[2],
+                                "repetition": key[3],
+                                "optimized_reduction_pct": safe_divide(
+                                    safe_subtract(naive_mean, optimized_mean), naive_mean)})
+            if comparisons[-1]["optimized_reduction_pct"] is not None:
+                comparisons[-1]["optimized_reduction_pct"] *= 100
     m3_pairs = []
     pair_groups = defaultdict(dict)
     for run in runs:
@@ -1481,22 +1471,24 @@ def descriptive_view(runs):
                                                 arms["ourcc"]["mean_ns_per_operation"])
                                 if set(arms) == {"ourcc", "ha-vi"} else None})
     m1_role_comparisons = []
-    role_groups = defaultdict(dict)
+    role_groups = defaultdict(lambda: defaultdict(list))
     for run in runs:
         if run["metric"] == 1:
-            role_groups[(run["repetition"], run["tc"], run["topology"])][
-                run.get("metric1_role", run["profile"])] = run
+            role_groups[(run["tc"], run["topology"])][
+                run.get("metric1_role", run["profile"])].append(run)
     for key, roles in sorted(role_groups.items(), key=lambda x: tuple(map(str, x[0]))):
-        m1_role_comparisons.append({"repetition": key[0], "tc": key[1],
-                                    "topology": key[2], "roles": sorted(roles),
-                                    "capacity_ratio": safe_divide(
-                                                       roles["spill"]["metrics"]["capacity"].get("effective_unique"),
-                                                       roles["naive"]["metrics"]["capacity"].get("effective_unique"))
-                                    if "naive" in roles and "spill" in roles else None,
+        naive_mean = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                               for run in roles.get("naive", []))
+        spill_mean = safe_mean(run["metrics"]["capacity"].get("effective_unique")
+                               for run in roles.get("spill", []))
+        spill_outer = pooled_outer_latency(roles.get("spill", []))
+        ideal_outer = pooled_outer_latency(roles.get("ideal", []))
+        m1_role_comparisons.append({"aggregation_id": "pooled", "repetition": None,
+                                    "tc": key[0], "topology": key[1],
+                                    "roles": sorted(roles),
+                                    "capacity_ratio": safe_divide(spill_mean, naive_mean),
                                     "outer_delta_ns": safe_subtract(
-                                                       roles["spill"]["metrics"]["outer_latency"].get("mean_ns"),
-                                                       roles["ideal"]["metrics"]["outer_latency"].get("mean_ns"))
-                                    if "spill" in roles and "ideal" in roles else None})
+                                        spill_outer["mean_ns"], ideal_outer["mean_ns"])})
     return {"runs": len(runs), "summaries": summaries,
             "comparisons": comparisons, "metric3_pairs": m3_pairs,
             "metric1_role_comparisons": m1_role_comparisons,
@@ -1837,9 +1829,6 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                                "message": "pooled capacity or Outer metric unavailable"})
         else:
             capacity_pass, latency_pass = ratio >= 1.5, delta_ns * 2.0 < 50
-            guest_values = {role: safe_mean(
-                finite_number(run["metrics"].get("mean_ns_per_operation"))
-                for run in m1_groups[role]) for role in ("naive", "spill", "ideal")}
             row = {"aggregation_id": "pooled", "repetition": None,
                    "sample_counts": m1_counts, "capacity_role_means": capacity_means,
                    "capacity_ratio": ratio,
@@ -1849,10 +1838,7 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
                    "ideal_outer_mean_ns": ideal_outer["mean_ns"],
                    "outer_delta_ns": delta_ns, "outer_delta_cycles": delta_ns * 2.0,
                    "capacity_pass": capacity_pass, "latency_pass": latency_pass,
-                   "pass": capacity_pass and latency_pass,
-                   "legacy_guest_descriptive": {"means_ns_per_operation": guest_values,
-                                                  "spill_minus_naive_ns": safe_subtract(
-                                                      guest_values["spill"], guest_values["naive"])}}
+                   "pass": capacity_pass and latency_pass}
             m1_comp.append(row)
             matrix.append({"metric": "Metric1", "level": "pooled", "identity": "all samples", "tc": "TC131",
                            "value": ratio, "unit": "capacity-ratio",

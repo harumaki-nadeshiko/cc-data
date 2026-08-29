@@ -274,7 +274,9 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(row["ideal_outer_samples"], 2)
         self.assertEqual(row["outer_delta_ns"], 2.0)
         self.assertEqual(row["outer_delta_cycles"], 4.0)
-        self.assertIsNone(row["legacy_guest_descriptive"]["spill_minus_naive_ns"])
+        self.assertNotIn("legacy_guest_descriptive", row)
+        self.assertEqual(row["outer_delta_ns"],
+                         row["spill_outer_mean_ns"] - row["ideal_outer_mean_ns"])
         self.assertEqual(sum(x["code"] == "METRIC1_GUEST_TIMER_MISSING"
                              for x in result["issues"]), 3)
 
@@ -1242,8 +1244,8 @@ class ExtractMetric123Test(unittest.TestCase):
         for run in runs:
             self.assertEqual(matrix.add(run)["status"], "ADDED")
         result = matrix.finalize(self.root / "missing-m1-report")
-        comparison = result["report"]["views"]["all"]["comparisons"][0]
-        self.assertIsNone(comparison["optimized_delta_ns"])
+        self.assertFalse(any(row.get("metric") == 1 for row in
+                             result["report"]["views"]["all"]["comparisons"]))
         self.assertEqual(result["report"]["metric1"]["status"], "INCOMPLETE")
         rows = result["report"]["views"]["all"]["matrix"]
         self.assertEqual({row["unit"] for row in rows}, {"lines", "ns"})
