@@ -591,6 +591,7 @@ static int g_numSockets = 1;
 static int g_numNodes = 3;
 static ResidentDirConfig g_rdcfg;    // may be overridden by argv
 static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
+static uint64_t g_dsmDataDelayPs = 68000;
 static bool g_batchRs = true;        // argv --batch-rs= override
 static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
 static bool g_debugUbioPerf = false;  // [DEBUG-UBIO-*] gate, set via UBIO_DEBUG_PERF=1
@@ -731,6 +732,7 @@ struct DsmDataStore {
         std::array<uint8_t, 64> buf;
         std::function<void(DsmDataStatus, const uint8_t*)> readCb;
         std::function<void(DsmDataStatus)> writeCb;
+        std::function<void()> delayCb;
     };
     static constexpr size_t kMaxPendingDataOps = 256;
     uint64_t _dsmDramDelayPs = 50000;
@@ -755,7 +757,9 @@ struct DsmDataStore {
         for (auto &slot : pending) {
             if (!slot.valid || tick < slot.fireTick)
                 continue;
-            if (slot.isWrite) {
+            if (slot.delayCb) {
+                    slot.delayCb();
+            } else if (slot.isWrite) {
                     const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
                     std::memcpy(data.data() + line * kLineBytes,
                                 slot.buf.data(), kLineBytes);
@@ -798,11 +802,23 @@ struct DsmDataStore {
         return false;
     }
 
+    bool delay(uint64_t t, std::function<void()> cb) {
+        PendingDataOp op;
+        op.fireTick = t + _dsmDramDelayPs;
+        op.delayCb = std::move(cb);
+        return enqueue(std::move(op));
+    }
+
     bool copyData(uint64_t pa, uint8_t *out) const {
         const size_t line = (pa & (kSegmentBytes - 1)) / kLineBytes;
         if (!valid[line]) return false;
         std::memcpy(out, data.data() + line * kLineBytes, kLineBytes);
         return true;
+    }
+
+    bool contains(uint64_t pa) const {
+        const size_t line = (pa & (kSegmentBytes - 1)) / kLineBytes;
+        return valid[line] != 0;
     }
 };
 
@@ -1237,6 +1253,121 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     std::unique_ptr<cc::glob::BackstoreHostH64> _h64Host;
 
     DsmDataStore dsmData;
+    using DataTxnKey = std::tuple<int, int, int, uint64_t>;
+    std::set<DataTxnKey> pendingDataTxns;
+    std::map<uint64_t, std::vector<CoherenceMessage>> pendingDataWrites;
+    struct PendingDataResponse {
+        DataTxnKey key;
+        CoherenceMessage response;
+    };
+    std::deque<PendingDataResponse> pendingDataResponses;
+    static constexpr size_t kMaxPendingDataResponses = 512;
+
+    static DataTxnKey dataTxnKey(const CoherenceMessage &request) {
+        return {static_cast<int>(request.h.type), request.h.srcNode,
+                request.h.srcSocket, request.h.reqId};
+    }
+
+    bool dataTxnPending(const CoherenceMessage &request) const {
+        return pendingDataTxns.count(dataTxnKey(request)) != 0;
+    }
+
+    bool dataWritePending(uint64_t pa) const {
+        return pendingDataWrites.count(pa) != 0;
+    }
+
+    void completeDataResponse(const DataTxnKey &key,
+                              const CoherenceMessage &response) {
+        if (routeControlToTarget(response)) {
+            pendingDataTxns.erase(key);
+            return;
+        }
+        panic_if(pendingDataResponses.size() >= kMaxPendingDataResponses,
+                 "pending data response queue full reqId={}", response.h.reqId);
+        pendingDataResponses.push_back({key, response});
+    }
+
+    void drainPendingDataResponses() {
+        while (!pendingDataResponses.empty()) {
+            PendingDataResponse &pending = pendingDataResponses.front();
+            if (!routeControlToTarget(pending.response))
+                return;
+            pendingDataTxns.erase(pending.key);
+            pendingDataResponses.pop_front();
+        }
+    }
+
+    bool scheduleReadResponse(const CoherenceMessage &request,
+                              CoherenceMessage response) {
+        const DataTxnKey key = dataTxnKey(request);
+        if (!pendingDataTxns.insert(key).second)
+            return true;
+        const bool queued = dsmData.readData(
+            request.h.homeLinePa, tickRef,
+            [this, key, response](DsmDataStatus status,
+                                  const uint8_t *data) mutable {
+                if (status == DsmDataStatus::RetryableBusy ||
+                    status == DsmDataStatus::IoError) {
+                    pendingDataTxns.erase(key);
+                    return;
+                }
+                if (status == DsmDataStatus::Ok && data) {
+                    std::memcpy(response.b.readResp.grantData, data, 64);
+                    response.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+                }
+                completeDataResponse(key, response);
+            });
+        if (!queued)
+            pendingDataTxns.erase(key);
+        return queued;
+    }
+
+    bool scheduleWritebackResponse(const CoherenceMessage &request,
+                                   bool keepAsClean) {
+        const DataTxnKey key = dataTxnKey(request);
+        if (!pendingDataTxns.insert(key).second)
+            return true;
+        auto existing = pendingDataWrites.find(request.h.homeLinePa);
+        if (existing != pendingDataWrites.end()) {
+            existing->second.push_back(request);
+            return true;
+        }
+        pendingDataWrites[request.h.homeLinePa].push_back(request);
+        const bool accepted = ubcc.processWriteback(
+            request.h.homeLinePa, request.h.requesterNode,
+            request.h.epoch, keepAsClean, request.b.writebackReq.data);
+        if (!accepted) {
+            pendingDataWrites.erase(request.h.homeLinePa);
+            pendingDataTxns.erase(key);
+            return false;
+        }
+        const bool queued = dsmData.delay(tickRef, [this, request]() {
+            const bool success = true;
+            auto pending = pendingDataWrites.find(request.h.homeLinePa);
+            panic_if(pending == pendingDataWrites.end(),
+                     "missing pending data write pa=0x{:x}", request.h.homeLinePa);
+            auto waiters = std::move(pending->second);
+            pendingDataWrites.erase(pending);
+            for (const CoherenceMessage &waiter : waiters) {
+                CoherenceMessage response;
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nodeId;
+                response.h.srcSocket = socketId;
+                response.h.dstNode = waiter.h.srcNode;
+                response.h.dstSocket = waiter.h.srcSocket;
+                response.h.homeLinePa = waiter.h.homeLinePa;
+                response.h.epoch = waiter.h.epoch;
+                response.h.reqId = waiter.h.reqId;
+                response.b.writebackResp.success = success;
+                completeDataResponse(dataTxnKey(waiter), response);
+            }
+        });
+        if (!queued) {
+            pendingDataWrites.erase(request.h.homeLinePa);
+            pendingDataTxns.erase(key);
+        }
+        return queued;
+    }
     // Exact H64 coverage becomes reportable only after every persisted group
     // has completed a validated scan. This is fixed group state, not a PA map.
     std::array<uint32_t, 256> h64GroupLive{};
@@ -2606,6 +2737,10 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 
     switch (msg.h.type) {
       case CoherenceMessageType::ReadReq: {
+        if (host.dataTxnPending(msg))
+            return true;
+        if (host.dataWritePending(msg.h.homeLinePa))
+            return true;
         UBCC_OuterReqType reqType =
             ((msg.h.flags & static_cast<uint32_t>(CFLAG_WRITE_INTENT)) ||
              msg.b.readReq.neededPerm == 1)
@@ -2637,7 +2772,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         uint64_t pendingInvMask = ubcc.getPendingInvalidationMask(msg.h.homeLinePa);
         uint64_t committedEpoch = ubcc.getEpochForLine(msg.h.homeLinePa);
         cc::glob::DataBlock grantData(64);
-        // Always try to source grant data from ubio-side stores:
+        // Transaction-owned data does not require a new home-memory access.
+        // Otherwise ReadResp waits for the configured DSM data-line delay.
         // 1. Outstanding grant data (recall-sourced, highest priority)
         // 2. Immediate grant data (G_S+RS fast path)
         // Priority: transaction payload > immediate grant data > authoritative
@@ -2646,8 +2782,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         bool hasGrantData = false;
         hasGrantData =
             ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
-            ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
-            host.dsmData.copyData(msg.h.homeLinePa, grantData.data);
+            ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData);
 
         response.h.type = CoherenceMessageType::ReadResp;
         response.h.srcNode = nid;
@@ -2675,19 +2810,29 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         if (hasGrantData) {
             std::memcpy(response.b.readResp.grantData, grantData.data, 64);
         }
-        hasResponse = true;
+        if (hasGrantData) {
+            hasResponse = true;
+        } else if (!host.dsmData.contains(msg.h.homeLinePa)) {
+            // A first-touch write allocate has no home data to fetch.
+            hasResponse = true;
+        } else {
+            host.scheduleReadResponse(msg, response);
+        }
         return true;
       }
 
       case CoherenceMessageType::WritebackReq: {
+        if (host.dataTxnPending(msg))
+            return true;
         bool keepAsClean =
             (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0;
-        bool success = msg.b.writebackReq.hasData
-            ? ubcc.processWritebackWithData(msg.h.homeLinePa, msg.h.requesterNode,
-                                            msg.h.epoch, keepAsClean,
-                                            msg.b.writebackReq.data)
-            : ubcc.processWriteback(msg.h.homeLinePa, msg.h.requesterNode,
-                                    msg.h.epoch, keepAsClean);
+        if (msg.b.writebackReq.hasData &&
+            host.scheduleWritebackResponse(msg, keepAsClean)) {
+            return true;
+        }
+        bool success = !msg.b.writebackReq.hasData &&
+            ubcc.processWriteback(msg.h.homeLinePa, msg.h.requesterNode,
+                                  msg.h.epoch, keepAsClean);
         response.h.type = CoherenceMessageType::WritebackResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3041,6 +3186,8 @@ main(int argc, char **argv)
         // UBCC runtime params
         if (!std::strncmp(argv[i], "--dram-delay-ps=", 16))
             g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
+        if (!std::strncmp(argv[i], "--dsm-data-delay-ps=", 20))
+            g_dsmDataDelayPs = std::strtoull(argv[i] + 20, nullptr, 10);
         if (!std::strncmp(argv[i], "--batch-rs=", 11))
             g_batchRs = (std::atoi(argv[i] + 11) != 0);
         if (!std::strncmp(argv[i], "--dir-overflow-policy=", 22)) {
@@ -3250,6 +3397,7 @@ main(int argc, char **argv)
               << ",\"home_controller\":"
               << jsonQuote(g_homeControllerMode == HomeControllerMode::Ubcc ? "ubcc" : "ha-vi")
               << ",\"dram_delay_ps\":" << g_dramDelayPs
+              << ",\"dsm_data_delay_ps\":" << g_dsmDataDelayPs
               << ",\"fault_rule_args\":" << faultRuleArgs.size()
               << ",\"blc_bytes\":" << g_rdcfg.blc_bytes
               << ",\"desc_scratch_bytes\":" << g_rdcfg.desc_scratch_bytes
@@ -3359,6 +3507,7 @@ main(int argc, char **argv)
     // T_ubio_dram: argv --dram-delay-ps= has priority (no env fallback)
     if (host) {
         host->_ubioDramDelayPs = g_dramDelayPs;
+        host->dsmData._dsmDramDelayPs = g_dsmDataDelayPs;
         ubcc->setHost(host.get());
         ubcc->setOutbound(host.get());
     }
@@ -4452,6 +4601,7 @@ main(int argc, char **argv)
             host->drainPendingFills(tick);
             host->drainPendingBackstoreAcks(tick);
             host->dsmData.drain(tick);
+            host->drainPendingDataResponses();
         } else if (dataPlaneActive && haHost) {
             haHost->dsmData.drain(tick);
         }

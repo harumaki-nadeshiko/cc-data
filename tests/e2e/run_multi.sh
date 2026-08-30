@@ -70,6 +70,11 @@ EP_SUPERVISOR_STARTUP_STALL_SEC="${EP_SUPERVISOR_STARTUP_STALL_SEC:-120}"
 # increase IPC overhead.  Target: 2.5ns (2500 ps) per solve_latency_params.py --x-ns 2.5.
 export EP_SYNC_INTERVAL_PS="${EP_SYNC_INTERVAL_PS:-2500}"
 export EP_LINK_LATENCY_PS="${EP_LINK_LATENCY_PS:-2500}"
+export EP_DSM_DATA_DELAY_PS="${EP_DSM_DATA_DELAY_PS:-68000}"
+[[ "$EP_DSM_DATA_DELAY_PS" =~ ^[0-9]+$ ]] || {
+    echo "FATAL: EP_DSM_DATA_DELAY_PS must be a non-negative integer" >&2
+    exit 2
+}
 
 # Phase 0: Metadata DRAM capacity — single source of truth for gem5 and ubio.
 # gem5 gets --ubcc_metadata_size; ubio gets --metadata-dram-bytes.
@@ -557,6 +562,7 @@ export RUN_GEM5_BIN="$GEM5_BIN"
     echo "EP_TRACK_L3_OCCUPANCY=$EP_TRACK_L3_OCCUPANCY"
     echo "EP_SYNC_INTERVAL_PS=$EP_SYNC_INTERVAL_PS"
     echo "EP_LINK_LATENCY_PS=$EP_LINK_LATENCY_PS"
+    echo "EP_DSM_DATA_DELAY_PS=$EP_DSM_DATA_DELAY_PS"
     echo "UBCC_METADATA_SIZE=$UBCC_METADATA_SIZE"
     echo "EP_TRACE_PERF=$EP_TRACE_PERF"
     echo "WORKLOAD_CFLAGS=${WORKLOAD_CFLAGS:-}"
@@ -584,7 +590,7 @@ except ValueError as exc:
 selected = {}
 for name in (
     "E2E_RUN_ID", "EP_CPU_MODEL", "EP_SEQUENCER_MAX_OUTSTANDING",
-    "EP_SYNC_INTERVAL_PS", "EP_LINK_LATENCY_PS", "EP_PORT_HWM",
+    "EP_SYNC_INTERVAL_PS", "EP_LINK_LATENCY_PS", "EP_DSM_DATA_DELAY_PS", "EP_PORT_HWM",
     "EP_NSIM_MAX_PENDING", "EP_PERF_PROFILE", "UBCC_POLICY", "UBCC_OPTS",
     "EP_GEM5_OPTS", "EP_HA_PROFILE", "OURCC_CLEAR_PROFILE", "EP_L3_SIZE",
     "EP_L3_ASSOC", "EP_L3_CACHE_LINES", "EP_L3_SETS",
@@ -1011,6 +1017,7 @@ run_tc() {
         uextra="$uextra --ha-max-active=$HA_MAX_ACTIVE --ha-max-queue=$HA_MAX_QUEUE"
     fi
     uextra="$uextra --tc=${tc} --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
+    uextra="$uextra --dsm-data-delay-ps=${EP_DSM_DATA_DELAY_PS}"
     [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
