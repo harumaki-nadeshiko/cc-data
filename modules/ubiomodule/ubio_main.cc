@@ -1374,6 +1374,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     std::array<uint8_t, 256> h64GroupCovered{};
     bool h64CoverageScanInFlight = false;
     size_t h64CoverageCursor = 0;
+    std::function<void()> pendingH64BloomScanRetry;
     MetaRNFClient _metaRNF;
 
     // Fixed admission table for push grants that need an authoritative home
@@ -1700,6 +1701,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         struct SliceScan {
             int nextGroup = 0;
             int slice = 0;
+            int groupRetries = 0;
             std::function<void(uint64_t)> onLive;
             std::function<void(bool)> completion;
         };
@@ -1727,14 +1729,30 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 },
                 [this, scan, issue, group, liveCount](BackstoreStatus status) {
                     if (status != BackstoreStatus::Ok) {
-                        if (scan->completion) scan->completion(false);
+                        if (++scan->groupRetries > 1024) {
+                            if (scan->completion) scan->completion(false);
+                            return;
+                        }
+                        scan->nextGroup = static_cast<int>(group);
+                        panic_if(pendingH64BloomScanRetry,
+                                 "multiple H64 Bloom group retries pending");
+                        pendingH64BloomScanRetry = [issue]() { (*issue)(); };
                         return;
                     }
+                    scan->groupRetries = 0;
                     recordH64CoverageGroup(group, *liveCount);
                     (*issue)();
                 });
         };
         (*issue)();
+    }
+
+    void pumpH64BloomScanRetry() {
+        if (!pendingH64BloomScanRetry)
+            return;
+        auto retry = std::move(pendingH64BloomScanRetry);
+        pendingH64BloomScanRetry = nullptr;
+        retry();
     }
 
     bool h64ExactCoverageKnown() const {
@@ -4579,6 +4597,7 @@ main(int argc, char **argv)
             if (dataPlaneActive) {
                 if (ubcc) ubcc->wakeup();
                 if (host) {
+                    host->pumpH64BloomScanRetry();
                     host->advanceH64Coverage();
                     host->advancePendingGrantReads(tick);
                 }

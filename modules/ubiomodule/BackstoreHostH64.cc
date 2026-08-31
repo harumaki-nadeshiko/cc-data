@@ -359,6 +359,18 @@ BackstoreHostH64::onGroupScanBucket(int scanIdx, MetaRNFLineStatus st,
     }
     H64BucketLine bucket;
     std::memcpy(&bucket, data64, sizeof(bucket));
+    bool allZero = true;
+    for (size_t i = 0; i < sizeof(bucket); ++i) {
+        if (data64[i] != 0) {
+            allZero = false;
+            break;
+        }
+    }
+    if (allZero) {
+        ++_groupScans[scanIdx].nextBucket;
+        readGroupScanBucket(scanIdx);
+        return;
+    }
     if (!bucket.hdrValid()) {
         completeGroupScan(scanIdx, BackstoreStatus::Corrupt);
         return;
