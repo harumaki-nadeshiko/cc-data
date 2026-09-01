@@ -593,6 +593,7 @@ static ResidentDirConfig g_rdcfg;    // may be overridden by argv
 static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
 static uint64_t g_dsmDataDelayPs = 68000;
 static bool g_batchRs = true;        // argv --batch-rs= override
+static bool g_evidenceEvents = false;
 static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
 static bool g_debugUbioPerf = false;  // [DEBUG-UBIO-*] gate, set via UBIO_DEBUG_PERF=1
 enum class HomeControllerMode { Ubcc, HaVi };
@@ -2955,9 +2956,11 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::ClearReq: {
-        LogInfo("UBIO", "[HOME-CLEAR-INGRESS] home={}:{} src={}:{} "
-                "pa=0x{:x} reqId={}", nid, sid, msg.h.srcNode,
-                msg.h.srcSocket, msg.h.homeLinePa, msg.h.reqId);
+        if (g_debugUbioPerf || g_evidenceEvents) {
+            LogInfo("UBIO", "[HOME-CLEAR-INGRESS] home={}:{} src={}:{} "
+                    "pa=0x{:x} reqId={}", nid, sid, msg.h.srcNode,
+                    msg.h.srcSocket, msg.h.homeLinePa, msg.h.reqId);
+        }
         if (g_debugUbioPerf) {
             LogDebug("UBIO",
                          "[DEBUG-UBIO-CLEAR] ubcc-enter nid={} type=ClearReq reqId={} pa=0x{:x} srcNode={} dstNode={} epoch={}",
@@ -2966,10 +2969,12 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         }
         bool accepted = ubcc.processClear(
             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
-        LogInfo("UBIO", "[HOME-CLEAR-RESULT] home={}:{} src={}:{} "
-                "pa=0x{:x} epoch={} reqId={} accepted={}", nid, sid,
-                msg.h.srcNode, msg.h.srcSocket, msg.h.homeLinePa,
-                msg.h.epoch, msg.h.reqId, accepted ? 1 : 0);
+        if (g_debugUbioPerf || g_evidenceEvents || !accepted) {
+            LogInfo("UBIO", "[HOME-CLEAR-RESULT] home={}:{} src={}:{} "
+                    "pa=0x{:x} epoch={} reqId={} accepted={}", nid, sid,
+                    msg.h.srcNode, msg.h.srcSocket, msg.h.homeLinePa,
+                    msg.h.epoch, msg.h.reqId, accepted ? 1 : 0);
+        }
         response.h.type = CoherenceMessageType::ClearResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3206,6 +3211,8 @@ main(int argc, char **argv)
             g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
         if (!std::strncmp(argv[i], "--dsm-data-delay-ps=", 20))
             g_dsmDataDelayPs = std::strtoull(argv[i] + 20, nullptr, 10);
+        if (!std::strncmp(argv[i], "--evidence-events=", 18))
+            g_evidenceEvents = (std::atoi(argv[i] + 18) != 0);
         if (!std::strncmp(argv[i], "--batch-rs=", 11))
             g_batchRs = (std::atoi(argv[i] + 11) != 0);
         if (!std::strncmp(argv[i], "--dir-overflow-policy=", 22)) {
@@ -3416,6 +3423,7 @@ main(int argc, char **argv)
               << jsonQuote(g_homeControllerMode == HomeControllerMode::Ubcc ? "ubcc" : "ha-vi")
               << ",\"dram_delay_ps\":" << g_dramDelayPs
               << ",\"dsm_data_delay_ps\":" << g_dsmDataDelayPs
+              << ",\"evidence_events\":" << (g_evidenceEvents ? 1 : 0)
               << ",\"fault_rule_args\":" << faultRuleArgs.size()
               << ",\"blc_bytes\":" << g_rdcfg.blc_bytes
               << ",\"desc_scratch_bytes\":" << g_rdcfg.desc_scratch_bytes
@@ -3474,6 +3482,8 @@ main(int argc, char **argv)
         ubcc->setBatchRsEnabled(g_batchRs);
         ubcc->setResidentOverflowPolicy(g_overflowPolicy);
         if (ubccDebugClear) ubcc->setDebugClearTrace(true);
+        ubcc->setVerboseLog(g_debugUbioPerf);
+        ubcc->setEvidenceEvents(g_evidenceEvents);
     }
     // Phase 3: H64 mode disables Bloom-negative shortcut
     if (ubcc && g_schemaMode == BackstoreSchemaMode::H64) {

@@ -22,6 +22,12 @@ namespace
 void
 appendTmpLog(const char *file, const char *fmt, ...)
 {
+    static const bool enabled = [] {
+        const char *value = std::getenv("UBCC_APPEND_TMP_LOG");
+        return value && std::atoi(value) != 0;
+    }();
+    if (!enabled)
+        return;
     char path[256];
     std::snprintf(path, sizeof(path), "/workspace/tmp_logs/%s", file);
     FILE *fp = std::fopen(path, "a");
@@ -598,16 +604,18 @@ UBCCController::handleResidentMiss(
         _overflowPolicy == ResidentOverflowPolicy::Spill &&
         (mayContain || (_h64BloomAllMisses && !h64NegativeAuthoritative));
 
-    framework::LogInfo("UBCC", "[RESIDENT-MISS] home={} pa=0x{:x} opKind={} req={} requester={} "
-            "mayContain={} h64BloomAll={} count={} capacity={} freeForPa={} policy={} reqId={}",
-            _nodeId, line_pa, static_cast<int>(pr.opKind),
-            static_cast<int>(pr.reqType), pr.node,
-            mayContain ? 1 : 0,
-            _h64BloomAllMisses ? 1 : 0,
-            _directory.count(), _directory.capacity(),
-            _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
-            _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0,
-            pr.reqId);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-MISS] home={} pa=0x{:x} opKind={} req={} requester={} "
+                "mayContain={} h64BloomAll={} count={} capacity={} freeForPa={} policy={} reqId={}",
+                _nodeId, line_pa, static_cast<int>(pr.opKind),
+                static_cast<int>(pr.reqType), pr.node,
+                mayContain ? 1 : 0,
+                _h64BloomAllMisses ? 1 : 0,
+                _directory.count(), _directory.capacity(),
+                _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
+                _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0,
+                pr.reqId);
+    }
     if (!_directory.hasFreeSlotForPa(line_pa)) {
         PendingRequester pr2 = pr;  // copy caller's envelope
         pr2.waitReason = ResidentWaitReason::Capacity;
@@ -671,10 +679,12 @@ UBCCController::handleResidentMiss(
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
     }
-    framework::LogInfo("UBCC", "[RESIDENT-FILL-ISSUED] tick={} home={} pa=0x{:x} waiterDepth={} opKind={}",
-            _host ? _host->hostCurrentTick() : 0,
-            _nodeId, line_pa, _residentWaiters[line_pa].size(),
-            static_cast<int>(pr.opKind));
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-FILL-ISSUED] tick={} home={} pa=0x{:x} waiterDepth={} opKind={}",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, line_pa, _residentWaiters[line_pa].size(),
+                static_cast<int>(pr.opKind));
+    }
     return ResidentAccessResult::Queued;
 }
 
@@ -732,10 +742,12 @@ UBCCController::enqueueResidentWaiterIfNew(uint64_t linePa, const PendingRequest
         }
     }
     q.push_back(pr);
-    framework::LogInfo("UBCC", "[RESIDENT-WAITER-ENQ] home={} pa=0x{:x} opKind={} node={} "
-            "socket={} reqId={} epoch={} depth={}",
-            _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
-            pr.socket, pr.reqId, pr.epoch, q.size());
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-WAITER-ENQ] home={} pa=0x{:x} opKind={} node={} "
+                "socket={} reqId={} epoch={} depth={}",
+                _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+                pr.socket, pr.reqId, pr.epoch, q.size());
+    }
     return ResidentWaiterEnqueueResult::Enqueued;
 }
 
@@ -875,9 +887,12 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
     _evictionPendingRemoval[victimPa] = victim.epoch;
-    framework::LogInfo("UBCC", "[RESIDENT-SPILL-START] tick={} home={} victim=0x{:x} state={} residentDirty={}",
-            _host ? _host->hostCurrentTick() : 0,
-            _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-SPILL-START] tick={} home={} victim=0x{:x} state={} residentDirty={}",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, victimPa, mesiStateName(victim.state),
+                victim.residentDirty ? 1 : 0);
+    }
     if (victim.state == MESIState::G_I) {
         scheduleBackstoreDelete(victimPa);
     } else {
@@ -919,10 +934,12 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         _naiveForcedWritebacks++;
     }
 
-    framework::LogInfo("UBCC","[UBCC-NAIVE-EVICT] home={} pa=0x{:x} state={} sharers=0x{:x} "
-           "targets=0x{:x} dirty={} epoch={}",
-           _nodeId, victimPa, mesiStateName(victim.state), victim.sharersMask,
-           targetMask, DirEntry::protoDirty(victim) ? 1 : 0, victim.epoch);
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC","[UBCC-NAIVE-EVICT] home={} pa=0x{:x} state={} sharers=0x{:x} "
+               "targets=0x{:x} dirty={} epoch={}",
+               _nodeId, victimPa, mesiStateName(victim.state), victim.sharersMask,
+               targetMask, DirEntry::protoDirty(victim) ? 1 : 0, victim.epoch);
+    }
 
     if (DirEntry::protoDirty(victim) && owner >= 0) {
         OutstandingRequest *recallOreq = createOutstanding(
@@ -1155,11 +1172,13 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         PendingRequester pr = it->second.front();
         it->second.pop_front();
 
-        framework::LogInfo("UBCC", "[RESIDENT-WAITER-REPLAY] tick={} home={} pa=0x{:x} opKind={} "
-                "node={} socket={} reqId={} epoch={}",
-                _host ? _host->hostCurrentTick() : 0,
-                _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
-                pr.socket, pr.reqId, pr.epoch);
+        if (_evidenceEvents || _verboseLog) {
+            framework::LogInfo("UBCC", "[RESIDENT-WAITER-REPLAY] tick={} home={} pa=0x{:x} opKind={} "
+                    "node={} socket={} reqId={} epoch={}",
+                    _host ? _host->hostCurrentTick() : 0,
+                    _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+                    pr.socket, pr.reqId, pr.epoch);
+        }
 
         bool stop = false;
         bool restore = false;  // whether to push the waiter back
@@ -1760,11 +1779,13 @@ UBCCController::processOuterRequest(
     // Emit one structured marker only when this call reaches a new grant
     // decision. Polling retries return through the existing outstanding/queue
     // paths above and must not dominate long-run logs.
-    framework::LogInfo("UBCC",
-        "[UBCC-OUTER-REQ] home={} pa=0x{:x} req={} write={} requester={} "
-        "sock={} baseEpoch={} reqId={}",
-        _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
-        requesterNode, requesterSocket, baseEpoch, reqId);
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC",
+            "[UBCC-OUTER-REQ] home={} pa=0x{:x} req={} write={} requester={} "
+            "sock={} baseEpoch={} reqId={}",
+            _nodeId, line_pa, static_cast<int>(reqType), writeIntent,
+            requesterNode, requesterSocket, baseEpoch, reqId);
+    }
 
     // Record grant-visible tick
     Tick grantVisibleTick = curTick();
@@ -2224,23 +2245,24 @@ UBCCController::processOuterRequest(
     // v4: §4.1.3 — SHALL NOT modify committed DirEntry here.
     // Committed DirEntry stays as-is until matching Clear is accepted.
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: v4 grant decision PA=0x{:x} "
-            "prev={} intended_state={} grant={} reservedEpoch={} "
-            "(committed DirEntry NOT modified)",
-            _nodeId, line_pa,
-            mesiStateName(prevState),
-            oreq ? mesiStateName(oreq->intendedState) : "none",
-            static_cast<int>(grant), reservedEpoch);
-    framework::LogInfo("UBCC","[UBCC-GRANT-READY] home={} pa=0x{:x} requester={} grant={} prev={} "
-           "intended={} baseEpoch={} reservedEpoch={} reqId={} dataSource={}",
-           _nodeId, line_pa, requesterNode, static_cast<int>(grant),
-           mesiStateName(prevState),
-           oreq ? mesiStateName(oreq->intendedState) : "none",
-           oreq ? oreq->baseEpoch : 0,
-           oreq ? oreq->reservedEpoch : 0,
-           oreq ? oreq->reqId : 0,
-           oreq ? static_cast<int>(oreq->dataSource) : -1);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: v4 grant decision PA=0x{:x} "
+                "prev={} intended_state={} grant={} reservedEpoch={} "
+                "(committed DirEntry NOT modified)",
+                _nodeId, line_pa, mesiStateName(prevState),
+                oreq ? mesiStateName(oreq->intendedState) : "none",
+                static_cast<int>(grant), reservedEpoch);
+        framework::LogInfo("UBCC","[UBCC-GRANT-READY] home={} pa=0x{:x} requester={} grant={} prev={} "
+               "intended={} baseEpoch={} reservedEpoch={} reqId={} dataSource={}",
+               _nodeId, line_pa, requesterNode, static_cast<int>(grant),
+               mesiStateName(prevState),
+               oreq ? mesiStateName(oreq->intendedState) : "none",
+               oreq ? oreq->baseEpoch : 0,
+               oreq ? oreq->reservedEpoch : 0,
+               oreq ? oreq->reqId : 0,
+               oreq ? static_cast<int>(oreq->dataSource) : -1);
+    }
 
     if (outGrantVisibleTick)
         *outGrantVisibleTick = grantVisibleTick;
@@ -2250,7 +2272,7 @@ UBCCController::processOuterRequest(
         *outGrantEpoch = oreq->reservedEpoch;
 
     // v4-latency: log OUTSTANDING state change
-    if (oreq) {
+    if (oreq && _verboseLog) {
         framework::LogInfo("UBCC-latency",
                 "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=OUTSTANDING",
                 curTick(), _nodeId, _socketId, line_pa,
@@ -3085,14 +3107,18 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 {
     epochVal = normalizeEpoch(epochVal);
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: processWriteback PA=0x{:x} "
-            "requesterNode={} epoch={} keepAsClean={}",
-            _nodeId, line_pa, requesterNode, epochVal, keepAsClean);
-    framework::LogInfo("UBCC","[UBCC-WB-ENTER] home={} pa=0x{:x} node={} keepAsClean={} epoch={}",
-           _nodeId, line_pa, requesterNode, keepAsClean, epochVal);
-    framework::LogInfo("UBCC", "[UBCC-WB-REQ] home={} pa=0x{:x} type=WritebackReq node={} keepAsClean={}",
-            _nodeId, line_pa, requesterNode, keepAsClean);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: processWriteback PA=0x{:x} "
+                "requesterNode={} epoch={} keepAsClean={}",
+                _nodeId, line_pa, requesterNode, epochVal, keepAsClean);
+        framework::LogInfo("UBCC","[UBCC-WB-ENTER] home={} pa=0x{:x} node={} keepAsClean={} epoch={}",
+               _nodeId, line_pa, requesterNode, keepAsClean, epochVal);
+    }
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[UBCC-WB-REQ] home={} pa=0x{:x} type=WritebackReq node={} keepAsClean={}",
+                _nodeId, line_pa, requesterNode, keepAsClean);
+    }
 
     DirEntry entry;
     PendingRequester prCtx;
@@ -3282,18 +3308,22 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
 
     _writebackCount++;
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: processWriteback PA=0x{:x} complete "
-             "newState={} ownerNode={} dirty={}",
-             _nodeId, line_pa, mesiStateName(entry.state),
-             DirEntry::ownerFromSharers(entry), DirEntry::protoDirty(entry));
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: processWriteback PA=0x{:x} complete "
+                 "newState={} ownerNode={} dirty={}",
+                 _nodeId, line_pa, mesiStateName(entry.state),
+                 DirEntry::ownerFromSharers(entry), DirEntry::protoDirty(entry));
+    }
 
     // Make home data authoritative before publishing the owner release.
     if (data && _host) {
         _host->writeDsmData(line_pa, data);
-        framework::LogInfo("UBCC",
-                     "[WB-DATA-PERSIST] home={} pa=0x{:x} node={} source=writeback",
-                     _nodeId, line_pa, requesterNode);
+        if (_evidenceEvents || _verboseLog) {
+            framework::LogInfo("UBCC",
+                         "[WB-DATA-PERSIST] home={} pa=0x{:x} node={} source=writeback",
+                         _nodeId, line_pa, requesterNode);
+        }
         // ── Phase C4 trace point 5: persisted word ──
         {
             uint64_t off = line_pa & 0x1FFFULL;
@@ -3816,10 +3846,12 @@ UBCCController::processClear(
         "[CLEAR] pa=0x%lx epoch=%lu reqId=%lu\n",
         line_pa, epoch, reqId);
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: processClear PA=0x{:x} "
-            "srcNode={} epoch={} reqId={}",
-            _nodeId, line_pa, srcNode, epoch, reqId);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: processClear PA=0x{:x} "
+                "srcNode={} epoch={} reqId={}",
+                _nodeId, line_pa, srcNode, epoch, reqId);
+    }
 
     // A delayed duplicate ReadReq can recreate the same grant tuple while its
     // historical Clear tombstone is still live. In that state, replaying the
@@ -4046,13 +4078,13 @@ UBCCController::processClear(
     validateSharersCanonical(line_pa);
 
     // v4-latency: log COMMIT state change
-    framework::LogInfo("UBCC-latency",
-            "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=COMMIT",
-            curTick(), _nodeId, _socketId, line_pa,
-            mesiStateName(oldState),
-            mesiStateName(entry.state),
-            entry.epoch,
-            entry.sharersMask);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC-latency",
+                "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=COMMIT",
+                curTick(), _nodeId, _socketId, line_pa,
+                mesiStateName(oldState), mesiStateName(entry.state),
+                entry.epoch, entry.sharersMask);
+    }
 
     // Retire GRANT_HANDSHAKE to tombstone(W) for duplicate Clear replay
     retireCommittedReadWaiters(*ost);
@@ -4306,15 +4338,17 @@ UBCCController::commitIntendedResult(
               "UBCC canonical assert failed PA=0x{:x} state={} sharers=0x{:x}",
              ost.linePa, static_cast<int>(entry.state), entry.sharersMask);
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: commitIntendedResult PA=0x{:x} "
-            "path={} state={} owner={} sharers=0x{:x} dirty={} epoch={} "
-            "baseEpoch={} reservedEpoch={} requester={}:{} reqId={}",
-            _nodeId, ost.linePa, path,
-            mesiStateName(entry.state), DirEntry::ownerFromSharers(entry),
-            entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch,
-            ost.baseEpoch, ost.reservedEpoch, ost.requesterNode,
-            ost.requesterSocket, ost.reqId);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: commitIntendedResult PA=0x{:x} "
+                "path={} state={} owner={} sharers=0x{:x} dirty={} epoch={} "
+                "baseEpoch={} reservedEpoch={} requester={}:{} reqId={}",
+                _nodeId, ost.linePa, path,
+                mesiStateName(entry.state), DirEntry::ownerFromSharers(entry),
+                entry.sharersMask, DirEntry::protoDirty(entry), entry.epoch,
+                ost.baseEpoch, ost.reservedEpoch, ost.requesterNode,
+                ost.requesterSocket, ost.reqId);
+    }
 
     if (entry.state != MESIState::G_I) {
         publishBloomLive(ost.linePa);
@@ -4337,15 +4371,16 @@ UBCCController::retireToTombstone(const OutstandingRequest &ost, bool accepted)
     // doesn't clobber earlier tombstones within window W.
     _tombstones[ost.linePa].push_back(ts);
 
-    framework::LogInfo("UBCC",
-            "UBCC node_id={}: retireToTombstone PA=0x{:x} "
-            "baseEpoch={} reservedEpoch={} reqId={} expireTick={} depth={}",
-            _nodeId, ost.linePa, ost.baseEpoch, ost.reservedEpoch, ost.reqId,
-            ts.expireTick,
-            _tombstones[ost.linePa].size());
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+                "UBCC node_id={}: retireToTombstone PA=0x{:x} "
+                "baseEpoch={} reservedEpoch={} reqId={} expireTick={} depth={}",
+                _nodeId, ost.linePa, ost.baseEpoch, ost.reservedEpoch, ost.reqId,
+                ts.expireTick, _tombstones[ost.linePa].size());
+    }
 
     // v4-latency: log RETIRE state change
-    framework::LogInfo("UBCC-latency",
+    if (_verboseLog) framework::LogInfo("UBCC-latency",
             "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=RETIRE",
             curTick(), _nodeId, _socketId, ost.linePa,
             mesiStateName(ost.intendedState),
@@ -4415,11 +4450,13 @@ UBCCController::recordCompletedReadIdentity(const OutstandingRequest &ost)
         _completedReadIdentities.erase(_completedReadIdentityOrder.front());
         _completedReadIdentityOrder.pop_front();
     }
-    framework::LogInfo("UBCC",
-        "[UBCC-COMPLETED-READ-RECORD] home={}:{} pa=0x{:x} requester={}:{} "
-        "reqId={} cacheSize={}",
-        _nodeId, _socketId, ost.linePa, ost.requesterNode, ost.requesterSocket,
-        ost.reqId, _completedReadIdentityOrder.size());
+    if (_verboseLog) {
+        framework::LogInfo("UBCC",
+            "[UBCC-COMPLETED-READ-RECORD] home={}:{} pa=0x{:x} requester={}:{} "
+            "reqId={} cacheSize={}",
+            _nodeId, _socketId, ost.linePa, ost.requesterNode,
+            ost.requesterSocket, ost.reqId, _completedReadIdentityOrder.size());
+    }
 }
 
 void
@@ -4430,7 +4467,7 @@ UBCCController::cleanupTombstones()
         auto &deq = it->second;
         // Remove expired entries from the front (FIFO push order)
         while (!deq.empty() && deq.front().expireTick <= now) {
-            framework::LogInfo("UBCC",
+            if (_verboseLog) framework::LogInfo("UBCC",
                     "UBCC node_id={}: tombstone expired PA=0x{:x} "
                     "epoch={} reqId={}",
                     _nodeId, deq.front().linePa,
@@ -4583,10 +4620,13 @@ UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
     cancelH64LookupRetry(linePa);
-    framework::LogInfo("UBCC", "[RESIDENT-FILL-DONE] tick={} home={} pa=0x{:x} found={} waiters={}",
-            _host ? _host->hostCurrentTick() : 0,
-            _nodeId, linePa, found ? 1 : 0,
-           _residentWaiters.count(linePa) ? _residentWaiters[linePa].size() : 0);
+    if (found || _evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-FILL-DONE] tick={} home={} pa=0x{:x} found={} waiters={}",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, linePa, found ? 1 : 0,
+                _residentWaiters.count(linePa) ?
+                    _residentWaiters[linePa].size() : 0);
+    }
     DirEntry e;
     if (!_directory.lookup(linePa, e)) {
         e.lineAddr = linePa;
@@ -4637,10 +4677,12 @@ UBCCController::onBackstoreFillComplete(
         "ubcc_fill_complete.log",
         "[FILL-COMPLETE] pa=0x%lx found=%d state=%d sharers=0x%lx\n",
         linePa, found ? 1 : 0, static_cast<int>(e.state), e.sharersMask);
-    framework::LogInfo("UBCC","[UBCC-FILL-DONE] home={} pa=0x{:x} found={} state={} sharers=0x{:x} "
-           "epoch={}",
-           _nodeId, linePa, found ? 1 : 0, mesiStateName(e.state),
-           e.sharersMask, e.epoch);
+    if (_verboseLog) {
+        framework::LogInfo("UBCC","[UBCC-FILL-DONE] home={} pa=0x{:x} found={} state={} sharers=0x{:x} "
+               "epoch={}",
+               _nodeId, linePa, found ? 1 : 0, mesiStateName(e.state),
+               e.sharersMask, e.epoch);
+    }
     _directory.update(linePa, e);
     _directory.setFillPending(linePa, false);
     _directory.touch(linePa);
@@ -4653,11 +4695,13 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa, uint64_t snapshotEpoch)
 {
-    framework::LogInfo("UBCC", "[RESIDENT-SPILL-DONE] tick={} home={} pa=0x{:x} evictionPending={} async={}",
-            _host ? _host->hostCurrentTick() : 0,
-            _nodeId, linePa,
-            _evictionPendingRemoval.count(linePa) ? 1 : 0,
-           _asyncWbSnapshots.count(linePa) ? 1 : 0);
+    if (_evidenceEvents || _verboseLog) {
+        framework::LogInfo("UBCC", "[RESIDENT-SPILL-DONE] tick={} home={} pa=0x{:x} evictionPending={} async={}",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, linePa,
+                _evictionPendingRemoval.count(linePa) ? 1 : 0,
+                _asyncWbSnapshots.count(linePa) ? 1 : 0);
+    }
 
     // Phase 3: successful backstore write — Bloom already inserted by caller.
     // No exact-PA shadow set.
@@ -4687,11 +4731,13 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa, uint64_t snapshotEpoch)
                 _directory.update(linePa, e);
             }
             _directory.setWbPending(linePa, false);
-            framework::LogInfo("UBCC",
-                "[UBCC-ORDINARY-WB-ACK] home={} pa=0x{:x} "
-                "snapshotEpoch={} currentEpoch={} matched={} action=release_waiters",
-                _nodeId, linePa, snapshotEpoch, e.epoch,
-                snapshotMatched ? 1 : 0);
+            if (_verboseLog) {
+                framework::LogInfo("UBCC",
+                    "[UBCC-ORDINARY-WB-ACK] home={} pa=0x{:x} "
+                    "snapshotEpoch={} currentEpoch={} matched={} action=release_waiters",
+                    _nodeId, linePa, snapshotEpoch, e.epoch,
+                    snapshotMatched ? 1 : 0);
+            }
             refreshPinnedBit(linePa);
             replayResidentWaiters(linePa);
             replayResidentWaitersForCapacity(linePa);
@@ -5409,12 +5455,14 @@ UBCCController::tryPushGrant(OutstandingRequest &ost, const char *reason)
     ost.respTick = curTick();
     const bool accepted = _outbound->sendGrantPush(push);
     ost.replayArmed = !accepted;
-    framework::LogInfo("UBCC",
-        "[PUSH-GRANT-TRY] reason={} home={} pa=0x{:x} requester={} "
-        "sock={} reqId={} accepted={}",
-        reason ? reason : "unknown", _nodeId, ost.linePa,
-        ost.requesterNode, ost.requesterSocket, ost.reqId,
-        accepted ? 1 : 0);
+    if (_verboseLog || _evidenceEvents || !accepted) {
+        framework::LogInfo("UBCC",
+            "[PUSH-GRANT-TRY] reason={} home={} pa=0x{:x} requester={} "
+            "sock={} reqId={} accepted={}",
+            reason ? reason : "unknown", _nodeId, ost.linePa,
+            ost.requesterNode, ost.requesterSocket, ost.reqId,
+            accepted ? 1 : 0);
+    }
     return accepted;
 }
 

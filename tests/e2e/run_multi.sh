@@ -496,6 +496,13 @@ ubio_extra_args_for_tc() {
     esac
 }
 
+ubio_evidence_events_for_tc() {
+    case "$1" in
+        125|126|127|128|129|141|200|201|202|203) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
 # ─── Lookup json module command (placeholder substitution) ────────────
 # expand_cmd <module_id> <fault_rules> <ubio_extra_args> [node_outdir]
 # Env: runtime paths used to substitute runner-specific placeholders.
@@ -1018,6 +1025,7 @@ run_tc() {
     fi
     uextra="$uextra --tc=${tc} --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
     uextra="$uextra --dsm-data-delay-ps=${EP_DSM_DATA_DELAY_PS}"
+    uextra="$uextra --evidence-events=$(ubio_evidence_events_for_tc "$tc")"
     [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
