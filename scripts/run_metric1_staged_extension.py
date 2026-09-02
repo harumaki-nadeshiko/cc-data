@@ -31,6 +31,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--wait-pid", required=True, type=int)
     parser.add_argument("--output-root", required=True, type=pathlib.Path)
+    parser.add_argument("--skip-stage", action="append", default=[])
     args = parser.parse_args(argv)
     root = args.output_root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -50,6 +51,7 @@ def main(argv=None):
         ("tc131_tc147_16n1s", ["16n1s"], [131] + list(range(142, 148)),
          ["0-31"]),
     ]
+    stages = [stage for stage in stages if stage[0] not in args.skip_stage]
     for name, topologies, test_cases, cpu_slots in stages:
         stage_root = root / name
         command = [
