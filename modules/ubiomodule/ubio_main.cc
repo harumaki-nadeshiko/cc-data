@@ -2759,7 +2759,7 @@ struct HomeVIAdapter {
             // HA directory entries do not carry the UBCC permission epoch, so
             // this adapter cannot validate StoreCommit's exact tuple. Reject it
             // explicitly rather than routing it through owner writeback state.
-            if (msg.b.writebackReq.kind == UBWritebackKind::StoreCommit) {
+            if (msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback) {
                 rejectWriteback();
                 return true;
             }
@@ -3328,8 +3328,10 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         const auto disposition = msg.b.writebackReq.disposition;
         const bool keepAsClean = disposition == UBWriteDisposition::KeepClean;
         const bool validKind = kind == UBWritebackKind::OwnerWriteback ||
-            kind == UBWritebackKind::StoreCommit;
+            kind == UBWritebackKind::StoreCommit ||
+            kind == UBWritebackKind::InternalPublication;
         const bool validDisposition = kind == UBWritebackKind::StoreCommit
+            || kind == UBWritebackKind::InternalPublication
             ? disposition == UBWriteDisposition::MemoryOnly
             : (disposition == UBWriteDisposition::DropOwner || keepAsClean);
         const bool validPayload = msg.b.writebackReq.hasData &&
@@ -3339,10 +3341,14 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         const bool exactStoreOwner = kind != UBWritebackKind::StoreCommit ||
             ubcc.processStoreCommit(msg.h.homeLinePa, msg.h.requesterNode,
                                     msg.h.epoch);
+        const bool validInternalIdentity =
+            kind != UBWritebackKind::InternalPublication ||
+            (msg.h.requesterNode == -1 && msg.h.epoch == 0);
         const int currentOwner = ubcc.getOwnerForLine(msg.h.homeLinePa);
         const bool plausibleOwner = kind != UBWritebackKind::OwnerWriteback ||
             currentOwner < 0 || currentOwner == msg.h.requesterNode;
         if (!validKind || !validDisposition || !validPayload || !exactStoreOwner ||
+            !validInternalIdentity ||
             !plausibleOwner) {
             response.h.type = CoherenceMessageType::WritebackResp;
             response.h.srcNode = nid; response.h.srcSocket = sid;

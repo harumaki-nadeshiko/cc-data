@@ -3412,6 +3412,12 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
             r.ownerWriteback != ownerWriteback || r.disposition != disposition)
             return false;
     }
+    // An HN-internal publication is identified by its source endpoint/reqId,
+    // not by an architectural requester or permission epoch.  It serializes
+    // against directory activity but never validates or changes outer owner.
+    if (!ownerWriteback && requesterNode == -1 && epochVal == 0 &&
+        disposition == 0)
+        return _outstandingReqs.find(line_pa) == _outstandingReqs.end();
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry) ||
         normalizeEpoch(entry.epoch) != normalizeEpoch(epochVal) ||

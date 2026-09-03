@@ -34,6 +34,7 @@ static_assert(offsetof(UBWritebackReqBody, reserved) == 3);
 static_assert(offsetof(UBWritebackReqBody, byteMask) == 8);
 static_assert(offsetof(UBWritebackReqBody, data) == 16);
 static_assert(sizeof(UBWritebackReqBody) == 80);
+static_assert(static_cast<uint8_t>(UBWritebackKind::InternalPublication) == 2);
 
 static_assert(offsetof(UBHAPermissionReqBody, operation) == 0);
 static_assert(offsetof(UBHAPermissionReqBody, reserved) == 1);
