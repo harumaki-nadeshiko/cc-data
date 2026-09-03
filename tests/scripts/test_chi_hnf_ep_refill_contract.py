@@ -4,12 +4,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+GEM5 = ROOT / "gem5"
 ACTIONS = (
-    ROOT
-    / "gem5/gem5/src/mem/ruby/protocol/chi/CHI-cache-actions.sm"
+    GEM5
+    / "src/mem/ruby/protocol/chi/CHI-cache-actions.sm"
 )
-FUNCS = ROOT / "gem5/gem5/src/mem/ruby/protocol/chi/CHI-cache-funcs.sm"
-EPSNF = ROOT / "gem5/gem5/src/mem/ruby/protocol/chi/ep/EPSNFController.cc"
+FUNCS = GEM5 / "src/mem/ruby/protocol/chi/CHI-cache-funcs.sm"
+EPSNF = GEM5 / "src/mem/ruby/protocol/chi/ep/EPSNFController.cc"
 
 
 def action_body(source, name):
@@ -122,6 +123,23 @@ class ChiHnfEpRefillContractTest(unittest.TestCase):
             r"publishOnData = msg->m_ubcc_publish_on_data.*"
             r"notifyLocalLinePublished\(linePa, _socketId\)",
         )
+
+    def test_ep_snf_split_write_responses_route_by_line_not_txnid(self):
+        source = EPSNF.read_text(encoding="utf-8")
+        compact = re.sub(r"\s+", " ", source)
+        self.assertRegex(
+            compact,
+            r"pending\.linePa, CHIResponseType_DBIDResp,.*"
+            r"false, false, pending\.originalTxnId, pending\.dbid,",
+        )
+        self.assertRegex(
+            compact,
+            r"pending\.linePa, CHIResponseType_Comp,.*"
+            r"false, false, pending\.originalTxnId, 0,",
+        )
+        self.assertIn("const uint64_t dbid = msg->m_txnId;", source)
+        self.assertIn("(1ULL << 58)", source)
+        self.assertIn("result == 0 && pending.internalPublication", source)
 
     def test_upgrade_completion_handles_stale_without_granting_unique(self):
         source = ACTIONS.read_text(encoding="utf-8")
