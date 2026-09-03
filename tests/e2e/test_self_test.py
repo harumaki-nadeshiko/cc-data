@@ -77,16 +77,6 @@ def gem5_config_main():
 
     system.cpu = cpus
 
-    # ── Proxy resolution (skip CPUs, same as e2e framework) ──────────
-    from m5.objects import BaseCPU
-    for _obj in root.descendants():
-        if isinstance(_obj, BaseCPU):
-            continue
-        try:
-            _obj.unproxyParams()
-        except Exception:
-            pass
-
     # ── Options ──────────────────────────────────────────────────────
     class O: pass
     options = O()
@@ -140,13 +130,6 @@ def gem5_config_main():
         print("FATAL: Ruby.create_system did not create system.ruby")
         sys.exit(1)
 
-    # ── Post-create proxy resolution ────────────────────────────────
-    for _obj in ruby_system.descendants():
-        try:
-            _obj.unproxyParams()
-        except Exception:
-            pass
-
     cpu_sequencers = ruby_system._cpu_ports
     for i, seq in enumerate(cpu_sequencers):
         seq.connectCpuPorts(cpus[i])
@@ -155,8 +138,9 @@ def gem5_config_main():
     all_ranges = []
     for nid in range(NODES):
         cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE)
-        all_ranges.append(cfg.local_private_range)
-        all_ranges.append(cfg.ubcc_exclusive_range)
+        all_ranges.extend(cfg.all_local_private_ranges())
+        all_ranges.extend(cfg.all_metadata_private_ranges())
+        all_ranges.extend(cfg.all_metadata_backstore_ranges())
         for hn in range(NODES):
             all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
     system.mem_ranges = all_ranges

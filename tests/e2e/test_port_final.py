@@ -10,7 +10,6 @@ if __name__ == "__m5_main__":
         System, SrcClockDomain, VoltageDomain,
         TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, RubySystem,
     )
-    from m5.SimObject import SimObject
 
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     binary = os.path.join(SCRIPT_DIR, "workloads", "e2e_tc_minimal.elf")
@@ -18,6 +17,7 @@ if __name__ == "__m5_main__":
     root = Root(full_system=False)
     system = System(mem_mode="timing", cache_line_size=64)
     root.system = system
+    system.mmap_using_noreserve = True
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
 
@@ -33,21 +33,8 @@ if __name__ == "__m5_main__":
     proc.executable = binary
     proc.cwd = os.getcwd()
     proc.cmd = [binary]
-    cpu.workload = [proc]
-
-    # Early proxy resolution
-    stack = [(root, 0)]
-    while stack:
-        obj, _ = stack.pop()
-        if not isinstance(obj, SimObject): continue
-        try: obj.unproxyParams()
-        except Exception: pass
-        for name in sorted(obj._children.keys(), reverse=True):
-            child = obj._children[name]
-            if hasattr(child, '__iter__') and not isinstance(child, (str, bytes)):
-                for c in reversed(list(child)):
-                    if isinstance(c, SimObject): stack.append((c, 0))
-            elif isinstance(child, SimObject): stack.append((child, 0))
+    cpu.process = proc
+    cpu.workload = [cpu.process]
 
     # Manual Ruby — just create a minimal Ruby system with one sequencer
     ruby = RubySystem()
@@ -81,7 +68,7 @@ if __name__ == "__m5_main__":
         _va_start = _seg['va'] & ~(_page_size - 1)
         _va_end = (_seg['va'] + _seg['memsz'] + _page_size - 1) & ~(_page_size - 1)
         for _va in range(_va_start, _va_end, _page_size):
-            proc.map(_va, _pa_cur, _page_size, cacheable=True)
+            proc.defer_map(_va, _pa_cur, _page_size, cacheable=True)
             _pa_cur += _page_size
 
     # Set mem_ranges to cover the fetch address

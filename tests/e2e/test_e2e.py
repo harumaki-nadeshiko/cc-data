@@ -3540,34 +3540,6 @@ def _collect_memories(system):
           flush=True)
 
 
-def _early_unproxy_all(root):
-    """Walk root children tree and call unproxyParams() to resolve all
-    Parent.*/Self.* proxy params BEFORE C++ object construction happens.
-    gem5 v25.1's internal config_filesystem (called by Ruby.create_system)
-    triggers C++ construction, which fatals on unresolved proxies."""
-    from m5.SimObject import SimObject
-    from m5.proxy import isproxy
-
-    # Iterative DFS to avoid recursion limit issues
-    stack = [(root, 0)]
-    while stack:
-        obj, _ = stack.pop()
-        if not isinstance(obj, SimObject):
-            continue
-        try:
-            obj.unproxyParams()
-        except Exception:
-            pass
-        # Push children
-        for name in sorted(obj._children.keys(), reverse=True):
-            child = obj._children[name]
-            if hasattr(child, '__iter__') and not isinstance(child, (str, bytes)):
-                for c in reversed(list(child)):
-                    if isinstance(c, SimObject):
-                        stack.append((c, 0))
-            elif isinstance(child, SimObject):
-                stack.append((child, 0))
-
 # ═══════════════════════════════════════════════════════════════════
 #  GEM5 CONFIG MODE
 # ═══════════════════════════════════════════════════════════════════
@@ -3802,15 +3774,13 @@ def gem5_config_main():
                               _cfg_num_sockets)
         local_external_ranges.extend(node_cfg.all_local_private_ranges())
 
-    # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    # Set the coherent external range in the constructor. The v25.1 proxy
-    # workaround below may materialize the C++ System before later Python
-    # assignments; O3 fetch consults the constructor-captured range.
+    # Set the coherent external range in the constructor for O3 fetches.
     system = ArmSystem(
         mem_mode="timing", cache_line_size=64,
         external_memory_ranges=local_external_ranges)
     root.system = system
+    system.mmap_using_noreserve = True
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
     # Give SE workloads an architected, simulated-time counter.  The timer
@@ -3861,7 +3831,11 @@ def gem5_config_main():
         # Pool 0,1,2 cover [0,1,2]TiB + 256MiB (node LP+UE ranges).
         # Each process allocates stack/heap from its own node's pool,
         # ensuring the PA is within the node's address space.
-        proc = Process(pid=100 + global_cpu_index, phys_pool_id=node_id)
+        # A split gem5 process exposes one local PhysicalMemory range, so its
+        # SE MemPool index is always zero. Legacy all-node mode has one pool
+        # per node and continues to use the global node index.
+        pool_id = node_id if _local_node < 0 else 0
+        proc = Process(pid=100 + global_cpu_index, phys_pool_id=pool_id)
         proc.executable = binary
         proc.cwd = os.getcwd()
         proc.cmd = [binary, str(node_id), str(global_cpu_index)]
@@ -3872,39 +3846,8 @@ def gem5_config_main():
         # O_APPEND preserves each single-syscall workload marker atomically.
         proc.output = f"append:simout_n{node_id}"
         proc.errout = "simerr"
-        cpu.workload = [proc]
-
-    # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
-    # Previous _early_unproxy_all(root) resolved all proxies on all
-    # SimObjects, including CPU port refs.  This caused the port
-    # bindings established later by connectCpuPorts to malfunction:
-    # the CPU's sendTimingReq returned success but the RubyPort's
-    # recvTimingReq was never called. Root cause: PortRef.unproxy()
-    # on unconnected CPU ports sets internal state that prevents
-    # ccConnect() from establishing a proper C++ binding.
-    #
-    # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
-    # Previous _early_unproxy_all(root) resolved all proxies on all
-    # SimObjects, including CPU port refs.  This caused the port
-    # bindings established later by connectCpuPorts to malfunction:
-    # the CPU's sendTimingReq returned success but the RubyPort's
-    # recvTimingReq was never called. Root cause: PortRef.unproxy()
-    # on unconnected CPU ports sets internal state that prevents
-    # ccConnect() from establishing a proper C++ binding.
-    #
-    # Fix: iterate ALL SimObjects but SKIP CPU objects to avoid
-    # touching their port refs.  CPUs get their port bindings
-    # after Ruby.create_system(), so their port refs must remain
-    # fresh for proper ccConnect() during m5.instantiate().
-    from m5.objects import BaseCPU
-    for _obj in root.descendants():
-        if isinstance(_obj, BaseCPU):
-            continue  # Skip CPUs: preserve fresh port refs
-        try:
-            _obj.unproxyParams()
-        except Exception:
-            pass
-    print(f"[E2E-Q2] Targeted proxy resolution: all non-CPU objects", flush=True)
+        cpu.process = proc
+        cpu.workload = [cpu.process]
 
     # ── Options ────────────────────────────────────────────────────
     class O: pass
@@ -3949,7 +3892,7 @@ def gem5_config_main():
     options.ubcc_local_node = _local_node
     options.ubcc_metadata_size = _args.ubcc_metadata_size
 
-    # ── Patch v25.1: Skip config_filesystem proxy-triggering call ──
+    # ── Patch v25.1: Skip config_filesystem ─────────────────────────
     import common.FileSystemConfig as _fsc
     _fsc.config_filesystem = lambda *a, **kw: None
 
@@ -3978,17 +3921,6 @@ def gem5_config_main():
     if not ruby_system:
         print("FATAL: Ruby.create_system did not create system.ruby")
         sys.exit(1)
-
-    # Q2 FIX: resolve proxy params set during create_ubcc_system
-    # (downstream_destinations, addr_ranges on SNF/HN-F controllers)
-    # after create_system has finished wiring everything.
-    for _obj in ruby_system.descendants():
-        try:
-            _obj.unproxyParams()
-        except Exception:
-            pass
-    print(f"[E2E-Q2] Post-create_system proxy resolution on Ruby tree",
-          flush=True)
 
     cpu_sequencers = ruby_system._cpu_ports
 
@@ -4091,7 +4023,7 @@ def gem5_config_main():
                 for _va in range(_va_start, _va_end, _page_size):
                     _pa = _node_pa[_node_id]
                     _node_pa[_node_id] += _page_size
-                    _proc.map(_va, _pa, _page_size, cacheable=True)
+                    _proc.defer_map(_va, _pa, _page_size, cacheable=True)
                     _total_pages += 1
 
     # ── Map local_private_range for workloads that need direct
@@ -4112,7 +4044,7 @@ def gem5_config_main():
                              _local_va_base + _local_map_bytes,
                              _page_size):
                 _pa = _local_pa_base + (_va - _local_va_base)
-                _proc.map(_va, _pa, _page_size, cacheable=True)
+                _proc.defer_map(_va, _pa, _page_size, cacheable=True)
                 _local_pages += 1
     _total_pages += _local_pages
 
@@ -4121,10 +4053,6 @@ def gem5_config_main():
            flush=True)
 
     # ── Ensure system.memories includes DDR4 DRAMs ──────────────
-    # _early_unproxy_all resolved Self.all → [] before DDR4 objects
-    # existed.  We explicitly rebuild system.memories here AND
-    # directly manipulate _values to ensure the C++ parameter
-    # transfer picks it up (bypassing any SimObject caching).
     from m5.objects import AbstractMemory
     _all_memories = [obj for obj in system.descendants()
                      if isinstance(obj, AbstractMemory)]

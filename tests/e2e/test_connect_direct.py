@@ -15,8 +15,6 @@ if __name__ == "__m5_main__":
         System, SrcClockDomain, VoltageDomain,
         TimingSimpleCPU, Process, SEWorkload, Root, AddrRange,
     )
-    from m5.SimObject import SimObject
-    from m5.proxy import isproxy
 
     gem5_root = os.path.dirname(os.path.dirname(os.path.dirname(GEM5_BIN)))
     configs_path = os.path.join(gem5_root, "configs")
@@ -40,6 +38,7 @@ if __name__ == "__m5_main__":
     root = Root(full_system=False)
     system = System(mem_mode="timing", cache_line_size=64)
     root.system = system
+    system.mmap_using_noreserve = True
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
 
@@ -62,26 +61,8 @@ if __name__ == "__m5_main__":
         proc.executable = binary
         proc.cwd = os.getcwd()
         proc.cmd = [binary]
-        cpu.workload = [proc]
-
-    # Early proxy resolution (MUST do this for Process parenting)
-    stack = [(root, 0)]
-    while stack:
-        obj, _ = stack.pop()
-        if not isinstance(obj, SimObject):
-            continue
-        try:
-            obj.unproxyParams()
-        except Exception:
-            pass
-        for name in sorted(obj._children.keys(), reverse=True):
-            child = obj._children[name]
-            if hasattr(child, '__iter__') and not isinstance(child, (str, bytes)):
-                for c in reversed(list(child)):
-                    if isinstance(c, SimObject):
-                        stack.append((c, 0))
-            elif isinstance(child, SimObject):
-                stack.append((child, 0))
+        cpu.process = proc
+        cpu.workload = [cpu.process]
 
     class O:
         pass
@@ -130,8 +111,9 @@ if __name__ == "__m5_main__":
     all_ranges = []
     for nid in range(NODES):
         cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE)
-        all_ranges.append(cfg.local_private_range)
-        all_ranges.append(cfg.ubcc_exclusive_range)
+        all_ranges.extend(cfg.all_local_private_ranges())
+        all_ranges.extend(cfg.all_metadata_private_ranges())
+        all_ranges.extend(cfg.all_metadata_backstore_ranges())
         for hn in range(NODES):
             all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
     system.mem_ranges = all_ranges
@@ -170,7 +152,7 @@ if __name__ == "__m5_main__":
                 for _va in range(_va_start, _va_end, _page_size):
                     _pa = _node_pa[_node_id]
                     _node_pa[_node_id] += _page_size
-                    _proc.map(_va, _pa, _page_size, cacheable=True)
+                    _proc.defer_map(_va, _pa, _page_size, cacheable=True)
                     _total_pages += 1
 
     print(f"[DIRECT-BIND] Pre-mapped {_total_pages} pages", flush=True)

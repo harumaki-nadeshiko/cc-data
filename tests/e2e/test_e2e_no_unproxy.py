@@ -105,8 +105,9 @@ if __name__ == "__m5_main__":
     all_ranges = []
     for nid in range(NODES):
         cfg = NodeConfig(nid, NODES, DEFAULT_SEG_SIZE)
-        all_ranges.append(cfg.local_private_range)
-        all_ranges.append(cfg.ubcc_exclusive_range)
+        all_ranges.extend(cfg.all_local_private_ranges())
+        all_ranges.extend(cfg.all_metadata_private_ranges())
+        all_ranges.extend(cfg.all_metadata_backstore_ranges())
         for hn in range(NODES):
             all_ranges.append(NodeConfig.dsm_range_for(hn, DEFAULT_SEG_SIZE, cfg.phy_base))
     system.mem_ranges = all_ranges
@@ -145,7 +146,7 @@ if __name__ == "__m5_main__":
                 for _va in range(_va_start, _va_end, _page_size):
                     _pa = _node_pa[_node_id]
                     _node_pa[_node_id] += _page_size
-                    _proc.map(_va, _pa, _page_size, cacheable=True)
+                    _proc.defer_map(_va, _pa, _page_size, cacheable=True)
                     _total_pages += 1
 
     print(f"[NO-UNPROXY] Pre-mapped {_total_pages} pages", flush=True)
