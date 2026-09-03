@@ -86,10 +86,14 @@ void testSingletonAndMultiRead()
     ha.directoryForTest().setSharers(pa, 1u << 2);
     assert(ha.submit({pa, 2, RK::Read, 9}));
     auto actions = drain(ha);
-    assert(actions.size() == 1 && actions[0].kind == AK::FetchMemory &&
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchOwner &&
            actions[0].source == 2 && actions[0].target == 2);
     const auto selfLine = payload(0x900d);
     ha.accept(event(EK::OwnerData, pa, 2, 9, selfLine));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::PersistMemory &&
+           actions[0].data == selfLine);
+    ha.accept(event(EK::PersistenceComplete, pa, 2, 9));
     actions = drain(ha);
     assert(actions.size() == 1 && actions[0].kind == AK::GrantRead &&
            actions[0].data == selfLine);
@@ -114,6 +118,18 @@ void testSingletonAndMultiRead()
     actions = drain(ha);
     assert(has(actions, AK::Commit, 10) && has(actions, AK::Release, 10));
     assert(ha.directory().sharers(pa) == ((1u << 1) | (1u << 2)));
+
+    const std::uint64_t cleanPa = pa + 128;
+    ha.directoryForTest().setSharers(cleanPa, 1u << 1);
+    assert(ha.submit({cleanPa, 2, RK::Read, 13}));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchOwner);
+    ha.accept(event(EK::OwnerNoData, cleanPa, 1, 13));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchMemory);
+    ha.accept(event(EK::OwnerData, cleanPa, 2, 13, payload(0xc1ea)));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantRead);
 
     assert(ha.submit({pa, 3, RK::Read, 11}));
     actions = drain(ha);
@@ -146,18 +162,15 @@ void testWriterBarrierAndAckQueueGating()
     assert(ha.submit({pa, 0, RK::Read, 21}));
     assert(ha.queued(pa) == 1);
     auto actions = drain(ha);
-    assert(actions.size() == 3); // invalidates gate persistence of final write data
+    assert(actions.size() == 3); // invalidates gate the write-back grant
     ha.accept({EK::InvalidateAck, pa, 2, 20});
     ha.accept({EK::InvalidateAck, pa, 0, 999}); // stale ID ignored
     ha.accept({EK::InvalidateAck, pa, 0, 20});
     assert(drain(ha).empty());
     ha.accept({EK::InvalidateAck, pa, 1, 20});
     actions = drain(ha);
-    assert(actions.size() == 1 && actions[0].kind == AK::PersistMemory &&
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite &&
            actions[0].data == writeLine);
-    ha.accept(event(EK::PersistenceComplete, pa, 3, 20));
-    actions = drain(ha);
-    assert(has(actions, AK::GrantWrite, 20));
     assert(ha.directory().sharers(pa) == 0x7);
     ha.accept({EK::InstallAck, pa, 3, 999});
     assert(drain(ha).empty() && ha.queued(pa) == 1);
@@ -178,10 +191,8 @@ void testWriterBarrierAndAckQueueGating()
            actions[0].target == 1);
     ha.accept(event(EK::InvalidateAck, handoffPa, 1, 22));
     actions = drain(ha);
-    assert(actions.size() == 1 && actions[0].kind == AK::PersistMemory &&
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite &&
            actions[0].data == handoffLine);
-    ha.accept(event(EK::PersistenceComplete, handoffPa, 2, 22));
-    assert(has(drain(ha), AK::GrantWrite, 22));
 }
 
 void testDifferentAddressConcurrencyAndBroadcast()
@@ -250,6 +261,15 @@ void testWritebackEvictAndPeerExit()
     HAController::Payload invalid;
     ha.accept(event(EK::Writeback, wbPa, 1, 53, invalid, true, true));
     assert(drain(ha).empty());
+
+    const std::uint64_t failedPa = 0x1001c0;
+    ha.directoryForTest().setSharers(failedPa, 1u << 2);
+    ha.accept(event(EK::Writeback, failedPa, 2, 54, fullLine, false, true));
+    assert(has(drain(ha), AK::PersistMemory, 54));
+    ha.accept(event(EK::WritebackFailed, failedPa, 2, 54));
+    assert(ha.directory().sharers(failedPa) == (1u << 2));
+    ha.accept(event(EK::Writeback, failedPa, 2, 55, fullLine, false, true));
+    assert(has(drain(ha), AK::PersistMemory, 55));
 }
 
 void testOverflowTransactionsAreTransient()
@@ -282,9 +302,7 @@ void testOverflowTransactionsAreTransient()
     ha.accept(event(EK::InvalidateAck, pa + 64, 0, 61));
     ha.accept(event(EK::InvalidateAck, pa + 64, 1, 61));
     actions = drain(ha);
-    assert(has(actions, AK::PersistMemory, 61));
-    ha.accept(event(EK::PersistenceComplete, pa + 64, 3, 61));
-    assert(has(drain(ha), AK::GrantWrite, 61));
+    assert(has(actions, AK::GrantWrite, 61));
     ha.accept(event(EK::InstallAck, pa + 64, 3, 61));
     assert(!ha.busy(pa + 64));
 }
@@ -303,6 +321,78 @@ void testUnavailableRejectKeepsControllerLive()
     assert(has(drain(ha), AK::Reject, 71));
 }
 
+void testMaskedWrites()
+{
+    auto ha = makeController();
+    const std::uint64_t pa = 0x100200;
+    HAController::Payload patch;
+    patch.valid = true;
+    patch.bytes[1] = 0xaa;
+    patch.bytes[63] = 0xbb;
+    const std::uint64_t mask = (std::uint64_t{1} << 1) |
+                               (std::uint64_t{1} << 63);
+
+    ha.directoryForTest().setSharers(pa, 1u << 2);
+    assert(ha.submit({pa, 2, RK::Write, 80, patch, mask}));
+    auto actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchOwner &&
+           actions[0].source == 2); // singleton participant is probed first
+    auto base = patternedPayload();
+    ha.accept(event(EK::OwnerData, pa, 2, 80, base));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite);
+    auto finalLine = actions[0].data;
+    assert(finalLine.bytes[1] == 0xaa && finalLine.bytes[63] == 0xbb);
+    assert(finalLine.bytes[0] == base.bytes[0] && finalLine.bytes[62] == base.bytes[62]);
+    assert(ha.directory().sharers(pa) == (1u << 2));
+    ha.accept({EK::InstallAck, pa, 2, 80});
+    drain(ha);
+    assert(ha.directory().sharers(pa) == (1u << 2));
+
+    const std::uint64_t memoryPa = pa + 64;
+    ha.directoryForTest().setSharers(memoryPa, (1u << 0) | (1u << 1));
+    assert(ha.submit({memoryPa, 3, RK::Write, 81, patch, mask}));
+    actions = drain(ha);
+    assert(has(actions, AK::FetchMemory, 81));
+    assert(has(actions, AK::Invalidate, 81));
+
+    const std::uint64_t remotePa = pa + 192;
+    ha.directoryForTest().setSharers(remotePa, 1u << 1);
+    assert(ha.submit({remotePa, 3, RK::Write, 84, patch, mask}));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchOwner &&
+           actions[0].source == 1);
+    ha.accept(event(EK::OwnerData, remotePa, 1, 84, base));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite);
+
+    const std::uint64_t cleanPa = pa + 256;
+    ha.directoryForTest().setSharers(cleanPa, 1u << 1);
+    assert(ha.submit({cleanPa, 3, RK::Write, 85, patch, mask}));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchOwner);
+    ha.accept(event(EK::OwnerNoData, cleanPa, 1, 85));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchMemory);
+    ha.accept(event(EK::RetryableBusy, cleanPa, 3, 85));
+    assert(ha.busy(cleanPa) && drain(ha).empty());
+    assert(ha.retryTransient(cleanPa, 85));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::FetchMemory);
+    ha.accept(event(EK::OwnerData, cleanPa, 3, 85, base));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite);
+
+    const std::uint64_t busyPa = pa + 128;
+    assert(ha.submit({busyPa, 0, RK::Read, 82}));
+    drain(ha);
+    ha.accept(event(EK::RetryableBusy, busyPa, 0, 82));
+    assert(has(drain(ha), AK::Reject, 82));
+    assert(!ha.busy(busyPa));
+    assert(ha.submit({busyPa, 0, RK::Read, 83})); // line was not poisoned
+    assert(has(drain(ha), AK::FetchMemory, 83));
+}
+
 } // namespace
 
 int main()
@@ -314,6 +404,7 @@ int main()
     testWritebackEvictAndPeerExit();
     testOverflowTransactionsAreTransient();
     testUnavailableRejectKeepsControllerLive();
+    testMaskedWrites();
     std::cout << "ha_controller_reference_test: PASS\n";
     return 0;
 }

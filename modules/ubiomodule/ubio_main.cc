@@ -729,10 +729,15 @@ struct DsmDataStore {
     std::vector<uint8_t> valid = std::vector<uint8_t>(kLineCount, 0);
     struct PendingDataOp {
         bool valid = false;
-        uint64_t fireTick; uint64_t pa; bool isWrite;
-        std::array<uint8_t, 64> buf;
+        uint64_t fireTick = 0;
+        uint64_t pa = 0;
+        bool isWrite = false;
+        uint64_t byteMask = 0;
+        uint64_t sequence = 0;
+        std::array<uint8_t, 64> buf{};
         std::function<void(DsmDataStatus, const uint8_t*)> readCb;
         std::function<void(DsmDataStatus)> writeCb;
+        std::function<bool()> writeGuard;
         std::function<void()> delayCb;
     };
     static constexpr size_t kMaxPendingDataOps = 256;
@@ -740,6 +745,7 @@ struct DsmDataStore {
     std::array<PendingDataOp, kMaxPendingDataOps> pending;
     size_t pendingCount = 0;
     size_t pendingHighwater = 0;
+    uint64_t nextSequence = 1;
 
     bool enqueue(PendingDataOp op) {
         for (auto &slot : pending) {
@@ -755,24 +761,42 @@ struct DsmDataStore {
     }
 
     void drain(uint64_t tick) {
-        for (auto &slot : pending) {
-            if (!slot.valid || tick < slot.fireTick)
-                continue;
+        for (;;) {
+            PendingDataOp *ready = nullptr;
+            for (auto &slot : pending) {
+                if (!slot.valid || tick < slot.fireTick)
+                    continue;
+                if (!ready || slot.fireTick < ready->fireTick ||
+                    (slot.fireTick == ready->fireTick &&
+                     slot.sequence < ready->sequence))
+                    ready = &slot;
+            }
+            if (!ready) break;
+            PendingDataOp &slot = *ready;
             if (slot.delayCb) {
                     slot.delayCb();
             } else if (slot.isWrite) {
+                    if (slot.writeGuard && !slot.writeGuard()) {
+                        if (slot.writeCb) slot.writeCb(DsmDataStatus::IoError);
+                        slot = PendingDataOp{};
+                        --pendingCount;
+                        continue;
+                    }
                     const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
-                    std::memcpy(data.data() + line * kLineBytes,
-                                slot.buf.data(), kLineBytes);
+                    uint8_t *dst = data.data() + line * kLineBytes;
+                    for (size_t i = 0; i < kLineBytes; ++i)
+                        if (slot.byteMask & (uint64_t{1} << i))
+                            dst[i] = slot.buf[i];
                     valid[line] = 1;
                     if (slot.writeCb) slot.writeCb(DsmDataStatus::Ok);
             } else {
                     const size_t line = (slot.pa & (kSegmentBytes - 1)) / kLineBytes;
                     if (slot.readCb) {
+                        const uint8_t zero64[64] = {};
                         slot.readCb(valid[line] ? DsmDataStatus::Ok
                                                  : DsmDataStatus::NotWritten,
-                                    valid[line] ? data.data() + line * kLineBytes
-                                                : nullptr);
+                                     valid[line] ? data.data() + line * kLineBytes
+                                                : zero64);
                     }
             }
             slot = PendingDataOp{};
@@ -781,7 +805,12 @@ struct DsmDataStore {
     }
     bool readData(uint64_t pa, uint64_t t,
                   std::function<void(DsmDataStatus, const uint8_t*)> cb) {
-        return enqueue({false, t + _dsmDramDelayPs, pa, false, {}, std::move(cb), nullptr});
+        PendingDataOp op;
+        op.fireTick = t + _dsmDramDelayPs;
+        op.pa = pa;
+        op.sequence = nextSequence++;
+        op.readCb = std::move(cb);
+        return enqueue(std::move(op));
     }
     bool writeData(uint64_t pa, const uint8_t *buf, uint64_t) {
         const size_t line = (pa & (kSegmentBytes - 1)) / kLineBytes;
@@ -791,21 +820,54 @@ struct DsmDataStore {
     }
     // H64 async write: completion fires when data is in `data` map (visible to reads)
     bool writeDataAsync(uint64_t pa, const uint8_t *buf, uint64_t t,
-                        std::function<void(DsmDataStatus)> cb) {
-        std::array<uint8_t, 64> a; memcpy(a.data(), buf, 64);
-        auto failCb = cb;
-        PendingDataOp op{false, t + _dsmDramDelayPs, pa, true, a, nullptr,
-                         std::move(cb)};
+                         std::function<void(DsmDataStatus)> cb) {
+        std::array<uint8_t, 64> a{};
+        memcpy(a.data(), buf, 64);
+        PendingDataOp op;
+        op.fireTick = t + _dsmDramDelayPs;
+        op.pa = pa;
+        op.isWrite = true;
+        op.byteMask = ~uint64_t{0};
+        op.sequence = nextSequence++;
+        op.buf = a;
+        op.writeCb = std::move(cb);
         if (enqueue(std::move(op)))
             return true;
-        if (failCb)
-            failCb(DsmDataStatus::RetryableBusy);
+        return false;
+    }
+
+    bool writeDataMaskedAsync(uint64_t pa, uint64_t byteMask, const uint8_t *buf,
+                              uint64_t t,
+                              std::function<void(DsmDataStatus)> cb,
+                              std::function<bool()> guard = {}) {
+        if (byteMask == ~uint64_t{0})
+        {
+            PendingDataOp op;
+            op.fireTick = t + _dsmDramDelayPs; op.pa = pa; op.isWrite = true;
+            op.byteMask = byteMask; op.sequence = nextSequence++;
+            std::memcpy(op.buf.data(), buf, 64); op.writeCb = std::move(cb);
+            op.writeGuard = std::move(guard);
+            return enqueue(std::move(op));
+        }
+        if (!byteMask)
+            return false;
+        PendingDataOp op;
+        op.fireTick = t + _dsmDramDelayPs;
+        op.pa = pa;
+        op.isWrite = true;
+        op.byteMask = byteMask;
+        op.sequence = nextSequence++;
+        std::memcpy(op.buf.data(), buf, 64);
+        op.writeCb = std::move(cb);
+        op.writeGuard = std::move(guard);
+        if (enqueue(std::move(op))) return true;
         return false;
     }
 
     bool delay(uint64_t t, std::function<void()> cb) {
         PendingDataOp op;
         op.fireTick = t + _dsmDramDelayPs;
+        op.sequence = nextSequence++;
         op.delayCb = std::move(cb);
         return enqueue(std::move(op));
     }
@@ -1254,19 +1316,65 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     std::unique_ptr<cc::glob::BackstoreHostH64> _h64Host;
 
     DsmDataStore dsmData;
-    using DataTxnKey = std::tuple<int, int, int, uint64_t>;
+    using DataTxnKey = std::tuple<int, int, int, int, uint64_t, uint64_t,
+                                  uint64_t, uint64_t, uint8_t, uint8_t>;
     std::set<DataTxnKey> pendingDataTxns;
+    std::map<DataTxnKey, CoherenceMessage> pendingDataRequests;
     std::map<uint64_t, std::vector<CoherenceMessage>> pendingDataWrites;
     struct PendingDataResponse {
         DataTxnKey key;
+        CoherenceMessage request;
         CoherenceMessage response;
     };
     std::deque<PendingDataResponse> pendingDataResponses;
+    struct CompletedDataResponse {
+        DataTxnKey key;
+        CoherenceMessage request;
+        CoherenceMessage response;
+    };
+    std::deque<CompletedDataResponse> completedDataResponses;
     static constexpr size_t kMaxPendingDataResponses = 512;
 
     static DataTxnKey dataTxnKey(const CoherenceMessage &request) {
+        uint64_t semantics = 0;
+        if (request.h.type == CoherenceMessageType::ReadReq) {
+            semantics = request.b.readReq.neededPerm;
+            if (request.h.flags & static_cast<uint32_t>(CFLAG_WRITE_INTENT))
+                semantics |= uint64_t{1} << 8;
+        } else if (request.h.type == CoherenceMessageType::WritebackReq) {
+            semantics = request.b.writebackReq.byteMask;
+        }
         return {static_cast<int>(request.h.type), request.h.srcNode,
-                request.h.srcSocket, request.h.reqId};
+                request.h.srcSocket, request.h.requesterNode,
+                request.h.homeLinePa, request.h.epoch,
+                request.h.reqId,
+                semantics,
+                request.h.type == CoherenceMessageType::WritebackReq
+                    ? static_cast<uint8_t>(request.b.writebackReq.kind) : 0,
+                request.h.type == CoherenceMessageType::WritebackReq
+                    ? static_cast<uint8_t>(request.b.writebackReq.disposition) : 0};
+    }
+
+    static bool sameDataRequest(const CoherenceMessage &a,
+                                const CoherenceMessage &b) {
+        if (dataTxnKey(a) != dataTxnKey(b)) return false;
+        if (a.h.type == CoherenceMessageType::ReadReq)
+            return a.b.readReq.neededPerm == b.b.readReq.neededPerm &&
+                ((a.h.flags ^ b.h.flags) &
+                 static_cast<uint32_t>(CFLAG_WRITE_INTENT)) == 0;
+        if (a.h.type != CoherenceMessageType::WritebackReq) return true;
+        return a.b.writebackReq.hasData == b.b.writebackReq.hasData &&
+            a.b.writebackReq.byteMask == b.b.writebackReq.byteMask &&
+            std::memcmp(a.b.writebackReq.data, b.b.writebackReq.data, 64) == 0;
+    }
+
+    static bool sameDataEnvelope(const CoherenceMessage &a,
+                                 const CoherenceMessage &b) {
+        return a.h.type == b.h.type && a.h.srcNode == b.h.srcNode &&
+            a.h.srcSocket == b.h.srcSocket &&
+            a.h.requesterNode == b.h.requesterNode &&
+            a.h.homeLinePa == b.h.homeLinePa && a.h.epoch == b.h.epoch &&
+            a.h.reqId == b.h.reqId;
     }
 
     bool dataTxnPending(const CoherenceMessage &request) const {
@@ -1278,14 +1386,19 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     }
 
     void completeDataResponse(const DataTxnKey &key,
+                              const CoherenceMessage &request,
                               const CoherenceMessage &response) {
         if (routeControlToTarget(response)) {
+            completedDataResponses.push_back({key, request, response});
+            if (completedDataResponses.size() > kMaxPendingDataResponses)
+                completedDataResponses.pop_front();
             pendingDataTxns.erase(key);
+            pendingDataRequests.erase(key);
             return;
         }
         panic_if(pendingDataResponses.size() >= kMaxPendingDataResponses,
                  "pending data response queue full reqId={}", response.h.reqId);
-        pendingDataResponses.push_back({key, response});
+        pendingDataResponses.push_back({key, request, response});
     }
 
     void drainPendingDataResponses() {
@@ -1293,7 +1406,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             PendingDataResponse &pending = pendingDataResponses.front();
             if (!routeControlToTarget(pending.response))
                 return;
+            completedDataResponses.push_back(
+                {pending.key, pending.request, pending.response});
+            if (completedDataResponses.size() > kMaxPendingDataResponses)
+                completedDataResponses.pop_front();
             pendingDataTxns.erase(pending.key);
+            pendingDataRequests.erase(pending.key);
             pendingDataResponses.pop_front();
         }
     }
@@ -1303,69 +1421,125 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         const DataTxnKey key = dataTxnKey(request);
         if (!pendingDataTxns.insert(key).second)
             return true;
+        pendingDataRequests[key] = request;
         const bool queued = dsmData.readData(
             request.h.homeLinePa, tickRef,
-            [this, key, response](DsmDataStatus status,
+            [this, key, request, response](DsmDataStatus status,
                                   const uint8_t *data) mutable {
                 if (status == DsmDataStatus::RetryableBusy ||
                     status == DsmDataStatus::IoError) {
                     pendingDataTxns.erase(key);
                     return;
                 }
-                if (status == DsmDataStatus::Ok && data) {
+                if ((status == DsmDataStatus::Ok ||
+                     status == DsmDataStatus::NotWritten) && data) {
                     std::memcpy(response.b.readResp.grantData, data, 64);
                     response.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
                 }
-                completeDataResponse(key, response);
+                completeDataResponse(key, request, response);
             });
-        if (!queued)
+        if (!queued) {
             pendingDataTxns.erase(key);
+            pendingDataRequests.erase(key);
+        }
         return queued;
     }
 
     bool scheduleWritebackResponse(const CoherenceMessage &request,
                                    bool keepAsClean) {
         const DataTxnKey key = dataTxnKey(request);
-        if (!pendingDataTxns.insert(key).second)
-            return true;
-        auto existing = pendingDataWrites.find(request.h.homeLinePa);
-        if (existing != pendingDataWrites.end()) {
-            existing->second.push_back(request);
-            return true;
+        if (!pendingDataTxns.insert(key).second) {
+            auto pending = pendingDataWrites.find(request.h.homeLinePa);
+            if (pending == pendingDataWrites.end()) return true;
+            return std::any_of(pending->second.begin(), pending->second.end(),
+                [&request](const CoherenceMessage &candidate) {
+                    return sameDataRequest(candidate, request);
+                });
         }
-        pendingDataWrites[request.h.homeLinePa].push_back(request);
-        const bool accepted = ubcc.processWriteback(
-            request.h.homeLinePa, request.h.requesterNode,
-            request.h.epoch, keepAsClean, request.b.writebackReq.data);
-        if (!accepted) {
-            pendingDataWrites.erase(request.h.homeLinePa);
+        pendingDataRequests[key] = request;
+        const bool ownerWriteback = request.b.writebackReq.kind ==
+            UBWritebackKind::OwnerWriteback;
+        const uint8_t disposition = static_cast<uint8_t>(
+            request.b.writebackReq.disposition);
+        if (!ubcc.reserveWritebackPersistence(
+                request.h.homeLinePa, request.h.requesterNode,
+                request.h.epoch, ownerWriteback, request.h.srcSocket,
+                request.h.reqId, disposition)) {
             pendingDataTxns.erase(key);
+            pendingDataRequests.erase(key);
             return false;
         }
-        const bool queued = dsmData.delay(tickRef, [this, request]() {
-            const bool success = true;
+        pendingDataWrites[request.h.homeLinePa].push_back(request);
+        const bool queued = dsmData.writeDataMaskedAsync(
+            request.h.homeLinePa, request.b.writebackReq.byteMask,
+            request.b.writebackReq.data, tickRef,
+            [this, request, keepAsClean, ownerWriteback,
+             disposition](DsmDataStatus status) {
+            bool success = status == DsmDataStatus::Ok;
+            if (success && ownerWriteback && !keepAsClean &&
+                ubcc.completeReservedOwnerWritebackRecall(
+                    request.h.homeLinePa, request.h.requesterNode,
+                    request.h.epoch, request.h.srcSocket, request.h.reqId,
+                    request.b.writebackReq.data)) {
+                // Matching recall and owner writeback share this one completed
+                // persistence operation.
+            } else {
+                ubcc.releaseWritebackPersistence(
+                    request.h.homeLinePa, request.h.requesterNode,
+                    request.h.epoch, ownerWriteback, request.h.srcSocket,
+                    request.h.reqId, disposition);
+                if (success && ownerWriteback)
+                    success = ubcc.processWriteback(
+                        request.h.homeLinePa, request.h.requesterNode,
+                        request.h.epoch, keepAsClean,
+                        request.b.writebackReq.data);
+            }
             auto pending = pendingDataWrites.find(request.h.homeLinePa);
             panic_if(pending == pendingDataWrites.end(),
                      "missing pending data write pa=0x{:x}", request.h.homeLinePa);
-            auto waiters = std::move(pending->second);
-            pendingDataWrites.erase(pending);
-            for (const CoherenceMessage &waiter : waiters) {
-                CoherenceMessage response;
-                response.h.type = CoherenceMessageType::WritebackResp;
-                response.h.srcNode = nodeId;
-                response.h.srcSocket = socketId;
-                response.h.dstNode = waiter.h.srcNode;
-                response.h.dstSocket = waiter.h.srcSocket;
-                response.h.homeLinePa = waiter.h.homeLinePa;
-                response.h.epoch = waiter.h.epoch;
-                response.h.reqId = waiter.h.reqId;
-                response.b.writebackResp.success = success;
-                completeDataResponse(dataTxnKey(waiter), response);
-            }
+            auto &waiters = pending->second;
+            auto waiterIt = std::find_if(waiters.begin(), waiters.end(),
+                [&request](const CoherenceMessage &candidate) {
+                    return dataTxnKey(candidate) == dataTxnKey(request);
+                });
+            panic_if(waiterIt == waiters.end(),
+                     "missing pending data write tuple pa=0x{:x}", request.h.homeLinePa);
+            CoherenceMessage waiter = *waiterIt;
+            waiters.erase(waiterIt);
+            if (waiters.empty()) pendingDataWrites.erase(pending);
+            CoherenceMessage response;
+            response.h.type = CoherenceMessageType::WritebackResp;
+            response.h.srcNode = nodeId;
+            response.h.srcSocket = socketId;
+            response.h.dstNode = waiter.h.srcNode;
+            response.h.dstSocket = waiter.h.srcSocket;
+            response.h.homeLinePa = waiter.h.homeLinePa;
+            response.h.epoch = waiter.h.epoch;
+            response.h.reqId = waiter.h.reqId;
+            response.b.writebackResp.success = success;
+            completeDataResponse(dataTxnKey(waiter), waiter, response);
+        }, [this, request, ownerWriteback, disposition]() {
+            return ubcc.validateWritebackPersistence(
+                request.h.homeLinePa, request.h.requesterNode,
+                request.h.epoch, ownerWriteback, request.h.srcSocket,
+                request.h.reqId, disposition);
         });
         if (!queued) {
-            pendingDataWrites.erase(request.h.homeLinePa);
+            ubcc.releaseWritebackPersistence(
+                request.h.homeLinePa, request.h.requesterNode,
+                request.h.epoch, ownerWriteback, request.h.srcSocket,
+                request.h.reqId, disposition);
+            auto pending = pendingDataWrites.find(request.h.homeLinePa);
+            if (pending != pendingDataWrites.end()) {
+                auto &waiters = pending->second;
+                waiters.erase(std::remove_if(waiters.begin(), waiters.end(),
+                    [&request](const CoherenceMessage &candidate) {
+                        return dataTxnKey(candidate) == dataTxnKey(request);
+                    }), waiters.end());
+                if (waiters.empty()) pendingDataWrites.erase(pending);
+            }
             pendingDataTxns.erase(key);
+            pendingDataRequests.erase(key);
         }
         return queued;
     }
@@ -1387,7 +1561,20 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         bool dataReady = false;
         uint64_t retryTick = 0;
         uint8_t retryCount = 0;
-        CoherenceMessage push;
+        CoherenceMessage push{};
+
+        void reset() {
+            active = false;
+            readInFlight = false;
+            dataReady = false;
+            retryTick = 0;
+            retryCount = 0;
+            // Inactive slots are never inspected. Reset the header and select
+            // a fully initialized, callback-free union member without copying
+            // indeterminate bytes from CoherenceMessageBody's empty ctor.
+            push.h = CoherenceMessageHeader{};
+            push.b.metaRNF = UBMetaRNFBody{};
+        }
     };
     static constexpr size_t kMaxPendingGrantReads = 32;
     std::array<PendingGrantRead, kMaxPendingGrantReads> pendingGrantReads{};
@@ -1504,16 +1691,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 return true;
             }
         }
-        // UBCC constructs replay pushes without direct access to the physical
-        // home DSM backing. Match the pull-path HomeMemory fallback here so a
-        // clean line restored from metadata after its owner wrote back carries
-        // the durable 64B payload, not an implicit zero line.
-        if (push.h.type == CoherenceMessageType::ReadResp &&
-            !(push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) &&
-            dsmData.copyData(push.h.homeLinePa, push.b.readResp.grantData)) {
-            push.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-        }
-
         if (push.h.type != CoherenceMessageType::ReadResp ||
             (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA))) {
             if (routeControlToTarget(push))
@@ -1521,8 +1698,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return reserveGrantSlot(push, true);
         }
 
-        // The synchronous copy missed. Do not push a fabricated zero line:
-        // reserve a bounded slot and resolve the direct-indexed home read.
+        // Every grant without transaction-owned data resolves an asynchronous
+        // authoritative home read, including written and first-touch lines.
         return reserveGrantSlot(push, false);
     }
 
@@ -1556,7 +1733,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 if (!ubcc.grantTupleLive(slot.push.h.homeLinePa,
                                          slot.push.h.requesterNode,
                                          slot.push.h.reqId)) {
-                    slot = PendingGrantRead{};
+                    slot.reset();
                     return;
                 }
                 if (status == DsmDataStatus::RetryableBusy) {
@@ -1565,12 +1742,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                     slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
                     return;
                 }
-                if (status == DsmDataStatus::Ok && data) {
+                if ((status == DsmDataStatus::Ok ||
+                     status == DsmDataStatus::NotWritten) && data) {
                     std::memcpy(slot.push.b.readResp.grantData, data, 64);
                     slot.push.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-                } else if (status == DsmDataStatus::NotWritten) {
-                    // An unwritten direct-indexed home line is the sole valid
-                    // no-data case; EPBackend may initialize it as zero.
                 } else {
                     slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
                     if (slot.retryCount != UINT8_MAX)
@@ -1588,11 +1763,11 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         if (!ubcc.grantTupleLive(slot.push.h.homeLinePa,
                                  slot.push.h.requesterNode,
                                  slot.push.h.reqId)) {
-            slot = PendingGrantRead{};
+            slot.reset();
             return;
         }
         if (routeControlToTarget(slot.push)) {
-            slot = PendingGrantRead{};
+            slot.reset();
             return;
         }
         slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
@@ -2051,8 +2226,11 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             });
     }
     void writeDsmDataAsyncStatus(uint64_t pa, const uint8_t *buf,
-                                 std::function<void(DsmDataStatus)> completion) override {
-        dsmData.writeDataAsync(pa, buf, tickRef, std::move(completion));
+                                  std::function<void(DsmDataStatus)> completion) override {
+        auto failCompletion = completion;
+        if (!dsmData.writeDataAsync(pa, buf, tickRef, std::move(completion)) &&
+            failCompletion)
+            failCompletion(DsmDataStatus::RetryableBusy);
     }
 
     // Drain expired pending backstore fills (T_ubio_dram expiry).
@@ -2137,6 +2315,7 @@ struct HomeVIAdapter {
         uint64_t wireReqId = 0;
         HAOperation operation = HAOperation::Read;
         uint64_t epoch = 0;
+        uint64_t byteMask = 0;
         std::array<uint8_t, 64> data{};
         bool hasData = false;
     };
@@ -2168,11 +2347,37 @@ struct HomeVIAdapter {
         uint16_t socket = 0;
         uint64_t address = 0;
         uint64_t wireReqId = 0;
+        CoherenceMessage request;
     };
     std::map<uint64_t, RequestContext> requests;
     std::map<WireRequestKey, uint64_t> wireRequests;
     std::map<ResponseKey, uint64_t> expectedResponses;
     std::map<uint64_t, WritebackContext> writebacks;
+    struct CompletedPermission {
+        WireRequestKey key;
+        uint64_t byteMask = 0;
+        std::array<uint8_t, 64> requestData{};
+        bool hasData = false;
+        CoherenceMessage response;
+    };
+    static constexpr size_t kMaxCompletedPermissions = 256;
+    std::deque<CompletedPermission> completedPermissions;
+    struct PendingHAOutput {
+        CoherenceMessage message;
+        uint64_t internalId = 0;
+        bool retireReject = false;
+        bool permissionResponse = false;
+        uint64_t retireWriteback = 0;
+    };
+    static constexpr size_t kMaxPendingHAOutputs = 512;
+    std::deque<PendingHAOutput> pendingHAOutputs;
+    struct CompletedHAWriteback {
+        CoherenceMessage request;
+        CoherenceMessage response;
+    };
+    static constexpr size_t kMaxCompletedHAWritebacks = 256;
+    std::deque<CompletedHAWriteback> completedHAWritebacks;
+    std::set<std::pair<uint64_t, uint64_t>> pendingDsmRetries;
     uint64_t nextInternalReqId = 1;
     uint64_t nextControlSeq = 1;
 
@@ -2200,6 +2405,90 @@ struct HomeVIAdapter {
                writebacks.count(nextInternalReqId))
             ++nextInternalReqId;
         return nextInternalReqId++;
+    }
+
+    bool samePermissionPayload(const RequestContext &context,
+                               const CoherenceMessage &msg) const {
+        const bool wireHasData = msg.b.haPermissionReq.operation == HAOperation::Write;
+        return context.byteMask == msg.b.haPermissionReq.byteMask &&
+            context.hasData == wireHasData &&
+            std::memcmp(context.data.data(), msg.b.haPermissionReq.data, 64) == 0;
+    }
+
+    void rememberPermission(const RequestContext &context,
+                            const CoherenceMessage &response) {
+        CompletedPermission done;
+        done.key = {context.requesterNode, context.requesterSocket,
+                    context.address, context.wireReqId,
+                    context.operation, context.epoch};
+        done.byteMask = context.byteMask;
+        done.requestData = context.data;
+        done.hasData = context.hasData;
+        done.response = response;
+        completedPermissions.push_back(std::move(done));
+        if (completedPermissions.size() > kMaxCompletedPermissions)
+            completedPermissions.pop_front();
+    }
+
+    bool queueHAOutput(const CoherenceMessage &message, uint64_t internalId,
+                       bool retireReject, bool permissionResponse = false,
+                       uint64_t retireWriteback = 0) {
+        for (const auto &pending : pendingHAOutputs) {
+            if (pending.message.h.type == message.h.type &&
+                pending.message.h.dstNode == message.h.dstNode &&
+                pending.message.h.dstSocket == message.h.dstSocket &&
+                pending.message.h.homeLinePa == message.h.homeLinePa &&
+                pending.message.h.reqId == message.h.reqId)
+                return true;
+        }
+        if (pendingHAOutputs.size() >= kMaxPendingHAOutputs) return false;
+        pendingHAOutputs.push_back(
+            {message, internalId, retireReject, permissionResponse,
+             retireWriteback});
+        return true;
+    }
+
+    void retryHAOutputs() {
+        while (!pendingHAOutputs.empty()) {
+            const PendingHAOutput pending = pendingHAOutputs.front();
+            if (!host.routeControlToTarget(pending.message)) return;
+            pendingHAOutputs.pop_front();
+            auto context = requests.find(pending.internalId);
+            if (pending.permissionResponse && context != requests.end())
+                rememberPermission(context->second, pending.message);
+            if (pending.retireReject && pending.internalId)
+                eraseRequest(pending.internalId);
+            if (pending.retireWriteback) {
+                auto wb = writebacks.find(pending.retireWriteback);
+                if (wb != writebacks.end()) {
+                    completedHAWritebacks.push_back(
+                        {wb->second.request, pending.message});
+                    if (completedHAWritebacks.size() > kMaxCompletedHAWritebacks)
+                        completedHAWritebacks.pop_front();
+                    writebacks.erase(wb);
+                }
+            }
+        }
+    }
+
+    bool sendReliable(const CoherenceMessage &message, uint64_t internalId = 0,
+                      bool retireReject = false,
+                      bool permissionResponse = false,
+                      uint64_t retireWriteback = 0) {
+        if (host.routeControlToTarget(message)) {
+            if (retireWriteback) {
+                auto wb = writebacks.find(retireWriteback);
+                if (wb != writebacks.end()) {
+                    completedHAWritebacks.push_back({wb->second.request, message});
+                    if (completedHAWritebacks.size() > kMaxCompletedHAWritebacks)
+                        completedHAWritebacks.pop_front();
+                    writebacks.erase(wb);
+                }
+            }
+            return true;
+        }
+        return queueHAOutput(message, internalId, retireReject,
+                             permissionResponse, retireWriteback);
     }
 
     ResponseKey responseKey(CoherenceMessageType type,
@@ -2246,11 +2535,12 @@ struct HomeVIAdapter {
         response.b.haPermissionResp.status = status;
         response.b.haPermissionResp.permissionEpoch =
             request.b.haPermissionReq.permissionEpoch;
-        panic_if(!host.routeControlToTarget(response),
-                 "HA permission status send failed reqId={}", request.h.reqId);
+        panic_if(!sendReliable(response),
+                 "HA permission status retry queue full reqId={}", request.h.reqId);
     }
 
     bool handle(const CoherenceMessage &msg) {
+        retryHAOutputs();
         using EventKind = cc::ha::HAController::EventKind;
         const uint32_t sourceParticipant = participant(msg.h.srcNode, msg.h.srcSocket);
         switch (msg.h.type) {
@@ -2263,8 +2553,29 @@ struct HomeVIAdapter {
             const WireRequestKey wireKey{msg.h.srcNode, msg.h.srcSocket,
                 msg.h.homeLinePa, msg.h.reqId, msg.b.haPermissionReq.operation,
                 msg.b.haPermissionReq.permissionEpoch};
-            if (wireRequests.find(wireKey) != wireRequests.end())
-                return true; // exact duplicate of a still-pending request
+            for (const auto &done : completedPermissions) {
+                if (!(done.key < wireKey) && !(wireKey < done.key)) {
+                    const bool hasData = msg.b.haPermissionReq.operation == HAOperation::Write;
+                    if (done.byteMask != msg.b.haPermissionReq.byteMask ||
+                        done.hasData != hasData ||
+                        std::memcmp(done.requestData.data(),
+                                    msg.b.haPermissionReq.data, 64) != 0)
+                        sendPermissionStatus(msg, HAStatus::InvalidArgument);
+                    else
+                        panic_if(!sendReliable(done.response),
+                                 "HA completed response retry queue full reqId={}",
+                                 msg.h.reqId);
+                    return true;
+                }
+            }
+            auto pendingWire = wireRequests.find(wireKey);
+            if (pendingWire != wireRequests.end()) {
+                auto pending = requests.find(pendingWire->second);
+                if (pending == requests.end() ||
+                    !samePermissionPayload(pending->second, msg))
+                    sendPermissionStatus(msg, HAStatus::InvalidArgument);
+                return true;
+            }
             if (requests.size() >= maxActive) {
                 sendPermissionStatus(msg, HAStatus::RetryableBusy);
                 return true;
@@ -2277,6 +2588,16 @@ struct HomeVIAdapter {
             context.wireReqId = msg.h.reqId;
             context.operation = msg.b.haPermissionReq.operation;
             context.epoch = msg.b.haPermissionReq.permissionEpoch;
+            context.byteMask = msg.b.haPermissionReq.byteMask;
+            const std::array<uint8_t, 64> zeroPayload{};
+            if ((context.operation == HAOperation::Read && context.byteMask != 0) ||
+                (context.operation == HAOperation::Read &&
+                 std::memcmp(msg.b.haPermissionReq.data,
+                             zeroPayload.data(), 64) != 0) ||
+                (context.operation == HAOperation::Write && context.byteMask == 0)) {
+                sendPermissionStatus(msg, HAStatus::InvalidArgument);
+                return true;
+            }
             if (context.operation == HAOperation::Write) {
                 std::memcpy(context.data.data(), msg.b.haPermissionReq.data, 64);
                 context.hasData = true;
@@ -2298,7 +2619,8 @@ struct HomeVIAdapter {
                 internalId,
                 context.hasData
                     ? cc::ha::HAController::Payload{context.data, true}
-                    : cc::ha::HAController::Payload{}});
+                    : cc::ha::HAController::Payload{},
+                context.byteMask});
             (void)accepted; // a false submit emits Reject, which still needs its context
             drainActions();
             return true;
@@ -2339,7 +2661,9 @@ struct HomeVIAdapter {
             if (msg.b.haPresenceProbeResp.status != HAStatus::Ok ||
                 msg.b.haPresenceProbeResp.action != HAProbeAction::Query) {
                 expectedResponses.erase(expected);
-                ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
+                ha.accept({msg.b.haPresenceProbeResp.status == HAStatus::RetryableBusy
+                               ? EventKind::RetryableBusy : EventKind::Unavailable,
+                           msg.h.homeLinePa, sourceParticipant,
                            internalId, {}, false, false});
                 drainActions();
                 return true;
@@ -2360,6 +2684,10 @@ struct HomeVIAdapter {
                     "internalId={} source={}:{} home={}:{} pa=0x{:x}",
                     tickRef, internalId, msg.h.srcNode, msg.h.srcSocket,
                     nodeId, socketId, msg.h.homeLinePa);
+            const bool ackReceived =
+                (msg.h.flags & static_cast<uint32_t>(CFLAG_ACCEPTED)) != 0;
+            const bool dataReturned =
+                (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0;
             cc::ha::HAController::Payload payload;
             if (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) {
                 auto it = requests.find(internalId);
@@ -2379,14 +2707,16 @@ struct HomeVIAdapter {
                         w0);
                 }
             }
-            if (!payload.valid) {
+            if (!ackReceived) {
                 ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
                            internalId, {}, false, false});
                 drainActions();
                 return true;
             }
-            ha.accept({EventKind::OwnerData, msg.h.homeLinePa, sourceParticipant,
-                       internalId, payload, true, true});
+            ha.accept({dataReturned && payload.valid ? EventKind::OwnerData
+                                                     : EventKind::OwnerNoData,
+                       msg.h.homeLinePa, sourceParticipant, internalId, payload,
+                       true, dataReturned && payload.valid});
             drainActions();
             return true;
           }
@@ -2405,8 +2735,7 @@ struct HomeVIAdapter {
             return true;
           }
           case CoherenceMessageType::WritebackReq: {
-            for (const auto &pending : writebacks) {
-                if (pending.second.address != msg.h.homeLinePa) continue;
+            auto rejectWriteback = [this, &msg]() {
                 CoherenceMessage response;
                 response.h.type = CoherenceMessageType::WritebackResp;
                 response.h.srcNode = nodeId; response.h.srcSocket = socketId;
@@ -2415,7 +2744,45 @@ struct HomeVIAdapter {
                 response.h.localLinePa = msg.h.localLinePa;
                 response.h.reqId = msg.h.reqId;
                 response.b.writebackResp.success = false;
-                host.routeControlToTarget(response);
+                panic_if(!sendReliable(response),
+                         "HA writeback reject retry queue full reqId={}", msg.h.reqId);
+            };
+            for (const auto &done : completedHAWritebacks) {
+                if (!UbioBackstoreHost::sameDataEnvelope(done.request, msg)) continue;
+                if (UbioBackstoreHost::sameDataRequest(done.request, msg))
+                    panic_if(!sendReliable(done.response),
+                             "HA writeback replay queue full reqId={}", msg.h.reqId);
+                else
+                    rejectWriteback();
+                return true;
+            }
+            // HA directory entries do not carry the UBCC permission epoch, so
+            // this adapter cannot validate StoreCommit's exact tuple. Reject it
+            // explicitly rather than routing it through owner writeback state.
+            if (msg.b.writebackReq.kind == UBWritebackKind::StoreCommit) {
+                rejectWriteback();
+                return true;
+            }
+            const bool keep = msg.b.writebackReq.disposition ==
+                UBWriteDisposition::KeepClean;
+            if (msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback ||
+                (msg.b.writebackReq.disposition != UBWriteDisposition::DropOwner &&
+                 !keep) || !msg.b.writebackReq.hasData ||
+                msg.b.writebackReq.byteMask != ~uint64_t{0}) {
+                rejectWriteback();
+                return true;
+            }
+            for (const auto &pending : writebacks) {
+                if (pending.second.address != msg.h.homeLinePa) continue;
+                if (UbioBackstoreHost::sameDataRequest(pending.second.request, msg)) {
+                    for (const auto &output : pendingHAOutputs)
+                        if (output.retireWriteback == pending.first)
+                            panic_if(!sendReliable(output.message),
+                                     "HA pending writeback replay queue full reqId={}",
+                                     msg.h.reqId);
+                    return true;
+                }
+                rejectWriteback();
                 return true;
             }
             const uint64_t internalId = allocInternalReqId();
@@ -2443,15 +2810,16 @@ struct HomeVIAdapter {
                 response.h.localLinePa = msg.h.localLinePa;
                 response.h.reqId = msg.h.reqId;
                 response.b.writebackResp.success = false;
-                host.routeControlToTarget(response);
+                panic_if(!sendReliable(response),
+                         "HA no-payload writeback retry queue full reqId={}", msg.h.reqId);
                 return true;
             }
             ha.accept({EventKind::Writeback, msg.h.homeLinePa,
                        sourceParticipant, internalId, payload,
-                       (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0,
-                       msg.b.writebackReq.hasData});
+                       keep,
+                       msg.b.writebackReq.hasData != 0});
             writebacks[internalId] = {msg.h.srcNode, msg.h.srcSocket,
-                                      msg.h.homeLinePa, msg.h.reqId};
+                                       msg.h.homeLinePa, msg.h.reqId, msg};
             drainActions();
             return true;
           }
@@ -2469,7 +2837,7 @@ struct HomeVIAdapter {
             response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
             response.h.homeLinePa = msg.h.homeLinePa; response.h.reqId = msg.h.reqId;
             response.b.evictResp.success = true;
-            panic_if(!host.routeControlToTarget(response), "HA evict response send failed");
+            panic_if(!sendReliable(response), "HA evict response retry queue full");
             return true;
           }
           case CoherenceMessageType::PeerExit:
@@ -2484,6 +2852,7 @@ struct HomeVIAdapter {
 
     void drainActions() {
         using ActionKind = cc::ha::HAController::ActionKind;
+        retryHAOutputs();
         while (ha.hasAction()) {
             const auto action = ha.popAction();
             auto contextIt = requests.find(action.requestId);
@@ -2493,6 +2862,7 @@ struct HomeVIAdapter {
                     [this, action](DsmDataStatus status, const uint8_t *data) {
                         auto it = requests.find(action.requestId);
                         if (it == requests.end()) return;
+                        pendingDsmRetries.erase({action.address, action.requestId});
                         const bool zeroFill = status == DsmDataStatus::NotWritten;
                         if (status == DsmDataStatus::Ok && data) {
                             std::memcpy(it->second.data.data(), data, 64);
@@ -2521,16 +2891,18 @@ struct HomeVIAdapter {
                         }
                         ha.accept({payload.valid
                                        ? cc::ha::HAController::EventKind::OwnerData
-                                       : cc::ha::HAController::EventKind::Unavailable,
+                                       : (status == DsmDataStatus::RetryableBusy
+                                          ? cc::ha::HAController::EventKind::RetryableBusy
+                                          : cc::ha::HAController::EventKind::Unavailable),
                                    action.address, action.source, action.requestId,
                                    payload, payload.valid, false});
                         drainActions();
                     });
                 if (!queued && requests.count(action.requestId)) {
-                    ha.accept({cc::ha::HAController::EventKind::Unavailable,
+                    pendingDsmRetries.insert({action.address, action.requestId});
+                    ha.accept({cc::ha::HAController::EventKind::RetryableBusy,
                                action.address, action.source, action.requestId,
                                {}, false, false});
-                    drainActions();
                 }
                 continue;
             }
@@ -2575,9 +2947,13 @@ struct HomeVIAdapter {
                     [this, action](DsmDataStatus status) {
                         const bool isWriteback = writebacks.count(action.requestId) != 0;
                         if (!isWriteback && requests.count(action.requestId) == 0) return;
+                        pendingDsmRetries.erase({action.address, action.requestId});
                         if (status != DsmDataStatus::Ok) {
                             if (isWriteback) {
                                 const auto wb = writebacks.at(action.requestId);
+                                ha.accept({cc::ha::HAController::EventKind::WritebackFailed,
+                                           action.address, action.source,
+                                           action.requestId, {}, false, false});
                                 CoherenceMessage response;
                                 response.h.type = CoherenceMessageType::WritebackResp;
                                 response.h.srcNode = nodeId; response.h.srcSocket = socketId;
@@ -2586,13 +2962,20 @@ struct HomeVIAdapter {
                                 response.h.localLinePa = wb.address;
                                 response.h.reqId = wb.wireReqId;
                                 response.b.writebackResp.success = false;
-                                if (host.routeControlToTarget(response))
-                                    writebacks.erase(action.requestId);
+                                panic_if(!sendReliable(response, 0, false, false,
+                                                       action.requestId),
+                                         "HA writeback failure response queue full");
                             } else {
-                                ha.accept({cc::ha::HAController::EventKind::Unavailable,
+                                if (status == DsmDataStatus::RetryableBusy)
+                                    pendingDsmRetries.insert(
+                                        {action.address, action.requestId});
+                                ha.accept({status == DsmDataStatus::RetryableBusy
+                                               ? cc::ha::HAController::EventKind::RetryableBusy
+                                               : cc::ha::HAController::EventKind::Unavailable,
                                            action.address, action.source, action.requestId,
                                            {}, false, false});
-                                drainActions();
+                                if (status != DsmDataStatus::RetryableBusy)
+                                    drainActions();
                             }
                             return;
                         }
@@ -2623,11 +3006,34 @@ struct HomeVIAdapter {
                             response.h.localLinePa = wbIt->second.address;
                             response.h.reqId = wbIt->second.wireReqId;
                             response.b.writebackResp.success = true;
-                            if (host.routeControlToTarget(response))
-                                writebacks.erase(wbIt);
+                            panic_if(!sendReliable(response, 0, false, false,
+                                                   action.requestId),
+                                     "HA writeback success response queue full");
                         }
                     });
-                (void)queued; // failure callback applies safe unavailable/negative response
+                if (!queued) {
+                    const bool isWriteback = writebacks.count(action.requestId) != 0;
+                    if (isWriteback) {
+                        const auto wb = writebacks.at(action.requestId);
+                        ha.accept({cc::ha::HAController::EventKind::WritebackFailed,
+                                   action.address, action.source,
+                                   action.requestId, {}, false, false});
+                        CoherenceMessage response;
+                        response.h.type = CoherenceMessageType::WritebackResp;
+                        response.h.srcNode = nodeId; response.h.srcSocket = socketId;
+                        response.h.dstNode = wb.node; response.h.dstSocket = wb.socket;
+                        response.h.homeLinePa = wb.address; response.h.reqId = wb.wireReqId;
+                        response.b.writebackResp.success = false;
+                        panic_if(!sendReliable(response, 0, false, false,
+                                               action.requestId),
+                                 "HA writeback busy response queue full");
+                    } else if (requests.count(action.requestId)) {
+                        pendingDsmRetries.insert({action.address, action.requestId});
+                        ha.accept({cc::ha::HAController::EventKind::RetryableBusy,
+                                   action.address, action.source, action.requestId,
+                                   {}, false, false});
+                    }
+                }
                 continue;
             }
             // A failure can reject a transaction while sibling probe/invalidate
@@ -2669,7 +3075,8 @@ struct HomeVIAdapter {
                 out.h.type = CoherenceMessageType::HAPermissionResp;
                 out.b.haPermissionResp.operation = context.operation;
                 out.b.haPermissionResp.status = action.kind == ActionKind::Reject
-                    ? HAStatus::RetryableBusy : HAStatus::Ok;
+                    ? (action.permanentReject ? HAStatus::Denied : HAStatus::RetryableBusy)
+                    : HAStatus::Ok;
                 out.b.haPermissionResp.permissionEpoch = context.epoch;
                 if (context.hasData) {
                     out.b.haPermissionResp.hasData = 1;
@@ -2693,7 +3100,11 @@ struct HomeVIAdapter {
                 panic_if(action.kind == ActionKind::GrantRead &&
                          !out.b.haPermissionResp.hasData,
                          "HA GrantRead missing 64-byte data pa=0x%lx requester=%u reqId=%lu",
-                         action.address, context.requesterNode, context.wireReqId);
+                          action.address, context.requesterNode, context.wireReqId);
+                panic_if(action.kind == ActionKind::GrantWrite &&
+                          !out.b.haPermissionResp.hasData,
+                          "HA GrantWrite missing final data pa=0x%lx requester=%u reqId=%lu",
+                          action.address, context.requesterNode, context.wireReqId);
             } else {
                 continue;
             }
@@ -2714,20 +3125,21 @@ struct HomeVIAdapter {
                                    out.h.homeLinePa, out.h.reqId}] = action.requestId;
             const bool sent = host.routeControlToTarget(out);
             if (!sent) {
-                if (expectsResponse)
-                    expectedResponses.erase({responseType, out.h.dstNode,
-                                             out.h.dstSocket, out.h.homeLinePa,
-                                             out.h.reqId});
                 warn("HA action send unavailable type={} reqId={} target={}",
                      coherenceMsgTypeName(out.h.type), out.h.reqId, out.h.dstNode);
-                if (action.kind != ActionKind::Reject &&
-                    requests.count(action.requestId)) {
-                    ha.accept({cc::ha::HAController::EventKind::Unavailable,
-                               action.address, action.source, action.requestId,
-                               {}, false, false});
-                }
+                panic_if(!queueHAOutput(out, action.requestId,
+                                       action.kind == ActionKind::Reject,
+                                       action.kind == ActionKind::GrantRead ||
+                                       action.kind == ActionKind::GrantWrite ||
+                                       action.kind == ActionKind::Reject),
+                         "HA output retry queue full reqId={}", out.h.reqId);
                 continue;
             }
+            if ((action.kind == ActionKind::GrantRead ||
+                 action.kind == ActionKind::GrantWrite ||
+                 action.kind == ActionKind::Reject) &&
+                requests.count(action.requestId))
+                rememberPermission(context, out);
             const char *phase = nullptr;
             if (action.kind == ActionKind::FetchOwner) phase = "recall_send";
             else if (action.kind == ActionKind::Invalidate) phase = "invalidate_send";
@@ -2745,6 +3157,16 @@ struct HomeVIAdapter {
                 eraseRequest(action.requestId);
         }
     }
+
+    void advance() {
+        retryHAOutputs();
+        if (!pendingDsmRetries.empty()) {
+            const auto retry = *pendingDsmRetries.begin();
+            pendingDsmRetries.erase(pendingDsmRetries.begin());
+            ha.retryTransient(retry.first, retry.second);
+        }
+        drainActions();
+    }
 };
 
 bool
@@ -2756,6 +3178,40 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 
     switch (msg.h.type) {
       case CoherenceMessageType::ReadReq: {
+        for (const auto &completed : host.completedDataResponses) {
+            if (!UbioBackstoreHost::sameDataEnvelope(completed.request, msg))
+                continue;
+            if (UbioBackstoreHost::sameDataRequest(completed.request, msg)) {
+                response = completed.response;
+                hasResponse = true;
+            } else {
+                response.h.type = CoherenceMessageType::ReadResp;
+                response.h.srcNode = nid; response.h.srcSocket = sid;
+                response.h.dstNode = msg.h.srcNode;
+                response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa;
+                response.h.epoch = msg.h.epoch;
+                response.h.reqId = msg.h.reqId;
+                response.b.readResp.grantType = -1;
+                hasResponse = true;
+            }
+            return true;
+        }
+        for (const auto &pending : host.pendingDataRequests) {
+            if (!UbioBackstoreHost::sameDataEnvelope(pending.second, msg))
+                continue;
+            if (!UbioBackstoreHost::sameDataRequest(pending.second, msg)) {
+                response.h.type = CoherenceMessageType::ReadResp;
+                response.h.srcNode = nid; response.h.srcSocket = sid;
+                response.h.dstNode = msg.h.srcNode;
+                response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa;
+                response.h.reqId = msg.h.reqId;
+                response.b.readResp.grantType = -1;
+                hasResponse = true;
+            }
+            return true;
+        }
         if (host.dataTxnPending(msg))
             return true;
         if (host.dataWritePending(msg.h.homeLinePa))
@@ -2831,9 +3287,6 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         }
         if (hasGrantData) {
             hasResponse = true;
-        } else if (!host.dsmData.contains(msg.h.homeLinePa)) {
-            // A first-touch write allocate has no home data to fetch.
-            hasResponse = true;
         } else {
             host.scheduleReadResponse(msg, response);
         }
@@ -2841,10 +3294,64 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::WritebackReq: {
-        if (host.dataTxnPending(msg))
+        for (const auto &completed : host.completedDataResponses) {
+            if (!UbioBackstoreHost::sameDataEnvelope(completed.request, msg))
+                continue;
+            if (!UbioBackstoreHost::sameDataRequest(completed.request, msg)) {
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nid; response.h.srcSocket = sid;
+                response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa; response.h.reqId = msg.h.reqId;
+                response.b.writebackResp.success = false;
+            } else {
+                response = completed.response;
+            }
+            hasResponse = true;
             return true;
-        bool keepAsClean =
-            (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0;
+        }
+        for (const auto &pending : host.pendingDataRequests) {
+            if (!UbioBackstoreHost::sameDataEnvelope(pending.second, msg))
+                continue;
+            if (!UbioBackstoreHost::sameDataRequest(pending.second, msg)) {
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nid; response.h.srcSocket = sid;
+                response.h.dstNode = msg.h.srcNode;
+                response.h.dstSocket = msg.h.srcSocket;
+                response.h.homeLinePa = msg.h.homeLinePa;
+                response.h.reqId = msg.h.reqId;
+                response.b.writebackResp.success = false;
+                hasResponse = true;
+            }
+            return true;
+        }
+        const auto kind = msg.b.writebackReq.kind;
+        const auto disposition = msg.b.writebackReq.disposition;
+        const bool keepAsClean = disposition == UBWriteDisposition::KeepClean;
+        const bool validKind = kind == UBWritebackKind::OwnerWriteback ||
+            kind == UBWritebackKind::StoreCommit;
+        const bool validDisposition = kind == UBWritebackKind::StoreCommit
+            ? disposition == UBWriteDisposition::MemoryOnly
+            : (disposition == UBWriteDisposition::DropOwner || keepAsClean);
+        const bool validPayload = msg.b.writebackReq.hasData &&
+            msg.b.writebackReq.byteMask != 0 &&
+            (kind != UBWritebackKind::OwnerWriteback ||
+             msg.b.writebackReq.byteMask == ~uint64_t{0});
+        const bool exactStoreOwner = kind != UBWritebackKind::StoreCommit ||
+            ubcc.processStoreCommit(msg.h.homeLinePa, msg.h.requesterNode,
+                                    msg.h.epoch);
+        const int currentOwner = ubcc.getOwnerForLine(msg.h.homeLinePa);
+        const bool plausibleOwner = kind != UBWritebackKind::OwnerWriteback ||
+            currentOwner < 0 || currentOwner == msg.h.requesterNode;
+        if (!validKind || !validDisposition || !validPayload || !exactStoreOwner ||
+            !plausibleOwner) {
+            response.h.type = CoherenceMessageType::WritebackResp;
+            response.h.srcNode = nid; response.h.srcSocket = sid;
+            response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+            response.h.homeLinePa = msg.h.homeLinePa; response.h.epoch = msg.h.epoch;
+            response.h.reqId = msg.h.reqId; response.b.writebackResp.success = false;
+            hasResponse = true;
+            return true;
+        }
         if (msg.b.writebackReq.hasData &&
             host.scheduleWritebackResponse(msg, keepAsClean)) {
             return true;
@@ -4381,7 +4888,9 @@ main(int argc, char **argv)
                                         nid, sid, coh->h.homeLinePa, coh->h.reqId);
                                 }
                             }
-                            resp.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
+                            resp.h.flags |= static_cast<uint32_t>(CFLAG_ACCEPTED) |
+                                static_cast<uint32_t>(CFLAG_DATA_RETURNED) |
+                                static_cast<uint32_t>(CFLAG_HAS_DATA);
                             sendCoh(netPort, tick, gidOf(nid, sid),
                                     gidOf(coh->h.homeNode, coh->h.homeSocket),
                                     resp, true);
@@ -4633,6 +5142,7 @@ main(int argc, char **argv)
             host->drainPendingDataResponses();
         } else if (dataPlaneActive && haHost) {
             haHost->dsmData.drain(tick);
+            if (haAdapter) haAdapter->advance();
         }
     }
 

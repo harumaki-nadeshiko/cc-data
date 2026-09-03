@@ -2477,6 +2477,25 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         return false;
     }
 
+    auto reservedWrite = _writeReservations.find(line_pa);
+    if (reservedWrite != _writeReservations.end()) {
+        const auto &reservation = reservedWrite->second;
+        const bool matchingOwnerWriteback = reservation.ownerWriteback &&
+            reservation.requesterNode == ownerNode &&
+            reservation.epoch == responseEpoch;
+        if (!matchingOwnerWriteback) {
+            framework::LogWarn("UBCC",
+                "recall response blocked by nonmatching persistence reservation PA=0x{:x}",
+                line_pa);
+            return false;
+        }
+        // The matching dirty OwnerWriteback owns persistence and will invoke
+        // this recall path only after its async write completes. An independent
+        // RecallResp must not publish release/grant while that write is pending.
+        if (reqId == ost->reqId)
+            return false;
+    }
+
     if (ost->targetNode >= 0 && ost->targetNode != ownerNode) {
         warn("UBCC node_id={}: recall owner mismatch PA=0x{:x} expected={} got={}",
              _nodeId, line_pa, ost->targetNode, ownerNode);
@@ -2668,6 +2687,8 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 bool
 UBCCController::isLineBusy(uint64_t line_pa) const
 {
+    if (_writeReservations.count(line_pa))
+        return true;
     // v4: Check outstanding requests for non-terminal stages
     auto oit = _outstandingReqs.find(line_pa);
     if (oit != _outstandingReqs.end()) {
@@ -3361,6 +3382,125 @@ UBCCController::processWritebackWithData(uint64_t line_pa, int requesterNode,
                                          const uint8_t *data)
 {
     return processWriteback(line_pa, requesterNode, epochVal, keepAsClean, data);
+}
+
+bool
+UBCCController::processStoreCommit(uint64_t line_pa, int requesterNode,
+                                   uint64_t epochVal) const
+{
+    DirEntry entry;
+    if (!_directory.lookup(line_pa, entry))
+        return false;
+    return normalizeEpoch(entry.epoch) == normalizeEpoch(epochVal) &&
+           DirEntry::ownerFromSharers(entry) == requesterNode;
+}
+
+bool
+UBCCController::validateWritebackPersistence(uint64_t line_pa,
+                                             int requesterNode,
+                                             uint64_t epochVal,
+                                             bool ownerWriteback,
+                                             int sourceSocket,
+                                             uint64_t reqId,
+                                             uint8_t disposition) const
+{
+    auto reservation = _writeReservations.find(line_pa);
+    if (reservation != _writeReservations.end()) {
+        const auto &r = reservation->second;
+        if (r.requesterNode != requesterNode || r.sourceSocket != sourceSocket ||
+            r.epoch != normalizeEpoch(epochVal) || r.reqId != reqId ||
+            r.ownerWriteback != ownerWriteback || r.disposition != disposition)
+            return false;
+    }
+    DirEntry entry;
+    if (!_directory.lookup(line_pa, entry) ||
+        normalizeEpoch(entry.epoch) != normalizeEpoch(epochVal) ||
+        DirEntry::ownerFromSharers(entry) != requesterNode)
+        return false;
+    if (!ownerWriteback)
+        return _outstandingReqs.find(line_pa) == _outstandingReqs.end();
+    auto active = _outstandingReqs.find(line_pa);
+    const bool recallMerge = active != _outstandingReqs.end() &&
+        active->second.opType == OpType::RECALL &&
+        active->second.stage == OpStage::WAITING_TARGET_RESP &&
+        active->second.targetNode == requesterNode;
+    if (recallMerge) return disposition != 2; // KeepClean cannot satisfy recall release
+    const bool idle = active == _outstandingReqs.end() ||
+        active->second.stage == OpStage::DONE ||
+        active->second.stage == OpStage::CANCELLED ||
+        active->second.stage == OpStage::TIMED_OUT;
+    return idle && entry.state == MESIState::G_M;
+}
+
+bool
+UBCCController::reserveWritebackPersistence(uint64_t line_pa,
+                                            int requesterNode,
+                                            uint64_t epochVal,
+                                            bool ownerWriteback,
+                                            int sourceSocket,
+                                            uint64_t reqId,
+                                            uint8_t disposition)
+{
+    auto found = _writeReservations.find(line_pa);
+    if (found != _writeReservations.end()) {
+        const auto &r = found->second;
+        return r.requesterNode == requesterNode && r.sourceSocket == sourceSocket &&
+            r.epoch == normalizeEpoch(epochVal) && r.reqId == reqId &&
+            r.ownerWriteback == ownerWriteback && r.disposition == disposition;
+    }
+    if (!validateWritebackPersistence(line_pa, requesterNode, epochVal,
+                                      ownerWriteback, sourceSocket, reqId,
+                                      disposition))
+        return false;
+    _writeReservations[line_pa] = {requesterNode, sourceSocket,
+        normalizeEpoch(epochVal), reqId, ownerWriteback, disposition};
+    return true;
+}
+
+void
+UBCCController::releaseWritebackPersistence(uint64_t line_pa,
+                                            int requesterNode,
+                                            uint64_t epochVal,
+                                            bool ownerWriteback,
+                                            int sourceSocket,
+                                            uint64_t reqId,
+                                            uint8_t disposition)
+{
+    auto found = _writeReservations.find(line_pa);
+    if (found == _writeReservations.end()) return;
+    const auto &r = found->second;
+    if (r.requesterNode == requesterNode && r.sourceSocket == sourceSocket &&
+        r.epoch == normalizeEpoch(epochVal) && r.reqId == reqId &&
+        r.ownerWriteback == ownerWriteback && r.disposition == disposition)
+        _writeReservations.erase(found);
+}
+
+bool
+UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
+                                                     int requesterNode,
+                                                     uint64_t epochVal,
+                                                     int sourceSocket,
+                                                     uint64_t reqId,
+                                                     const uint8_t *data)
+{
+    auto reservation = _writeReservations.find(line_pa);
+    OutstandingRequest *active = findOutstanding(line_pa);
+    if (reservation == _writeReservations.end() || !active || !data)
+        return false;
+    const auto &r = reservation->second;
+    if (!r.ownerWriteback || r.disposition != 1 ||
+        r.requesterNode != requesterNode || r.sourceSocket != sourceSocket ||
+        r.epoch != normalizeEpoch(epochVal) || r.reqId != reqId ||
+        active->opType != OpType::RECALL ||
+        active->stage != OpStage::WAITING_TARGET_RESP ||
+        active->targetNode != requesterNode)
+        return false;
+    const uint64_t recallReqId = active->reqId;
+    _writeReservations.erase(reservation);
+    DataBlock payload(64);
+    payload.setData(data, 0, 64);
+    return processRecallResponse(line_pa, requesterNode, true, epochVal,
+                                 recallReqId, &payload);
 }
 
 // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----

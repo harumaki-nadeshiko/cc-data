@@ -56,12 +56,16 @@ bool HAController::submit(const Request &request)
     validateAddressNode(request.address, request.requester);
     if (!request.requestId)
         throw std::invalid_argument("HAController requestId zero is reserved");
-    if (request.kind == RequestKind::Write && !request.data.valid)
-        throw std::invalid_argument("HAController write requires a full payload");
+    if (request.kind == RequestKind::Write &&
+        (!request.data.valid || !request.byteMask))
+        throw std::invalid_argument("HAController write requires data and a non-zero mask");
+    if (request.kind == RequestKind::Read && request.byteMask)
+        throw std::invalid_argument("HAController read mask must be zero");
     if (!directory_.contains(request.address)) return submitOverflow(request);
     if (unavailable(request.address)) {
         actions_.push_back({ActionKind::Reject, request.address, request.requester,
                             request.requester, request.requestId, {}});
+        actions_.back().permanentReject = true;
         return false;
     }
     LineWork &work = work_[request.address];
@@ -84,8 +88,11 @@ bool HAController::submitOverflow(const Request &request)
     if (directory_.contains(request.address)) return submit(request);
     if (!request.requestId)
         throw std::invalid_argument("HAController requestId zero is reserved");
-    if (request.kind == RequestKind::Write && !request.data.valid)
-        throw std::invalid_argument("HAController write requires a full payload");
+    if (request.kind == RequestKind::Write &&
+        (!request.data.valid || !request.byteMask))
+        throw std::invalid_argument("HAController write requires data and a non-zero mask");
+    if (request.kind == RequestKind::Read && request.byteMask)
+        throw std::invalid_argument("HAController read mask must be zero");
     LineWork &work = work_[request.address];
     if (work.active) {
         if (work.waiting.size() >= queueDepth_) {
@@ -138,26 +145,45 @@ void HAController::startKnown(LineWork &work, Transaction &txn)
         if (popcount(txn.oldSharers) == 1) {
             txn.dataPending = true;
             txn.dataSource = firstSet(txn.oldSharers);
-            if (txn.dataSource == txn.request.requester) {
-                emit(ActionKind::FetchMemory, txn, txn.request.requester,
-                     txn.request.requester);
-            } else {
-                txn.persistBeforeGrant = true;
-                emit(ActionKind::FetchOwner, txn, txn.dataSource,
-                     txn.request.requester);
-            }
+            // A singleton participant may be the dirty/latest owner, including
+            // when it is also the requester.  Probe it before consulting Home
+            // memory; a successful clean/no-data response explicitly permits
+            // the memory fallback below.
+            // A data-bearing ReadShared recall downgrades the sole dirty owner
+            // into an ordinary shared participant. Persist the latest line
+            // before that distinction is lost, even for a self read.
+            txn.persistBeforeGrant = true;
+            emit(ActionKind::FetchOwner, txn, txn.dataSource,
+                 txn.request.requester);
         } else if (txn.oldSharers == 0 || popcount(txn.oldSharers) > 1) {
             txn.dataPending = true;
             txn.dataSource = txn.request.requester;
-            emit(ActionKind::FetchMemory, txn, txn.request.requester, txn.request.requester);
+            txn.fetchingMemory = true;
+            emit(ActionKind::FetchMemory, txn, txn.request.requester,
+                 txn.request.requester);
         }
     } else {
+        txn.partialWrite = txn.request.byteMask != ~std::uint64_t{0};
         txn.data = txn.request.data;
-        txn.persistBeforeGrant = true;
         txn.pendingInvalidates = txn.oldSharers & ~requesterBit;
+        if (txn.partialWrite && popcount(txn.oldSharers) == 1)
+            txn.pendingInvalidates &= ~txn.oldSharers;
         for (std::uint32_t node = 0; node < directory_.config().nodeCount; ++node)
             if (txn.pendingInvalidates & (std::uint64_t{1} << node))
                 emit(ActionKind::Invalidate, txn, txn.request.requester, node);
+        if (txn.partialWrite) {
+            txn.dataPending = true;
+            if (popcount(txn.oldSharers) == 1) {
+                txn.dataSource = firstSet(txn.oldSharers);
+                emit(ActionKind::FetchOwner, txn, txn.dataSource,
+                     txn.request.requester);
+            } else {
+                txn.dataSource = txn.request.requester;
+                txn.fetchingMemory = true;
+                emit(ActionKind::FetchMemory, txn, txn.request.requester,
+                     txn.request.requester);
+            }
+        }
     }
     maybeGrant(work);
 }
@@ -177,10 +203,11 @@ void HAController::maybeGrant(LineWork &work)
     txn.phase = Phase::NeedInstall;
 }
 
-void HAController::rejectUnavailable(LineWork &work)
+void HAController::rejectUnavailable(LineWork &work, bool permanent)
 {
     Transaction &txn = *work.active;
     emit(ActionKind::Reject, txn, txn.request.requester, txn.request.requester);
+    actions_.back().permanentReject = permanent;
     finish(work, txn.request.address);
 }
 
@@ -193,6 +220,7 @@ void HAController::finish(LineWork &work, std::uint64_t address)
         if (unavailable(next.address)) {
             actions_.push_back({ActionKind::Reject, next.address, next.requester,
                                 next.requester, next.requestId, {}});
+            actions_.back().permanentReject = true;
             finish(work, address);
         } else if (directory_.contains(next.address)) start(work, next);
         else {
@@ -242,7 +270,8 @@ void HAController::accept(const Event &event)
                 item.second.active->phase != Phase::Reconstruct) reject.push_back(item.first);
         for (std::uint64_t pa : reject) {
             auto found = work_.find(pa);
-            if (found != work_.end() && found->second.active) rejectUnavailable(found->second);
+            if (found != work_.end() && found->second.active)
+                rejectUnavailable(found->second, true);
         }
         for (std::uint64_t pa : reconstructed) {
             auto found = work_.find(pa);
@@ -268,6 +297,13 @@ void HAController::accept(const Event &event)
                         event.requestId, event.data};
         emit(ActionKind::PersistMemory, wire, event.node, event.node, event.data);
         writebacks_[event.address] = {event.node, event.requestId, event.data, event.present};
+        return;
+    }
+    if (event.kind == EventKind::WritebackFailed) {
+        auto wb = writebacks_.find(event.address);
+        if (wb != writebacks_.end() && wb->second.node == event.node &&
+            wb->second.requestId == event.requestId)
+            writebacks_.erase(wb);
         return;
     }
     if (event.kind == EventKind::PersistenceComplete) {
@@ -297,7 +333,17 @@ void HAController::accept(const Event &event)
     if (event.kind == EventKind::Unavailable) {
         if (directory_.contains(event.address))
             unavailable_[static_cast<std::size_t>(directory_.lineIndex(event.address))] = 1;
-        rejectUnavailable(work);
+        rejectUnavailable(work, true);
+        return;
+    }
+    if (event.kind == EventKind::RetryableBusy) {
+        // Admission can reject only before coherence state has been disturbed.
+        // Once owner data or an invalidation ack has been accepted, keep the
+        // transaction alive; the adapter retries the same DSM operation.
+        if (!txn.destructiveAccepted &&
+            txn.phase == Phase::NeedDataAndInvalidates) {
+            rejectUnavailable(work, false);
+        }
         return;
     }
     const std::uint64_t nodeBit = std::uint64_t{1} << event.node;
@@ -319,10 +365,32 @@ void HAController::accept(const Event &event)
     }
     if (event.kind == EventKind::OwnerData && txn.dataPending &&
         event.node == txn.dataSource && event.data.valid) {
+        if (txn.oldSharers & nodeBit) txn.destructiveAccepted = true;
         txn.dataPending = false;
-        txn.data = event.data;
+        if (txn.partialWrite) {
+            txn.data = event.data;
+            for (unsigned i = 0; i < 64; ++i)
+                if (txn.request.byteMask & (std::uint64_t{1} << i))
+                    txn.data.bytes[i] = txn.request.data.bytes[i];
+            txn.data.valid = true;
+        } else {
+            txn.data = event.data;
+        }
         maybeGrant(work);
+    } else if (event.kind == EventKind::OwnerNoData && txn.dataPending &&
+               event.node == txn.dataSource && !txn.fetchingMemory) {
+        // The recall completed and established that this was a clean
+        // presence-only participant.  Home memory is therefore authoritative.
+        // Do not issue the recall again if the asynchronous memory access is
+        // subsequently busy.
+        txn.destructiveAccepted = true;
+        txn.persistBeforeGrant = false;
+        txn.dataSource = txn.request.requester;
+        txn.fetchingMemory = true;
+        emit(ActionKind::FetchMemory, txn, txn.request.requester,
+             txn.request.requester);
     } else if (event.kind == EventKind::InvalidateAck && (txn.pendingInvalidates & nodeBit)) {
+        txn.destructiveAccepted = true;
         txn.pendingInvalidates &= ~nodeBit;
         maybeGrant(work);
     } else if (event.kind == EventKind::PersistenceComplete &&
@@ -360,6 +428,26 @@ bool HAController::busy(std::uint64_t address) const
 {
     auto found = work_.find(address);
     return found != work_.end() && found->second.active.has_value();
+}
+
+bool HAController::retryTransient(std::uint64_t address, std::uint64_t requestId)
+{
+    auto found = work_.find(address);
+    if (found == work_.end() || !found->second.active ||
+        found->second.active->request.requestId != requestId)
+        return false;
+    Transaction &txn = *found->second.active;
+    if (txn.phase == Phase::NeedPersistence) {
+        emit(ActionKind::PersistMemory, txn, txn.dataSource,
+             txn.request.requester, txn.data);
+        return true;
+    }
+    if (txn.dataPending && txn.fetchingMemory) {
+        emit(ActionKind::FetchMemory, txn, txn.request.requester,
+             txn.request.requester);
+        return true;
+    }
+    return false;
 }
 
 bool HAController::beginBroadcastReconstruction(std::uint64_t address, std::uint64_t requestId)

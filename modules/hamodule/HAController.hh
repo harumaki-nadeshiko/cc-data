@@ -17,8 +17,9 @@ class HAController {
   public:
     enum class RequestKind { Read, Write };
     enum class EventKind {
-        OwnerData, InvalidateAck, InstallAck, ProbeResponse, Writeback,
-        PersistenceComplete, Unavailable, Evict, PeerExit
+        OwnerData, OwnerNoData, InvalidateAck, InstallAck, ProbeResponse, Writeback,
+        WritebackFailed, PersistenceComplete, RetryableBusy, Unavailable,
+        Evict, PeerExit
     };
     enum class ActionKind {
         FetchOwner, FetchMemory, Invalidate, GrantRead, GrantWrite, Probe,
@@ -45,17 +46,24 @@ class HAController {
         RequestKind kind;
         std::uint64_t requestId;
         Payload data{};
+        std::uint64_t byteMask = 0;
 
         Request(std::uint64_t address_ = 0, std::uint32_t requester_ = 0,
                 RequestKind kind_ = RequestKind::Read, std::uint64_t requestId_ = 0)
             : address(address_), requester(requester_), kind(kind_),
-              requestId(requestId_), data()
+              requestId(requestId_), data(), byteMask(0)
         {}
         Request(std::uint64_t address_, std::uint32_t requester_,
                 RequestKind kind_, std::uint64_t requestId_, Payload data_)
             : address(address_), requester(requester_), kind(kind_),
-              requestId(requestId_), data(data_)
+              requestId(requestId_), data(data_),
+              byteMask(kind_ == RequestKind::Write ? ~std::uint64_t{0} : 0)
         {}
+        Request(std::uint64_t address_, std::uint32_t requester_,
+                RequestKind kind_, std::uint64_t requestId_, Payload data_,
+                std::uint64_t byteMask_)
+            : address(address_), requester(requester_), kind(kind_),
+              requestId(requestId_), data(data_), byteMask(byteMask_) {}
     };
     struct Event {
         EventKind kind = EventKind::InstallAck;
@@ -73,6 +81,7 @@ class HAController {
         std::uint32_t target;
         std::uint64_t requestId;
         Payload data{};
+        bool permanentReject = false;
     };
     struct Config {
         FlatBitmapDirectory::Config directory;
@@ -89,6 +98,7 @@ class HAController {
     Action popAction();
     std::size_t queued(std::uint64_t address) const;
     bool busy(std::uint64_t address) const;
+    bool retryTransient(std::uint64_t address, std::uint64_t requestId);
 
     // Used after bounded tracking overflow or uncertain peer state.  Probe
     // responses reconstruct the line's exact bitmap entirely in transient
@@ -111,6 +121,9 @@ class HAController {
         bool overflow = false;
         bool reconstructOnly = false;
         bool persistBeforeGrant = false;
+        bool partialWrite = false;
+        bool destructiveAccepted = false;
+        bool fetchingMemory = false;
     };
     struct LineWork {
         std::optional<Transaction> active;
@@ -132,7 +145,7 @@ class HAController {
               std::uint32_t target);
     void emit(ActionKind kind, const Transaction &txn, std::uint32_t source,
               std::uint32_t target, const Payload &data);
-    void rejectUnavailable(LineWork &work);
+    void rejectUnavailable(LineWork &work, bool permanent);
     bool unavailable(std::uint64_t address) const noexcept;
 
     FlatBitmapDirectory directory_;

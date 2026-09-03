@@ -550,6 +550,29 @@ class UBCCController
                                   uint64_t epochVal, bool keepAsClean,
                                   const uint8_t *data);
 
+    // Validate a StoreCommit publication tuple without changing directory
+    // ownership, sharers, or epoch. Persistence is owned by the caller.
+    bool processStoreCommit(uint64_t line_pa, int requesterNode,
+                            uint64_t epochVal) const;
+    bool validateWritebackPersistence(uint64_t line_pa, int requesterNode,
+                                      uint64_t epochVal,
+                                      bool ownerWriteback, int sourceSocket,
+                                      uint64_t reqId, uint8_t disposition) const;
+    bool reserveWritebackPersistence(uint64_t line_pa, int requesterNode,
+                                     uint64_t epochVal, bool ownerWriteback,
+                                     int sourceSocket, uint64_t reqId,
+                                     uint8_t disposition);
+    void releaseWritebackPersistence(uint64_t line_pa, int requesterNode,
+                                     uint64_t epochVal, bool ownerWriteback,
+                                     int sourceSocket, uint64_t reqId,
+                                     uint8_t disposition);
+    bool completeReservedOwnerWritebackRecall(uint64_t line_pa,
+                                              int requesterNode,
+                                              uint64_t epochVal,
+                                              int sourceSocket,
+                                              uint64_t reqId,
+                                              const uint8_t *data);
+
     /**
      * Notify UBCC that dirty data for a home PA has been written to DRAM
      * by the HN-F → EP-SNF path. Releases ownership by transitioning the
@@ -1117,6 +1140,15 @@ public:
     bool _diagStableDumped = false;
     size_t _grantPushRetryCursor = 0;
     static constexpr size_t kGrantPushAttemptsPerWake = 8;
+    struct WritebackPersistenceReservation {
+        int requesterNode = -1;
+        int sourceSocket = -1;
+        uint64_t epoch = 0;
+        uint64_t reqId = 0;
+        bool ownerWriteback = false;
+        uint8_t disposition = 0;
+    };
+    std::map<uint64_t, WritebackPersistenceReservation> _writeReservations;
 
     // ---- v4 fanout helpers (home UBCC direct invalidation) ----
     bool fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,

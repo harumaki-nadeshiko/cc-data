@@ -227,10 +227,28 @@ struct UBInvalidateReqBody { /* no extra fields beyond header */ };
 
 struct UBInvalidateAckBody { /* no extra fields beyond header */ };
 
+enum class UBWritebackKind : uint8_t {
+    OwnerWriteback = 0,
+    StoreCommit = 1,
+};
+
+enum class UBWriteDisposition : uint8_t {
+    MemoryOnly = 0,
+    DropOwner = 1,
+    KeepClean = 2,
+};
+
 struct UBWritebackReqBody {
-    bool hasData;
+    UBWritebackKind kind;
+    UBWriteDisposition disposition;
+    uint8_t hasData;
+    uint8_t reserved[5];
+    uint64_t byteMask;
     uint8_t data[64];
-    UBWritebackReqBody() : hasData(false) { memset(data, 0, 64); }
+    UBWritebackReqBody()
+        : kind(UBWritebackKind::OwnerWriteback),
+          disposition(UBWriteDisposition::DropOwner), hasData(0), reserved{},
+          byteMask(0), data{} {}
 };
 
 struct UBWritebackRespBody {
@@ -346,16 +364,19 @@ struct UBMetaRNFLineWriteRespBody {
     UBMetaRNFLineWriteRespBody() : status(MetaRNFLineStatus::IoError), bucketOffset(0) {}
 };
 
-// HA permission bodies use explicit reserved bytes so their wire offsets do
-// not depend on compiler-inserted interior padding. The data arrays are always
-// present: they are meaningful for Write requests and successful Read replies.
+// HA permission requests have the fixed wire order operation, reserved[7],
+// permissionEpoch, byteMask, data[64]. Read uses mask zero; a full write uses
+// all ones; a partial write uses a non-zero proper subset. Explicit reserved
+// bytes make offsets independent of compiler-inserted interior padding.
 struct UBHAPermissionReqBody {
     HAOperation operation;
     uint8_t reserved[7];
     uint64_t permissionEpoch;
+    uint64_t byteMask;
     uint8_t data[64];
     UBHAPermissionReqBody()
-        : operation(HAOperation::Read), reserved{}, permissionEpoch(0), data{} {}
+        : operation(HAOperation::Read), reserved{}, permissionEpoch(0),
+          byteMask(0), data{} {}
 };
 
 struct UBHAPermissionRespBody {
@@ -432,7 +453,9 @@ union CoherenceMessageBody {
     UBHAPresenceProbeReqBody haPresenceProbeReq;
     UBHAPresenceProbeRespBody haPresenceProbeResp;
 
-    CoherenceMessageBody() {} // value-initialized by CoherenceMessage default ctor
+    // The largest body covers the entire union and initializes every byte.
+    // Senders then assign the active tagged member explicitly.
+    CoherenceMessageBody() : metaRNF() {}
 };
 
 // ---- Full Message ----
@@ -440,7 +463,7 @@ struct CoherenceMessage {
     CoherenceMessageHeader h;
     CoherenceMessageBody b;
 
-    CoherenceMessage() = default;
+    CoherenceMessage() : h(), b() {}
 };
 
 // ---- Debug helpers ----
