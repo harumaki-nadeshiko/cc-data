@@ -88,6 +88,7 @@ int main(int argc, char **argv)
             } else {
                 (void)dsm_load(0, portable_line(record, page));
             }
+            __asm__ volatile("dsb sy" ::: "memory");
         }
         __asm__ volatile("dsb sy" ::: "memory");
         samples[batch] = read_counter_serialized() - start;
