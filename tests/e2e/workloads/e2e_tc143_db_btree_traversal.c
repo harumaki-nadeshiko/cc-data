@@ -49,13 +49,28 @@ int main(int argc, char **argv)
     uint64_t samples[BATCHES];
     uint64_t service_ticks = 0;
     uint64_t end_to_end_start = read_counter_serialized();
+    int pressure_completed = 0;
+    int pressure_target = portable_pressure_plane_target(plane);
     for (int batch = 0; batch < BATCHES; ++batch) {
         int first = portable_pressure_begin(batch);
         int last = portable_pressure_end(batch);
+        int batch_completed = 0;
+        portable_emit_workload_progress(
+            plane, "batch_begin", batch, pressure_completed, pressure_target);
         for (int line = first + plane; line < last;
-             line += PORTABLE_PLANES)
+             line += PORTABLE_PLANES) {
             dsm_store(0, portable_global_pressure(PRESSURE_BASE, line),
                       VALUE_BASE | 0x00800000u | (uint32_t)line);
+            ++batch_completed;
+            ++pressure_completed;
+            if (batch_completed == 64 || batch_completed == 128 ||
+                batch_completed == 256 || (batch_completed % 512) == 0)
+                portable_emit_workload_progress(
+                    plane, "stores_progress", batch, pressure_completed,
+                    pressure_target);
+        }
+        portable_emit_workload_progress(
+            plane, "stores_done", batch, pressure_completed, pressure_target);
         __asm__ volatile("dsb sy" ::: "memory");
         portable_barrier();
 
@@ -77,6 +92,8 @@ int main(int argc, char **argv)
         __asm__ volatile("dsb sy" ::: "memory");
         samples[batch] = read_counter_serialized() - start;
         service_ticks += samples[batch];
+        portable_emit_workload_progress(
+            plane, "batch_done", batch, pressure_completed, pressure_target);
         portable_barrier();
     }
     uint64_t end_to_end_ticks = read_counter_serialized() - end_to_end_start;

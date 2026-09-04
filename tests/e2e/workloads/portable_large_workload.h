@@ -207,6 +207,44 @@ static inline int portable_pressure_end(int batch)
                  (uint64_t)PORTABLE_BATCHES);
 }
 
+static inline int portable_pressure_plane_count(int batch, int plane)
+{
+    int first = portable_pressure_begin(batch) + plane;
+    int last = portable_pressure_end(batch);
+    return first < last ? 1 + (last - 1 - first) / PORTABLE_PLANES : 0;
+}
+
+static inline int portable_pressure_plane_target(int plane)
+{
+    int total = 0;
+    for (int batch = 0; batch < PORTABLE_BATCHES; ++batch)
+        total += portable_pressure_plane_count(batch, plane);
+    return total;
+}
+
+static inline void portable_emit_workload_progress(
+    int plane, const char *event, int batch, int completed, int target)
+{
+    char b[256]; int p = 0; const char *s;
+#define PORTABLE_PROGRESS_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+    PORTABLE_PROGRESS_TEXT("[WORKLOAD-PROGRESS] node=");
+    p = fmt_int(b, p, plane);
+    PORTABLE_PROGRESS_TEXT(" phase=pressure event=");
+    PORTABLE_PROGRESS_TEXT(event);
+    PORTABLE_PROGRESS_TEXT(" batch=");
+    p = fmt_int(b, p, batch);
+    PORTABLE_PROGRESS_TEXT(" batches=");
+    p = fmt_int(b, p, PORTABLE_BATCHES);
+    PORTABLE_PROGRESS_TEXT(" completed=");
+    p = fmt_int(b, p, completed);
+    PORTABLE_PROGRESS_TEXT(" target=");
+    p = fmt_int(b, p, target);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_PROGRESS_TEXT
+}
+
 static inline void portable_emit_pressure_config(int plane, int hot_lines)
 {
     char b[384]; int p = 0; const char *s;

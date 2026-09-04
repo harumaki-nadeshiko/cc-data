@@ -27,6 +27,8 @@
 #   EP_SUPERVISOR_LOG_CEIL_GB=20 max log dir GiB ceiling (default 20)
 #   EP_SUPERVISOR_DISK_FREE_GB=50 min disk free GiB (default 50)
 #   EP_SUPERVISOR_PROGRESS_STALL_SEC=600 stop after no simout growth
+#   EP_SUPERVISOR_ETA_CALIBRATION_SEC=300 estimate marked workload duration
+#   EP_SUPERVISOR_ETA_BUDGET_PCT=125 stop if projected time exceeds budget
 #
 # TRACE-PERF is bounded by default to prevent capacity tests from producing
 # one record per protocol hop. The first 500 events per process are retained.
@@ -65,6 +67,24 @@ EP_SUPERVISOR_LOG_CEIL_GB="${EP_SUPERVISOR_LOG_CEIL_GB:-20}"
 EP_SUPERVISOR_DISK_FREE_GB="${EP_SUPERVISOR_DISK_FREE_GB:-50}"
 EP_SUPERVISOR_PROGRESS_STALL_SEC="${EP_SUPERVISOR_PROGRESS_STALL_SEC:-600}"
 EP_SUPERVISOR_STARTUP_STALL_SEC="${EP_SUPERVISOR_STARTUP_STALL_SEC:-120}"
+EP_SUPERVISOR_ETA_CALIBRATION_SEC="${EP_SUPERVISOR_ETA_CALIBRATION_SEC:-300}"
+EP_SUPERVISOR_ETA_BUDGET_PCT="${EP_SUPERVISOR_ETA_BUDGET_PCT:-125}"
+for value in TIMEOUT_SEC EP_SUPERVISOR_INTERVAL \
+             EP_SUPERVISOR_PROGRESS_STALL_SEC \
+             EP_SUPERVISOR_STARTUP_STALL_SEC \
+             EP_SUPERVISOR_ETA_CALIBRATION_SEC \
+             EP_SUPERVISOR_ETA_BUDGET_PCT; do
+    [[ "${!value}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "FATAL: $value must be a positive integer" >&2
+        exit 2
+    }
+done
+for value in EP_SUPERVISOR_LOG_CEIL_GB EP_SUPERVISOR_DISK_FREE_GB; do
+    [[ "${!value}" =~ ^[0-9]+$ ]] || {
+        echo "FATAL: $value must be a non-negative integer" >&2
+        exit 2
+    }
+done
 
 # C5: PDES sync interval (ps).  Lower values improve time-resolution but
 # increase IPC overhead.  Target: 2.5ns (2500 ps) per solve_latency_params.py --x-ns 2.5.
@@ -726,6 +746,43 @@ _aggregate_protocol_tick() {
     printf '%s\n' "$max_tick"
 }
 
+# Return aggregate completed/target counters from the latest per-node
+# [WORKLOAD-PROGRESS] markers. These markers represent useful workload work;
+# protocol heartbeat ticks alone do not.
+_aggregate_workload_progress() {
+    local m5outdir="$1"
+    local num_nodes="$2"
+    local slow_completed=-1 slow_target=0 reporting=0 nid progress
+    for nid in $(seq 0 $((num_nodes - 1))); do
+        progress=$(perl -e '
+            $f = shift;
+            open(my $fh, "<", $f) or exit;
+            while (<$fh>) {
+                if (/^\[WORKLOAD-PROGRESS\].* completed=(\d+) target=(\d+)/) {
+                    $completed = $1; $target = $2;
+                }
+            }
+            print "$completed $target" if defined $completed;
+        ' "$m5outdir/node${nid}/simout_n${nid}")
+        if [ -n "$progress" ]; then
+            local node_completed=${progress%% *}
+            local node_target=${progress##* }
+            # Select the node with the lowest completed/target ratio. Keeping
+            # that node's own pair avoids false incompletion when per-plane
+            # targets differ by one line.
+            if [ "$slow_completed" -lt 0 ] || \
+               [ $((node_completed * slow_target)) -lt \
+                 $((slow_completed * node_target)) ]; then
+                slow_completed="$node_completed"
+                slow_target="$node_target"
+            fi
+            reporting=$((reporting + 1))
+        fi
+    done
+    [ "$slow_completed" -ge 0 ] || slow_completed=0
+    printf '%s %s %s\n' "$slow_completed" "$slow_target" "$reporting"
+}
+
 # ── Supervisor: opt-in long-run watchdog ───────────────────────────
 # Writes PID manifest, monitors liveness/progress/log-size/disk.
 # On fault: writes reason to status file, kills CURRENT_TC PIDs + self;
@@ -734,6 +791,7 @@ _supervisor_start() {
     local tc="$1"
     local m5outdir="$2"
     local num_nodes="$3"
+    local tc_timeout="$4"
     local manifest="$LOG_BASE/supervisor_manifest_tc${tc}.txt"
     local status_file="$LOG_BASE/supervisor_status_tc${tc}.txt"
     local gem5_pids="$GEM5_PIDS"
@@ -755,6 +813,9 @@ _supervisor_start() {
         echo "INTERVAL=$EP_SUPERVISOR_INTERVAL"
         echo "PROGRESS_STALL_SEC=$EP_SUPERVISOR_PROGRESS_STALL_SEC"
         echo "STARTUP_STALL_SEC=$EP_SUPERVISOR_STARTUP_STALL_SEC"
+        echo "TC_TIMEOUT_SEC=$tc_timeout"
+        echo "ETA_CALIBRATION_SEC=$EP_SUPERVISOR_ETA_CALIBRATION_SEC"
+        echo "ETA_BUDGET_PCT=$EP_SUPERVISOR_ETA_BUDGET_PCT"
         echo "TRACE_PERF=$EP_TRACE_PERF first_n=$EP_TRACE_PERF_FIRST_N every=$EP_TRACE_PERF_EVERY max=$EP_TRACE_PERF_MAX"
         echo "PORT_HWM=$EP_PORT_HWM NSIM_MAX_PENDING=$EP_NSIM_MAX_PENDING"
     } > "$manifest"
@@ -766,8 +827,15 @@ _supervisor_start() {
         local floor_bytes=$((EP_SUPERVISOR_DISK_FREE_GB * 1073741824))
         local prev_guest_progress=-1
         local prev_protocol_tick=-1
+        local prev_workload_progress=-1
         local guest_stall_count=0
         local protocol_stall_count=0
+        local generic_stall_count=0
+        local useful_stall_count=0
+        local eta_over_budget_count=0
+        local start_wall; start_wall=$(date +%s)
+        local workload_start_wall=0
+        local workload_start_completed=0
         local stall_limit=$((EP_SUPERVISOR_PROGRESS_STALL_SEC / interval))
         local startup_limit=$((EP_SUPERVISOR_STARTUP_STALL_SEC / interval))
         [ "$stall_limit" -gt 0 ] 2>/dev/null || stall_limit=1
@@ -798,7 +866,7 @@ _supervisor_start() {
                     echo "FAULT ${ts} gem5_exit: $(basename "$gem5_status")=$gem5_code" >> "$status_file"
                     echo "[supervisor] FAULT: $(basename "$gem5_status") exited $gem5_code"
                     for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                        kill -9 "$pid" 2>/dev/null || true
+                        _kill_pid_tree "$pid"
                     done
                     exit 1
                 fi
@@ -824,13 +892,17 @@ _supervisor_start() {
             done
             local current_protocol_tick
             current_protocol_tick=$(_aggregate_protocol_tick)
+            local workload_completed workload_target workload_reporting
+            read -r workload_completed workload_target workload_reporting <<< \
+                "$(_aggregate_workload_progress "$m5outdir" "$num_nodes")"
+            local guest_changed=0 protocol_changed=0 workload_changed=0
+            [ "$current_guest_progress" -ne "$prev_guest_progress" ] && guest_changed=1
+            [ "$current_protocol_tick" -gt "$prev_protocol_tick" ] && protocol_changed=1
+            [ "$workload_completed" -gt "$prev_workload_progress" ] && workload_changed=1
             if [ "$current_guest_progress" -gt 0 ] || [ "$current_protocol_tick" -gt 0 ]; then
                 ever_progressed=1
             fi
-            if [ "$current_guest_progress" -ne "$prev_guest_progress" ] || \
-               [ "$current_protocol_tick" -gt "$prev_protocol_tick" ]; then
-                prev_guest_progress="$current_guest_progress"
-                prev_protocol_tick="$current_protocol_tick"
+            if [ "$guest_changed" -eq 1 ]; then
                 guest_stall_count=0
             else
                 guest_stall_count=$((guest_stall_count + 1))
@@ -840,25 +912,87 @@ _supervisor_start() {
                     echo "FAULT ${ts} startup_stall: guest_bytes=0 protocol_tick=0 for $((guest_stall_count * interval))s" >> "$status_file"
                     echo "[supervisor] FAULT: no startup progress for $((guest_stall_count * interval))s"
                     for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                        kill -9 "$pid" 2>/dev/null || true
-                    done
-                    exit 1
-                fi
-                if [ "$guest_stall_count" -ge "$stall_limit" ]; then
-                    local ts; ts=$(date +%s)
-                    echo "FAULT ${ts} progress_stall: guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} for $((guest_stall_count * interval))s" >> "$status_file"
-                    echo "[supervisor] FAULT: no guest or protocol tick progress for $((guest_stall_count * interval))s"
-                    for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                        kill -9 "$pid" 2>/dev/null || true
+                        _kill_pid_tree "$pid"
                     done
                     exit 1
                 fi
             fi
-            if [ "$current_protocol_tick" -gt "$prev_protocol_tick" ]; then
+            if [ "$guest_changed" -eq 1 ] || [ "$protocol_changed" -eq 1 ]; then
+                generic_stall_count=0
+            else
+                generic_stall_count=$((generic_stall_count + 1))
+                if [ "$workload_reporting" -eq 0 ] && \
+                   [ "$generic_stall_count" -ge "$stall_limit" ]; then
+                    local ts; ts=$(date +%s)
+                    echo "FAULT ${ts} progress_stall: guest_bytes=${current_guest_progress} protocol_tick=${current_protocol_tick} for $((generic_stall_count * interval))s" >> "$status_file"
+                    echo "[supervisor] FAULT: no guest or protocol tick progress for $((generic_stall_count * interval))s"
+                    for pid in $gem5_pids $ubio_pids $nsim_pid; do
+                        _kill_pid_tree "$pid"
+                    done
+                    exit 1
+                fi
+            fi
+            if [ "$protocol_changed" -eq 1 ]; then
                 protocol_stall_count=0
             else
                 protocol_stall_count=$((protocol_stall_count + 1))
             fi
+            if [ "$workload_reporting" -gt 0 ] && \
+               [ "$workload_completed" -lt "$workload_target" ]; then
+                if [ "$workload_changed" -eq 1 ]; then
+                    useful_stall_count=0
+                else
+                    useful_stall_count=$((useful_stall_count + 1))
+                fi
+                if [ "$useful_stall_count" -ge "$stall_limit" ]; then
+                    local ts; ts=$(date +%s)
+                    echo "FAULT ${ts} workload_stall: completed=${workload_completed} target=${workload_target} for $((useful_stall_count * interval))s" >> "$status_file"
+                    echo "[supervisor] FAULT: no marked workload progress for $((useful_stall_count * interval))s"
+                    for pid in $gem5_pids $ubio_pids $nsim_pid; do
+                        _kill_pid_tree "$pid"
+                    done
+                    exit 1
+                fi
+
+                local now elapsed projected workload_elapsed workload_delta
+                now=$(date +%s)
+                elapsed=$((now - start_wall))
+                if [ "$workload_reporting" -eq "$num_nodes" ] && \
+                   [ "$workload_start_wall" -eq 0 ]; then
+                    workload_start_wall="$now"
+                    workload_start_completed="$workload_completed"
+                fi
+                workload_elapsed=$((now - workload_start_wall))
+                workload_delta=$((workload_completed - workload_start_completed))
+                if [ "$workload_start_wall" -gt 0 ] && \
+                   [ "$workload_delta" -gt 0 ] && \
+                   [ "$workload_target" -gt "$workload_completed" ] && \
+                   [ "$workload_elapsed" -ge "$EP_SUPERVISOR_ETA_CALIBRATION_SEC" ]; then
+                    projected=$((elapsed + workload_elapsed * \
+                        (workload_target - workload_completed) / workload_delta))
+                    if [ $((projected * 100)) -gt \
+                         $((tc_timeout * EP_SUPERVISOR_ETA_BUDGET_PCT)) ]; then
+                        eta_over_budget_count=$((eta_over_budget_count + 1))
+                    else
+                        eta_over_budget_count=0
+                    fi
+                    if [ "$eta_over_budget_count" -ge 2 ]; then
+                        local ts; ts=$(date +%s)
+                        echo "FAULT ${ts} infeasible_eta: elapsed=${elapsed} completed=${workload_completed} target=${workload_target} projected=${projected} timeout=${tc_timeout}" >> "$status_file"
+                        echo "[supervisor] FAULT: projected workload time ${projected}s exceeds ${tc_timeout}s budget"
+                        for pid in $gem5_pids $ubio_pids $nsim_pid; do
+                            _kill_pid_tree "$pid"
+                        done
+                        exit 1
+                    fi
+                fi
+            else
+                useful_stall_count=0
+                eta_over_budget_count=0
+            fi
+            prev_guest_progress="$current_guest_progress"
+            prev_protocol_tick="$current_protocol_tick"
+            prev_workload_progress="$workload_completed"
 
             # ── 3. Log directory size check ───────────────────────
             local log_size
@@ -868,7 +1002,7 @@ _supervisor_start() {
                 echo "FAULT ${ts} log_size: ${log_size} bytes > ceil ${ceil_bytes} bytes (${EP_SUPERVISOR_LOG_CEIL_GB}GiB)" >> "$status_file"
                 echo "[supervisor] FAULT: log dir ${log_size} > ${EP_SUPERVISOR_LOG_CEIL_GB}GiB ceiling"
                 for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                    kill -9 "$pid" 2>/dev/null || true
+                    _kill_pid_tree "$pid"
                 done
                 exit 1
             fi
@@ -881,14 +1015,14 @@ _supervisor_start() {
                 echo "FAULT ${ts} disk_free: ${disk_free} bytes < floor ${floor_bytes} bytes (${EP_SUPERVISOR_DISK_FREE_GB}GiB)" >> "$status_file"
                 echo "[supervisor] FAULT: disk free ${disk_free} < ${EP_SUPERVISOR_DISK_FREE_GB}GiB floor"
                 for pid in $gem5_pids $ubio_pids $nsim_pid; do
-                    kill -9 "$pid" 2>/dev/null || true
+                    _kill_pid_tree "$pid"
                 done
                 exit 1
             fi
 
             # ── Heartbeat (only to status file, not stdout) ───────
             local ts; ts=$(date +%s)
-            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} guest_stall_sec=$((guest_stall_count * interval)) protocol_tick=${current_protocol_tick} protocol_stall_sec=$((protocol_stall_count * interval)) log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
+            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} guest_stall_sec=$((guest_stall_count * interval)) workload=${workload_completed}/${workload_target} workload_nodes=${workload_reporting}/${num_nodes} useful_stall_sec=$((useful_stall_count * interval)) protocol_tick=${current_protocol_tick} protocol_stall_sec=$((protocol_stall_count * interval)) log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
         done
     ) &
     SUPERVISOR_PID=$!
@@ -1177,7 +1311,7 @@ run_tc() {
 
     # 6b. Supervisor: opt-in long-run watchdog (EP_SUPERVISOR=1)
     if [ "${EP_SUPERVISOR:-0}" = "1" ]; then
-        _supervisor_start "$tc" "$m5outdir" "$NUM_NODES"
+        _supervisor_start "$tc" "$m5outdir" "$NUM_NODES" "$TC_TIMEOUT"
     fi
 
     # 6. Wait for all gem5 processes to finish (or timeout)

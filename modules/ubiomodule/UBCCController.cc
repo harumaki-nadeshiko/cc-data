@@ -1118,8 +1118,13 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         // though every tombstone is now safe to reclaim.
         refreshPinnedBit(linePa);
         replayResidentWaitersForCapacity(linePa);
-        framework::LogInfo("UBCC","[UBCC-ASYNC-WB] home={} pa=0x{:x} epoch={} — dirty cleared (snapshot matched)",
-               _nodeId, linePa, snapshotEpoch);
+        if (_asyncWbCount <= 16 || (_asyncWbCount % 1024) == 0) {
+            framework::LogInfo(
+                "UBCC",
+                "[UBCC-ASYNC-WB] home={} pa=0x{:x} epoch={} count={} "
+                "— dirty cleared (snapshot matched)",
+                _nodeId, linePa, snapshotEpoch, _asyncWbCount);
+        }
     } else {
         // The completed snapshot no longer owns the entry. Keep the newer
         // metadata dirty, but release the stale snapshot pin and wake capacity
