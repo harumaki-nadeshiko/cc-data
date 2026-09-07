@@ -3163,10 +3163,12 @@ def build_metric_details(resolved, report=None):
         delta_ns = safe_subtract(spill_outer["mean_ns"], ideal_outer["mean_ns"])
         scope = ("Standard" if contract == STANDARD_CONTRACT_ID else
                  "Formal qualification" if contract else "Extension descriptive")
+        parsed_sample_counts = {role: len(rows) for role, rows in role_runs.items()}
+        formal_sample_counts = {role: len(rows) for role, rows in groups.items()}
         reasons = []
-        for role, rows in groups.items():
+        for role, rows in role_runs.items():
             if not rows:
-                reasons.append(f"missing role={role}")
+                reasons.append(f"missing parsed role={role}")
         if groups["naive"] and naive is None:
             reasons.append("naive capacity unavailable")
         if groups["spill"] and spill is None:
@@ -3176,7 +3178,7 @@ def build_metric_details(resolved, report=None):
         if groups["ideal"] and ideal_outer["samples"] == 0:
             reasons.append("ideal completed Outer missing")
         if not contract:
-            reasons.append("naive/spill/ideal do not share one formal contract")
+            reasons.append("parsed naive/spill/ideal do not share one formal contract")
         elif not complete_contract:
             reasons.append("formal coordinate is incomplete")
         display_complete = complete_contract
@@ -3200,7 +3202,12 @@ def build_metric_details(resolved, report=None):
                                      if display_complete else
                                      (descriptive_delta * 2.0
                                       if descriptive_delta is not None else None)),
-            "sample_counts": {role: len(rows) for role, rows in groups.items()},
+            # sample_counts remains the intuitive parsed-run count.  Formal
+            # qualification counts are separate so extension data does not
+            # appear to have vanished from the detail report.
+            "sample_counts": parsed_sample_counts,
+            "parsed_sample_counts": parsed_sample_counts,
+            "formal_sample_counts": formal_sample_counts,
             "role_details": {
                 role: [{"run_id": run["id"], "profile": run["profile"],
                         "metric1_role": run.get("metric1_role"),
@@ -3290,14 +3297,16 @@ def render_detail_markdown(details):
     lines = ["# Metric 1/2/3 按拓扑与 TC 明细", "",
              "`Extension descriptive`表示日志指标已提取，但未进入冻结 Standard 或显式 qualification。", "",
              "## Metric1", "",
-             "| Scope | Contract | Topology | TC | Capacity ratio | Outer delta cycles | Samples naive/spill/ideal | Reason |",
-             "|---|---|---|---:|---:|---:|---|---|"]
+             "| Scope | Contract | Topology | TC | Capacity ratio | Outer delta cycles | Parsed samples naive/spill/ideal | Formal samples naive/spill/ideal | Reason |",
+             "|---|---|---|---:|---:|---:|---|---|---|"]
     for row in details["metric1"]:
-        counts = row["sample_counts"]
+        parsed = row.get("parsed_sample_counts", row["sample_counts"])
+        formal = row.get("formal_sample_counts", row["sample_counts"])
         lines.append(
             f"| {row['scope']} | {row['contract'] or '-'} | {row['topology']} | TC{row['tc']} | "
             f"{brief_number(row['capacity_ratio'])} | {brief_number(row['outer_delta_cycles'])} | "
-            f"{counts['naive']}/{counts['spill']}/{counts['ideal']} | {row['reason'] or '-'} |")
+            f"{parsed['naive']}/{parsed['spill']}/{parsed['ideal']} | "
+            f"{formal['naive']}/{formal['spill']}/{formal['ideal']} | {row['reason'] or '-'} |")
         for role in ("naive", "spill", "ideal"):
             for item in row["role_details"][role]:
                 lines.append(
@@ -3309,7 +3318,7 @@ def render_detail_markdown(details):
                     f"samples={item['outer_samples']} | "
                     f"qualified={item['qualified_contracts']} |")
     if not details["metric1"]:
-        lines.append("| - | - | - | - | N/A | N/A | - | no Metric1 runs |")
+        lines.append("| - | - | - | - | N/A | N/A | - | - | no Metric1 runs |")
     lines += ["", "## Metric2", "",
               "| Scope | Contract | Topology | TC | Phase | Reduction % | Naive/Optimized ns | Samples naive/spill/optimized | Reason |",
               "|---|---|---|---:|---|---:|---|---|---|"]

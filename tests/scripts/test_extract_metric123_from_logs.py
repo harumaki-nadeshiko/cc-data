@@ -1577,6 +1577,37 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertEqual(row["capacity_ratio"], 1.6)
         self.assertEqual(row["outer_delta_cycles"], 4)
 
+    def test_metric1_detail_separates_parsed_and_formal_role_counts(self):
+        matrix = MOD.Metric123RawLogMatrix(base_dir=self.root)
+        for role, capacity, exact, outer in (
+                ("naive", 100, None, ()), ("spill", 100, 160, (12000,)),
+                ("ideal", 1000, 1, (10000,))):
+            run = self.make_formal_m1(f"detail-extension-{role}", role,
+                                      capacity, exact, outer)
+            sim = pathlib.Path(run["simulator_log_dir"])
+            run.update(tc=143, topology="3n1s")
+            for path in list(sim.rglob("*")):
+                if path.is_file():
+                    path.write_text(path.read_text().replace("tc131", "tc143")
+                                    .replace('"tc": 131', '"tc": 143'))
+            (sim / "verify_tc131.log").unlink()
+            shutil.rmtree(sim / "child_status_tc131")
+            self.correctness(sim, 143, "3n1s")
+            self.assertEqual(matrix.add(run)["status"], "ADDED")
+        output = self.root / "m1-extension-detail"
+        result = matrix.finalize(output)
+        detail = json.loads((output / "metric_detail_by_tc_topology.json").read_text())
+        row = detail["metric1"][0]
+        self.assertEqual(row["parsed_sample_counts"],
+                         {"naive": 1, "spill": 1, "ideal": 1})
+        self.assertEqual(row["formal_sample_counts"],
+                         {"naive": 0, "spill": 0, "ideal": 0})
+        self.assertNotIn("missing parsed role", row["reason"])
+        self.assertIn("do not share one formal contract", row["reason"])
+        markdown = (output / "report_detail_by_tc_topology_zh.md").read_text()
+        self.assertIn("| 1/1/1 | 0/0/0 |", markdown)
+        self.assertEqual(result["report"]["metric1"]["status"], "NOT_REQUESTED")
+
     def test_opt_in_metric2_exact_topology_phase_and_unregistered_extension(self):
         qualification = {"id": "m2-5n", "metric": 2,
                          "coordinates": [{"tc": 135, "topology": "5n1s",

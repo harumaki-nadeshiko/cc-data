@@ -491,6 +491,9 @@ tools/wheels/aarch64-cp311/
 TC228-TC235 Standard aggregate。因此额外 TC/topology 即使单点已解析或 qualification 已 PASS，总览仍可能
 显示 Standard N/A。此时应查看`report_detail_by_tc_topology_zh.md`：它按`Standard`、
 `Formal qualification`、`Extension descriptive`区分 scope，并逐 topology/TC 显示实际数值与 N/A 原因。
+Metric1明细同时显示`Parsed samples`和`Formal samples`：前者是实际成功解析的naive/spill/ideal
+run数量，后者是三类role共同命中同一个Standard或qualification后的数量。`parsed=1/1/1、formal=0/0/0`
+表示数据已解析但没有共同正式合同，不表示三个role日志缺失。
 
 图表方向：Metric1 capacity ratio 越大越好，门槛`>=1.5`；Metric1 Outer delta 定义为`spill-ideal`，
 越小越好，门槛`<50 cycles`，负值表示 spill mean 低于 IdealDir mean，不是负延迟；Metric2 reduction
