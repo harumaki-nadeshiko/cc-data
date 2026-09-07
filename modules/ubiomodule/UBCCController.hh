@@ -135,6 +135,12 @@ enum class ResidentOverflowPolicy {
     NaiveEvict
 };
 
+enum class WritebackAdmission : uint8_t {
+    Pending,
+    Ready,
+    Stale,
+};
+
 // ---- M6: Recall result codes ----
 enum class UBCC_RecallResult {
     RecallInProgress,    // Recall has been initiated, caller must wait
@@ -562,6 +568,11 @@ class UBCCController
                                      uint64_t epochVal, bool ownerWriteback,
                                      int sourceSocket, uint64_t reqId,
                                      uint8_t disposition);
+    WritebackAdmission writebackAdmission(
+        uint64_t line_pa, int requesterNode, uint64_t epochVal,
+        bool ownerWriteback, int sourceSocket, uint64_t reqId,
+        uint8_t disposition);
+    bool writebackMetadataPending(uint64_t line_pa) const;
     void releaseWritebackPersistence(uint64_t line_pa, int requesterNode,
                                      uint64_t epochVal, bool ownerWriteback,
                                      int sourceSocket, uint64_t reqId,

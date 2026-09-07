@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <set>
 #include <vector>
 
 #include "BackstoreTypes.hh"
@@ -187,6 +188,9 @@ class ResidentDir
     uint64_t getTag(int set, int way) const;
     uint64_t getEpoch(int set, int way) const;
     void     setDirty(int set, int way, bool v);
+    const std::set<size_t>& dirtySlotsHostIndex() const {
+        return _dirtySlotsHostIndex;
+    }
 
     // Reconstruct full PA from set/way (requires valid entry)
     uint64_t rebuildPA(int set, int way) const;
@@ -296,6 +300,10 @@ class ResidentDir
     // SRAM storage: all bit-packed into a single flat buffer
     std::vector<uint8_t> _dirBits;   // directory entries (set-associative)
     std::vector<uint8_t> _bloomBits; // bloom filter
+
+    // Host-execution index only; packed directory bits remain authoritative.
+    // Slot ordering preserves the original lowest-slot-first writeback scan.
+    std::set<size_t> _dirtySlotsHostIndex;
 
     size_t _bloomBytes;
     size_t _bloomBitCount;

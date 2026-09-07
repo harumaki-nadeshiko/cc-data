@@ -1321,6 +1321,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
     std::set<DataTxnKey> pendingDataTxns;
     std::map<DataTxnKey, CoherenceMessage> pendingDataRequests;
     std::map<uint64_t, std::vector<CoherenceMessage>> pendingDataWrites;
+    std::set<DataTxnKey> metadataDeferredWrites;
     struct PendingDataResponse {
         DataTxnKey key;
         CoherenceMessage request;
@@ -1385,13 +1386,22 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         return pendingDataWrites.count(pa) != 0;
     }
 
+    static bool cacheCompletedDataResponse(
+        const CoherenceMessage &request, const CoherenceMessage &response) {
+        return request.h.type != CoherenceMessageType::WritebackReq ||
+            request.b.writebackReq.kind != UBWritebackKind::InternalPublication ||
+            response.b.writebackResp.success;
+    }
+
     void completeDataResponse(const DataTxnKey &key,
                               const CoherenceMessage &request,
                               const CoherenceMessage &response) {
         if (routeControlToTarget(response)) {
-            completedDataResponses.push_back({key, request, response});
-            if (completedDataResponses.size() > kMaxPendingDataResponses)
-                completedDataResponses.pop_front();
+            if (cacheCompletedDataResponse(request, response)) {
+                completedDataResponses.push_back({key, request, response});
+                if (completedDataResponses.size() > kMaxPendingDataResponses)
+                    completedDataResponses.pop_front();
+            }
             pendingDataTxns.erase(key);
             pendingDataRequests.erase(key);
             return;
@@ -1406,10 +1416,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             PendingDataResponse &pending = pendingDataResponses.front();
             if (!routeControlToTarget(pending.response))
                 return;
-            completedDataResponses.push_back(
-                {pending.key, pending.request, pending.response});
-            if (completedDataResponses.size() > kMaxPendingDataResponses)
-                completedDataResponses.pop_front();
+            if (cacheCompletedDataResponse(pending.request, pending.response)) {
+                completedDataResponses.push_back(
+                    {pending.key, pending.request, pending.response});
+                if (completedDataResponses.size() > kMaxPendingDataResponses)
+                    completedDataResponses.pop_front();
+            }
             pendingDataTxns.erase(pending.key);
             pendingDataRequests.erase(pending.key);
             pendingDataResponses.pop_front();
@@ -1459,21 +1471,36 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         pendingDataRequests[key] = request;
         const bool ownerWriteback = request.b.writebackReq.kind ==
             UBWritebackKind::OwnerWriteback;
+        const int requesterNode = request.b.writebackReq.kind ==
+                UBWritebackKind::InternalPublication
+            ? -1 : static_cast<int>(request.h.requesterNode);
         const uint8_t disposition = static_cast<uint8_t>(
             request.b.writebackReq.disposition);
-        if (!ubcc.reserveWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+        const WritebackAdmission admission = ubcc.writebackAdmission(
+                request.h.homeLinePa, requesterNode,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
-                request.h.reqId, disposition)) {
+                request.h.reqId, disposition);
+        if (admission == WritebackAdmission::Pending) {
+            metadataDeferredWrites.insert(key);
+            return true;
+        }
+        if (admission == WritebackAdmission::Stale) {
             pendingDataTxns.erase(key);
             pendingDataRequests.erase(key);
             return false;
+        }
+        if (!ubcc.reserveWritebackPersistence(
+                request.h.homeLinePa, requesterNode,
+                request.h.epoch, ownerWriteback, request.h.srcSocket,
+                request.h.reqId, disposition)) {
+            metadataDeferredWrites.insert(key);
+            return true;
         }
         pendingDataWrites[request.h.homeLinePa].push_back(request);
         const bool queued = dsmData.writeDataMaskedAsync(
             request.h.homeLinePa, request.b.writebackReq.byteMask,
             request.b.writebackReq.data, tickRef,
-            [this, request, keepAsClean, ownerWriteback,
+            [this, request, keepAsClean, ownerWriteback, requesterNode,
              disposition](DsmDataStatus status) {
             bool success = status == DsmDataStatus::Ok;
             if (success && ownerWriteback && !keepAsClean &&
@@ -1485,7 +1512,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 // persistence operation.
             } else {
                 ubcc.releaseWritebackPersistence(
-                    request.h.homeLinePa, request.h.requesterNode,
+                    request.h.homeLinePa, requesterNode,
                     request.h.epoch, ownerWriteback, request.h.srcSocket,
                     request.h.reqId, disposition);
                 if (success && ownerWriteback)
@@ -1518,15 +1545,15 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             response.h.reqId = waiter.h.reqId;
             response.b.writebackResp.success = success;
             completeDataResponse(dataTxnKey(waiter), waiter, response);
-        }, [this, request, ownerWriteback, disposition]() {
+        }, [this, request, ownerWriteback, requesterNode, disposition]() {
             return ubcc.validateWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+                request.h.homeLinePa, requesterNode,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
                 request.h.reqId, disposition);
         });
         if (!queued) {
             ubcc.releaseWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+                request.h.homeLinePa, requesterNode,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
                 request.h.reqId, disposition);
             auto pending = pendingDataWrites.find(request.h.homeLinePa);
@@ -1542,6 +1569,53 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             pendingDataRequests.erase(key);
         }
         return queued;
+    }
+
+    void drainMetadataDeferredWrites() {
+        std::vector<DataTxnKey> ready(metadataDeferredWrites.begin(),
+                                      metadataDeferredWrites.end());
+        for (const DataTxnKey &key : ready) {
+            auto request = pendingDataRequests.find(key);
+            if (request == pendingDataRequests.end()) {
+                metadataDeferredWrites.erase(key);
+                pendingDataTxns.erase(key);
+                continue;
+            }
+            const CoherenceMessage saved = request->second;
+            const bool ownerWriteback = saved.b.writebackReq.kind ==
+                UBWritebackKind::OwnerWriteback;
+            const int requesterNode = ownerWriteback
+                ? static_cast<int>(saved.h.requesterNode) : -1;
+            const uint8_t disposition = static_cast<uint8_t>(
+                saved.b.writebackReq.disposition);
+            const WritebackAdmission admission = ubcc.writebackAdmission(
+                saved.h.homeLinePa, requesterNode, saved.h.epoch,
+                ownerWriteback, saved.h.srcSocket, saved.h.reqId, disposition);
+            if (admission == WritebackAdmission::Pending)
+                continue;
+            const bool keepAsClean = saved.b.writebackReq.disposition ==
+                UBWriteDisposition::KeepClean;
+            // Re-enter normal admission with the same immutable wire tuple.
+            metadataDeferredWrites.erase(key);
+            pendingDataTxns.erase(key);
+            pendingDataRequests.erase(request);
+            if (admission == WritebackAdmission::Stale ||
+                !scheduleWritebackResponse(saved, keepAsClean)) {
+                // A restored authoritative owner/epoch mismatch is permanent,
+                // so return one explicit failure on the original reqId.
+                CoherenceMessage response;
+                response.h.type = CoherenceMessageType::WritebackResp;
+                response.h.srcNode = nodeId;
+                response.h.srcSocket = socketId;
+                response.h.dstNode = saved.h.srcNode;
+                response.h.dstSocket = saved.h.srcSocket;
+                response.h.homeLinePa = saved.h.homeLinePa;
+                response.h.epoch = saved.h.epoch;
+                response.h.reqId = saved.h.reqId;
+                response.b.writebackResp.success = false;
+                completeDataResponse(key, saved, response);
+            }
+        }
     }
     // Exact H64 coverage becomes reportable only after every persisted group
     // has completed a validated scan. This is fixed group state, not a PA map.
@@ -3343,7 +3417,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
                                     msg.h.epoch);
         const bool validInternalIdentity =
             kind != UBWritebackKind::InternalPublication ||
-            (msg.h.requesterNode == -1 && msg.h.epoch == 0);
+            msg.h.epoch == 0;
         const int currentOwner = ubcc.getOwnerForLine(msg.h.homeLinePa);
         const bool plausibleOwner = kind != UBWritebackKind::OwnerWriteback ||
             currentOwner < 0 || currentOwner == msg.h.requesterNode;
@@ -4386,10 +4460,15 @@ main(int argc, char **argv)
         (void)replyPort;
         if (!port) return;
         ReceiveStatus st;
-        const Message *m = ReceiveMessage(port, tick, &st);
         int drain_cnt = 0;
+        auto receiveNext = [&]() -> const Message * {
+            if (drain_cnt >= 200)
+                return nullptr;
+            ++drain_cnt;
+            return ReceiveMessage(port, tick, &st);
+        };
+        const Message *m = receiveNext();
         while (m && st == ReceiveStatus::Message) {
-            if (++drain_cnt > 200) break;  // prevent starvation of other ports
             if (GetMessageType(m) == MessageType::Terminate) {
                 LogInfo("UBIO", "[ubio:{}] recv TERMINATE ts={} from_net={}",
                              nid, GetMessageTimestamp(m), fromNetwork);
@@ -4432,18 +4511,18 @@ main(int argc, char **argv)
                     *doneFlag = true;
                 }
                 if (*doneFlag) break;
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             if (GetMessageType(m) == MessageType::ControlSync) {
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             if (GetMessageType(m) != MessageType::Payload) {
                 LogWarn("UBIO", "[ubio:{}] drop Message type={} ts={} size={}",
                              nid, static_cast<unsigned>(GetMessageType(m)),
                              GetMessageTimestamp(m), GetMessagePayloadSize(m));
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4454,7 +4533,7 @@ main(int argc, char **argv)
             if (!coh) {
                 LogWarn("UBIO", "[ubio:{}] bad payload size={} req_id={}",
                              nid, GetMessagePayloadSize(m), GetMessageRequestId(m));
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             if (coh->h.type == CoherenceMessageType::UpgradeReq ||
@@ -4480,7 +4559,7 @@ main(int argc, char **argv)
                             nid, sid, coherenceMsgTypeName(coh->h.type),
                             coh->h.srcNode, coh->h.srcSocket, coh->h.reqId);
                 }
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4501,7 +4580,7 @@ main(int argc, char **argv)
                     }
                 }
                 // Already handled via gem5Port send above; skip further processing.
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4532,7 +4611,7 @@ main(int argc, char **argv)
                             LogWarn("UBIO",
                                          "[UBIO-BARRIER-WARN] n{} ignored source={} mask=0x{:x}",
                                          nid, src, mask);
-                            m = ReceiveMessage(port, tick, &st);
+                            m = receiveNext();
                             continue;
                         }
                         BarrierArrivals &arrivals = barrierArrivals[bk];
@@ -4553,19 +4632,10 @@ main(int argc, char **argv)
                         // A single deterministic leader aggregates arrivals.
                         // Broadcast coordination allowed different nodes to
                         // independently release incompatible generations.
-                        Message *fwd = AllocateSendMessage(netPort, tick);
-                        if (fwd) {
-                            CopyMessage(fwd, m);
-                            // CopyMessage preserves the gem5-local envelope.
-                            // This UBIO plane is the real network source and
-                            // the computed leader plane is the real target.
-                            SetMessageSourceId(fwd, gidOf(nid, sid));
-                            SetMessageTargetId(
-                                fwd, gidOf(leaderNode, leaderSocket));
-                            SendMessage(netPort, fwd);
-                        }
+                        sendNetworkResponse(
+                            *coh, gidOf(leaderNode, leaderSocket));
                     }
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4590,7 +4660,7 @@ main(int argc, char **argv)
                 faultCopies = applyUbioFault(*coh, nid, tick, fromNetwork);
                 if (faultCopies == 0) {
                     // Dropped — neither processed nor forwarded.
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
             }
@@ -4603,7 +4673,7 @@ main(int argc, char **argv)
                             "non-network PeerExit src={}:{} exitId={}",
                             nid, sid, coh->h.srcNode, coh->h.srcSocket,
                             coh->h.reqId);
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
                 constexpr uint32_t kPeerExitFlags =
@@ -4624,7 +4694,7 @@ main(int argc, char **argv)
                             coh->h.reqId, coh->h.seqNum, coh->h.flags,
                             GetMessageSourceId(m), GetMessageTargetId(m),
                             GetMessageRequestId(m));
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
                 const bool isAck = (coh->h.flags &
@@ -4641,7 +4711,7 @@ main(int argc, char **argv)
                             "dst={}:{} exitId={} ignored=invalid_peer_or_route",
                             nid, sid, peer.node, peer.socket, coh->h.dstNode,
                             coh->h.dstSocket, coh->h.reqId);
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
                 for (int rep = 0; rep < faultCopies; ++rep) {
@@ -4665,7 +4735,7 @@ main(int argc, char **argv)
                     }
                     logPeerExitQuiesce();
                 }
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4685,7 +4755,7 @@ main(int argc, char **argv)
                     GetMessageTargetId(m) != localModule) {
                     LogWarn("UBIO", "[NETWORK-EXIT-WARN] local={}:{} exitId={} "
                             "ignored=invalid_ack", nid, sid, coh->h.reqId);
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
                 LogInfo("UBIO", "[NETWORK-EXIT-ACK-RECV] local={}:{} exitId={} "
@@ -4772,7 +4842,7 @@ main(int argc, char **argv)
                                          coh->h.reqId);
                         }
                     }
-                    m = ReceiveMessage(port, tick, &st);
+                    m = receiveNext();
                     continue;
                 }
             }
@@ -4926,7 +4996,7 @@ main(int argc, char **argv)
                         }
                     }
                 }
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4957,7 +5027,7 @@ main(int argc, char **argv)
                             coh->h.homeLinePa);
                     }
                 }
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -4971,7 +5041,7 @@ main(int argc, char **argv)
                 host->_metaRNF.handleResp(*coh);
                 host->_metaRNF.leaveReentrant();
                 // Deferred ops drained at outer loop boundary (after pollAndProcess)
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             // MetaRNFWriteResp: durable write ack from gem5 (Phase D2)
@@ -4979,7 +5049,7 @@ main(int argc, char **argv)
                 host->_metaRNF.enterReentrant();
                 host->_metaRNF.handleWriteResp(*coh);
                 host->_metaRNF.leaveReentrant();
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             // MetaRNFLineReadResp: typed 64B line read response (Phase 2)
@@ -4987,7 +5057,7 @@ main(int argc, char **argv)
                 host->_metaRNF.enterReentrant();
                 host->_metaRNF.handleLineReadResp(*coh);
                 host->_metaRNF.leaveReentrant();
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
             // MetaRNFLineWriteResp: typed 64B line write ack (Phase 2)
@@ -4995,14 +5065,14 @@ main(int argc, char **argv)
                 host->_metaRNF.enterReentrant();
                 host->_metaRNF.handleLineWriteResp(*coh);
                 host->_metaRNF.leaveReentrant();
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
             if (!isUbccIngress(coh->h.type)) {
                 LogWarn("UBIO", "[ubio:{}] drop unsupported local type={}",
                              nid, coherenceMsgTypeName(coh->h.type));
-                m = ReceiveMessage(port, tick, &st);
+                m = receiveNext();
                 continue;
             }
 
@@ -5037,7 +5107,7 @@ main(int argc, char **argv)
                 }
             }
 
-            m = ReceiveMessage(port, tick, &st);
+            m = receiveNext();
         }
     };
 
@@ -5146,6 +5216,7 @@ main(int argc, char **argv)
             host->drainPendingBackstoreAcks(tick);
             host->dsmData.drain(tick);
             host->drainPendingDataResponses();
+            host->drainMetadataDeferredWrites();
         } else if (dataPlaneActive && haHost) {
             haHost->dsmData.drain(tick);
             if (haAdapter) haAdapter->advance();

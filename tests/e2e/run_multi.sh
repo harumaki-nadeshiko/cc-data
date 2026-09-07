@@ -1564,10 +1564,15 @@ run_tc() {
             echo "  TC${tc} FAILED (PeerExit contract)"
             return 1
         fi
-        # Persist request issue-to-first-response chains for cross-run latency
-        # evaluation.  TRACE-PERF is emitted by gem5, UBIO, and networksim.
-        python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \
-            >"$LOG_BASE/trace_chains_tc${tc}.json" 2>/dev/null || true
+        # Full traces retain every source event and can regenerate chains on
+        # demand. Avoid duplicating them into multi-GB JSON during campaigns.
+        if [ "${EP_TRACE_CHAIN_OUTPUT:-auto}" = "1" ] || {
+            [ "${EP_TRACE_CHAIN_OUTPUT:-auto}" = "auto" ] &&
+            [ "$EP_TRACE_PERF" != "full" ];
+        }; then
+            python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \
+                >"$LOG_BASE/trace_chains_tc${tc}.json" 2>/dev/null || true
+        fi
         echo "  TC${tc} PASSED"
         return 0
     else

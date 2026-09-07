@@ -162,7 +162,8 @@ static inline void portable_emit_meta(int plane, const char *test_name)
 
 static inline void portable_barrier(void)
 {
-    sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
+    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
+              (long)NUM_SOCKETS, 0);
 }
 
 #define PORTABLE_SERIAL_FOR_EACH_PLANE(plane_id, body) \

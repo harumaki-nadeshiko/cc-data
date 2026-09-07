@@ -190,6 +190,7 @@ ResidentDir::init(const ResidentDirConfig &cfg)
         "ResidentDir", "epoch_bits must be in [1,64]");
     _layout = searchOptimalLayout(cfg);
     _count = 0;
+    _dirtySlotsHostIndex.clear();
 
     // Allocate bit-packed directory storage
     // Total bits = num_sets * set_total_bits; we store in byte-granularity
@@ -307,28 +308,49 @@ ResidentDir::init(const ResidentDirConfig &cfg)
 void
 ResidentDir::writeBits(size_t bitOffset, int numBits, uint64_t value)
 {
-    // Write numBits (1..64) starting at bitOffset into _dirBits[]
-    for (int i = 0; i < numBits; i++) {
-        size_t byteIdx = (bitOffset + i) / 8;
-        int    bitIdx  = (bitOffset + i) % 8;
-        if (value & (1ULL << i))
-            _dirBits[byteIdx] |= (1u << bitIdx);
-        else
-            _dirBits[byteIdx] &= ~(1u << bitIdx);
-    }
+    assert(numBits >= 0 && numBits <= 64);
+    if (numBits == 0)
+        return;
+    const size_t firstByte = bitOffset / 8;
+    const int shift = static_cast<int>(bitOffset % 8);
+    const size_t byteCount = static_cast<size_t>(shift + numBits + 7) / 8;
+    assert(firstByte + byteCount <= _dirBits.size());
+
+    unsigned __int128 window = 0;
+    for (size_t i = 0; i < byteCount; ++i)
+        window |= static_cast<unsigned __int128>(_dirBits[firstByte + i]) <<
+                  (i * 8);
+
+    const unsigned __int128 valueMask = numBits == 64
+        ? static_cast<unsigned __int128>(UINT64_MAX)
+        : (static_cast<unsigned __int128>(1) << numBits) - 1;
+    const unsigned __int128 fieldMask = valueMask << shift;
+    window = (window & ~fieldMask) |
+             ((static_cast<unsigned __int128>(value) & valueMask) << shift);
+
+    for (size_t i = 0; i < byteCount; ++i)
+        _dirBits[firstByte + i] =
+            static_cast<uint8_t>(window >> (i * 8));
 }
 
 uint64_t
 ResidentDir::readBits(size_t bitOffset, int numBits) const
 {
-    uint64_t val = 0;
-    for (int i = 0; i < numBits; i++) {
-        size_t byteIdx = (bitOffset + i) / 8;
-        int    bitIdx  = (bitOffset + i) % 8;
-        if (_dirBits[byteIdx] & (1u << bitIdx))
-            val |= (1ULL << i);
-    }
-    return val;
+    assert(numBits >= 0 && numBits <= 64);
+    if (numBits == 0)
+        return 0;
+    const size_t firstByte = bitOffset / 8;
+    const int shift = static_cast<int>(bitOffset % 8);
+    const size_t byteCount = static_cast<size_t>(shift + numBits + 7) / 8;
+    assert(firstByte + byteCount <= _dirBits.size());
+
+    unsigned __int128 window = 0;
+    for (size_t i = 0; i < byteCount; ++i)
+        window |= static_cast<unsigned __int128>(_dirBits[firstByte + i]) <<
+                  (i * 8);
+    const uint64_t mask = numBits == 64
+        ? UINT64_MAX : (uint64_t{1} << numBits) - 1;
+    return static_cast<uint64_t>(window >> shift) & mask;
 }
 
 // ========================================================================
@@ -388,7 +410,14 @@ bool ResidentDir::getValid(int set, int way) const
 { return readBits(entryBitOffset(set, way) + _layout.off_valid, 1) != 0; }
 
 void ResidentDir::setValid(int set, int way, bool v)
-{ writeBits(entryBitOffset(set, way) + _layout.off_valid, 1, v ? 1 : 0); }
+{
+    writeBits(entryBitOffset(set, way) + _layout.off_valid, 1, v ? 1 : 0);
+    const size_t slot = globalSlot(set, way);
+    if (!v)
+        _dirtySlotsHostIndex.erase(slot);
+    else if (getDirty(set, way))
+        _dirtySlotsHostIndex.insert(slot);
+}
 
 uint64_t ResidentDir::getTag(int set, int way) const
 { return readBits(entryBitOffset(set, way) + _layout.off_tag, _layout.tag_bits); }
@@ -406,7 +435,14 @@ bool ResidentDir::getDirty(int set, int way) const
 { return readBits(entryBitOffset(set, way) + _layout.off_dirty, 1) != 0; }
 
 void ResidentDir::setDirty(int set, int way, bool v)
-{ writeBits(entryBitOffset(set, way) + _layout.off_dirty, 1, v ? 1 : 0); }
+{
+    writeBits(entryBitOffset(set, way) + _layout.off_dirty, 1, v ? 1 : 0);
+    const size_t slot = globalSlot(set, way);
+    if (v && getValid(set, way))
+        _dirtySlotsHostIndex.insert(slot);
+    else
+        _dirtySlotsHostIndex.erase(slot);
+}
 
 uint8_t ResidentDir::getCtrl(int set, int way) const
 { return (uint8_t)readBits(entryBitOffset(set, way) + _layout.off_ctrl, 3); }
@@ -630,6 +666,7 @@ ResidentDir::remove(uint64_t pa)
     uint64_t tag = tagOf(pa);
     for (int w = 0; w < _layout.ways; w++) {
         if (getValid(set, w) && getTag(set, w) == tag) {
+            _dirtySlotsHostIndex.erase(globalSlot(set, w));
             setValid(set, w, false);
             // Zero out the entry bits for cleanliness
             size_t base = entryBitOffset(set, w);
@@ -653,6 +690,7 @@ void
 ResidentDir::clear()
 {
     std::fill(_dirBits.begin(), _dirBits.end(), 0);
+    _dirtySlotsHostIndex.clear();
     _count = 0;
     bloomClear();
 }
