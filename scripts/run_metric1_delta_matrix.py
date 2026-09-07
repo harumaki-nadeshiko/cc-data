@@ -62,8 +62,8 @@ def main(argv=None):
     unknown = sorted(set(args.test_cases) - ({131} | set(matrix.HOT)))
     if unknown:
         parser.error(f"unsupported test cases: {unknown}")
-    if args.pressure_pct <= 100 or matrix.NAIVE_CAPACITY * args.pressure_pct % 100:
-        parser.error("--pressure-pct must produce an integral footprint above 100%")
+    if args.pressure_pct <= 100:
+        parser.error("--pressure-pct must be greater than 100")
 
     root = args.output_root.expanduser().resolve()
     try:
@@ -72,7 +72,7 @@ def main(argv=None):
         parser.error("--output-root must be inside the workspace")
     root.mkdir(parents=True, exist_ok=True)
     matrix.PRESSURE_PCT = args.pressure_pct
-    matrix.TARGET_TOTAL = matrix.NAIVE_CAPACITY * args.pressure_pct // 100
+    matrix.TARGET_TOTAL = matrix.portable_target_lines(args.pressure_pct)
 
     jobs = [(topology, tc, role) for tc in args.test_cases
             for topology in args.topologies for role in ROLES]

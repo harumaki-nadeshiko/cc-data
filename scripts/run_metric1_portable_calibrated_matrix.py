@@ -32,6 +32,11 @@ OUTER_NODE_RE = re.compile(
 DSM_DATA_DELAY_PS = 68000
 
 
+def portable_target_lines(pressure_pct):
+    """Return floor(naive capacity * pressure percentage / 100)."""
+    return NAIVE_CAPACITY * pressure_pct // 100
+
+
 def atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -238,13 +243,11 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.pressure_pct <= 100:
         parser.error("--pressure-pct must be greater than 100")
-    if NAIVE_CAPACITY * args.pressure_pct % 100:
-        parser.error("--pressure-pct must produce an integral target footprint")
     unknown = sorted(set(args.test_cases) - set(HOT))
     if unknown:
         parser.error(f"unsupported portable test cases: {unknown}")
     PRESSURE_PCT = args.pressure_pct
-    TARGET_TOTAL = NAIVE_CAPACITY * PRESSURE_PCT // 100
+    TARGET_TOTAL = portable_target_lines(PRESSURE_PCT)
     TEST_CASES = tuple(dict.fromkeys(args.test_cases))
     root = args.output_root.expanduser().resolve()
     try:

@@ -42,8 +42,8 @@ def main(argv=None):
     parser.add_argument("--output-root", required=True, type=pathlib.Path)
     parser.add_argument("--pressure-pct", type=int, default=175)
     args = parser.parse_args(argv)
-    if args.pressure_pct <= 100 or matrix.NAIVE_CAPACITY * args.pressure_pct % 100:
-        parser.error("--pressure-pct must produce an integral footprint above 100%")
+    if args.pressure_pct <= 100:
+        parser.error("--pressure-pct must be greater than 100")
 
     root = args.output_root.expanduser().resolve()
     try:
@@ -53,7 +53,7 @@ def main(argv=None):
     root.mkdir(parents=True, exist_ok=True)
 
     matrix.PRESSURE_PCT = args.pressure_pct
-    matrix.TARGET_TOTAL = matrix.NAIVE_CAPACITY * args.pressure_pct // 100
+    matrix.TARGET_TOTAL = matrix.portable_target_lines(args.pressure_pct)
     matrix.TEST_CASES = TEST_CASES
     matrix.TOPOLOGIES = {name: matrix.TOPOLOGIES[name] for name in TOPOLOGIES}
 
