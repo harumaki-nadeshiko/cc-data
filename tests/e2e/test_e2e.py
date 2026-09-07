@@ -2026,9 +2026,11 @@ def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,
     if target_footprint != 0 and total_unique != target_footprint:
         return False, (f"TC{tc_id} FAILED: total_unique={total_unique}, "
                        f"target={target_footprint}"), []
-    if pressure_pct != 0 and total_unique * 100 != naive_capacity * pressure_pct:
-        return False, (f"TC{tc_id} FAILED: footprint {total_unique}/{naive_capacity} "
-                       f"does not equal {pressure_pct}%"), []
+    expected_target = naive_capacity * pressure_pct // 100
+    if pressure_pct != 0 and total_unique != expected_target:
+        return False, (f"TC{tc_id} FAILED: footprint {total_unique} does not "
+                       f"equal floor({naive_capacity}*{pressure_pct}/100)="
+                       f"{expected_target}"), []
     expected_reads = len(planes) * reads_per_plane
     if len(reads) != expected_reads:
         return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
