@@ -88,6 +88,22 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(all(item["metrics"]["capacity"]["resident_capacity"] == 100
                             for item in resolved))
 
+    def test_metric1_canonical_stderr_preserves_identical_real_events(self):
+        root = self.root / "outer"
+        line = self.outer(12000, 7)
+        self.write(root / "gem5_tc131_node0/stderr.log", line)
+        self.write(root / "gem5_tc131_node1/stderr.log", line)
+        parsed = MOD.metric1_outer_latency(root)
+        self.assertEqual(parsed["samples"], 2)
+        self.assertEqual(parsed["mean_ns"], 12.0)
+
+    def test_metric1_fallback_still_deduplicates_copied_lines(self):
+        root = self.root / "outer-fallback"
+        line = self.outer(12000, 7)
+        self.write(root / "node0/stdout.log", line)
+        self.write(root / "node0/stderr.log", line)
+        self.assertEqual(MOD.metric1_outer_latency(root)["samples"], 1)
+
     def test_process_testcase_hint_is_optional_but_conflicts_reject(self):
         run = self.make_m1_run("tc-hint", layout="recognized")
         sim = pathlib.Path(run["simulator_log_dir"])
@@ -969,11 +985,123 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue((self.root / "report/metric_matrix_standard.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_all.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_extension.tsv").is_file())
+        self.assertTrue((self.root / "report/metric_matrix_formal.tsv").is_file())
+        self.assertTrue((self.root / "report/publication_metrics.json").is_file())
+        self.assertTrue((self.root / "report/report_brief_zh.md").is_file())
+        self.assertTrue((self.root / "report/metric_summary_bar_chart.svg").is_file())
         inventory = result["report"]["source_inventory"]
         self.assertEqual(inventory["logical_runs"], 1)
         self.assertGreater(inventory["unique_files"], 0)
         self.assertGreater(inventory["source_references"], 0)
         self.assertIn("not logical runs", inventory["note"])
+
+    def test_publication_view_is_path_independent_and_definition_tagged(self):
+        report = {
+            "metric1": {"status": "PASS", "aggregation_mode": "pooled-samples",
+                        "comparisons": [{
+                            "capacity_ratio": 1.6,
+                            "naive_resident_capacity": 100,
+                            "spill_resident_capacity": 90,
+                            "ideal_resident_capacity": 1000,
+                            "spill_outer_mean_ns": 12.0,
+                            "ideal_outer_mean_ns": 10.0,
+                            "outer_delta_ns": 2.0,
+                        }]},
+            "metric2": {"status": "PASS", "aggregation_mode": "pooled-samples",
+                        "aggregate_reduction_pct": 20.0, "cases": [{
+                            "tc": 135, "means_ns": {"naive": 1000.0,
+                            "spill-noopt": 900.0, "optimized": 800.0},
+                            "optimized_reduction_pct": 20.0,
+                            "applicable": True}]},
+            "metric3": {"status": "COMPLETE", "aggregation_mode": "pooled-samples",
+                        "primary_values": [{"tc": 228,
+                            "ourcc_mean_ticks": 8.0, "ha_vi_mean_ticks": 10.0,
+                            "delta_mean_ticks": 2.0, "direction": "OURCC_FASTER"}],
+                        "aggregates": [{"name": "core_equal_weight",
+                            "ourcc_ticks_per_operation": 8.0,
+                            "ha_vi_ticks_per_operation": 10.0,
+                            "ourcc_ns_per_operation": 8.0,
+                            "ha_vi_ns_per_operation": 10.0,
+                            "ourcc_reduction_pct": 20.0,
+                            "delta_ticks": 2.0, "delta_ns": 2.0,
+                            "direction": "OURCC_FASTER", "status": "COMPLETE"}]},
+        }
+        left = MOD.publication_view(dict(report, manifest="/left/manifest.json"))
+        right = MOD.publication_view(dict(report, manifest="/right/manifest.json"))
+        self.assertEqual(left, right)
+        self.assertEqual(left["metric_definitions_version"], "metric123-publication-v1")
+        self.assertEqual(left["metric1"]["aggregation_mode"], "pooled-samples")
+        self.assertEqual(left["metric3"]["groups"][0]["scope"], "core")
+        self.assertNotIn("/left", json.dumps(left))
+
+    def test_publication_supplement_cannot_override_metrics(self):
+        report = {"metric1": {}, "metric2": {}, "metric3": {}}
+        supplement = {"metric1": {"capacity_ratio": 999},
+                      "charts": {"support": [{"value": 1}]}}
+        publication = MOD.publication_view(report, supplement)
+        supplement["charts"]["support"][0]["value"] = 2
+        self.assertIsNone(publication["metric1"]["capacity_ratio"])
+        self.assertEqual(publication["charts"]["support"][0]["value"], 1)
+        with self.assertRaisesRegex(MOD.ExtractError, "JSON object"):
+            MOD.publication_view(report, [])
+
+    def test_publication_view_maps_nonfinite_and_zero_denominator_to_null(self):
+        report = {
+            "metric1": {"comparisons": [{"capacity_ratio": float("inf"),
+                "outer_delta_ns": None, "spill_outer_mean_ns": None,
+                "ideal_outer_mean_ns": None}]},
+            "metric2": {"cases": [{"tc": 135, "means_ns": {},
+                "optimized_reduction_pct": float("nan"), "applicable": None}]},
+            "metric3": {"primary_values": [{"tc": 228,
+                "ourcc_mean_ticks": 1.0, "ha_vi_mean_ticks": 0.0,
+                "delta_mean_ticks": -1.0, "direction": "HA_VI_FASTER"}],
+                "aggregates": []},
+        }
+        publication = MOD.publication_view(report)
+        self.assertIsNone(publication["metric1"]["capacity_ratio"])
+        self.assertIsNone(publication["metric2"]["cases"][0]["optimized_reduction_pct"])
+        self.assertIsNone(publication["metric3"]["per_testcase"][0]["ourcc_reduction_pct"])
+        json.dumps(publication, allow_nan=False)
+
+    def test_main_preserves_workers_and_qualification_with_publication_options(self):
+        manifest = self.root / "main-manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        supplement = self.root / "supplement.json"
+        supplement.write_text('{"charts":{"support":[]}}', encoding="utf-8")
+        report = {"overall_status": "PASS", "metric1": {}, "metric2": {},
+                  "metric3": {}, "views": {"all": {"matrix": []},
+                  "extension": {"matrix": []}, "formal": {"matrix": []}},
+                  "qualifications": [], "source_inventory": {"unique_files": 0,
+                  "source_references": 0}, "issues": [], "ingestion": {}}
+        with mock.patch.object(MOD, "analyze", return_value=(report, [], [], [], [], 0)) as analyze, \
+                mock.patch.object(MOD, "write_outputs") as write_outputs:
+            code = MOD.main(["--manifest", str(manifest), "--output-dir",
+                             str(self.root / "main-output"), "--workers", "3",
+                             "--require-qualification", "q1",
+                             "--publication-supplement", str(supplement)])
+        self.assertEqual(code, 0)
+        self.assertEqual(analyze.call_args.args[2], ["q1"])
+        self.assertEqual(analyze.call_args.kwargs["workers"], 3)
+        self.assertEqual(write_outputs.call_args.args[-1], {"charts": {"support": []}})
+
+    def test_main_render_figures_uses_canonical_publication(self):
+        manifest = self.root / "render-manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        output = self.root / "render-output"
+        report = {"overall_status": "PASS", "metric1": {}, "metric2": {},
+                  "metric3": {}, "views": {"all": {"matrix": []},
+                  "extension": {"matrix": []}, "formal": {"matrix": []}},
+                  "qualifications": [], "source_inventory": {"unique_files": 0,
+                  "source_references": 0}, "issues": [], "ingestion": {}}
+        with mock.patch.object(MOD, "analyze", return_value=(report, [], [], [], [], 0)), \
+                mock.patch.object(MOD, "write_outputs"), \
+                mock.patch.object(MOD.subprocess, "run") as run:
+            code = MOD.main(["--manifest", str(manifest), "--output-dir", str(output),
+                             "--render-figures"])
+        self.assertEqual(code, 0)
+        command = run.call_args.args[0]
+        self.assertIn(str(output / "publication_metrics.json"), command)
+        self.assertIn(str(output / "figures"), command)
 
     def test_incremental_incomplete_requirements_lists_missing_slots(self):
         requirements = {"metric1": {"repetitions": []},

@@ -56,8 +56,9 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   `cycles = ns * 2GHz`。所有有效样本先按 role 池化：容量对每个 role 的 run 值等权求均值后作
   spill/naive 比值；Outer 合并 spill/ideal 的全部 completed Outer source sample 后求均值差。
   pooled ratio>=1.5 且 delta cycles<50 才 PASS。
-  simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，不存在时才确定性回退
-  全部日志，并去除 stdout/stderr 中完全相同的复制行；保留 source files、samples、mean、p50/p95/p99/max。
+  simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，其中每个文件行号
+  表示独立完成事件，文本完全相同也保留。canonical stderr不存在时才确定性回退全部日志，并去除
+  stdout/stderr中完全相同的镜像复制行；保留 source files、samples、mean、p50/p95/p99/max。
   spill/ideal 标准角色至少须有一条 completed Outer。
   旧 node1/node2 `post_pressure_catalog_reuse` GUEST-TIMER 已弃用为描述字段，不参与完整性或 PASS。
   完整时继续输出旧 guest 值；缺失或部分存在仍 ADDED，产生`METRIC1_GUEST_TIMER_MISSING`，描述字段为 null。
@@ -423,6 +424,7 @@ Metric 3 p150 representative    2.8785156250000004 ticks
 
 ```text
 output/report.json           完整机器可读报告
+output/publication_metrics.json 路径无关、带 definition_id 的文章与图表发布数据
 output/report.md             中文摘要和人读矩阵
 output/report_brief_zh.md    交付简阅摘要：状态、关键值、缺失点和主要原因
 output/report_detail_by_tc_topology_zh.md 按 scope/topology/TC 展开的详细结果
@@ -440,6 +442,41 @@ output/resolved_runs.json    解析后的绝对路径、来源 marker 与 correc
 output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
+
+这些输出按职责分层，并不是同一个统计量的不同文件格式：
+
+- `report.json`包含冻结 Standard 聚合、qualification 结果和显式分离的描述视图；
+- `resolved_runs.json`保留逐物理 run 的绝对路径与证据来源，不是发布聚合；
+- `metric_matrix_formal.tsv`包含 Standard 及已配置资格结果，`metric_matrix_all.tsv`还包含描述性扩展；
+- `publication_metrics.json`是下游文章与正式性能图唯一应读取的路径无关数值层。
+
+因此不同输出中的同名字段可能处于逐 run、pooled Standard、formal qualification 或 extension
+层级，数值不要求彼此相同；发布工具不得再从多个层级中选择字段拼接。
+
+若公司机器提供等价原始日志，提取后可直接生成正式性能图：
+
+```bash
+python3 scripts/extract_metric123_from_logs.py \
+  --manifest /path/to/metric123-manifest.json \
+  --output-dir /path/to/output \
+  --publication-supplement /path/to/supporting-chart-data.json \
+  --render-figures \
+  --figure-output-dir /path/to/output/figures
+```
+
+`--workers`和`--require-qualification`可与上述参数同时使用。`--publication-supplement`只合并
+`charts`支撑数据，不能覆盖 Metric1/2/3 canonical值或定义版本。若已有审核后的等价
+`publication_metrics.json`，也可只生成图：
+
+```bash
+python3 scripts/generate_delivery_figures.py \
+  --charts-only \
+  --publication-json /path/to/publication_metrics.json \
+  --out-dir /path/to/output/figures
+```
+
+相同JSON、代码、Matplotlib和字体环境可复刻相同数值、柱序与图表。不同字体或渲染库版本下，
+图表语义相同，但PNG字节哈希不保证一致。
 
 PNG 柱状图所需的 Linux aarch64 / CPython 3.11 离线 wheel 位于：
 

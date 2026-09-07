@@ -19,6 +19,7 @@ import numbers
 import pathlib
 import re
 import statistics
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict
@@ -483,16 +484,18 @@ def metric1_outer_latency(root):
     candidates = preferred or [p.resolve() for p in all_log_files(root)
                                if p.suffix in (".log", ".gz")]
     first_source, rows = {}, []
+    deduplicate_copied_lines = not bool(preferred)
     for path in sorted(candidates, key=str):
         with open_text(path) as stream:
             for line_no, line in enumerate(stream, 1):
                 match = OUTER_RE.search(line)
                 if not match:
                     continue
-                exact_line = line.rstrip("\r\n")
-                if exact_line in first_source and first_source[exact_line] != str(path):
-                    continue
-                first_source.setdefault(exact_line, str(path))
+                if deduplicate_copied_lines:
+                    exact_line = line.rstrip("\r\n")
+                    if exact_line in first_source and first_source[exact_line] != str(path):
+                        continue
+                    first_source.setdefault(exact_line, str(path))
                 rows.append({"file": str(path), "line": line_no,
                              "latency_ps": int(match.group(1))})
     values = sorted(row["latency_ps"] for row in rows)
@@ -1837,6 +1840,9 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
         capacity_means = {role: safe_mean(
             finite_number(run["metrics"]["capacity"].get("effective_unique"))
             for run in m1_groups[role]) for role in ("naive", "spill")}
+        resident_capacity_means = {role: safe_mean(
+            finite_number(run["metrics"]["capacity"].get("resident_capacity"))
+            for run in m1_groups[role]) for role in ("naive", "spill", "ideal")}
         ratio = safe_divide(capacity_means["spill"], capacity_means["naive"])
         spill_outer = pooled_outer_latency(m1_groups["spill"])
         ideal_outer = pooled_outer_latency(m1_groups["ideal"])
@@ -1848,6 +1854,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             capacity_pass, latency_pass = ratio >= 1.5, delta_ns * 2.0 < 50
             row = {"aggregation_id": "pooled", "repetition": None,
                    "sample_counts": m1_counts, "capacity_role_means": capacity_means,
+                   "naive_effective_unique": capacity_means["naive"],
+                   "spill_effective_unique": capacity_means["spill"],
+                   "naive_resident_capacity": resident_capacity_means["naive"],
+                   "spill_resident_capacity": resident_capacity_means["spill"],
+                   "ideal_resident_capacity": resident_capacity_means["ideal"],
                    "capacity_ratio": ratio,
                    "spill_outer_samples": spill_outer["samples"],
                    "ideal_outer_samples": ideal_outer["samples"],
@@ -2129,15 +2140,28 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     aggregates = []
     for name, weights in M3_AGGREGATES.items():
         if all(key in by_summary for key in weights):
-            delta = safe_weighted_sum((weight, by_summary[key].get("delta_mean_ticks"))
+            ourcc = safe_weighted_sum((weight, by_summary[key].get("ourcc_mean_ticks"))
                                       for key, weight in weights.items())
-            delta_ns = safe_weighted_sum((weight, by_summary[key].get("delta_mean_ns"))
+            havi = safe_weighted_sum((weight, by_summary[key].get("ha_vi_mean_ticks"))
+                                     for key, weight in weights.items())
+            ourcc_ns = safe_weighted_sum((weight, by_summary[key].get("ourcc_mean_ns"))
                                          for key, weight in weights.items())
-            if delta is None or delta_ns is None:
+            havi_ns = safe_weighted_sum((weight, by_summary[key].get("ha_vi_mean_ns"))
+                                        for key, weight in weights.items())
+            delta = safe_subtract(havi, ourcc)
+            delta_ns = safe_subtract(havi_ns, ourcc_ns)
+            reduction = safe_divide(delta, havi)
+            if delta is None or delta_ns is None or reduction is None:
                 m3_complete = False
                 missing_m3.append((name, "aggregate_required_metrics"))
                 continue
-            aggregates.append({"name": name, "delta_ticks": delta,
+            aggregates.append({"name": name,
+                               "ourcc_ticks_per_operation": ourcc,
+                               "ha_vi_ticks_per_operation": havi,
+                               "ourcc_ns_per_operation": ourcc_ns,
+                               "ha_vi_ns_per_operation": havi_ns,
+                               "ourcc_reduction_pct": reduction * 100.0,
+                               "delta_ticks": delta,
                                "delta_ns": delta_ns,
                                "direction": metric3_direction(delta_ns),
                                "status": "COMPLETE"})
@@ -2177,6 +2201,15 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     failed = m1_status == "FAIL" or m2_status == "FAIL" or m3_status.startswith("FAIL")
     overall, code = (("INVALID", 2) if has_errors else ("INCOMPLETE", 3) if incomplete else ("FAIL", 1) if failed else ("PASS", 0))
     report = {"schema_version": 1, "manifest": str(manifest) if manifest is not None else None,
+              "output_semantics": {
+                  "report.json": "formal aggregation, qualification results, and separated descriptive views",
+                  "resolved_runs.json": "normalized per-run evidence with provenance; not a publication aggregate",
+                  "metric_matrix_standard.tsv": "frozen standard contract rows",
+                  "metric_matrix_formal.tsv": "standard plus configured qualification rows",
+                  "metric_matrix_all.tsv": "descriptive rows across all successfully parsed runs",
+                  "metric_matrix_extension.tsv": "descriptive rows outside formal contracts",
+                  "publication_metrics.json": "path-independent canonical input for publication reports and figures",
+              },
               "correctness_policy": data.get("correctness_policy", "strict"),
               "overall_status": overall, "exit_code": code,
               "metric1": {"status": m1_status, "aggregation_mode": "pooled-samples",
@@ -3597,12 +3630,130 @@ def write_summary_png(path, report):
         return False
 
 
-def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
+def publication_view(report, supplement=None):
+    """Return a path-independent, definition-tagged publication data view."""
+    if supplement is None:
+        supplement = {}
+    if not isinstance(supplement, dict):
+        raise ExtractError("publication supplement must be a JSON object")
+    charts = supplement.get("charts", {})
+    if not isinstance(charts, dict):
+        raise ExtractError("publication supplement charts must be a JSON object")
+
+    comparisons = report.get("metric1", {}).get("comparisons", [])
+    capacity_ratio = safe_mean(row.get("capacity_ratio") for row in comparisons)
+    delta_outer = safe_mean(row.get("outer_delta_ns") for row in comparisons)
+    spill_outer = safe_mean(row.get("spill_outer_mean_ns") for row in comparisons)
+    ideal_outer = safe_mean(row.get("ideal_outer_mean_ns") for row in comparisons)
+    capacity_increase = ((capacity_ratio - 1.0) * 100.0
+                         if capacity_ratio is not None else None)
+
+    metric2_rows = []
+    for row in report.get("metric2", {}).get("cases", []):
+        means = row.get("means_ns", {})
+        metric2_rows.append({
+            "case": f"TC{row['tc']}",
+            "naive_mean_ns": finite_number(means.get("naive")),
+            "spill_noopt_mean_ns": finite_number(means.get("spill-noopt")),
+            "optimized_mean_ns": finite_number(means.get("optimized")),
+            "optimized_reduction_pct": finite_number(
+                row.get("optimized_reduction_pct")),
+            "applicable": row.get("applicable"),
+        })
+
+    per_testcase = []
+    for row in report.get("metric3", {}).get("primary_values", []):
+        reduction = safe_divide(row.get("delta_mean_ticks"),
+                                row.get("ha_vi_mean_ticks"))
+        per_testcase.append({
+            "case": f"TC{row['tc']}",
+            "ourcc_ticks_per_operation": finite_number(row.get("ourcc_mean_ticks")),
+            "ha_vi_ticks_per_operation": finite_number(row.get("ha_vi_mean_ticks")),
+            "delta_ticks": finite_number(row.get("delta_mean_ticks")),
+            "ourcc_reduction_pct": (reduction * 100.0
+                                     if reduction is not None else None),
+            "direction": row.get("direction"),
+        })
+
+    groups = []
+    for row in report.get("metric3", {}).get("aggregates", []):
+        scope = {"core_equal_weight": "core",
+                 "representative_equal_weight": "representative"}.get(
+                     row.get("name"), row.get("name"))
+        groups.append({
+            "pressure_level": 100,
+            "scope": scope,
+            "ourcc_ticks_per_operation": finite_number(
+                row.get("ourcc_ticks_per_operation")),
+            "ha_vi_ticks_per_operation": finite_number(
+                row.get("ha_vi_ticks_per_operation")),
+            "ourcc_ns_per_operation": finite_number(row.get("ourcc_ns_per_operation")),
+            "ha_vi_ns_per_operation": finite_number(row.get("ha_vi_ns_per_operation")),
+            "delta_ticks": finite_number(row.get("delta_ticks")),
+            "delta_ns": finite_number(row.get("delta_ns")),
+            "ourcc_reduction_pct": finite_number(row.get("ourcc_reduction_pct")),
+            "direction": row.get("direction"),
+            "status": row.get("status"),
+        })
+
+    metric1 = {
+        "definition_id": "metric1-capacity-and-completed-outer-v1",
+        "status": report.get("metric1", {}).get("status"),
+        "aggregation_mode": report.get("metric1", {}).get("aggregation_mode"),
+        "capacity_ratio": capacity_ratio,
+        "capacity_increase_pct": capacity_increase,
+        "outer_delta_mean_ns": delta_outer,
+        "outer_delta_mean_cycles_2ghz": (delta_outer * 2.0
+                                         if delta_outer is not None else None),
+        "spill_outer_mean_ns": spill_outer,
+        "ideal_outer_mean_ns": ideal_outer,
+        "observations": copy.deepcopy(comparisons),
+    }
+    if comparisons:
+        first = comparisons[0]
+        metric1.update({
+            "naive_resident_capacity": finite_number(
+                first.get("naive_resident_capacity")),
+            "spill_resident_capacity": finite_number(
+                first.get("spill_resident_capacity")),
+            "ideal_resident_capacity": finite_number(
+                first.get("ideal_resident_capacity")),
+        })
+
+    return json_ready({
+        "schema_version": 1,
+        "metric_definitions_version": "metric123-publication-v1",
+        "metric1": metric1,
+        "metric2": {
+            "definition_id": "metric2-applicable-testcase-equal-weight-v1",
+            "status": report.get("metric2", {}).get("status"),
+            "aggregation_mode": report.get("metric2", {}).get("aggregation_mode"),
+            "cases": metric2_rows,
+            "applicable_equal_weight_mean_reduction_pct": finite_number(
+                report.get("metric2", {}).get("aggregate_reduction_pct")),
+        },
+        "metric3": {
+            "definition_id": "metric3-frozen-primary-and-tier-weights-v1",
+            "status": report.get("metric3", {}).get("status"),
+            "aggregation_mode": report.get("metric3", {}).get("aggregation_mode"),
+            "pressure_level": 100,
+            "groups": groups,
+            "per_testcase": per_testcase,
+        },
+        "charts": copy.deepcopy(charts),
+    })
+
+
+def write_outputs(output_dir, report, resolved, matrix, per_run, issues,
+                  publication_supplement=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "report.json").write_text(json.dumps(
         json_ready(report), indent=2, sort_keys=True, allow_nan=False) + "\n")
     (output_dir / "resolved_runs.json").write_text(json.dumps(
         json_ready(resolved), indent=2, sort_keys=True, allow_nan=False) + "\n")
+    (output_dir / "publication_metrics.json").write_text(json.dumps(
+        publication_view(report, publication_supplement), indent=2,
+        sort_keys=True, allow_nan=False) + "\n")
     matrix_fields = ["metric", "level", "identity", "tc", "value", "unit", "status", "detail"]
     write_tsv(output_dir / "metric_matrix.tsv", matrix, matrix_fields)
     write_tsv(output_dir / "metric_matrix_standard.tsv", matrix, matrix_fields)
@@ -3764,18 +3915,43 @@ def main(argv=None):
                         help="also require the named opt-in qualification set to PASS")
     parser.add_argument("--workers", type=int, default=1, metavar="N",
                         help="processes for merge/report CPU work (default: 1)")
+    parser.add_argument("--publication-supplement", type=pathlib.Path,
+                        help="optional chart/support data merged into publication_metrics.json")
+    parser.add_argument("--render-figures", action="store_true",
+                        help="render publication charts after successful extraction")
+    parser.add_argument("--figure-output-dir", type=pathlib.Path,
+                        help="figure destination; defaults to OUTPUT_DIR/figures")
     args = parser.parse_args(argv)
     manifest, output = args.manifest.expanduser().resolve(), args.output_dir.expanduser().resolve()
+    supplement = None
     try:
+        if args.publication_supplement is not None:
+            supplement = json.loads(args.publication_supplement.expanduser().read_text(
+                encoding="utf-8"))
+            if not isinstance(supplement, dict):
+                raise ExtractError("publication supplement must be a JSON object")
+            if not isinstance(supplement.get("charts", {}), dict):
+                raise ExtractError("publication supplement charts must be a JSON object")
         report, resolved, matrix, per_run, issues, code = analyze(
             manifest, output, args.require_qualification, workers=args.workers)
     except (ExtractError, OSError, ValueError) as error:
+        supplement = None
         report = {"schema_version": 1, "overall_status": "INVALID", "exit_code": 2,
                   "metric1": {"status": "INVALID"}, "metric2": {"status": "INVALID"},
                   "metric3": {"status": "INVALID", "executable_reference_model": True},
                   "issues": [{"severity": "ERROR", "code": "MANIFEST_INVALID", "run_id": "", "message": str(error)}]}
         resolved, matrix, per_run, issues, code = [], [], [], report["issues"], 2
-    write_outputs(output, report, resolved, matrix, per_run, issues)
+    write_outputs(output, report, resolved, matrix, per_run, issues, supplement)
+    if args.render_figures and code == 0:
+        figure_output = (args.figure_output_dir.expanduser().resolve()
+                         if args.figure_output_dir else output / "figures")
+        subprocess.run([
+            sys.executable,
+            str(pathlib.Path(__file__).with_name("generate_delivery_figures.py")),
+            "--charts-only",
+            "--publication-json", str(output / "publication_metrics.json"),
+            "--out-dir", str(figure_output),
+        ], check=True)
     print(report["overall_status"])
     return code
 

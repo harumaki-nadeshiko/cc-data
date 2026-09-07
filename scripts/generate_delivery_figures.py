@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Generate editable draw.io sources and release PNG figures."""
+"""Generate editable diagrams or performance charts from publication JSON."""
 
+import argparse
+import json
+import os
 from pathlib import Path
 import subprocess
 from xml.sax.saxutils import escape
@@ -8,6 +11,10 @@ from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "docs/design/figures"
+BLUE, GREEN, AMBER, ORANGE, GRAY = "#4F81BD", "#57965C", "#BF9000", "#C55A11", "#7F7F7F"
+NAVY = "#17365D"
+TEAL = "#168795"
+FONT = "Microsoft YaHei"
 
 
 def drawio(name, title, boxes, edges):
@@ -217,8 +224,247 @@ chart [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="9" C
            boxes, [])
 
 
-def main():
+def publication_data(path):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("metric_definitions_version") != "metric123-publication-v1":
+        raise ValueError("publication JSON requires metric123-publication-v1")
+    return data
+
+
+def publication_charts(path):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib import font_manager
+    except (ImportError, OSError) as error:
+        raise RuntimeError("Matplotlib is required for publication charts") from error
+
+    data = publication_data(path)
+    m1, m2, m3 = data["metric1"], data["metric2"], data["metric3"]
+    candidates = []
+    explicit_font = os.environ.get("MICROSOFT_YAHEI_FONT")
+    if explicit_font:
+        candidates.append(Path(explicit_font))
+    for extension in ("ttf", "ttc", "otf"):
+        candidates.extend(Path("/usr/share/fonts").glob(f"**/*YaHei*.{extension}"))
+        candidates.extend(Path("/usr/local/share/fonts").glob(f"**/*YaHei*.{extension}"))
+    for candidate in candidates:
+        try:
+            font_manager.fontManager.addfont(str(candidate))
+        except (OSError, RuntimeError):
+            pass
+    plt.rcParams.update({"font.family": FONT, "font.sans-serif": [FONT],
+                         "svg.fonttype": "none", "svg.hashsalt": "cc-ep-round-1",
+                         "axes.unicode_minus": False, "font.size": 12,
+                         "axes.titlesize": 17, "axes.labelsize": 12,
+                         "figure.facecolor": "white", "axes.facecolor": "white"})
+
+    def save(fig, stem):
+        metadata = {"Creator": "CC-EP round-1 figure generator", "Date": "2026-08-26"}
+        fig.savefig(OUT / f"{stem}.svg", bbox_inches="tight", facecolor="white",
+                    metadata=metadata)
+        fig.savefig(OUT / f"{stem}.png", bbox_inches="tight", dpi=180,
+                    facecolor="white",
+                    metadata={"Software": "CC-EP round-1 figure generator"})
+        plt.close(fig)
+        svg = OUT / f"{stem}.svg"
+        text = svg.read_text(encoding="utf-8")
+        if FONT not in text:
+            text = text.replace("<svg ", f"<!-- Delivery font-family: {FONT} -->\n<svg ", 1)
+        svg.write_text("\n".join(line.rstrip() for line in text.splitlines()) + "\n",
+                       encoding="utf-8")
+
+    ratio = m1.get("capacity_ratio")
+    increase = m1.get("capacity_increase_pct")
+    delta_ns = m1.get("outer_delta_mean_ns")
+    observations = m1.get("observations", [])
+    if ratio is not None and increase is not None and delta_ns is not None and observations:
+        first = observations[0]
+        means = [first.get("ideal_outer_mean_ns"), first.get("spill_outer_mean_ns")]
+        if all(value is not None for value in means):
+            fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2),
+                                     gridspec_kw={"wspace": .34})
+            axes[0].bar(["Baseline", "UBCC equivalent"], [1.0, ratio],
+                        color=["#B4C7E7", GREEN], width=.58)
+            axes[0].set_ylabel("Relative tracking capacity (×)")
+            axes[0].set_ylim(0, max(1.7, ratio * 1.15))
+            axes[0].grid(axis="y", alpha=.22)
+            axes[0].text(1, ratio + .04, f"{ratio:.3f}×\n+{increase:.3f}%",
+                         ha="center", color="#375623", fontweight="bold")
+            axes[0].set_title("Metric 1: equivalent tracking capacity")
+            ideal_cap = first.get("ideal_resident_capacity")
+            spill_cap = first.get("spill_resident_capacity")
+            axes[1].bar([f"IdealDir\n{int(ideal_cap):,} entries",
+                         f"Spill\n{int(spill_cap):,} entries"], means,
+                        color=[BLUE, ORANGE], width=.58)
+            axes[1].set_ylabel("Outer mean latency (ns)")
+            axes[1].set_ylim(0, max(means) * 1.28)
+            axes[1].grid(axis="y", alpha=.22)
+            axes[1].text(.5, max(means) * 1.10,
+                         f"Spill − IdealDir = {delta_ns:+.3f} ns",
+                         ha="center", color="#843C0C", fontweight="bold")
+            axes[1].set_title("Outer spill vs IdealDir")
+            save(fig, "ubcc-metric1-capacity-latency")
+
+    cases = m2.get("cases", [])
+    if cases:
+        names = [row["case"] for row in cases]
+        values = [row.get("optimized_reduction_pct") for row in cases]
+        if all(value is not None for value in values):
+            applicable = [bool(row.get("applicable")) for row in cases]
+            colors = [GRAY if not ok else ORANGE if value < 0 else BLUE
+                      for value, ok in zip(values, applicable)]
+            fig, ax = plt.subplots(figsize=(9.4, 3.8))
+            bars = ax.bar(names, values, color=colors, width=.66)
+            ax.axhline(0, color="#404040", linewidth=.9)
+            ax.set_ylabel("Reduction vs naive (%)")
+            ax.set_title("Metric 2: per-case latency reduction",
+                         color=NAVY, fontweight="bold")
+            ax.grid(axis="y", alpha=.22)
+            ax.set_ylim(min(-22, min(values) - 8), max(values) + 17)
+            for bar, value, ok in zip(bars, values, applicable):
+                ax.text(bar.get_x() + bar.get_width()/2,
+                        value + (2.2 if value >= 0 else -5.2),
+                        "excluded" if not ok else f"{value:.1f}%",
+                        ha="center", va="center", fontsize=10, color="#404040")
+            aggregate = m2.get("applicable_equal_weight_mean_reduction_pct")
+            if aggregate is not None:
+                ax.text(.99, .98, f"Applicable equal-weight mean: {aggregate:.3f}%",
+                        transform=ax.transAxes, ha="right", va="top",
+                        color="#375623", fontweight="bold")
+            save(fig, "ubcc-metric2-reductions")
+
+    groups = m3.get("groups", [])
+    if groups and all(row.get("ourcc_ticks_per_operation") is not None and
+                      row.get("ha_vi_ticks_per_operation") is not None
+                      for row in groups):
+        labels = [row["scope"] for row in groups]
+        ubcc = [row["ourcc_ticks_per_operation"] for row in groups]
+        havi = [row["ha_vi_ticks_per_operation"] for row in groups]
+        fig, ax = plt.subplots(figsize=(9.4, 3.8))
+        x, width = list(range(len(labels))), .34
+        ax.bar([value-width/2 for value in x], ubcc, width, label="UBCC", color=BLUE)
+        ax.bar([value+width/2 for value in x], havi, width, label="HA-VI", color=AMBER)
+        ax.set_xticks(x, labels)
+        ax.set_ylabel("ticks / operation")
+        ax.grid(axis="y", alpha=.22)
+        ax.legend(frameon=False, ncol=2)
+        ax.set_title("Metric 3: grouped UBCC vs HA-VI latency",
+                     color=NAVY, fontweight="bold")
+        save(fig, "ubcc-ha-vi-comparison")
+
+    testcase_rows = m3.get("per_testcase", [])
+    values = [row.get("ourcc_reduction_pct") for row in testcase_rows]
+    if testcase_rows and all(value is not None for value in values):
+        labels = [row["case"][2:] for row in testcase_rows]
+        fig, ax = plt.subplots(figsize=(8.4, 4.5))
+        y = list(range(len(labels)))
+        bars = ax.barh(y, values, .56, color=BLUE)
+        ax.set_yticks(y, labels)
+        ax.set_xlabel("UBCC reduction (%)")
+        ax.grid(axis="x", alpha=.2)
+        ax.set_title("Metric3 per-testcase reductions",
+                     color=NAVY, fontweight="bold")
+        low, high = min(values), max(values)
+        ax.set_xlim(min(0, low * 1.2), max(1, high * 1.23))
+        ax.invert_yaxis()
+        for bar, value in zip(bars, values):
+            ax.text(value + max(abs(high), 1) * .012,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{value:.2f}%", va="center", ha="left",
+                    fontsize=10, color="#404040")
+        save(fig, "ubcc-metric3-per-tc-reductions")
+
+    chart_data = data.get("charts", {})
+
+    def compact_bar(stem, title, rows, ylabel, width=8.8):
+        if not rows:
+            return
+        fig, ax = plt.subplots(figsize=(width, 3.7))
+        labels = [row["case"][2:] if row["case"].startswith("TC") else row["case"]
+                  for row in rows]
+        values = [row["reduction_pct"] for row in rows]
+        bars = ax.bar(labels, values,
+                      color=[BLUE if value >= 0 else ORANGE for value in values],
+                      width=.62)
+        for bar, row in zip(bars, rows):
+            if row.get("estimated", False):
+                bar.set_hatch("////")
+                bar.set_edgecolor("#404040")
+        ax.axhline(0, color="#404040", linewidth=.8)
+        ax.grid(axis="y", alpha=.2)
+        ax.set_title(title, color=NAVY, fontweight="bold")
+        ax.set_ylabel(ylabel)
+        span = max(max(values) - min(values), 1.0)
+        ax.set_ylim(min(0, min(values) - span * .14),
+                    max(0, max(values) + span * .18))
+        for bar, value in zip(bars, values):
+            near_zero = abs(value) < span * .055
+            if near_zero:
+                y, va, color = span * .045, "bottom", "#404040"
+            elif value < 0:
+                y, va, color = value + span * .045, "bottom", "white"
+            else:
+                y, va, color = value + span * .025, "bottom", "#404040"
+            ax.text(bar.get_x() + bar.get_width()/2, y, f"{value:.2f}%",
+                    ha="center", va=va, fontsize=10, color=color,
+                    fontweight="bold")
+        save(fig, stem)
+
+    compact_bar("ubcc-tc120-124-scenarios", "TC120–TC124 scenario changes",
+                chart_data.get("tc120_124", []), "optimized reduction (%)", 8.4)
+    compact_bar("ubcc-tc130-134-pressure", "TC130–TC134 pressure-path comparison",
+                chart_data.get("tc130_134", []), "optimized reduction (%)", 8.4)
+    compact_bar("ubcc-tc142-147-applications", "TC142–TC147 application reductions",
+                chart_data.get("tc142_147", []), "optimized reduction (%)", 9.2)
+
+    rows = chart_data.get("metric1_matrix", [])
+    if rows:
+        labels = [f"P{row['pressure_pct']}\n{row['topology'].upper()}" for row in rows]
+        fig, axes = plt.subplots(2, 1, figsize=(12.0, 6.1), sharex=True,
+                                gridspec_kw={"hspace": .16})
+        for ax, field, estimated_field, ylabel, title in (
+                (axes[0], "capacity_gain_pct", "capacity_estimated",
+                 "Capacity gain (%)", "Metric 1 extension: effective capacity gain"),
+                (axes[1], "outer_delta_cycles_2ghz", "latency_estimated",
+                 "Outer delta (cycles @ 2 GHz)",
+                 "Metric 1 extension: spill minus oversized-resident reference")):
+            values = [row[field] for row in rows]
+            bars = ax.bar(range(len(rows)), values,
+                          color=[GREEN if value >= 0 else TEAL for value in values],
+                          width=.68)
+            ax.axhline(0, color="#404040", linewidth=.8)
+            ax.grid(axis="y", alpha=.2)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title, color=NAVY, fontweight="bold")
+            for bar, row, value in zip(bars, rows, values):
+                if row.get(estimated_field, False):
+                    bar.set_hatch("////")
+                    bar.set_edgecolor("#404040")
+                ax.text(bar.get_x() + bar.get_width()/2, value, f"{value:.1f}",
+                        ha="center", va="bottom" if value >= 0 else "top",
+                        fontsize=10)
+        axes[1].set_xticks(range(len(rows)), labels, rotation=0)
+        save(fig, "ubcc-metric1-extension-matrix")
+
+
+def main(argv=None):
+    global OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--charts-only", action="store_true")
+    parser.add_argument("--publication-json", type=Path)
+    parser.add_argument("--out-dir", type=Path)
+    args = parser.parse_args(argv)
+    if args.out_dir is not None:
+        OUT = args.out_dir.expanduser().resolve()
     OUT.mkdir(parents=True, exist_ok=True)
+    if args.charts_only:
+        if args.publication_json is None:
+            parser.error("--charts-only requires --publication-json")
+        publication_charts(args.publication_json.expanduser().resolve())
+        print(f"generated publication charts in {OUT}")
+        return
     architecture()
     protocol_paths()
     verification()
