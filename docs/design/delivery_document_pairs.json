@@ -16,10 +16,10 @@
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "77f69102abaef3e8c26ea228cd9d1a6053a7781d43030b332b0f56fbfd197d2b",
-      "embedded_source_sha256": "e6989f6af5490896ce7dd5ea37bb9a72500311c9e95d699a0cd891ae959c96ac",
+      "docx_sha256": "00c136efef93fd4e4f9a481541f038194f58e823442719319315245b889acd7a",
+      "embedded_source_sha256": "3096d168b98c6b5bcce2c9f7f15ef18dc2dd173c6bbcabc26187ebecd4c89d45",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "e6989f6af5490896ce7dd5ea37bb9a72500311c9e95d699a0cd891ae959c96ac"
+      "markdown_sha256": "3096d168b98c6b5bcce2c9f7f15ef18dc2dd173c6bbcabc26187ebecd4c89d45"
     }
   ],
   "schema_version": 1

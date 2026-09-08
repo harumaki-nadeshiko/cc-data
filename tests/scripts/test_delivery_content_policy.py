@@ -91,7 +91,7 @@ class DeliveryContentPolicyTest(unittest.TestCase):
             ("协议端点层级验证", "目标硬件和端口级 Switch 微体系结构未建模",
              "主要证据类型为参考模型仿真", "仿真值而非物理测量", "100% L3 压力",
              "未完成事件", "低于 500 ns 适用门槛", "2/3 × hot-key read + 1/3 × hot-key write",
-             "保持一次权重", "-13.333%", "-0.269", "-0.488", "-9.2",
+              "保持一次权重", "-13.333%", "-0.269", "-0.488", "负 Delta 原样显示",
              "N/A", "验证状态：未验证", "根操作不以同步 ClearResp 作为完成条件"),
         )
         for path, phrases in zip(FORMAL_DOCS, required):

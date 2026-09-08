@@ -31,7 +31,8 @@
 ### 1.1 三项指标结论
 
 UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI 配对比较三项指标。三项
-指标均达到正式验收口径。
+指标均达到历史正式验收口径。本节保留历史三轮合同数值；第 3.6、4.1–4.4、4.6 节
+另行发布 2026-09-06–08 批次的扩展实测，不将单轮新值称为三轮验收，不重写历史结论。
 
 | 指标 | 验收门槛 | 最终结果 | 结论 |
 |---|---:|---:|---|
@@ -357,30 +358,27 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 ### 3.6 多压力与多拓扑扩展观测
 
 新一轮 TC142-TC147 三角色矩阵进一步覆盖 175% 和 200% 目标压力，以及 3N1S、3N2S、
-8N1S、8N2S 和 16N1S 拓扑。图 3-3 对每个压力/拓扑坐标先计算六个代表应用的均值；容量
-使用 spill 相对 naive 的等效追踪容量增幅，时延使用 spill 相对超大 ResidentDir 参考角色的
-已完成 Outer 均值差。该扩展矩阵用于展示目录压力和节点规模下的变化趋势。
+8N1S、8N2S 和 16N1S 拓扑。2026-09-06–08 批次的 60 个坐标、180 个选定臂均已核实
+PASS 源文件。P175/P200 是目录目标压力，不是 L3 压力。替换批只替换指定臂；P175/8N2S/
+TC143/naive 采用 9 月 7 日完整通过的本地隔离重跑，不重复计入远端旧失败臂或后续重跑。
 
-175% 压力下五个拓扑的平均容量增幅为 58.7%-86.7%；200% 压力下五个拓扑的
-平均容量增幅为 86.9%-120.5%。
-3N1S、3N2S 和 8N1S 的已完成平均 Outer 增量保持在约
-24-28 cycles；16N1S 中的 B-tree、FaaS 和 feature-store 路径表现出更高的 spill/fill
-敏感性，说明高节点数和高元数据 churn 会将后备目录访问放大为排队成本。
+容量柱为 max(spill ResidentDir capacity, Home0/socket0 H64 exact live) / naive capacity，
+不把 resident 与 H64 重复相加。每个 TC 内五拓扑取几何平均（GM），末柱为六个 TC 的 GM。
+Delta 为每臂合并所有进程 completed Outer 事件后的均值差乘 2，单位 cycles @ 2 GHz；
+每个 TC 内五拓扑取算术平均（AM），末柱为六个 TC AM 的 AM。汇总柱不重复计权。
+负 Delta 原样显示；参考线分别为 1.5× 以及 0、50 cycles。两个压力分面独立汇总。
 
-| 目标压力 | 拓扑 | 六应用平均容量增幅 | 六应用平均 Outer 增量（cycles @ 2 GHz） |
+| 目录目标压力 | 实测坐标 / 选定臂 | 容量层级 GM | Delta 层级 AM（cycles @ 2 GHz） |
 |---:|---:|---:|---:|
-| 175% | 3N1S | 65.5% | 24.2 |
-| 175% | 3N2S | 61.2% | 28.3 |
-| 175% | 8N1S | 60.8% | 27.1 |
-| 175% | 8N2S | 58.7% | -9.2 |
-| 175% | 16N1S | 86.7% | 50.7 |
-| 200% | 3N1S | 93.1% | 25.0 |
-| 200% | 3N2S | 90.9% | 27.4 |
-| 200% | 8N1S | 88.0% | 26.1 |
-| 200% | 8N2S | 86.9% | 1.9 |
-| 200% | 16N1S | 120.5% | 57.4 |
+| 175% | 30 / 90 | 1.660× | 24.200 |
+| 200% | 30 / 90 | 1.954× | 27.573 |
 
-![图 3-3 指标 1 多压力与多拓扑扩展观测](figures/ubcc-metric1-extension-matrix.png =12cm)
+超大 ResidentDir 参考仍有非零 H64 live，属于扩展参考，不宣称满足 Formal IdealDir 资格。
+数值源 performance_extension_data.json 保留逐臂原始 Outer 延迟频数、进程事件数、计时记录、
+Home0/socket0 统计、PASS manifest 和源文件 SHA-256；压缩与普通日志均按进程读取，
+不以相同文本去重事件，也不对节点均值再平均。
+
+![图 3-3 指标 1 多压力与多拓扑扩展观测](figures/ubcc-metric1-extension-matrix.png =16cm)
 
 图 3-3　指标 1 多压力与多拓扑扩展观测
 
@@ -390,14 +388,17 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 
 ### 4.1 场景结果
 
+本节及图 4-1 使用 2026-09-07 新单轮 21 次运行，比较臂仍为 optimized vs naive。
+历史三轮的 **64.759%** 保留在执行摘要，历史 TC138 降幅为 -13.333%；以下新值不是三轮复测。
+
 | 场景 | naive ns/op | spill-noopt ns/op | optimized ns/op | optimized 降幅 |
 |---|---:|---:|---:|---:|
-| TC135 preserved sharer revisit | 2344.449 | 39.736 | 39.736 | 98.305% |
-| TC136 preserved owner store | 2384.186 | 79.473 | 79.473 | 96.667% |
-| TC137 new requester load | 2384.186 | 1788.139 | 1788.139 | 25.000% |
-| TC138 dirty owner handoff | 2384.186 | 2702.077 | 2702.077 | -13.333% |
-| TC139 mixed batch | 23563.703 | 635.783 | 635.783 | 97.302% |
-| TC217 catalog batch | 4132.589 | 635.783 | 635.783 | 84.615% |
+| TC135 preserved sharer revisit | 2423.922 | 39.736 | 39.736 | 98.361% |
+| TC136 preserved owner store | 2463.659 | 39.736 | 79.473 | 96.774% |
+| TC137 new requester load | 2423.922 | 1867.612 | 1867.612 | 22.951% |
+| TC138 dirty owner handoff | 2463.659 | 2702.077 | 2702.077 | -9.677% |
+| TC139 mixed batch | 24199.486 | 635.783 | 635.783 | 97.373% |
+| TC217 catalog batch | 4251.798 | 596.046 | 596.046 | 85.981% |
 
 TC140 的 naive、spill-noopt 和 optimized 均值均为 119.209 ns，低于 500 ns 适用门槛，
 因此作为低时延中性控制项，不进入指标 2 聚合。
@@ -406,11 +407,12 @@ TC140 的 naive、spill-noopt 和 optimized 均值均为 119.209 ns，低于 500
 
 ![图 4-1 指标 2 适用场景端到端时延](figures/ubcc-metric2-reductions.png =11cm)
 
-图 4-1　指标 2 场景时延
+图 4-1　指标 2 原场景单轮 speedup（naive / optimized，对数轴）；参考线 1× 与
+1/0.9×（时延下降 10%）。适用 TC 等权 GM 仅用于图示，不是正式 AM 降幅判据。
 
 ### 4.2 聚合结果
 
-六个适用场景的 case-level 等权平均降幅为 **64.759%**。
+六个适用场景的新单轮 case-level 等权算术平均降幅为 **65.294%**，未舍入值保留在数值源。
 
 TC138 展示了 dirty owner handoff 场景下数据回收与权限迁移的机制权衡，其结果完整纳入
 等权平均。聚合结果仍显著超过 10% 门槛，说明 optimized profile 在适用场景集合中形成
@@ -428,7 +430,7 @@ TC138 展示了 dirty owner handoff 场景下数据回收与权限迁移的机�
 
 ### 4.4 结论
 
-指标 2 的适用场景等权平均降幅为 64.759%，超过 10% 合同门槛。
+新单轮的适用场景等权平均降幅为 65.294%，超过 10% 数值门槛；不替代历史三轮正式验收。
 
 ### 4.5 真实容量压力支撑结果
 
@@ -455,11 +457,12 @@ TC130、TC133 和 TC134 表明 UBCC 在目录压力后仍能保留有价值的�
 
 图 4-2　TC130-TC134 压力后主路径变化
 
-### 4.6 16N1S Level-A 代表应用结果
+### 4.6 代表应用：历史 optimized 与新 spill-noopt 扩展分区
 
 TC142-TC147 覆盖数据库、FaaS、图计算和 feature store。每个 testcase 均完成 naive、
 spill-noopt 和 optimized 三个 profile 的正确性运行，共 18/18 通过。下表使用同一完成边界下
-可直接比较的 naive 与 optimized 端到端值；spill-noopt 正确性通过，同口径性能主值缺失记为 N/A。
+可直接比较的历史 naive 与 optimized 端到端值；历史 spill-noopt 同口径性能主值缺失记为 N/A。
+此历史表不作为下方新图 4-3 的数值源。
 
 | Testcase | 应用场景 | naive ns/op | spill-noopt ns/op | optimized ns/op | optimized 降幅 |
 |---|---|---:|---:|---:|---:|
@@ -473,13 +476,33 @@ spill-noopt 和 optimized 三个 profile 的正确性运行，共 18/18 通过�
 六个代表应用均显示 optimized 相对 naive 的端到端收益，降幅范围为 14.67%–28.81%。
 该矩阵证明 UBCC 的容量和协议机制可以用于代表性应用模式与 16N1S Level-A 协议节点规模。
 
-![图 4-3 TC142-TC147 代表应用降幅](figures/ubcc-tc142-147-applications.png =11cm)
+图 4-3 改用 2026-09-06–08 新批次全部 60 个 TC×拓扑×压力坐标的 naive 与 spill-noopt
+E2E 配对，共 120 个选定臂。应用臂不是 optimized，不与上方历史表混合。
+沿用 summarize_database_perf_matrix.py 的 mean_plane_ns_per_operation：每 plane 的
+counter_ticks × 10⁹ / frequency / operations 后跨 plane 等权平均；保留每 plane 的原始
+operations 与频率。TC142–147 分别采用 db_oltp、db_btree、db_wal、faas、graph、feature
+的 end_to_end phase，不用 service 或 Outer 顶替。全部预期 plane 必须齐全且不重复。
 
-图 4-3　TC142-TC147 代表应用降幅
+| 新应用目录压力 | 实测配对坐标 | naive / spill-noopt 层级 GM |
+|---:|---:|---:|
+| P175 | 30 / 30 | 1.107× |
+| P200 | 30 / 30 | 1.109× |
+
+![图 4-3 TC142-TC147 新应用 E2E speedup](figures/ubcc-tc142-147-applications.png =16cm)
+
+图 4-3　新应用 naive / spill-noopt E2E speedup；每 TC 内跨拓扑 GM，再跨 TC GM；
+P175/P200 分面独立汇总，参考线 1×、1/0.9×。不把该 GM 当作原场景 10% 正式通过判据。
 
 ---
 
 ## 5. 指标 3：UBCC 与 HA-VI 配对比较
+
+本章表与图 5-1、5-2 仍为历史 2N1S/P100 正式参考模型结果，不是 9 月 8 日多拓扑新实测。
+2026-09-08 多拓扑 P100 批次计划 480 臂（8 TC×6 拓扑×5 pairs×2），先做 96 臂 gate。
+本次只读检查时 state/progress.json 为 BLOCKED，首轮 2N1S/TC228 的 HA-VI 臂 runner
+return code 1，exit.json 为 1；未形成完整 gate，不发布新 P100 总体 GM，缺失不画零柱。
+9 月 7 日 metric23-single 的 M3 为 2N1S/P0 单对，不混入 P100。新补测尚不能支持
+TC×多拓扑比较，因此保留有覆盖的历史图，所有历史数值仅在原配置范围内解释。
 
 ### 5.1 场景定义与关键路径
 
@@ -548,7 +571,7 @@ spill-noopt 和 optimized 三个 profile 的正确性运行，共 18/18 通过�
 
 ![图 5-1 指标 3 UBCC 与 HA-VI 配对比较](figures/ubcc-ha-vi-comparison.png =11cm)
 
-图 5-1　指标 3 配对结果
+图 5-1　历史 2N1S/P100 的 HA-VI / UBCC 组均值比，参考线 1×；沿用原正式组权重，非层级 GM。
 
 ### 5.4 理论路径解释
 
@@ -601,7 +624,8 @@ UBCC 时延更低。
 
 ![图 5-2 指标 3 每 testcase 降幅](figures/ubcc-metric3-per-tc-reductions.png =11cm)
 
-图 5-2　指标 3 每 testcase 降幅
+图 5-2　历史 2N1S/P100 每 testcase 的 HA-VI / UBCC speedup 与八 TC 等权 GM，参考线 1×。
+只有一个拓扑，组内拓扑 GM 等于该单值；此展示 GM 不替代上表历史正式组 AM 判据。
 
 ### 5.6 复合项与辅助发布事件
 

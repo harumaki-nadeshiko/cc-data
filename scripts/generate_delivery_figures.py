@@ -16,6 +16,7 @@ import argparse
 import shutil
 import subprocess
 import tempfile
+import sys
 from typing import Optional
 import xml.etree.ElementTree as ET
 
@@ -31,6 +32,8 @@ except ModuleNotFoundError:  # Metadata-only validation does not require renderi
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 OUT = ROOT / "docs/design/figures"
 FONT = "Microsoft YaHei"
 MATH_FONT = "STIX Two Math"
@@ -583,16 +586,20 @@ def metric_charts(publication_path=None):
     spill_cap = float(required(first.get("spill", {}).get("resident_capacity"), "spill resident_capacity"))
     ideal_cap = float(required(first.get("ideal", {}).get("resident_capacity"), "IdealDir resident_capacity"))
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2), gridspec_kw={"wspace": .34})
-    axes[0].bar(["Baseline", "UBCC equivalent"], [1.0, ratio], color=["#B4C7E7", GREEN], width=.58)
+    axes[0].bar(["Historical TC131"], [ratio], color=[GREEN], width=.58)
+    axes[0].axhline(1.5, color=ORANGE, linestyle="--")
     axes[0].set_ylabel("Relative tracking capacity (×)"); axes[0].set_ylim(0, max(1.7, ratio * 1.15)); axes[0].grid(axis="y", alpha=.22)
-    axes[0].text(1, ratio + .04, f"{ratio:.3f}×\n+{increase:.3f}%", ha="center", color="#375623", fontweight="bold")
+    axes[0].text(0, ratio + .04, f"{ratio:.3f}×\n+{increase:.3f}%", ha="center", color="#375623", fontweight="bold")
     axes[0].set_title("Metric 1: equivalent tracking capacity")
-    means = [float(first["ideal"]["outer_mean_ns"]), float(first["spill"]["outer_mean_ns"])]
-    axes[1].bar([f"IdealDir\n{int(ideal_cap):,} entries", f"Spill\n{int(spill_cap):,} entries"], means,
-                color=[BLUE, ORANGE], width=.58)
-    axes[1].set_ylabel("Outer mean latency (ns)"); axes[1].set_ylim(0, max(means) * 1.28); axes[1].grid(axis="y", alpha=.22)
-    axes[1].text(.5, max(means) * 1.10, f"Spill − IdealDir = +{delta_ns:.3f} ns", ha="center", color="#843C0C", fontweight="bold")
-    axes[1].set_title("Outer spill vs IdealDir")
+    delta = delta_ns * 2
+    axes[1].bar(["Historical TC131"], [delta], color=[ORANGE], width=.58)
+    axes[1].set_ylabel("Outer Delta (cycles @ 2 GHz)")
+    axes[1].set_ylim(min(0, delta) - 5, max(50, delta) + 10)
+    axes[1].grid(axis="y", alpha=.22)
+    axes[1].axhline(0, color=GRAY)
+    axes[1].axhline(50, color=ORANGE, linestyle="--")
+    axes[1].text(0, delta + 2, f"{delta:.3f} cycles", ha="center", color="#843C0C", fontweight="bold")
+    axes[1].set_title("Historical spill − IdealDir")
     save_chart(fig, "ubcc-metric1-capacity-latency")
 
     # Metric 2, including the negative TC138 and explicitly excluded TC140.
@@ -626,10 +633,11 @@ def metric_charts(publication_path=None):
             ubcc.append(float(required(row.get("ourcc_ticks_per_operation"), f"{key}.ourcc")))
             havi.append(float(required(row.get("ha_vi_ticks_per_operation"), f"{key}.ha_vi")))
     fig, ax = plt.subplots(figsize=(9.4, 3.8)); x = list(range(len(labels))); w = .34
-    ax.bar([v-w/2 for v in x], ubcc, w, label="UBCC", color=BLUE)
-    ax.bar([v+w/2 for v in x], havi, w, label="HA-VI", color=AMBER)
-    ax.set_xticks(x, labels); ax.set_ylabel("ticks / operation"); ax.grid(axis="y", alpha=.22); ax.legend(frameon=False, ncol=2)
-    ax.set_title("Metric 3: grouped UBCC vs HA-VI latency", color=NAVY, fontweight="bold")
+    speedups = [h/u for h,u in zip(havi, ubcc)]
+    ax.bar(x, speedups, .55, color=BLUE)
+    ax.axhline(1, color=ORANGE, linestyle="--")
+    ax.set_xticks(x, labels); ax.set_ylabel("Speedup: HA-VI / UBCC (×)"); ax.grid(axis="y", alpha=.22)
+    ax.set_title("Historical 2N1S / P100: original group mean ratios\nNew multi-topology P100: N/A (gate blocked)", color=NAVY, fontsize=14)
     save_chart(fig, "ubcc-ha-vi-comparison")
 
     def compact_bar(stem, title, rows, ylabel, width=8.8):
@@ -691,16 +699,25 @@ def metric_charts(publication_path=None):
         save_chart(fig, "ubcc-metric1-extension-matrix")
     metric3_rows = preview["metric3_per_tc"]
     labels = [str(tc) for tc in range(228, 236)]
-    values = [next(row["reduction_pct"] for row in metric3_rows if row["case"] == str(tc)) for tc in range(228, 236)]
+    values = [1 / (1-next(row["reduction_pct"] for row in metric3_rows if row["case"] == str(tc))/100) for tc in range(228, 236)]
+    from publication_extension_charts import geomean
+    labels.append("Overall GM")
+    values.append(geomean(values))
     fig, ax = plt.subplots(figsize=(8.4, 4.5)); y = list(range(len(labels)))
     bars = ax.barh(y, values, .56, color=BLUE)
-    ax.set_yticks(y, labels); ax.set_xlabel("UBCC reduction (%)"); ax.grid(axis="x", alpha=.2)
-    ax.set_title("Metric3 per-testcase reductions", color=NAVY, fontweight="bold")
+    ax.set_yticks(y, labels); ax.set_xlabel("Speedup: HA-VI / UBCC (×)"); ax.grid(axis="x", alpha=.2)
+    ax.axvline(1, color=ORANGE, linestyle="--")
+    ax.set_title("Historical 2N1S / P100 · TC228–235\nNew multi-topology: N/A; no available-case GM", color=NAVY, fontsize=13)
     ax.set_xlim(0, max(values) * 1.23); ax.invert_yaxis()
     for bar, value in zip(bars, values):
         ax.text(value + max(values) * .012, bar.get_y() + bar.get_height() / 2,
-                f"{value:.2f}%", va="center", ha="left", fontsize=10, color="#404040")
+                 f"{value:.3f}×", va="center", ha="left", fontsize=10, color="#404040")
     save_chart(fig, "ubcc-metric3-per-tc-reductions")
+    extension_path = ROOT / "docs/design/performance_extension_data.json"
+    if extension_path.is_file():
+        from publication_extension_charts import render
+        import sys
+        render(sys.modules[__name__], json.loads(extension_path.read_text(encoding="utf-8")))
     return chart_lineage(report, outer, preview,
                          PUBLICATION_DATA if publication_path == ROOT / PUBLICATION_DATA
                          else str(publication_path))
@@ -724,7 +741,7 @@ def chart_lineage(report, outer, preview=None, publication_source=PUBLICATION_DA
          "expected_values": {"cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]), "applicable": bool(row["applicable"])} for row in report["metric2"]["cases"]], "applicable_equal_weight_mean_reduction_pct": float(report["metric2"]["equal_weight_mean_reduction_pct"])},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric2-reductions"]},
         {"name": "ubcc-ha-vi-comparison", "source_artifacts": [publication_source], "generator": GENERATOR,
-         "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
+          "metric_definition": "Historical 2N1S/P100 only: HA-VI group mean / UBCC group mean speedup under original formal weights, not GM. Reference=1. New multi-topology P100 gate blocked; N/A, no missing-case weighting.",
          "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] if int(level["pressure_level"]) == 100 for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-ha-vi-comparison"]},
     ]
@@ -750,6 +767,15 @@ def chart_lineage(report, outer, preview=None, publication_source=PUBLICATION_DA
             "derived_values": {"rows": preview.get("metric1_matrix", [])},
             "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric1-extension-matrix"],
         })
+    extension_path = ROOT / "docs/design/performance_extension_data.json"
+    if extension_path.is_file():
+        from publication_extension_charts import lineage
+        updates = lineage(json.loads(extension_path.read_text(encoding="utf-8")))
+        names = {row["name"] for row in updates}
+        charts = [row for row in charts if row["name"] not in names] + updates
+    for chart in charts:
+        if chart['name'] == 'ubcc-metric3-per-tc-reductions':
+            chart['metric_definition'] = 'Historical 2N1S/P100 per-TC speedup=1/(1-reduction_pct/100), plus equal-TC GM. Reference=1. Single-topology coverage only; new multi-topology P100 N/A.'
     return charts
 
 

@@ -34,7 +34,10 @@ class GenerateDeliveryFiguresTest(unittest.TestCase):
         report, outer, preview = MOD.publication_sources(ROOT / MOD.PUBLICATION_DATA)
         charts = MOD.chart_lineage(report, outer, preview)
         for chart in charts:
-            self.assertEqual(chart["source_artifacts"], [MOD.PUBLICATION_DATA])
+            source = ("docs/design/performance_extension_data.json" if chart["name"] in
+                      {"ubcc-metric1-extension-matrix", "ubcc-tc142-147-applications",
+                       "ubcc-metric2-reductions"} else MOD.PUBLICATION_DATA)
+            self.assertEqual(chart["source_artifacts"], [source])
 
 
 if __name__ == "__main__":

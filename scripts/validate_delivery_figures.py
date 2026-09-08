@@ -99,6 +99,11 @@ def contains_stale_guest_latency(value):
 
 def expected_chart_values(stem, sources):
     source = {path: load_json(path) for path in sources}
+    extension = next((value for value in source.values() if 'selected_arms' in value), None)
+    if extension is not None:
+        from publication_extension_charts import lineage
+        row = next(row for row in lineage(extension) if row['name'] == stem)
+        return 'derived_values', row['derived_values']
     publication = next((value for value in source.values()
                         if value.get("metric_definitions_version") == "metric123-publication-v1"), None)
     if stem == "ubcc-metric1-capacity-latency":

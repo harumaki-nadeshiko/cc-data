@@ -1,0 +1,364 @@
+{
+  "checked_at_utc": "2026-09-08T07:33:17.927961+00:00",
+  "source_id": "m3-multitopo-p100-20260908",
+  "state": {
+    "progress.json": {
+      "present": true,
+      "sha256": "2197bb081496b16e3d6249f14cedfe2231a3f15f3eacc76bc4f0882184fbddab",
+      "value": {
+        "phase": "BLOCKED",
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 237, in <module>\n    main()\n  File \"/campaign/runner-v2.py\", line 225, in main\n    row=run(job)\n  File \"/campaign/runner-v2.py\", line 200, in run\n    assert row['status'] == 'PASS', row.get('reason')\nAssertionError: Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 194, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner-v2.py\", line 108, in audit\n    assert rc == 0, f'runner return code {rc}'\nAssertionError: runner return code 1\n\n",
+        "updated": 1788849733.9640777
+      }
+    },
+    "current.json": {
+      "present": true,
+      "sha256": "32781b2d69382d38f13ca7e0bcd38d3590f65e52c1a79401b74652d4eef0dd05",
+      "value": {
+        "attempt": 1,
+        "campaign_gib": 1.4763565063476562,
+        "free_gib": 83.97429656982422,
+        "job": {
+          "arm": "ha-vi",
+          "key": "2n1s/r01/tc228/ha-vi",
+          "order": "AB",
+          "pair": 1,
+          "pressure_level": 100,
+          "seed": 239463,
+          "tc": 228,
+          "topology": "2n1s"
+        },
+        "pid": 7,
+        "storage_warning": false,
+        "updated": 1788849718.9465246
+      }
+    },
+    "gate.json": {
+      "present": false,
+      "sha256": null,
+      "value": null
+    },
+    "exit.json": {
+      "present": true,
+      "sha256": "e1b21cbc5269dc04dfb69e5efd6302ed4a8f1f84371c2ccdd7d1421dd380897c",
+      "value": {
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 237, in <module>\n    main()\n  File \"/campaign/runner-v2.py\", line 225, in main\n    row=run(job)\n  File \"/campaign/runner-v2.py\", line 200, in run\n    assert row['status'] == 'PASS', row.get('reason')\nAssertionError: Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 194, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner-v2.py\", line 108, in audit\n    assert rc == 0, f'runner return code {rc}'\nAssertionError: runner return code 1\n\n",
+        "return_code": 1,
+        "timestamp": 1788849733.963854
+      }
+    }
+  },
+  "result_records": [
+    {
+      "file": "results/2n1s/r01/tc228/ha-vi/result.json",
+      "value": {
+        "arm": "ha-vi",
+        "elapsed_sec": 108.26838445663452,
+        "key": "2n1s/r01/tc228/ha-vi",
+        "log_dir": "/campaign/results/2n1s/r01/tc228/ha-vi/attempt-001",
+        "order": "AB",
+        "pair": 1,
+        "pressure_level": 100,
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 194, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner-v2.py\", line 108, in audit\n    assert rc == 0, f'runner return code {rc}'\nAssertionError: runner return code 1\n",
+        "return_code": 1,
+        "run_id": "m3mt_d59fb6c684d2afd5d1ee",
+        "seed": 239463,
+        "status": "FAIL",
+        "tc": 228,
+        "topology": "2n1s"
+      }
+    },
+    {
+      "file": "results/2n1s/r01/tc228/ha-vi/attempt-001/result.json",
+      "value": {
+        "arm": "ha-vi",
+        "elapsed_sec": 108.26838445663452,
+        "key": "2n1s/r01/tc228/ha-vi",
+        "log_dir": "/campaign/results/2n1s/r01/tc228/ha-vi/attempt-001",
+        "order": "AB",
+        "pair": 1,
+        "pressure_level": 100,
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner-v2.py\", line 194, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner-v2.py\", line 108, in audit\n    assert rc == 0, f'runner return code {rc}'\nAssertionError: runner return code 1\n",
+        "return_code": 1,
+        "run_id": "m3mt_d59fb6c684d2afd5d1ee",
+        "seed": 239463,
+        "status": "FAIL",
+        "tc": 228,
+        "topology": "2n1s"
+      }
+    },
+    {
+      "file": "results/2n1s/r01/tc228/ourcc/result.json",
+      "value": {
+        "arm": "ourcc",
+        "audit_revision": "v2 filter component=gem5-config; original attempt result retained",
+        "elapsed_sec": 108.26604676246643,
+        "evidence_sha256": {
+          "child_status_tc228/gem5_node0.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+          "child_status_tc228/gem5_node1.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+          "child_status_tc228/networksim.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+          "child_status_tc228/networksim.pid": "eedb85ab90d324a555a45560d75c88cecf23721990c3b6353697d707e6465c74",
+          "child_status_tc228/ubio_n0_s0.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+          "child_status_tc228/ubio_n1_s0.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+          "coordinator.log": "dac36b7796be468648e18e9eee379f45abc26112f04c1f92eb8ba06517ce126f",
+          "gem5_tc228_node0/stderr.log": "5938e4f94d572a8c1a5e0d948eb4ce2ba6b48efed244fd277bb506cab5ff8fc9",
+          "gem5_tc228_node0/stdout.log": "2205b2b839397e584c17a697b8188b42513339545dd7f33a8a430c91ecfe5c3e",
+          "gem5_tc228_node1/stderr.log": "70e9cb0727df8d29e4ef084a718c8f4fcc8a023b6b54df30150d3fd252cbd51e",
+          "gem5_tc228_node1/stdout.log": "864e8ee2c397f122b5e0df3886fb1127550566d1c4ac25a1eabaf3fbde1aacab",
+          "launch_commands_tc228.jsonl": "287500ea7f1369a828fb361a514531d8c058074af204d970012e4f34c886208f",
+          "launch_manifest.txt": "79988b1b06a0cc87dd21cac449fd6aeeccd3aef344afef79fd60dce519a0d4e5",
+          "nsim_tc228.log": "3a416acf5943648c120ea82151b07b04a554b11b4faeb3751fb8b9d5c61e501a",
+          "process.json": "902a8fea17284876129734c65d867e1ea18b291a02fabf28080b1c984d6cbf6b",
+          "requested_launch.json": "f546a069a1cf734615d6382dece2a554e9e2444c75d3d7f86ae7b2a461b55e2a",
+          "result.json": "5b3bcd17dab710cf711a5a4651842160a7dd2eb5b023eda56bf1ae8add2bd223",
+          "runner_signals.log": "6f8d3251a489c5e9de843c54a7ec0cf54077391012d294ec65e458866cc7b22d",
+          "simout_tc228_node0.log": "7426681445ee75aea2d2994169ec8cc68f7ef8a4702348f80a1eabb6903764a9",
+          "simout_tc228_node1.log": "e5e2f3782be7df98faa8cacd154a5eb5ac702de81dabf1583d8b32f5bf029f93",
+          "supervisor_manifest_tc228.txt": "6bed0eeecbb00a559c64f7783dfd765c9fa6470195aa95e25478696c4ea11c2d",
+          "ubio_tc228_n0_s0/stderr.log": "1ee65516b52f5f6d7ec67256337332fb3fb442dc6af7ca6540887c5e9784bc71",
+          "ubio_tc228_n0_s0/stdout.log": "1552b8a8c8cdbf3c5fae20227653b9c107277b4a0875ea095fe66aca25298c65",
+          "ubio_tc228_n1_s0/stderr.log": "b8ca367663e98e49c83072795a7e4d3c9968e8dc612d6241d4d21c653d59106d",
+          "ubio_tc228_n1_s0/stdout.log": "ee4f5061b8492d2cf43459d020cc7b2896c837fd12f91dba2cfa4a6f8d7ca9dd",
+          "verify_tc228.log": "8d26392b38b8f007858e86bb4cb3e763272f574cc65019ce9aadc6506300d228"
+        },
+        "key": "2n1s/r01/tc228/ourcc",
+        "log_dir": "/campaign/results/2n1s/r01/tc228/ourcc/attempt-001",
+        "metrics": {
+          "remote_read": {
+            "counter_frequency_hz": 25165824,
+            "ns_per_operation": 1018.2460149129232,
+            "ticks_per_operation": 25.625
+          }
+        },
+        "occupancy_peak_per_hnf": {
+          "0:0": 4096,
+          "1:0": 4096
+        },
+        "order": "AB",
+        "pair": 1,
+        "pressure_fill_planes": [
+          0,
+          1
+        ],
+        "pressure_level": 100,
+        "primary_ns_per_operation": 1018.2460149129232,
+        "primary_weights": {
+          "remote_read": 1.0
+        },
+        "process_manifests": [
+          {
+            "argv": [
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=0",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "batch_rs": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "build_nodes": [
+              0
+            ],
+            "clear_profile": "lossless-oneway",
+            "component": "gem5-config",
+            "config_argv": [
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=0",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "cpu_model": "o3",
+            "cpus_per_node": 4,
+            "direct_fwd": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "ha_profile": "ubcc",
+            "l3_assoc": 16,
+            "l3_pressure_level": 100,
+            "l3_size": "256kB",
+            "metadata_bytes": 134217728,
+            "node": 0,
+            "num_nodes": 2,
+            "num_sockets": 1,
+            "process_argv": [
+              "/workspace/gem5/build/ARM/gem5.opt",
+              "--outdir=/workspace/build/runs/m3mt_1065d203420d14da2622/tc228/m5out/node0",
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=0",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "process_cpu_count": 4,
+            "sequencer_max_outstanding": 16,
+            "silent_upgrade": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "tc": 228,
+            "unknown_args": []
+          },
+          {
+            "argv": [
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=1",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "batch_rs": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "build_nodes": [
+              1
+            ],
+            "clear_profile": "lossless-oneway",
+            "component": "gem5-config",
+            "config_argv": [
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=1",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "cpu_model": "o3",
+            "cpus_per_node": 4,
+            "direct_fwd": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "ha_profile": "ubcc",
+            "l3_assoc": 16,
+            "l3_pressure_level": 100,
+            "l3_size": "256kB",
+            "metadata_bytes": 134217728,
+            "node": 1,
+            "num_nodes": 2,
+            "num_sockets": 1,
+            "process_argv": [
+              "/workspace/gem5/build/ARM/gem5.opt",
+              "--outdir=/workspace/build/runs/m3mt_1065d203420d14da2622/tc228/m5out/node1",
+              "/workspace/tests/e2e/test_e2e.py",
+              "--node-id=1",
+              "--num-nodes=2",
+              "--num-sockets=1",
+              "--workload=/workspace/build/runs/m3mt_1065d203420d14da2622/workload.elf",
+              "--tc=228",
+              "--l3-size=256kB",
+              "--l3-assoc=16",
+              "--silent-upgrade=0",
+              "--direct-fwd=0",
+              "--ubcc-batch-rs=0",
+              "--ubcc_metadata_size=134217728",
+              "--ha-profile=ubcc",
+              "--clear-profile=lossless-oneway",
+              "--cpu-model=o3",
+              "--sequencer-max-outstanding=16"
+            ],
+            "process_cpu_count": 4,
+            "sequencer_max_outstanding": 16,
+            "silent_upgrade": {
+              "effective": 0,
+              "env": "0",
+              "requested": 0
+            },
+            "tc": 228,
+            "unknown_args": []
+          }
+        ],
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner.py\", line 185, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner.py\", line 125, in audit\n    assert len(configs) == n, f'process manifest count {len(configs)} expected {n}'\nAssertionError: process manifest count 5 expected 2\n",
+        "return_code": 0,
+        "run_id": "m3mt_1065d203420d14da2622",
+        "seed": 239463,
+        "status": "PASS",
+        "tc": 228,
+        "topology": "2n1s",
+        "workload_elf_sha256": "e59b15340fd147312316cfcd009ac6987ebbcd6a6a858e2ed5f6b9f9760fbeec"
+      }
+    },
+    {
+      "file": "results/2n1s/r01/tc228/ourcc/attempt-001/result.json",
+      "value": {
+        "arm": "ourcc",
+        "elapsed_sec": 108.26604676246643,
+        "key": "2n1s/r01/tc228/ourcc",
+        "log_dir": "/campaign/results/2n1s/r01/tc228/ourcc/attempt-001",
+        "order": "AB",
+        "pair": 1,
+        "pressure_level": 100,
+        "reason": "Traceback (most recent call last):\n  File \"/campaign/runner.py\", line 185, in run\n    row.update(audit(job, out, runid, rc))\n  File \"/campaign/runner.py\", line 125, in audit\n    assert len(configs) == n, f'process manifest count {len(configs)} expected {n}'\nAssertionError: process manifest count 5 expected 2\n",
+        "return_code": 0,
+        "run_id": "m3mt_1065d203420d14da2622",
+        "seed": 239463,
+        "status": "FAIL",
+        "tc": 228,
+        "topology": "2n1s"
+      }
+    }
+  ]
+}

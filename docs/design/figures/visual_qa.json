@@ -425,9 +425,9 @@
       "name": "ubcc-metric1-capacity-latency",
       "kind": "chart",
       "width": 1735,
-      "height": 745,
+      "height": 711,
       "svg_report": {
-        "bytes": 18334,
+        "bytes": 16462,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -456,45 +456,12 @@
       "status": "PASS"
     },
     {
-      "name": "ubcc-metric2-reductions",
-      "kind": "chart",
-      "width": 1452,
-      "height": 656,
-      "svg_report": {
-        "bytes": 12797,
-        "font_declared": true,
-        "minimum_font_size": 10.0
-      },
-      "drawio_report": null,
-      "checks": {
-        "png_present": true,
-        "svg_present": true,
-        "minimum_resolution": true,
-        "release_aspect_ratio": true,
-        "approved_svg_font": true,
-        "minimum_svg_font_size": true,
-        "metadata_name": true,
-        "metadata_source_artifacts": true,
-        "metadata_generator": true,
-        "metadata_metric_definition": true,
-        "metadata_document_references": true,
-        "metadata_values": true,
-        "source_artifacts_are_relative": true,
-        "source_artifacts_exist": true,
-        "generator_exists": true,
-        "document_references_exist": true,
-        "no_stale_guest_latency_field": true,
-        "values_match_source_json": true
-      },
-      "status": "PASS"
-    },
-    {
       "name": "ubcc-ha-vi-comparison",
       "kind": "chart",
-      "width": 1436,
-      "height": 656,
+      "width": 1442,
+      "height": 689,
       "svg_report": {
-        "bytes": 8166,
+        "bytes": 8546,
         "font_declared": true,
         "minimum_font_size": 12.0
       },
@@ -588,45 +555,12 @@
       "status": "PASS"
     },
     {
-      "name": "ubcc-tc142-147-applications",
-      "kind": "chart",
-      "width": 1408,
-      "height": 642,
-      "svg_report": {
-        "bytes": 11991,
-        "font_declared": true,
-        "minimum_font_size": 10.0
-      },
-      "drawio_report": null,
-      "checks": {
-        "png_present": true,
-        "svg_present": true,
-        "minimum_resolution": true,
-        "release_aspect_ratio": true,
-        "approved_svg_font": true,
-        "minimum_svg_font_size": true,
-        "metadata_name": true,
-        "metadata_source_artifacts": true,
-        "metadata_generator": true,
-        "metadata_metric_definition": true,
-        "metadata_document_references": true,
-        "metadata_values": true,
-        "source_artifacts_are_relative": true,
-        "source_artifacts_exist": true,
-        "generator_exists": true,
-        "document_references_exist": true,
-        "no_stale_guest_latency_field": true,
-        "values_match_source_json": true
-      },
-      "status": "PASS"
-    },
-    {
       "name": "ubcc-metric3-per-tc-reductions",
       "kind": "chart",
-      "width": 1273,
-      "height": 792,
+      "width": 1374,
+      "height": 821,
       "svg_report": {
-        "bytes": 12645,
+        "bytes": 13188,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
@@ -656,10 +590,76 @@
     {
       "name": "ubcc-metric1-extension-matrix",
       "kind": "chart",
-      "width": 1815,
-      "height": 1008,
+      "width": 4109,
+      "height": 2493,
       "svg_report": {
-        "bytes": 24599,
+        "bytes": 123397,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-tc142-147-applications",
+      "kind": "chart",
+      "width": 2849,
+      "height": 1233,
+      "svg_report": {
+        "bytes": 60461,
+        "font_declared": true,
+        "minimum_font_size": 10.0
+      },
+      "drawio_report": null,
+      "checks": {
+        "png_present": true,
+        "svg_present": true,
+        "minimum_resolution": true,
+        "release_aspect_ratio": true,
+        "approved_svg_font": true,
+        "minimum_svg_font_size": true,
+        "metadata_name": true,
+        "metadata_source_artifacts": true,
+        "metadata_generator": true,
+        "metadata_metric_definition": true,
+        "metadata_document_references": true,
+        "metadata_values": true,
+        "source_artifacts_are_relative": true,
+        "source_artifacts_exist": true,
+        "generator_exists": true,
+        "document_references_exist": true,
+        "no_stale_guest_latency_field": true,
+        "values_match_source_json": true
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "ubcc-metric2-reductions",
+      "kind": "chart",
+      "width": 1606,
+      "height": 747,
+      "svg_report": {
+        "bytes": 17761,
         "font_declared": true,
         "minimum_font_size": 10.0
       },
