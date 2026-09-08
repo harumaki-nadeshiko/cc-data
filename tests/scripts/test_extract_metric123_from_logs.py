@@ -83,6 +83,15 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue(all(item["metrics"]["capacity"]["resident_capacity"] == 100
                             for item in resolved))
 
+    def test_metric1_canonical_stderr_preserves_identical_real_events(self):
+        root = self.root / "outer"
+        line = self.outer(12000, 7)
+        self.write(root / "gem5_tc131_node0/stderr.log", line)
+        self.write(root / "gem5_tc131_node1/stderr.log", line)
+        parsed = MOD.metric1_outer_latency(root)
+        self.assertEqual(parsed["samples"], 2)
+        self.assertEqual(parsed["mean_ns"], 12.0)
+
     def test_process_testcase_hint_is_optional_but_conflicts_reject(self):
         run = self.make_m1_run("tc-hint", layout="recognized")
         sim = pathlib.Path(run["simulator_log_dir"])
@@ -551,6 +560,38 @@ class ExtractMetric123Test(unittest.TestCase):
         self.assertTrue((self.root / "report/metric_matrix_standard.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_all.tsv").is_file())
         self.assertTrue((self.root / "report/metric_matrix_extension.tsv").is_file())
+        self.assertTrue((self.root / "report/publication_metrics.json").is_file())
+
+    def test_publication_view_is_path_independent_and_definition_tagged(self):
+        report = {
+            "metric1": {"status": "PASS", "comparisons": [{
+                "repetition": "r1", "capacity_ratio": 1.6,
+                "naive_effective_unique": 100, "spill_effective_unique": 160,
+                "naive_resident_capacity": 100, "spill_resident_capacity": 90,
+                "ideal_resident_capacity": 1000, "spill_outer_mean_ns": 12.0,
+                "ideal_outer_mean_ns": 10.0, "outer_delta_ns": 2.0,
+                "outer_delta_cycles": 4.0,
+            }]},
+            "metric2": {"status": "PASS", "aggregate_reduction_pct": 20.0,
+                        "cases": [{"tc": 135, "means_ns": {"naive": 1000.0,
+                                                             "spill-noopt": 900.0,
+                                                             "optimized": 800.0},
+                                   "optimized_reduction_pct": 20.0,
+                                   "applicable": True}]},
+            "metric3": {"status": "PASS", "primary_values": [{"tc": 228,
+                         "ourcc_mean_ticks": 8.0, "ha_vi_mean_ticks": 10.0}],
+                        "aggregates": [{"name": "core_equal_weight",
+                         "ourcc_ticks_per_operation": 8.0,
+                         "ha_vi_ticks_per_operation": 10.0,
+                         "ourcc_reduction_pct": 20.0, "delta_ticks": 2.0,
+                         "status": "PASS"}]},
+        }
+        left = MOD.publication_view(dict(report, manifest="/left/archive/manifest.json"))
+        right = MOD.publication_view(dict(report, manifest="/right/archive/manifest.json"))
+        self.assertEqual(left, right)
+        self.assertEqual(left["metric_definitions_version"], "metric123-publication-v1")
+        self.assertNotIn("/left", json.dumps(left))
+        self.assertEqual(left["metric3"]["groups"][0]["scope"], "core")
 
     def test_incremental_incomplete_requirements_lists_missing_slots(self):
         requirements = {"metric1": {"repetitions": []},

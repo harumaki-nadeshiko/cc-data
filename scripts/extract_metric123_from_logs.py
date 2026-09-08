@@ -13,6 +13,7 @@ import json
 import pathlib
 import re
 import statistics
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict
@@ -136,17 +137,13 @@ def metric1_outer_latency(root):
                         for p in root.rglob(pattern) if p.is_file()}, key=str)
     candidates = preferred or [p.resolve() for p in all_log_files(root)
                                if p.suffix in (".log", ".gz")]
-    first_source, rows = {}, []
+    rows = []
     for path in sorted(candidates, key=str):
         with open_text(path) as stream:
             for line_no, line in enumerate(stream, 1):
                 match = OUTER_RE.search(line)
                 if not match:
                     continue
-                exact_line = line.rstrip("\r\n")
-                if exact_line in first_source and first_source[exact_line] != str(path):
-                    continue
-                first_source.setdefault(exact_line, str(path))
                 rows.append({"file": str(path), "line": line_no,
                              "latency_ps": int(match.group(1))})
     values = sorted(row["latency_ps"] for row in rows)
@@ -981,6 +978,11 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
             guest_values = {role: m1_by[rep, role]["metrics"].get("mean_ns_per_operation")
                             for role in ("naive", "spill", "ideal")}
             row = {"repetition": rep, "capacity_ratio": ratio,
+                   "naive_effective_unique": naive["metrics"]["capacity"]["effective_unique"],
+                   "spill_effective_unique": spill["metrics"]["capacity"]["effective_unique"],
+                   "naive_resident_capacity": naive["metrics"]["capacity"]["resident_capacity"],
+                   "spill_resident_capacity": spill["metrics"]["capacity"]["resident_capacity"],
+                   "ideal_resident_capacity": ideal["metrics"]["capacity"]["resident_capacity"],
                    "spill_outer_samples": spill_outer["samples"],
                    "ideal_outer_samples": ideal_outer["samples"],
                    "spill_outer_mean_ns": spill_outer["mean_ns"],
@@ -1184,8 +1186,14 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     aggregates = []
     for name, weights in M3_AGGREGATES.items():
         if all(key in by_summary for key in weights):
-            delta = sum(weight * by_summary[key]["delta_mean_ticks"] for key, weight in weights.items())
-            aggregates.append({"name": name, "delta_ticks": delta,
+            ourcc = sum(weight * by_summary[key]["ourcc_mean_ticks"] for key, weight in weights.items())
+            havi = sum(weight * by_summary[key]["ha_vi_mean_ticks"] for key, weight in weights.items())
+            delta = havi - ourcc
+            aggregates.append({"name": name,
+                               "ourcc_ticks_per_operation": ourcc,
+                               "ha_vi_ticks_per_operation": havi,
+                               "ourcc_reduction_pct": 100.0 * (1.0 - ourcc / havi),
+                               "delta_ticks": delta,
                                "status": "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)" if delta > 0 else "FAIL (EXECUTABLE-REFERENCE-MODEL SCOPE)"})
             matrix.append({"metric": "Metric3", "level": "aggregate", "identity": name, "tc": "ALL",
                            "value": delta, "unit": "ticks/op", "status": aggregates[-1]["status"],
@@ -1202,6 +1210,13 @@ def aggregate_results(data, resolved, ingestion_issues, output_dir=None,
     failed = m1_status == "FAIL" or m2_status == "FAIL" or m3_status.startswith("FAIL")
     overall, code = (("INVALID", 2) if has_errors else ("INCOMPLETE", 3) if incomplete else ("FAIL", 1) if failed else ("PASS", 0))
     report = {"schema_version": 1, "manifest": str(manifest) if manifest is not None else None,
+              "output_semantics": {
+                  "report.json": "formal contract aggregation plus explicitly separated descriptive views",
+                  "resolved_runs.json": "normalized per-run evidence; not a publication aggregate",
+                  "metric_matrix_standard.tsv": "formal contract rows",
+                  "metric_matrix_all.tsv": "descriptive rows across standard and extension runs",
+                  "publication_metrics.json": "path-independent canonical input for reports and figures",
+              },
               "correctness_policy": data.get("correctness_policy", "strict"),
               "overall_status": overall, "exit_code": code,
               "metric1": {"status": m1_status, "definition": {
@@ -1582,10 +1597,107 @@ def write_tsv(path, rows, fields):
         writer.writeheader(); writer.writerows(rows)
 
 
-def write_outputs(output_dir, report, resolved, matrix, per_run, issues):
+def publication_view(report, supplement=None):
+    """Return the path-independent, definition-tagged publication data view."""
+    supplement = supplement or {}
+    comparisons = report.get("metric1", {}).get("comparisons", [])
+    capacity_ratios = [row["capacity_ratio"] for row in comparisons]
+    spill_outer = [row["spill_outer_mean_ns"] for row in comparisons]
+    ideal_outer = [row["ideal_outer_mean_ns"] for row in comparisons]
+    delta_outer = [row["outer_delta_ns"] for row in comparisons]
+
+    metric2_rows = []
+    by_tc = defaultdict(list)
+    for row in report.get("metric2", {}).get("cases", []):
+        by_tc[int(row["tc"])].append(row)
+    for tc, rows in sorted(by_tc.items()):
+        means = {profile: statistics.mean(row["means_ns"][profile] for row in rows)
+                 for profile in PROFILES}
+        metric2_rows.append({
+            "case": f"TC{tc}",
+            "naive_mean_ns": means["naive"],
+            "spill_noopt_mean_ns": means["spill-noopt"],
+            "optimized_mean_ns": means["optimized"],
+            "optimized_reduction_pct": statistics.mean(
+                row["optimized_reduction_pct"] for row in rows),
+            "applicable": all(row["applicable"] for row in rows),
+        })
+
+    primary = []
+    for row in report.get("metric3", {}).get("primary_values", []):
+        havi = row["ha_vi_mean_ticks"]
+        ourcc = row["ourcc_mean_ticks"]
+        primary.append({
+            "case": f"TC{row['tc']}",
+            "ourcc_ticks_per_operation": ourcc,
+            "ha_vi_ticks_per_operation": havi,
+            "delta_ticks": havi - ourcc,
+            "ourcc_reduction_pct": 100.0 * (1.0 - ourcc / havi),
+        })
+    groups = []
+    for row in report.get("metric3", {}).get("aggregates", []):
+        scope = {"core_equal_weight": "core",
+                 "representative_equal_weight": "representative"}.get(
+                     row["name"], row["name"])
+        groups.append({
+            "pressure_level": 100,
+            "scope": scope,
+            "ourcc_ticks_per_operation": row.get("ourcc_ticks_per_operation"),
+            "ha_vi_ticks_per_operation": row.get("ha_vi_ticks_per_operation"),
+            "delta_ticks": row["delta_ticks"],
+            "ourcc_reduction_pct": row.get("ourcc_reduction_pct"),
+            "status": row["status"],
+        })
+
+    metric1 = {
+        "definition_id": "metric1-capacity-and-completed-outer-v1",
+        "status": report.get("metric1", {}).get("status"),
+        "capacity_ratio": statistics.mean(capacity_ratios) if capacity_ratios else None,
+        "capacity_increase_pct": ((statistics.mean(capacity_ratios) - 1.0) * 100.0
+                                  if capacity_ratios else None),
+        "outer_delta_mean_ns": statistics.mean(delta_outer) if delta_outer else None,
+        "outer_delta_mean_cycles_2ghz": (statistics.mean(delta_outer) * 2.0
+                                         if delta_outer else None),
+        "spill_outer_mean_ns": statistics.mean(spill_outer) if spill_outer else None,
+        "ideal_outer_mean_ns": statistics.mean(ideal_outer) if ideal_outer else None,
+        "repetitions": comparisons,
+    }
+    if comparisons:
+        metric1["naive_resident_capacity"] = comparisons[0]["naive_resident_capacity"]
+        metric1["spill_resident_capacity"] = comparisons[0]["spill_resident_capacity"]
+        metric1["ideal_resident_capacity"] = comparisons[0]["ideal_resident_capacity"]
+
+    publication = {
+        "schema_version": 1,
+        "metric_definitions_version": "metric123-publication-v1",
+        "metric1": metric1,
+        "metric2": {
+            "definition_id": "metric2-applicable-testcase-equal-weight-v1",
+            "status": report.get("metric2", {}).get("status"),
+            "cases": metric2_rows,
+            "applicable_equal_weight_mean_reduction_pct": report.get("metric2", {}).get(
+                "aggregate_reduction_pct"),
+        },
+        "metric3": {
+            "definition_id": "metric3-frozen-primary-and-tier-weights-v1",
+            "status": report.get("metric3", {}).get("status"),
+            "pressure_level": 100,
+            "groups": groups,
+            "per_testcase": primary,
+        },
+        "charts": copy.deepcopy(supplement.get("charts", {})),
+    }
+    return publication
+
+
+def write_outputs(output_dir, report, resolved, matrix, per_run, issues,
+                  publication_supplement=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     (output_dir / "resolved_runs.json").write_text(json.dumps(resolved, indent=2, sort_keys=True) + "\n")
+    (output_dir / "publication_metrics.json").write_text(
+        json.dumps(publication_view(report, publication_supplement), indent=2,
+                   sort_keys=True) + "\n")
     matrix_fields = ["metric", "level", "identity", "tc", "value", "unit", "status", "detail"]
     write_tsv(output_dir / "metric_matrix.tsv", matrix, matrix_fields)
     write_tsv(output_dir / "metric_matrix_standard.tsv", matrix, matrix_fields)
@@ -1620,8 +1732,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=pathlib.Path)
     parser.add_argument("--output-dir", default=pathlib.Path("output"), type=pathlib.Path)
+    parser.add_argument("--publication-supplement", type=pathlib.Path,
+                        help="optional canonical chart/support data merged into publication_metrics.json")
+    parser.add_argument("--render-figures", action="store_true",
+                        help="render publication charts after successful extraction")
+    parser.add_argument("--figure-output-dir", type=pathlib.Path,
+                        help="figure destination; defaults to OUTPUT_DIR/figures")
     args = parser.parse_args(argv)
     manifest, output = args.manifest.expanduser().resolve(), args.output_dir.expanduser().resolve()
+    supplement = None
+    if args.publication_supplement is not None:
+        supplement = json.loads(args.publication_supplement.expanduser().read_text(encoding="utf-8"))
     try:
         report, resolved, matrix, per_run, issues, code = analyze(manifest, output)
     except (ExtractError, OSError, ValueError) as error:
@@ -1630,7 +1751,15 @@ def main(argv=None):
                   "metric3": {"status": "INVALID", "executable_reference_model": True},
                   "issues": [{"severity": "ERROR", "code": "MANIFEST_INVALID", "run_id": "", "message": str(error)}]}
         resolved, matrix, per_run, issues, code = [], [], [], report["issues"], 2
-    write_outputs(output, report, resolved, matrix, per_run, issues)
+    write_outputs(output, report, resolved, matrix, per_run, issues, supplement)
+    if args.render_figures and code == 0:
+        figure_output = (args.figure_output_dir.expanduser().resolve()
+                         if args.figure_output_dir else output / "figures")
+        subprocess.run([
+            sys.executable, str(pathlib.Path(__file__).with_name("generate_delivery_figures.py")),
+            "--charts-only", "--publication-json", str(output / "publication_metrics.json"),
+            "--out-dir", str(figure_output),
+        ], check=True)
     print(report["overall_status"])
     return code
 

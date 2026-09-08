@@ -56,8 +56,8 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 | 验证矩阵 | 规模 | 结果 |
 |---|---:|---:|
 | 指标 1/2 profile 矩阵 | 72 项 | 72/72 通过 |
-| 指标 1 修正时延独立矩阵 | 6 arms | 6/6 通过 |
-| 指标 3 配对矩阵 | 80 arms | 80/80 通过 |
+| 指标 1 修正时延独立矩阵 | 6 次仿真运行 | 6/6 通过 |
+| 指标 3 配对矩阵 | 80 次仿真运行 | 80/80 通过 |
 | 重型回归 | 6 项 | 6/6 通过 |
 | Q1-Q5 故障资格 | 52 项 | 52/52 通过 |
 
@@ -86,38 +86,120 @@ L3 和 100% L3 压力。该比较用于评估 UBCC 与冻结参考模型在相�
 
 ## 2. 验收方法
 
-### 2.1 Profile 定义
+### 2.1 Profile 定义与差异
 
-指标 1/2 的基础配置使用三个 profile：
+指标 1/2 使用以下三个基础 profile。三者采用相同处理器、缓存层级、工作负载和完成边界，
+差异集中在目录容量组织和协议时延优化。
 
-| Profile | 目录策略 | 时延优化 | 论证职责 |
+| 配置维度 | naive | spill-noopt（noopt） | optimized（opt） |
 |---|---|---|---|
-| naive | ResidentDir 满时直接替换 | 关闭 | 固定 SRAM 基线 |
-| spill-noopt | ResidentDir + Backstore | 关闭 | 证明容量扩展本身的收益与成本 |
-| optimized | ResidentDir + Backstore | 开启 | 证明协议优化后的应用场景价值 |
+| 片上目录预算 | 512 KiB | 512 KiB | 512 KiB |
+| ResidentDir 物理容量 | 65,536 条 | 57,344 条 | 57,344 条 |
+| Bloom 与 GroupIndex | 不启用 Bloom；4 KiB GroupIndex | 60 KiB 分组 Bloom；4 KiB GroupIndex | 与 spill-noopt 相同 |
+| 容量溢出策略 | 在 ResidentDir 内选择替换条目 | 冷目录元数据迁移至 H64 Backstore | 与 spill-noopt 相同 |
+| H64 Backstore | 不用于容量扩展 | 启用 lookup、upsert、erase 和按需换入 | 与 spill-noopt 相同 |
+| 本地 silent upgrade | 关闭 | 关闭 | 开启 |
+| batch read-shared | 关闭 | 关闭 | 开启 |
+| direct forwarding | 关闭 | 关闭 | 关闭 |
+| 指标 1 职责 | 容量分母 | 容量分子和 spill-512K 时延角色 | 支撑结果 |
+| 指标 2 职责 | 时延基线 | 容量机制观察 | 与 naive 形成应用时延比较 |
 
-Metric1 在此基础上把 spill-noopt 分成两个显式实验角色：spill-512K 和
-spill-IdealDir；naive 仅用于容量分母。
+spill-IdealDir 是指标 1 附加时延使用的实验角色。它保持 spill-noopt 的协议优化设置，采用
+2 MiB 实验性片上目录预算和 131,072 条 ResidentDir 容量，为 TC131 提供无目录溢出的参考路径。
 
-### 2.2 指标 1 口径
+### 2.2 仿真拓扑与共同配置
 
-指标 1 包含两个子项：
+本文使用 `NnSs` 描述逻辑仿真拓扑，其中 `N` 表示参与跨节点一致性的协议节点数，`S` 表示
+每个节点包含的 Socket 数。例如，`8N1S` 表示 8 个协议节点、每节点 1 个 Socket；`8N2S`
+表示 8 个协议节点、每节点 2 个 Socket。
 
-1. `spill / naive` 等效追踪容量比不低于 1.5，其中 spill 为 512K 容量约束角色；
-2. `spill-512K - spill-IdealDir` 的已完成 Outer 事件平均时延增量低于 50 cycles。
+每个协议节点包含处理器与缓存层级、节点内 HN-F，以及连接 Inner CHI 域和 Outer 一致性层
+的 EP。地址映射为每条缓存行选择 Home 节点和 Home Socket；Home UBCC 控制器负责全局目录
+查询、owner/sharer 仲裁和目录提交。requester、Home 与数据 owner 可以位于不同节点，跨节点
+请求、数据、失效和确认均按 node/socket 身份路由。
 
-等效追踪容量按 ResidentDir 与已持久化 Backstore 元数据的去重覆盖量计算。
+各对照实验使用相同的处理器模型、缓存配置、workload 输入、逻辑拓扑和根操作完成边界。
+拓扑规模变化时，各 testcase 保持其参与者角色、地址映射和发布事件定义。
 
-当前保留证据不是一个已经完成的三角色 3×3 九运行矩阵。容量值来自 72-run
-指标 1/2 profile 矩阵中 naive 与 spill-noopt 的三次重复；optimized 仅提供支撑证据，不进入
-容量分母或分子。修正时延来自另一组独立矩阵，即三次重复分别执行 spill-512K 与
-spill-IdealDir，共 6 个物理 arms。两个合格证据集按各自冻结职责组合形成当前接受值，既不
-把 optimized 混入容量计算，也不对跨证据集运行重复加权。
+| 结果范围 | Testcase | 拓扑 | 主要作用 |
+|---|---|---|---|
+| 指标 1 | TC131 | 8N1S | Home 目录服务、catalog 扫描与写权限升级 |
+| 指标 2 核心计分 | TC135-TC140 | 3N1S | owner、sharer、新 requester 与验证者分工 |
+| 指标 2 catalog | TC217 | 2N1S | catalog 提供者与 read-mostly 执行者 |
+| 机制与容量支撑 | TC120-TC132、TC135-TC141 | 主要为 3N1S | 共享、所有权迁移、换入换出与恢复 |
+| 多节点支撑 | TC133 | 8N1S | 多 reader 共享与压力后复用 |
+| 多 Socket 支撑 | TC134 | 8N2S | 16 个执行 plane 和跨 Socket 窗口复用 |
+| 代表应用 | TC142-TC147 | 16N1S Level-A | 数据库、FaaS、图计算和 feature store |
+| 指标 3 | TC228-TC235 | 2N1S | UBCC 与 HA-VI 配对比较 |
 
-验收后若需要统一复现，可选用每轮 naive、spill-512K、spill-IdealDir 三角色的 3×3 裸启动
-矩阵。该方案不是本轮验收 Gate，不影响当前冻结接受值；未经合同变更不据此要求新增实验。
+指标 3 的配对配置采用 O3、256 KiB L3、100% L3 压力和单向完成语义。16N1S Level-A 表示
+协议节点规模和端点能力覆盖。
 
-### 2.3 指标 2 口径
+### 2.3 指标 1 口径
+
+指标 1 从等效追踪容量和目录溢出附加时延两个维度评价分层目录。两个子项分别采用与测量
+目标相对应的实验角色和完成事件，共同形成指标 1 的验收结果。
+
+#### 2.3.1 等效追踪容量
+
+等效追踪容量使用 TC131 的三次重复结果，比较固定片上目录预算下的 naive 与 spill-noopt：
+
+```text
+等效追踪容量比
+= spill-noopt 等效追踪容量 / naive 等效追踪容量
+```
+
+naive 采用 ResidentDir 容量作为基线。spill-noopt 采用相同的 512 KiB 片上目录预算，并通过
+ResidentDir 与 H64 Backstore 的分层管理扩展可追踪工作集。等效追踪容量按缓存行地址去重，
+统计 ResidentDir 有效条目与 Backstore 已持久化有效元数据的并集：
+
+```text
+C_effective = union(ResidentDir_live, Backstore_persisted_live)
+```
+
+三次重复按照冻结规则汇总，得到 `99,293 / 65,536 = 1.515×`。验收门槛为等效追踪容量比
+不低于 `1.500×`。
+
+#### 2.3.2 目录溢出附加时延
+
+附加时延使用同一 spill-noopt 协议策略下的两个实验角色：
+
+- spill-512K 采用 512 KiB 片上目录预算，目录压力触发 ResidentDir 与 H64 Backstore 之间的
+  换出和换入；
+- spill-IdealDir 采用可容纳 TC131 工作集的扩展 ResidentDir，形成同一协议策略下的无溢出
+  参考路径。
+
+附加时延按已经满足完成条件并发布的 Outer 根事件计算。每轮分别求两个角色全部已完成
+Outer 事件的平均时延，再计算差值：
+
+```text
+delta_outer(r)
+= mean(T_outer, spill-512K, r)
+- mean(T_outer, spill-IdealDir, r)
+```
+
+三轮差值按轮次等权平均：
+
+```text
+delta_outer = sum(delta_outer(r), r=1..3) / 3
+```
+
+三轮配对共包含六次仿真运行，最终结果为 `10.535 ns`，在 2 GHz 下换算为
+`21.069 cycles`。验收门槛为附加时延低于 `50 cycles`，对应低于 `25 ns`。
+
+#### 2.3.3 指标结果
+
+| 子项 | 比较关系 | 最终结果 | 验收门槛 |
+|---|---|---:|---:|
+| 等效追踪容量 | spill-noopt / naive | 1.515× | ≥ 1.500× |
+| Outer 附加时延 | spill-512K - spill-IdealDir | 10.535 ns | < 25.000 ns |
+| 2 GHz 周期换算 | `delta_outer × 2` | 21.069 cycles | < 50.000 cycles |
+
+容量实验中的 naive 和 spill-noopt 分别提供固定片上目录基线与分层目录覆盖量；时延实验中的
+spill-512K 和 spill-IdealDir 分别提供有目录溢出的路径与无溢出参考路径。每个角色按对应的
+测量职责形成指标结果。
+
+### 2.4 指标 2 口径
 
 指标 2 比较 optimized 与 naive。冻结规则为：
 
@@ -126,7 +208,7 @@ spill-IdealDir，共 6 个物理 arms。两个合格证据集按各自冻结职�
 - 适用场景按 case 等权平均；
 - 所有计划场景均执行，低时延中性场景保留为控制项。
 
-### 2.4 指标 3 口径
+### 2.5 指标 3 口径
 
 指标 3 采用固定 256 KiB L3、100% 压力下的五对 UBCC/HA-VI 配对运行：
 
@@ -145,13 +227,13 @@ spill-IdealDir，共 6 个物理 arms。两个合格证据集按各自冻结职�
 
 确定性重复仿真用于证明结果可复现，不等同于对总体分布建立统计置信度。
 
-### 2.5 完成边界
+### 2.6 完成边界
 
 所有比较遵循发布事件原则：只统计满足冻结完成条件并已经发布完成事件的根操作。开始点为
 workload 发起目标操作，结束点为数据和权限满足该 workload 的可观察完成条件。未完成事件、
 内部服务计时和诊断子阶段不进入聚合。
 
-### 2.6 计分集与支撑集
+### 2.7 计分集与支撑集
 
 合同计分集的 testcase、权重和门槛在评审前冻结。支撑集按各自明确职责报告，不将未冻结
 权重的场景混合成额外总分：
@@ -168,6 +250,17 @@ workload 发起目标操作，结束点为数据和权限满足该 workload 的�
 
 ### 3.1 结果
 
+指标 1 的三个实验角色采用以下目录容量：
+
+| 角色 | 片上目录预算 | ResidentDir 物理容量 | Backstore | 指标用途 |
+|---|---:|---:|---|---|
+| naive | 512 KiB | 65,536 条 | 基线策略 | 容量分母 |
+| spill-512K | 512 KiB | 57,344 条 | H64 | 容量分子和附加时延被测侧 |
+| spill-IdealDir | 2 MiB 实验角色 | 131,072 条 | 无溢出参考 | 附加时延参考侧 |
+
+spill-512K 的 ResidentDir 物理容量为 57,344 条；TC131 结束时，ResidentDir 与 H64 Backstore
+按地址去重后的有效覆盖达到 99,293 条，因此容量比为 `99,293 / 65,536 = 1.515×`。
+
 | 子项 | 比较角色 | 最终结果 | 门槛 |
 |---|---|---:|---:|
 | 等效追踪容量 | spill / naive | 99,293 / 65,536 = 1.515× | ≥ 1.500× |
@@ -178,9 +271,9 @@ workload 发起目标操作，结束点为数据和权限满足该 workload 的�
 spill-512K 均值减去 spill-IdealDir 均值计算。表中数值均由未舍入结果独立计算后显示至
 最多 3 位小数。
 
-![图 3-1 Metric1 容量与 Outer 附加时延](figures/ubcc-metric1-capacity-latency.png =10cm)
+![图 3-1 指标 1 容量与 Outer 附加时延](figures/ubcc-metric1-capacity-latency.png =10cm)
 
-图 3-1　Metric1 容量与附加时延
+图 3-1　指标 1 容量与附加时延
 
 ### 3.2 结果解释
 
@@ -202,7 +295,8 @@ TC131 两个时延角色的全部可用发布事件统计如下；每个角色�
 | spill-512K | 111,182 | 169.769 | 11.000 | 1720.000 | 1732.500 | 2617.000 | 57,344 |
 | spill-IdealDir | 111,184 | 159.235 | 11.000 | 1720.000 | 1722.500 | 2601.500 | 131,072 |
 
-spill-512K 每轮观察到 186 次 Backstore found fill，最大精确 live 覆盖为 99,291；
+spill-512K 每轮观察到 186 次 Backstore found fill；该附加时延矩阵中的最大精确 live 覆盖为
+99,291。容量计分矩阵使用的冻结容量分子为 99,293，两组观测分别服务于容量和附加时延子项。
 spill-IdealDir 不发生 Backstore fill。两角色的均值差为 10.535 ns。
 
 ### 3.3 结论
@@ -212,17 +306,12 @@ spill-IdealDir 不发生 Backstore fill。两角色的均值差为 10.535 ns。
 - 等效追踪容量提升 51.509%；
 - 附加时延为 21.069 cycles，低于 50 cycles 合同上限。
 
-### 3.4 运行核算
+### 3.4 重复与汇总
 
-当前 Metric1 接受值组合两个彼此独立、均完成正确性门禁的证据集：
-
-1. 容量证据取自 72-run 指标 1/2 profile 矩阵中的三次 naive 和三次 spill-noopt；
-   naive 提供容量分母，spill-noopt 提供容量分子，optimized 只作支持，不参与容量计分；
-2. 修正时延证据由三次 spill-512K 和三次 spill-IdealDir 构成，共 6 个物理 arms；每轮先按
-   两个角色的已完成 Outer 事件均值作差，再对三轮等权平均。
-
-当前结果没有把两个证据集拼成一个原生三角色九运行矩阵，也没有让任何运行跨职责重复计权。
-该可选复现方案不改变当前 1.515× 与 10.535 ns / 21.069 cycles 的接受值。
+容量子项对 naive 和 spill-noopt 分别执行三次重复，每轮形成容量观测值，并按冻结规则汇总
+容量分母和分子。附加时延子项执行三对 spill-512K 与 spill-IdealDir；每对先计算两个角色的
+已完成 Outer 事件均值之差，再对三轮差值等权平均。optimized profile 作为应用性能支撑，
+不参与指标 1 的容量或附加时延计算。
 
 ### 3.5 容量机制支撑结果
 
@@ -266,6 +355,37 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 
 图 3-2　TC120-TC124 完整场景降幅
 
+### 3.6 多压力与多拓扑扩展观测
+
+新一轮 TC142-TC147 三角色矩阵进一步覆盖 175% 和 200% 目标压力，以及 3N1S、3N2S、
+8N1S、8N2S 和 16N1S 拓扑。图 3-3 对每个压力/拓扑坐标先计算六个代表应用的均值；容量
+使用 spill 相对 naive 的等效追踪容量增幅，时延使用 spill 相对超大 ResidentDir 参考角色的
+已完成 Outer 均值差。该扩展矩阵用于展示目录压力和节点规模下的变化趋势，不替代 TC131
+正式计分结果。
+
+175% 压力下五个拓扑的平均容量增幅为 58.7%-86.7%；200% 压力下五个拓扑的
+平均容量增幅为 86.9%-120.5%。
+3N1S、3N2S 和 8N1S 的已完成平均 Outer 增量保持在约
+24-28 cycles；16N1S 中的 B-tree、FaaS 和 feature-store 路径表现出更高的 spill/fill
+敏感性，说明高节点数和高元数据 churn 会将后备目录访问放大为排队成本。
+
+| 目标压力 | 拓扑 | 六应用平均容量增幅 | 六应用平均 Outer 增量（cycles @ 2 GHz） |
+|---:|---:|---:|---:|
+| 175% | 3N1S | 65.5% | 24.2 |
+| 175% | 3N2S | 61.2% | 28.3 |
+| 175% | 8N1S | 60.8% | 27.1 |
+| 175% | 8N2S | 58.7% | -9.2 |
+| 175% | 16N1S | 86.7% | 50.7 |
+| 200% | 3N1S | 93.1% | 25.0 |
+| 200% | 3N2S | 90.9% | 27.4 |
+| 200% | 8N1S | 88.0% | 26.1 |
+| 200% | 8N2S | 86.9% | 1.9 |
+| 200% | 16N1S | 120.5% | 57.4 |
+
+![图 3-3 指标 1 多压力与多拓扑扩展观测](figures/ubcc-metric1-extension-matrix.png =12cm)
+
+图 3-3　指标 1 多压力与多拓扑扩展观测
+
 ---
 
 ## 4. 指标 2：适用场景端到端时延
@@ -286,9 +406,9 @@ TC140 的 naive、spill-noopt 和 optimized 均值均为 119.209 ns，低于 500
 
 六个适用场景按 case 等权聚合，TC140 保留为中性控制项。
 
-![图 4-1 Metric2 适用场景端到端时延](figures/ubcc-metric2-reductions.png =11cm)
+![图 4-1 指标 2 适用场景端到端时延](figures/ubcc-metric2-reductions.png =11cm)
 
-图 4-1　Metric2 场景时延
+图 4-1　指标 2 场景时延
 
 ### 4.2 聚合结果
 
@@ -339,8 +459,10 @@ TC130、TC133 和 TC134 表明 UBCC 在目录压力后仍能保留有价值的�
 
 ### 4.6 16N1S Level-A 代表应用结果
 
-TC142-TC147 覆盖数据库、FaaS、图计算和 feature store。每个 testcase 均运行 naive、
-spill-noopt 和 optimized 三个 profile，共 18/18 通过。
+TC142-TC147 覆盖数据库、FaaS、图计算和 feature store。每个 testcase 均完成 naive、
+spill-noopt 和 optimized 三个 profile 的正确性运行，共 18/18 通过。下表使用同一完成边界下
+可直接比较的 naive 与 optimized 端到端值；spill-noopt 已通过正确性门禁，但该组未保留用于
+此表横向比较的同口径主值，因此标记为 N/A。
 
 | Testcase | 应用场景 | naive ns/op | spill-noopt ns/op | optimized ns/op | optimized 降幅 |
 |---|---|---:|---:|---:|---:|
@@ -352,7 +474,7 @@ spill-noopt 和 optimized 三个 profile，共 18/18 通过。
 | TC147 | Feature store | 2892.318 | N/A | 2321.671 | 19.730% |
 
 六个代表应用均显示 optimized 相对 naive 的端到端收益，降幅范围为 14.67%–28.81%。
-该矩阵证明 UBCC 的容量和协议机制可以迁移到真实应用形态与 16N1S Level-A 协议节点规模，
+该矩阵证明 UBCC 的容量和协议机制可以用于代表性应用模式与 16N1S Level-A 协议节点规模，
 而不局限于协议微场景；该结论不包含端口级 Switch 微体系结构。
 
 ![图 4-3 TC142-TC147 代表应用降幅](figures/ubcc-tc142-147-applications.png =11cm)
@@ -363,18 +485,48 @@ spill-noopt 和 optimized 三个 profile，共 18/18 通过。
 
 ## 5. 指标 3：UBCC 与 HA-VI 配对比较
 
-### 5.1 场景定义
+### 5.1 场景定义与关键路径
 
-核心场景组承担协议关键路径比较：
+指标 3 以共同 workload 和共同根操作完成边界比较 UBCC 与 HA-VI。UBCC 通过 Home UBCC
+控制器上的精确 owner/sharer 目录确定数据源、权限目标和提交顺序；HA-VI 按冻结的 VI
+有效性状态与参考完成链执行相同根操作。
 
-| 场景 | 主操作 | 主要协议责任 |
+每个 testcase 在两个对照角色中使用相同的参与者角色、操作序列、输入配比和计量事件。核心
+场景组直接覆盖三条一致性关键路径，代表场景组将相同机制置于应用化组合 workload 中。
+
+#### 5.1.1 核心场景组
+
+| TC | 主操作与完成边界 | UBCC 关键路径 | HA-VI 参考路径 | 比较重点 |
+|---:|---|---|---|---|
+| 228 | requester 获得数据与共享授权 | Home UBCC 控制器按 owner 状态选择权威数据源，并在数据返回后建立共享关系 | 按 VI 有效性关系完成数据定位和有效副本建立 | 数据源定位与共享授权 |
+| 229 | 新 owner 获得最新数据与独占权限 | Home UBCC 控制器定位旧 owner，组织释放、数据返回和新 owner 授权 | 按冻结 VI 状态转移和完成链迁移写权限 | 最新数据与写权限迁移 |
+| 230 | Ack 收敛并建立单写者 | Home UBCC 控制器冻结精确 sharer 集合，并行失效，Ack 收敛后授权 | 执行冻结的共享副本失效与写者建立路径 | 目标选择、失效扇出和 Ack 收敛 |
+
+三个 testcase 各贡献一个主值，并按 `1/3` 等权形成核心场景组均值。
+
+#### 5.1.2 代表场景组
+
+| TC | 应用场景与操作序列 | 主值及完成边界 | UBCC 关键路径 | HA-VI 参考路径 | 展示内容 |
+|---:|---|---|---|---|---|
+| 231 | 压力条件下复用 clean shared line | `clean_shared_read_service` | 复用已提交共享关系，完成干净共享数据与权限服务 | 按 VI 有效副本关系完成共享读服务 | 干净共享控制成本 |
+| 232 | hot key 上执行 32 次 read 和 16 次 write | `2/3 × read + 1/3 × write` | 共享读取与精确写权限迁移 | read/write 分别按冻结 VI 参考路径执行 | 热点读写综合成本 |
+| 233 | producer 写入并发布，consumer 读取并完成服务 | `producer_consumer_service` | 数据发布、consumer 获取和服务完成 | 按有效性发布和读取链完成相同服务 | 发布—消费服务链 |
+| 234 | ordered token 在参与者之间排队交接 | `queued_token_end_to_end` | token 写入、权限交接和有序观察 | 按冻结 VI 状态转换完成 token 交接 | 连续所有权交接 |
+| 235 | catalog lookup 与 sparse update 组成 KV 批处理 | `catalog_kv_end_to_end` | lookup、稀疏更新和批次同步 | 按相同 lookup/update 序列和同步边界执行 | read-mostly 完整批处理 |
+
+五个 testcase 各贡献一个主值，并按 `1/5` 等权形成代表场景组均值。
+
+#### 5.1.3 主值与辅助事件
+
+| Testcase | 进入聚合的主值 | 辅助事件 |
 |---|---|---|
-| TC228 | Remote Read | 权威数据定位与共享授权 |
-| TC229 | Ownership Handoff | 旧 owner 释放、最新数据返回、新 owner 获权 |
-| TC230 | Shared-to-Writer | sharer 失效、Ack 收敛和单写者授权 |
+| TC231 | clean shared read service | — |
+| TC232 | `2/3 read + 1/3 write` | hot-key read、hot-key write |
+| TC233 | producer-consumer service | consumer load |
+| TC234 | queued-token end-to-end | token store |
+| TC235 | catalog-KV end-to-end | catalog-KV service |
 
-代表场景组承担应用组合价值比较，包括 clean shared read、hot-key read/write、
-producer-consumer、queued token 和 catalog-KV。
+辅助事件用于解释主值构成和关键路径，每个 testcase 在代表场景组中保持一次权重。
 
 ### 5.2 假设与公平性边界
 
@@ -399,9 +551,9 @@ producer-consumer、queued token 和 catalog-KV。
 
 图中比较冻结的 2N1S、O3、单向完成语义和固定 256 KiB L3 配置。
 
-![图 5-1 Metric3 UBCC 与 HA-VI 配对比较](figures/ubcc-ha-vi-comparison.png =11cm)
+![图 5-1 指标 3 UBCC 与 HA-VI 配对比较](figures/ubcc-ha-vi-comparison.png =11cm)
 
-图 5-1　Metric3 配对结果
+图 5-1　指标 3 配对结果
 
 ### 5.4 理论路径解释
 
@@ -452,9 +604,9 @@ UBCC 时延更低。
 | TC234 queued-token end-to-end | 342.250 | 352.850 | 10.600 |
 | TC235 catalog-KV end-to-end | 7.053 | 8.488 | 1.436 |
 
-![图 5-2 Metric3 每 testcase 降幅](figures/ubcc-metric3-per-tc-reductions.png =11cm)
+![图 5-2 指标 3 每 testcase 降幅](figures/ubcc-metric3-per-tc-reductions.png =11cm)
 
-图 5-2　Metric3 每 testcase 降幅
+图 5-2　指标 3 每 testcase 降幅
 
 ### 5.6 复合项与辅助发布事件
 
@@ -480,8 +632,8 @@ UBCC 时延更低。
 | 矩阵 | 计划项 | 通过 | 失败 |
 |---|---:|---:|---:|
 | 指标 1/2 profile 矩阵 | 72 | 72 | 0 |
-| 指标 1 修正时延独立矩阵 | 6 arms | 6 | 0 |
-| 指标 3 | 80 arms | 80 | 0 |
+| 指标 1 修正时延独立矩阵 | 6 次仿真运行 | 6 | 0 |
+| 指标 3 | 80 次仿真运行 | 80 | 0 |
 
 每项性能运行同时检查数据读回、目标阶段、受管模块退出和 profile 身份，确保性能值来自完整
 且正确的协议执行。
@@ -523,7 +675,8 @@ partial Ack 和多拓扑，52/52 通过。该结果为性能结论提供可靠�
 
 ### 7.3 EP-SNF 接口
 
-EP-SNF 接收节点内服务请求，将地址、操作类型和事务身份交给 UBAdapter，并在 UBCC 返回后
+EP-SNF 接收节点内服务请求，将地址、操作类型和事务身份交给 UBAdapter，并在 Home UBCC
+控制器返回后
 生成节点内数据或完成响应。
 
 ### 7.4 UBAdapter 接口
@@ -712,7 +865,7 @@ TC142-TC147 的独立 spill-noopt 扩展矩阵覆盖 3N1S、3N2S、8N1S、8N2S�
 |---|---|---|
 | UBCCController | read、upgrade、clear、writeback、evict | grant、target set、commit result |
 | ResidentDir | lookup、insert、erase、waiter | directory entry、capacity status |
-| Backstore | read、write、erase | persisted directory metadata |
+| H64 Backstore | lookup、upsert、erase | persisted directory metadata |
 | EP-RNF | read shared/unique、clean unique、snoop | data、snoop response、completion |
 | EP-SNF | request service | CHI data/response |
 | UBAdapter | send、receive、retry、callback | Outer message、local completion |
@@ -723,15 +876,16 @@ TC142-TC147 的独立 spill-noopt 扩展矩阵覆盖 3N1S、3N2S、8N1S、8N2S�
 
 | 术语 | 说明 |
 |---|---|
-| UBCC | 跨节点缓存一致性方案及全局目录控制器 |
+| UBCC 方案 | 由 Outer 一致性层、Home UBCC 控制器、分层目录和 EP 边界组成的跨节点一致性体系结构 |
+| UBCC 控制器 | 维护全局目录、串行化同址事务并执行权限仲裁的控制器组件 |
+| Home UBCC 控制器 | 由地址映射选定、负责该地址全局目录和事务提交的 UBCC 控制器实例 |
 | HA-VI | 指标 3 使用的 VI 协议可执行参考模型 |
 | 可执行参考模型 | 使用相同 workload、完成边界和冻结参数运行的协议对照模型 |
 | Profile | 一组冻结的目录策略与协议优化配置 |
 | ResidentDir | SRAM 驻留目录 |
-| Backstore | 冷目录元数据的后备存储 |
+| H64 Backstore | 位于 metadata DRAM、保存冷目录元数据的 64 B bucket 哈希表 |
 | 等效追踪容量 | ResidentDir 与持久化 Backstore 元数据的去重覆盖量 |
-| naive | 不使用 Backstore 容量扩展和时延优化的基线 profile |
-| spill-noopt | 使用 Backstore、关闭时延优化的 profile |
+| spill-noopt | 使用 H64 Backstore 且关闭时延优化 |
 | optimized | 使用 Backstore 并启用时延优化的 profile |
 | 核心场景组 | TC228-TC230 等权聚合 |
 | 代表场景组 | TC231-TC235 按冻结主值等权聚合 |
@@ -740,3 +894,4 @@ TC142-TC147 的独立 spill-noopt 扩展矩阵覆盖 3N1S、3N2S、8N1S、8N2S�
 | 完成边界 | 根操作开始和结束时刻的共同定义 |
 | ubsim |  |
 | ub |  |
+| naive | 不使用 Backstore 容量扩展和时延优化的基线 profile |

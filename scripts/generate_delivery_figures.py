@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import argparse
 import shutil
 import subprocess
 import tempfile
@@ -61,52 +62,55 @@ CHART_STEMS = (
     "ubcc-tc130-134-pressure",
     "ubcc-tc142-147-applications",
     "ubcc-metric3-per-tc-reductions",
+    "ubcc-metric1-extension-matrix",
 )
 
 GENERATOR = "scripts/generate_delivery_figures.py::metric_charts"
-METRIC_REPORT = "results/metric12-final-v1/report/metric123_report.json"
-METRIC1_OUTER_SUMMARY = "results/metric1-outer-ideal-matrix-v1/summary.json"
 QUALIFICATION_MATRIX = "scripts/fault_qualification_matrix.json"
-PREVIEW_DATA = "docs/design/performance_preview_data.json"
+PUBLICATION_DATA = "docs/design/performance_publication_data.json"
 
 
-def preview_data(report):
-    """Load optional preview data, retaining the published values as fallback."""
-    path = ROOT / PREVIEW_DATA
-    if path.is_file():
-        raw = require_json(PREVIEW_DATA)
-        cases = raw.get("testcases", {})
-        def reduction(tc, field="optimized_reduction_pct"):
-            return float(required(cases[tc]["measurements"].get(field), f"{tc}.{field}"))
-
-        def metric3_primary(tc, pressure):
-            row = cases[tc]["metric3"][f"p{pressure}"]
-            if "ubcc" in row:
-                return row
-            if tc == "TC232":
-                return row["composite"]
-            return row["primary"]
-        return {
-            "tc120_124": [{"case": tc, "reduction_pct": reduction(tc)} for tc in ("TC120", "TC121", "TC122", "TC123", "TC124")],
-            "tc130_134": [{"case": tc, "reduction_pct": reduction(tc, "primary_reduction_pct")} for tc in ("TC130", "TC131", "TC132", "TC133", "TC134")],
-            "tc142_147": [{"case": tc, "reduction_pct": reduction(tc)} for tc in ("TC142", "TC143", "TC144", "TC145", "TC146", "TC147")],
-            "metric3_per_tc": [{"case": tc[2:], "reduction_pct":
-                                100.0 * (1.0 - metric3_primary(tc, 100)["ubcc"] /
-                                         metric3_primary(tc, 100)["ha_vi"])}
-                               for tc in ("TC228", "TC229", "TC230", "TC231", "TC232", "TC233", "TC234", "TC235")],
-        }
-    return {
-        "tc120_124": [{"case": "TC120", "reduction_pct": -5.37}, {"case": "TC121", "reduction_pct": -0.86},
-                       {"case": "TC122", "reduction_pct": 0.02}, {"case": "TC123", "reduction_pct": 0.00},
-                       {"case": "TC124", "reduction_pct": 0.04}],
-        "tc130_134": [{"case": "TC130", "reduction_pct": 57.68}, {"case": "TC131", "reduction_pct": 0.00},
-                       {"case": "TC132", "reduction_pct": 0.00}, {"case": "TC133", "reduction_pct": 7.17},
-                       {"case": "TC134", "reduction_pct": 76.42}],
-        "tc142_147": [{"case": "TC142", "reduction_pct": 14.674}, {"case": "TC143", "reduction_pct": 25.690},
-                       {"case": "TC144", "reduction_pct": 16.872}, {"case": "TC145", "reduction_pct": 20.588},
-                       {"case": "TC146", "reduction_pct": 28.808}, {"case": "TC147", "reduction_pct": 19.730}],
-        "metric3_per_tc": [],
+def publication_sources(path):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("metric_definitions_version") != "metric123-publication-v1":
+        raise ValueError("publication JSON requires metric123-publication-v1")
+    metric1, metric2, metric3 = data["metric1"], data["metric2"], data["metric3"]
+    report = {
+        "metric1": {
+            "capacity_ratio": metric1["capacity_ratio"],
+            "capacity_increase_pct": metric1["capacity_increase_pct"],
+        },
+        "metric2": {
+            "cases": metric2["cases"],
+            "equal_weight_mean_reduction_pct": metric2["applicable_equal_weight_mean_reduction_pct"],
+        },
+        "metric3": {"levels": [{
+            "pressure_level": metric3.get("pressure_level", 100),
+            "core_equal_weight": next(row for row in metric3["groups"] if row["scope"] == "core"),
+            "representative_equal_weight": next(row for row in metric3["groups"] if row["scope"] == "representative"),
+        }]},
     }
+    outer = {"delta_mean_ns": metric1["outer_delta_mean_ns"], "repeats": {}}
+    for index, row in enumerate(metric1["repetitions"], 1):
+        outer["repeats"][str(index)] = {
+            "spill": {"resident_capacity": row["spill_resident_capacity"],
+                      "outer_mean_ns": row["spill_outer_mean_ns"]},
+            "ideal": {"resident_capacity": row["ideal_resident_capacity"],
+                      "outer_mean_ns": row["ideal_outer_mean_ns"]},
+        }
+    charts = data.get("charts", {})
+    preview = {
+        "tc120_124": charts.get("tc120_124", []),
+        "tc130_134": charts.get("tc130_134", []),
+        "tc142_147": charts.get("tc142_147", []),
+        "metric1_matrix": charts.get("metric1_matrix", []),
+        "metric3_per_tc": data["metric3"].get("per_testcase", []),
+    }
+    preview["metric3_per_tc"] = [
+        {"case": row["case"][2:], "reduction_pct": row["ourcc_reduction_pct"]}
+        for row in preview["metric3_per_tc"]
+    ]
+    return report, outer, preview
 
 DIAGRAM_DOCUMENT_REFERENCES = {
     "ubcc-system-architecture": [{"document": "docs/design/cc_ep_protocol_overview.md", "figure": "图 2-1"}, {"document": "docs/design/cc_ep_protocol_overview.docx", "figure": "图 2-1"}],
@@ -124,6 +128,7 @@ CHART_DOCUMENT_REFERENCES = {
     "ubcc-metric2-reductions": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 4-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 4-1"}],
     "ubcc-ha-vi-comparison": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 5-1"}],
     "ubcc-q1-q5-qualification": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 5-1"}],
+    "ubcc-metric1-extension-matrix": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-3"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-3"}],
 }
 
 
@@ -565,12 +570,12 @@ def save_chart(fig, stem):
     svg.write_text(text, encoding="utf-8")
 
 
-def metric_charts():
+def metric_charts(publication_path=None):
     configure_plot()
-    report = require_json(METRIC_REPORT)
-    outer = require_json(METRIC1_OUTER_SUMMARY)
+    if publication_path is None:
+        publication_path = ROOT / PUBLICATION_DATA
+    report, outer, preview = publication_sources(publication_path)
     matrix = require_json(QUALIFICATION_MATRIX)
-    preview = preview_data(report)
 
     # Metric 1: capacity comes from the final contract; corrected Outer latency
     # comes from the dedicated spill-vs-IdealDir experiment.  The stale guest
@@ -652,6 +657,10 @@ def metric_charts():
         labels = [row[0][2:] if row[0].startswith("TC") else row[0] for row in rows]
         values = [row[1] for row in rows]
         bars = ax.bar(labels, values, color=[BLUE if value >= 0 else ORANGE for value in values], width=.62)
+        for bar, row in zip(bars, rows):
+            if len(row) > 2 and row[2]:
+                bar.set_hatch("////")
+                bar.set_edgecolor("#404040")
         ax.axhline(0, color="#404040", linewidth=.8); ax.grid(axis="y", alpha=.2)
         ax.set_title(title, color=NAVY, fontweight="bold"); ax.set_ylabel(ylabel)
         span = max(max(values) - min(values), 1.0)
@@ -671,11 +680,35 @@ def metric_charts():
         save_chart(fig, stem)
 
     compact_bar("ubcc-tc120-124-scenarios", "TC120–TC124 scenario changes",
-                [(row["case"], row["reduction_pct"]) for row in preview["tc120_124"]], "optimized reduction (%)", 8.4)
+                [(row["case"], row["reduction_pct"], row.get("estimated", False)) for row in preview["tc120_124"]], "optimized reduction (%)", 8.4)
     compact_bar("ubcc-tc130-134-pressure", "TC130–TC134 pressure-path comparison",
-                [(row["case"], row["reduction_pct"]) for row in preview["tc130_134"]], "optimized reduction (%)", 8.4)
+                [(row["case"], row["reduction_pct"], row.get("estimated", False)) for row in preview["tc130_134"]], "optimized reduction (%)", 8.4)
     compact_bar("ubcc-tc142-147-applications", "TC142–TC147 application reductions",
-                [(row["case"], row["reduction_pct"]) for row in preview["tc142_147"]], "optimized reduction (%)", 9.2)
+                [(row["case"], row["reduction_pct"], row.get("estimated", False)) for row in preview["tc142_147"]], "optimized reduction (%)", 9.2)
+
+    if preview.get("metric1_matrix"):
+        rows = preview["metric1_matrix"]
+        labels = [f"P{row['pressure_pct']}\n{row['topology'].upper()}" for row in rows]
+        fig, axes = plt.subplots(2, 1, figsize=(12.0, 6.1), sharex=True,
+                                gridspec_kw={"hspace": .16})
+        for ax, field, estimated_field, ylabel, title in (
+                (axes[0], "capacity_gain_pct", "capacity_estimated", "Capacity gain (%)", "Metric 1 extension: effective capacity gain"),
+                (axes[1], "outer_delta_cycles_2ghz", "latency_estimated", "Outer delta (cycles @ 2 GHz)", "Metric 1 extension: spill minus oversized-resident reference")):
+            values = [row[field] for row in rows]
+            bars = ax.bar(range(len(rows)), values, color=[GREEN if value >= 0 else TEAL for value in values], width=.68)
+            ax.axhline(0, color="#404040", linewidth=.8)
+            ax.grid(axis="y", alpha=.2)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title, color=NAVY, fontweight="bold")
+            for bar, row, value in zip(bars, rows, values):
+                if row.get(estimated_field, False):
+                    bar.set_hatch("////")
+                    bar.set_edgecolor("#404040")
+                ax.text(bar.get_x() + bar.get_width()/2, value,
+                        f"{value:.1f}", ha="center",
+                        va="bottom" if value >= 0 else "top", fontsize=10)
+        axes[1].set_xticks(range(len(rows)), labels, rotation=0)
+        save_chart(fig, "ubcc-metric1-extension-matrix")
     metric3_rows = preview["metric3_per_tc"]
     labels = [str(tc) for tc in range(228, 236)]
     values = [next(row["reduction_pct"] for row in metric3_rows if row["case"] == str(tc)) for tc in range(228, 236)]
@@ -688,15 +721,17 @@ def metric_charts():
         ax.text(value + max(values) * .012, bar.get_y() + bar.get_height() / 2,
                 f"{value:.2f}%", va="center", ha="left", fontsize=10, color="#404040")
     save_chart(fig, "ubcc-metric3-per-tc-reductions")
-    return chart_lineage(report, outer, matrix, preview)
+    return chart_lineage(report, outer, matrix, preview,
+                         PUBLICATION_DATA if publication_path == ROOT / PUBLICATION_DATA
+                         else str(publication_path))
 
 
-def chart_lineage(report, outer, matrix, preview=None):
+def chart_lineage(report, outer, matrix, preview=None, publication_source=PUBLICATION_DATA):
     first = outer["repeats"]["1"]
     counts = Counter(row["qualification"] for row in matrix["cases"])
     labels = [f"Q{i}" for i in range(1, 6)]
     charts = [
-        {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [METRIC_REPORT, METRIC1_OUTER_SUMMARY],
+        {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [publication_source],
          "generator": GENERATOR, "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
          "evidence_sets": [
              {"name": "capacity", "physical_runs": 6, "roles": ["naive", "spill-noopt"],
@@ -706,11 +741,11 @@ def chart_lineage(report, outer, matrix, preview=None):
          "cross_set_weighting": "none; the two evidence sets serve independent Metric1 subcontracts",
          "expected_values": {"capacity_ratio": float(report["metric1"]["capacity_ratio"]), "capacity_increase_pct": float(report["metric1"]["capacity_increase_pct"]), "ideal_outer_mean_ns": float(first["ideal"]["outer_mean_ns"]), "spill_outer_mean_ns": float(first["spill"]["outer_mean_ns"]), "outer_delta_mean_ns": float(outer["delta_mean_ns"]), "ideal_resident_capacity": int(first["ideal"]["resident_capacity"]), "spill_resident_capacity": int(first["spill"]["resident_capacity"])},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric1-capacity-latency"]},
-        {"name": "ubcc-metric2-reductions", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,
+        {"name": "ubcc-metric2-reductions", "source_artifacts": [publication_source], "generator": GENERATOR,
          "metric_definition": "Per-case optimized reduction versus naive; non-applicable cases remain visible as excluded.",
          "expected_values": {"cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]), "applicable": bool(row["applicable"])} for row in report["metric2"]["cases"]], "applicable_equal_weight_mean_reduction_pct": float(report["metric2"]["equal_weight_mean_reduction_pct"])},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric2-reductions"]},
-        {"name": "ubcc-ha-vi-comparison", "source_artifacts": [METRIC_REPORT], "generator": GENERATOR,
+        {"name": "ubcc-ha-vi-comparison", "source_artifacts": [publication_source], "generator": GENERATOR,
          "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
          "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] if int(level["pressure_level"]) == 100 for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-ha-vi-comparison"]},
@@ -730,9 +765,17 @@ def chart_lineage(report, outer, matrix, preview=None):
                                  ("ubcc-tc130-134-pressure", "Pressure path reductions", "tc130_134"),
                                  ("ubcc-tc142-147-applications", "Application reductions", "tc142_147"),
                                  ("ubcc-metric3-per-tc-reductions", "Metric3 per-TC reductions", "metric3_per_tc")):
-            charts.append({"name": stem, "source_artifacts": [PREVIEW_DATA], "generator": GENERATOR,
+            charts.append({"name": stem, "source_artifacts": [publication_source], "generator": GENERATOR,
                            "metric_definition": title + "; visual-only preview derived from the checked-in preview data.",
                            "derived_values": {"rows": preview[key]}, "document_references": refs[stem]})
+        charts.append({
+            "name": "ubcc-metric1-extension-matrix",
+            "source_artifacts": [publication_source],
+            "generator": GENERATOR,
+            "metric_definition": "Mean TC142-TC147 capacity gain and completed-Outer delta for each pressure/topology coordinate.",
+            "derived_values": {"rows": preview.get("metric1_matrix", [])},
+            "document_references": CHART_DOCUMENT_REFERENCES["ubcc-metric1-extension-matrix"],
+        })
     return charts
 
 
@@ -754,15 +797,29 @@ def remove_obsolete():
             stale_source.unlink()
 
 
-def main():
+def main(argv=None):
+    global OUT, PUBLICATION_DATA
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--metadata-only", action="store_true")
+    parser.add_argument("--charts-only", action="store_true")
+    parser.add_argument("--publication-json", type=Path)
+    parser.add_argument("--out-dir", type=Path)
+    args = parser.parse_args(argv)
+    if args.out_dir is not None:
+        OUT = args.out_dir.expanduser().resolve()
+    if args.publication_json is not None:
+        PUBLICATION_DATA = str(args.publication_json.expanduser().resolve())
     OUT.mkdir(parents=True, exist_ok=True)
-    metadata_only = "--metadata-only" in os.sys.argv[1:]
-    if metadata_only:
-        report = require_json(METRIC_REPORT)
-        outer = require_json(METRIC1_OUTER_SUMMARY)
+    if args.metadata_only:
+        publication_path = (Path(PUBLICATION_DATA) if Path(PUBLICATION_DATA).is_absolute()
+                            else ROOT / PUBLICATION_DATA)
+        try:
+            publication_source = str(publication_path.relative_to(ROOT))
+        except ValueError:
+            publication_source = str(publication_path)
+        report, outer, preview = publication_sources(publication_path)
         matrix = require_json(QUALIFICATION_MATRIX)
-        preview = preview_data(report)
-        charts = chart_lineage(report, outer, matrix, preview)
+        charts = chart_lineage(report, outer, matrix, preview, publication_source)
         diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
                     for stem in DIAGRAM_STEMS]
         existing = require_json("docs/design/figures/figure_inventory.json") if (OUT / "figure_inventory.json").is_file() else {}
@@ -774,6 +831,12 @@ def main():
         print(f"updated metadata for {len(diagrams) + len(charts)} figures in {OUT}")
         return
     remove_obsolete()
+    if args.charts_only:
+        publication_path = (Path(PUBLICATION_DATA) if Path(PUBLICATION_DATA).is_absolute()
+                            else ROOT / PUBLICATION_DATA)
+        metric_charts(publication_path)
+        print(f"generated charts in {OUT}")
+        return
     diagrams = (architecture_diagram(), gem5_diagram(), protocol_diagram(), verification_diagram(), two_phase_diagram(),
                 authority_comparison_diagram(), central_direct_diagram(), metadata_scaling_diagram(),
                 inner_outer_boundary_diagram())
@@ -786,7 +849,9 @@ def main():
             export_rows.append((diagram.stem, "matplotlib same-model fallback", detail))
         else:
             export_rows.append((diagram.stem, detail, ""))
-    charts = metric_charts()
+    publication_path = (Path(PUBLICATION_DATA) if Path(PUBLICATION_DATA).is_absolute()
+                        else ROOT / PUBLICATION_DATA)
+    charts = metric_charts(publication_path)
     diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
                 for stem in DIAGRAM_STEMS]
     manifest = {"schema_version": 2, "diagrams": diagrams, "charts": charts,

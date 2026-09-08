@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "4cc460f20b674e2aaf24531732ba157123ec703f31b9a19649e53d48ca1fe0d2",
-      "embedded_source_sha256": "500951c7640f0655cecb831ee76da61b34ebb5cda6aab1296f368a67d38ce229",
+      "docx_sha256": "f698db6321760f1270d4838604ff3ba163404846f6a728835f13556a5009bc35",
+      "embedded_source_sha256": "95eadbd648ccb7a5cb8ce4666a10b993478917881465f0bdfa0890e85afd7432",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
-      "markdown_sha256": "500951c7640f0655cecb831ee76da61b34ebb5cda6aab1296f368a67d38ce229"
+      "markdown_sha256": "95eadbd648ccb7a5cb8ce4666a10b993478917881465f0bdfa0890e85afd7432"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "f8e101837d69ae6c4b9a42400d410e4c38757132ed70b17bb70c376fc01f5389",
-      "embedded_source_sha256": "5e5a1dcbab8d4158f9ffa5cc50f3fc63f8d02ec0d1c30eab4e0cb646c5afb77c",
+      "docx_sha256": "7513322d12d8d00582527edc81a01a7fceb0caec9a4a76e129d119cd071e0043",
+      "embedded_source_sha256": "7f69f06aa472e7134b65b180ac6dab56031a864e4c34fbb9944b6f3a652868cf",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
-      "markdown_sha256": "5e5a1dcbab8d4158f9ffa5cc50f3fc63f8d02ec0d1c30eab4e0cb646c5afb77c"
+      "markdown_sha256": "7f69f06aa472e7134b65b180ac6dab56031a864e4c34fbb9944b6f3a652868cf"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "4ed5250bf45ca5201e85fe68d87a0fcf32b802ac19c8fb7b7146fca36b6881c2",
-      "embedded_source_sha256": "a2e6ff5d242774478420483ac9c088ffd0dd1af378c9985a1a5036321f551c9c",
+      "docx_sha256": "9b221f986f016fa4066bdb940c7835bca1099e865ffb446f8d57d5232f779722",
+      "embedded_source_sha256": "8d4a46def12132fe4da55e629daffbb396c20a51d18972971bcb887f0da04584",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "a2e6ff5d242774478420483ac9c088ffd0dd1af378c9985a1a5036321f551c9c"
+      "markdown_sha256": "8d4a46def12132fe4da55e629daffbb396c20a51d18972971bcb887f0da04584"
     }
   ],
   "schema_version": 1

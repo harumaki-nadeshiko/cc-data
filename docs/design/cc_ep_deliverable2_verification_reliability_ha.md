@@ -28,7 +28,7 @@
 
 ### 1.1 验证目标
 
-本报告验证 UBCC 在正常执行、并发竞争和可恢复消息传输故障下的协议正确性，重点覆盖：
+本报告验证 UBCC 方案在正常执行、并发竞争和可恢复消息传输故障下的协议正确性，重点覆盖：
 
 - 全局目录状态安全；
 - 单一 owner 与 sharer 集合一致性；
@@ -41,7 +41,7 @@
 
 ### 1.2 验证体系
 
-UBCC 采用分层验证方法：形式化模型验证状态与动作规则，定向机制验证连接模型与实现，
+UBCC 方案采用分层验证方法：形式化模型验证状态与动作规则，定向机制验证连接模型与实现，
 端到端验证确认数据与权限结果，故障资格矩阵验证恢复机制在实际消息路径中的表现。
 
 ![图 1-1 UBCC 分层验证体系](figures/ubcc-verification-stack.png)
@@ -57,7 +57,7 @@ UBCC 采用分层验证方法：形式化模型验证状态与动作规则，定
 | EP-RNF snoop 仲裁 | focused TLA+ + 端到端验证 | 通过 |
 | 多 PA 与多 Socket 隔离 | TLA+ + 多拓扑验证 | 通过 |
 | 处理器 O3 下的同步语义 | 可执行验证 | 通过 |
-| Q1-Q5 故障资格 | 52 项物理运行 | 52/52 通过 |
+| Q1-Q5 故障资格 | 52 项仿真测试 | 52/52 通过 |
 | 拓扑覆盖 | 3N1S、3N2S、8N2S、16N1S Level-A | 协议节点规模与端点能力通过 |
 
 表中 Liveness 结论仅适用于对应 temporal property、FairSpec/forward-progress 公平性和可恢复
@@ -188,8 +188,8 @@ EP-RNF focused 模型覆盖 active Recall、ReadShared、ReadUnique、CleanUniqu
 | UBCC 目录核心 | 目录状态、授权与提交 | 通过 | 通过 |
 | 传输故障 | 丢失、重复、乱序 | 通过 | 通过 |
 | 多 PA / 多 Socket | 状态隔离 | 通过 | 通过 |
-| EP-RNF 仲裁 | 同址 snoop 仲裁安全性 | 通过 | 未单独检查，由可执行验证补充 |
-| waiter 退役 | 精确退役与重放安全性 | 通过 | 未单独检查，由可执行验证补充 |
+| EP-RNF 仲裁 | 同址 snoop 仲裁安全性 | 通过 | 由 TC98 验证 |
+| waiter 退役 | 精确退役与重放安全性 | 通过 | 由 TC224、TC126 验证 |
 
 ---
 
@@ -197,12 +197,12 @@ EP-RNF focused 模型覆盖 active Recall、ReadShared、ReadUnique、CleanUniqu
 
 ### 4.1 两阶段目录提交
 
-UBCC 使用保留和提交两个阶段管理跨节点授权：
+Home UBCC 控制器使用保留和提交两个阶段管理跨节点授权：
 
-1. 请求通过仲裁后，UBCC 建立 outstanding 并记录 intended state；
+1. 请求通过仲裁后，Home UBCC 控制器建立 outstanding 并记录 intended state；
 2. Grant 发送期间，原 committed state 保持有效；
 3. requester 本地操作完成后发送 Clear；
-4. UBCC 校验 epoch、reqId 和 requester；
+4. Home UBCC 控制器校验 epoch、reqId 和 requester；
 5. 匹配事务提交 intended state，并退役 outstanding。
 
 ![图 4-1 UBCC 两阶段目录提交](figures/ubcc-two-phase-commit.png)
@@ -277,7 +277,7 @@ Q1-Q5 矩阵面向可恢复消息传输故障，覆盖基础故障、连续丢�
 | Q5 | 12 | 3N1S、3N2S、8N2S、16N1S Level-A | 12/12 通过 |
 | 合计 | 52 | Q1-Q5 | 52/52 通过 |
 
-五组共 52 项物理运行，最终结果为 52/52 通过。
+五组共 52 项仿真测试，最终结果为 52/52 通过。
 
 ![图 5-1 Q1-Q5 故障资格结果](figures/ubcc-q1-q5-qualification.png)
 
@@ -301,7 +301,7 @@ Q1-Q5 矩阵面向可恢复消息传输故障，覆盖基础故障、连续丢�
 | 重复 | 6 | Ack、Clear 和事务提交幂等 |
 | 乱序 | 6 | 接收顺序变化下的 epoch/reqId 安全 |
 
-同一 case 可同时包含多个动作，因此动作覆盖数不等于物理运行总数。
+同一测试可同时包含多个故障动作，因此动作覆盖数不等于仿真测试总数。
 
 ### 5.5 连续丢失与组合故障
 
@@ -356,7 +356,7 @@ L3 和 100% L3 压力；它是理论与可执行参考比较，不是物理芯�
 | 维度 | UBCC | HA-VI 冻结参考 | 理论含义 |
 |---|---|---|---|
 | 全局状态表达 | 精确 owner、sharer 与事务身份 | VI 有效/无效关系的窄化表达 | UBCC 可直接形成精确 Recall/Invalidate 目标 |
-| 目录资源 | 独立 ResidentDir + Backstore | 冻结参考目录组织 | UBCC 将全局元数据与节点内 Home 资源解耦 |
+| 目录资源 | 独立 ResidentDir + H64 Backstore | 冻结参考目录组织 | UBCC 方案将全局元数据与节点内 Home 资源解耦 |
 | 提交语义 | Grant 与 Clear 两阶段提交 | 参考模型完成链 | UBCC 显式区分承诺与提交，并支持幂等恢复 |
 | 数据源选择 | 按 owner 定位权威数据 | 按参考模型状态路径处理 | 对 ownership handoff 和 shared-to-writer 路径影响最直接 |
 
@@ -469,20 +469,21 @@ UBCC 已建立从形式化模型到端到端执行的分层验证体系。目录
 
 | 术语 | 说明 |
 |---|---|
-| UBCC | 跨节点缓存一致性方案及全局目录控制器 |
+| UBCC 方案 | 采用独立 Outer 一致性层和分层目录的跨节点一致性体系结构 |
+| UBCC 控制器 | 维护全局目录并执行同址事务仲裁的控制器组件 |
+| Home UBCC 控制器 | 由地址映射选定、负责目标地址目录和提交的控制器实例 |
 | EP-RNF | 代表 Outer 域参与节点内 snoop 的端点 |
 | ResidentDir | SRAM 驻留目录 |
-| Backstore | 冷目录元数据的后备存储 |
+| H64 Backstore | 位于 metadata DRAM、保存冷目录元数据的 64 B bucket 哈希表 |
 | TLA+ | 用于描述并检查协议状态与动作的形式化语言 |
-| O3 | 支持乱序执行的处理器模型 |
+| O3 | Out-of-Order，乱序执行并按架构顺序提交的处理器模型；用于验证乱序条件下的同步与一致性语义 |
 | Safety | 所有可达状态均满足的不变量 |
-| Liveness | 在公平和最终可达条件下事务最终完成的性质 |
 | epoch | 区分同址新旧事务的单调序号 |
 | reqId | 标识具体请求的事务编号 |
 | stable tuple | 重试期间保持不变的事务身份 |
 | tombstone | 已完成事务的幂等确认记录 |
 | partial Ack | 目标集合中部分节点已经完成确认 |
-| 故障资格验证 | 对可恢复消息传输故障的可执行验证矩阵 |
 | Q1-Q5 | 从基础单故障到多拓扑故障的五级资格分组 |
 | ubsim |  |
 | ub |  |
+| Liveness | 在公平调度和消息最终可达条件下，事务能够持续推进并最终完成的性质 |

@@ -100,7 +100,21 @@ def contains_stale_guest_latency(value):
 
 def expected_chart_values(stem, sources):
     source = {path: load_json(path) for path in sources}
+    publication = next((value for value in source.values()
+                        if value.get("metric_definitions_version") == "metric123-publication-v1"), None)
     if stem == "ubcc-metric1-capacity-latency":
+        if publication is not None:
+            metric1 = publication["metric1"]
+            first = metric1["repetitions"][0]
+            return "expected_values", {
+                "capacity_ratio": float(metric1["capacity_ratio"]),
+                "capacity_increase_pct": float(metric1["capacity_increase_pct"]),
+                "ideal_outer_mean_ns": float(first["ideal_outer_mean_ns"]),
+                "spill_outer_mean_ns": float(first["spill_outer_mean_ns"]),
+                "outer_delta_mean_ns": float(metric1["outer_delta_mean_ns"]),
+                "ideal_resident_capacity": int(first["ideal_resident_capacity"]),
+                "spill_resident_capacity": int(first["spill_resident_capacity"]),
+            }
         report, outer = source[sources[0]], source[sources[1]]
         first = outer["repeats"]["1"]
         return "expected_values", {
@@ -113,6 +127,13 @@ def expected_chart_values(stem, sources):
             "spill_resident_capacity": int(first["spill"]["resident_capacity"]),
         }
     if stem == "ubcc-metric2-reductions":
+        if publication is not None:
+            metric2 = publication["metric2"]
+            return "expected_values", {
+                "cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]),
+                           "applicable": bool(row["applicable"])} for row in metric2["cases"]],
+                "applicable_equal_weight_mean_reduction_pct": float(metric2["applicable_equal_weight_mean_reduction_pct"]),
+            }
         metric2 = source[sources[0]]["metric2"]
         return "expected_values", {
             "cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]),
@@ -120,6 +141,12 @@ def expected_chart_values(stem, sources):
             "applicable_equal_weight_mean_reduction_pct": float(metric2["equal_weight_mean_reduction_pct"]),
         }
     if stem == "ubcc-ha-vi-comparison":
+        if publication is not None:
+            return "expected_values", {"groups": [{
+                "pressure_level": row["pressure_level"], "scope": row["scope"],
+                "ubcc_ticks_per_operation": float(row["ourcc_ticks_per_operation"]),
+                "ha_vi_ticks_per_operation": float(row["ha_vi_ticks_per_operation"]),
+            } for row in publication["metric3"]["groups"]]}
         levels = [level for level in source[sources[0]]["metric3"]["levels"]
                   if int(level["pressure_level"]) == 100]
         return "expected_values", {
@@ -135,9 +162,18 @@ def expected_chart_values(stem, sources):
         labels = [f"Q{i}" for i in range(1, 6)]
         return "derived_values", {"qualification_counts": {label: counts[label] for label in labels},
                                   "total": sum(counts[label] for label in labels)}
+    if stem == "ubcc-metric1-extension-matrix":
+        return "derived_values", {"rows": publication["charts"]["metric1_matrix"]}
     if stem in {"ubcc-tc120-124-scenarios", "ubcc-tc130-134-pressure", "ubcc-tc142-147-applications", "ubcc-metric3-per-tc-reductions"}:
         key = {"ubcc-tc120-124-scenarios": "tc120_124", "ubcc-tc130-134-pressure": "tc130_134",
                "ubcc-tc142-147-applications": "tc142_147", "ubcc-metric3-per-tc-reductions": "metric3_per_tc"}[stem]
+        if publication is not None:
+            if key == "metric3_per_tc":
+                rows = [{"case": row["case"][2:], "reduction_pct": row["ourcc_reduction_pct"]}
+                        for row in publication["metric3"]["per_testcase"]]
+            else:
+                rows = publication["charts"][key]
+            return "derived_values", {"rows": rows}
         raw = load_json("docs/design/performance_preview_data.json")
         cases = raw["testcases"]
         if key == "metric3_per_tc":

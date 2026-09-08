@@ -49,7 +49,8 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
   跨轮报告 ratio/delta 的等权 mean、stdev、CV，不按 Outer sample 数给轮次加权。
   simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，不存在时才确定性回退
-  全部日志，并去除 stdout/stderr 中完全相同的复制行；保留 source files、samples、mean、p50/p95/p99/max。
+  全部日志。canonical stderr 中的相同行按独立完成事件保留；回退布局需要由归档侧避免重复镜像。
+  输出保留 source files、samples、mean、p50/p95/p99/max。
   spill/ideal 标准角色至少须有一条 completed Outer。
   旧 node1/node2 `post_pressure_catalog_reuse` GUEST-TIMER 已弃用为描述字段，不参与完整性或 PASS。
   完整时继续输出旧 guest 值；缺失或部分存在仍 ADDED，产生`METRIC1_GUEST_TIMER_MISSING`，描述字段为 null。
@@ -164,6 +165,49 @@ python3 scripts/extract_metric123_from_logs.py \
   --manifest /path/to/metric123-manifest.json \
   --output-dir /path/to/output
 ```
+
+输出目录中的文件按职责分层：
+
+```text
+report.json                  正式合同聚合及显式分离的描述视图
+resolved_runs.json           每个物理 run 的标准化证据
+metric_matrix_standard.tsv   正式计分矩阵
+metric_matrix_all.tsv        正式与扩展 run 的描述矩阵
+publication_metrics.json     路径无关的发布数值与图表输入
+```
+
+这些输出并非同一统计量的不同格式。`report.json`只在冻结合同坐标上聚合，`resolved_runs.json`
+保留逐运行值，`metric_matrix_all.tsv`还包含 extension；下游文章和图片应只读取
+`publication_metrics.json`，不得从多个输出中选择同名但定义不同的字段拼接。
+
+公司机器上有两种复刻方式：
+
+1. 提供等价原始日志和 manifest，先生成 `publication_metrics.json`，再生成图表；
+2. 直接提供已审核的等价 `publication_metrics.json`，只执行图表生成。
+
+提取器可在成功后直接生成图表：
+
+```bash
+python3 scripts/extract_metric123_from_logs.py \
+  --manifest /path/to/metric123-manifest.json \
+  --output-dir /path/to/output \
+  --publication-supplement /path/to/supporting-chart-data.json \
+  --render-figures \
+  --figure-output-dir /path/to/output/figures
+```
+
+也可以只从 canonical publication JSON 复刻图表：
+
+```bash
+python3 scripts/generate_delivery_figures.py \
+  --charts-only \
+  --publication-json /path/to/publication_metrics.json \
+  --out-dir /path/to/output/figures
+```
+
+数值、柱形顺序、hatch 和图表内容由 canonical JSON 决定。要获得与交付件一致的字体度量和
+逐像素输出，仍应使用同一文档 Docker 镜像和同一字体资产；仅保证“等价数据”而不固定
+matplotlib、Pillow、libpng和字体版本时，可复刻相同图表语义与数值，但不保证 PNG 字节哈希相同。
 
 项目中的测试必须按 Docker-only 规则运行：
 

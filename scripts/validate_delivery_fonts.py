@@ -34,6 +34,7 @@ FIGURE_STEMS = (
     "ubcc-tc130-134-pressure",
     "ubcc-tc142-147-applications",
     "ubcc-metric3-per-tc-reductions",
+    "ubcc-metric1-extension-matrix",
 )
 ALLOWED = {"Calibri", "Calibri-Bold", "Consolas", "MicrosoftYaHei", "SimHei",
            "STIXTwoMath-Regular", "STIXTwoMath"}

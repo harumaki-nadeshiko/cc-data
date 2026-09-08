@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_PATH = ROOT / "docs/design/performance_preview_data.json"
+PUBLICATION_PATH = ROOT / "docs/design/performance_publication_data.json"
 FORMAL_PATH = ROOT / "docs/design/cc_ep_deliverable3_performance_api.md"
 
 EXPECTED_TCS = {
@@ -62,6 +63,15 @@ class PerformancePreviewDataTest(unittest.TestCase):
                 continue
             self.assertIsInstance(value, (int, float))
             self.assertTrue(math.isfinite(value))
+
+    def test_publication_data_is_canonical_and_contains_new_metric1_matrix(self):
+        data = json.loads(PUBLICATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(data["metric_definitions_version"], "metric123-publication-v1")
+        self.assertEqual(len(data["charts"]["metric1_matrix"]), 10)
+        self.assertEqual({row["pressure_pct"] for row in data["charts"]["metric1_matrix"]},
+                         {175, 200})
+        self.assertFalse(any(row["capacity_estimated"] or row["latency_estimated"]
+                             for row in data["charts"]["metric1_matrix"]))
 
     def test_required_special_coverage_is_present(self):
         data = json.loads(DATA_PATH.read_text(encoding="utf-8"))

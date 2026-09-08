@@ -107,8 +107,7 @@
     {
       "name": "ubcc-metric1-capacity-latency",
       "source_artifacts": [
-        "results/metric12-final-v1/report/metric123_report.json",
-        "results/metric1-outer-ideal-matrix-v1/summary.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
@@ -158,7 +157,7 @@
     {
       "name": "ubcc-metric2-reductions",
       "source_artifacts": [
-        "results/metric12-final-v1/report/metric123_report.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Per-case optimized reduction versus naive; non-applicable cases remain visible as excluded.",
@@ -216,7 +215,7 @@
     {
       "name": "ubcc-ha-vi-comparison",
       "source_artifacts": [
-        "results/metric12-final-v1/report/metric123_report.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
@@ -278,7 +277,7 @@
     {
       "name": "ubcc-tc120-124-scenarios",
       "source_artifacts": [
-        "docs/design/performance_preview_data.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Scenario change reductions; visual-only preview derived from the checked-in preview data.",
@@ -286,23 +285,28 @@
         "rows": [
           {
             "case": "TC120",
-            "reduction_pct": 5.34
+            "reduction_pct": 5.34,
+            "estimated": false
           },
           {
             "case": "TC121",
-            "reduction_pct": 0.85
+            "reduction_pct": 0.85,
+            "estimated": false
           },
           {
             "case": "TC122",
-            "reduction_pct": -0.01
+            "reduction_pct": -0.01,
+            "estimated": false
           },
           {
             "case": "TC123",
-            "reduction_pct": -0.01
+            "reduction_pct": -0.01,
+            "estimated": false
           },
           {
             "case": "TC124",
-            "reduction_pct": 0.0
+            "reduction_pct": 0.0,
+            "estimated": false
           }
         ]
       },
@@ -320,7 +324,7 @@
     {
       "name": "ubcc-tc130-134-pressure",
       "source_artifacts": [
-        "docs/design/performance_preview_data.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Pressure path reductions; visual-only preview derived from the checked-in preview data.",
@@ -328,23 +332,28 @@
         "rows": [
           {
             "case": "TC130",
-            "reduction_pct": 57.68
+            "reduction_pct": 57.68,
+            "estimated": false
           },
           {
             "case": "TC131",
-            "reduction_pct": 1.84
+            "reduction_pct": 1.84,
+            "estimated": false
           },
           {
             "case": "TC132",
-            "reduction_pct": -39.49
+            "reduction_pct": -39.49,
+            "estimated": false
           },
           {
             "case": "TC133",
-            "reduction_pct": 7.17
+            "reduction_pct": 7.17,
+            "estimated": false
           },
           {
             "case": "TC134",
-            "reduction_pct": 76.42
+            "reduction_pct": 76.42,
+            "estimated": false
           }
         ]
       },
@@ -362,7 +371,7 @@
     {
       "name": "ubcc-tc142-147-applications",
       "source_artifacts": [
-        "docs/design/performance_preview_data.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Application reductions; visual-only preview derived from the checked-in preview data.",
@@ -370,27 +379,33 @@
         "rows": [
           {
             "case": "TC142",
-            "reduction_pct": 14.674
+            "reduction_pct": 14.674,
+            "estimated": false
           },
           {
             "case": "TC143",
-            "reduction_pct": 25.69
+            "reduction_pct": 25.69,
+            "estimated": false
           },
           {
             "case": "TC144",
-            "reduction_pct": 16.872
+            "reduction_pct": 16.872,
+            "estimated": false
           },
           {
             "case": "TC145",
-            "reduction_pct": 20.588
+            "reduction_pct": 20.588,
+            "estimated": false
           },
           {
             "case": "TC146",
-            "reduction_pct": 28.808
+            "reduction_pct": 28.808,
+            "estimated": false
           },
           {
             "case": "TC147",
-            "reduction_pct": 19.73
+            "reduction_pct": 19.73,
+            "estimated": false
           }
         ]
       },
@@ -408,7 +423,7 @@
     {
       "name": "ubcc-metric3-per-tc-reductions",
       "source_artifacts": [
-        "docs/design/performance_preview_data.json"
+        "docs/design/performance_publication_data.json"
       ],
       "generator": "scripts/generate_delivery_figures.py::metric_charts",
       "metric_definition": "Metric3 per-TC reductions; visual-only preview derived from the checked-in preview data.",
@@ -456,6 +471,108 @@
         {
           "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
           "figure": "图 5-2"
+        }
+      ]
+    },
+    {
+      "name": "ubcc-metric1-extension-matrix",
+      "source_artifacts": [
+        "docs/design/performance_publication_data.json"
+      ],
+      "generator": "scripts/generate_delivery_figures.py::metric_charts",
+      "metric_definition": "Mean TC142-TC147 capacity gain and completed-Outer delta for each pressure/topology coordinate.",
+      "derived_values": {
+        "rows": [
+          {
+            "pressure_pct": 175,
+            "topology": "3n1s",
+            "capacity_gain_pct": 65.46173095703125,
+            "outer_delta_cycles_2ghz": 24.212824624323122,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 175,
+            "topology": "3n2s",
+            "capacity_gain_pct": 61.246490478515625,
+            "outer_delta_cycles_2ghz": 28.305874285406844,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 175,
+            "topology": "8n1s",
+            "capacity_gain_pct": 60.848490397135414,
+            "outer_delta_cycles_2ghz": 27.054943523668573,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 175,
+            "topology": "8n2s",
+            "capacity_gain_pct": 58.6578369140625,
+            "outer_delta_cycles_2ghz": -9.240645657521176,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 175,
+            "topology": "16n1s",
+            "capacity_gain_pct": 86.73683449074073,
+            "outer_delta_cycles_2ghz": 50.66895955223132,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 200,
+            "topology": "3n1s",
+            "capacity_gain_pct": 93.05267333984375,
+            "outer_delta_cycles_2ghz": 25.003577070143894,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 200,
+            "topology": "3n2s",
+            "capacity_gain_pct": 90.948486328125,
+            "outer_delta_cycles_2ghz": 27.428933021906687,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 200,
+            "topology": "8n1s",
+            "capacity_gain_pct": 88.03126017252605,
+            "outer_delta_cycles_2ghz": 26.090189381246926,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 200,
+            "topology": "8n2s",
+            "capacity_gain_pct": 86.85709635416667,
+            "outer_delta_cycles_2ghz": 1.9462678153442237,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          },
+          {
+            "pressure_pct": 200,
+            "topology": "16n1s",
+            "capacity_gain_pct": 120.51625192901234,
+            "outer_delta_cycles_2ghz": 57.39830519476618,
+            "capacity_estimated": false,
+            "latency_estimated": false
+          }
+        ]
+      },
+      "document_references": [
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+          "figure": "图 3-3"
+        },
+        {
+          "document": "docs/design/cc_ep_deliverable3_performance_api.docx",
+          "figure": "图 3-3"
         }
       ]
     }

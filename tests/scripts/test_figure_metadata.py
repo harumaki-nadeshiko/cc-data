@@ -36,20 +36,27 @@ class FigureMetadataTest(unittest.TestCase):
     def test_metric1_separates_capacity_and_outer_latency_sources(self):
         chart = next(row for row in self.inventory["charts"]
                      if row["name"] == "ubcc-metric1-capacity-latency")
-        self.assertEqual(chart["source_artifacts"], [GENERATOR.METRIC_REPORT,
-                                                     GENERATOR.METRIC1_OUTER_SUMMARY])
+        self.assertEqual(chart["source_artifacts"], [GENERATOR.PUBLICATION_DATA])
         self.assertNotIn("guest_delta", json.dumps(chart))
         self.assertEqual(chart["evidence_sets"][0]["physical_runs"], 6)
         self.assertEqual(chart["evidence_sets"][1]["physical_arms"], 6)
         self.assertEqual(
             chart["cross_set_weighting"],
             "none; the two evidence sets serve independent Metric1 subcontracts")
-        report = GENERATOR.require_json(GENERATOR.METRIC_REPORT)
-        outer = GENERATOR.require_json(GENERATOR.METRIC1_OUTER_SUMMARY)
+        report, outer, preview = GENERATOR.publication_sources(
+            ROOT / GENERATOR.PUBLICATION_DATA)
         lineage = next(row for row in GENERATOR.chart_lineage(
-            report, outer, GENERATOR.require_json(GENERATOR.QUALIFICATION_MATRIX))
+            report, outer, GENERATOR.require_json(GENERATOR.QUALIFICATION_MATRIX),
+            preview)
                        if row["name"] == chart["name"])
         self.assertEqual(lineage, chart)
+
+    def test_estimated_metric1_preview_values_are_machine_visible(self):
+        data = json.loads((ROOT / GENERATOR.PUBLICATION_DATA).read_text())
+        rows = data["charts"]["metric1_matrix"]
+        self.assertEqual(len(rows), 10)
+        self.assertFalse(any(row["capacity_estimated"] for row in rows))
+        self.assertFalse(any(row["latency_estimated"] for row in rows))
 
     def test_diagrams_have_document_references(self):
         self.assertEqual({entry["name"] for entry in self.inventory["diagrams"]}, set(GENERATOR.DIAGRAM_STEMS))

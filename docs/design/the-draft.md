@@ -174,6 +174,21 @@ draw.io 导出”，需在有 draw.io Desktop/CLI 的环境再执行一次同版
 4. 生成对应 DOCX。
 5. 检查正式文档无 `OurCC`、无 SHA、无 draft 名称、无运行命令和调试 Marker。
 
+### 9.1 新 Metric1 预览替换 TODO
+
+图 3-3 当前冻结到新 TC142-TC147 P175/P200 矩阵的预览快照。当前数据替换状态如下：
+
+- P175 8N2S TC143 naive 使用本地隔离replacement完整结果补齐；该run完成25/25子进程、
+  verifier和压力门禁，full TRACE无抑制，ResidentDir物理容量为65,536；
+- P200 3N2S 的 TC143 三角色与 TC144 spill/ideal replacement 已完成，容量和时延柱已替换为
+  六个 testcase 的全实测均值；
+- P200 8N2S 的 TC143 naive replacement 已完成，容量柱已替换为六个 testcase 的全实测均值；
+- 当前图 3-3 已无预估柱，所有hatch均已移除。后续若引入新的未完成坐标，仍只在预览柱形
+  使用hatch，并在本节记录真实数据替换TODO，不在正式正文或图注解释该视觉编码。
+
+当前 portable oversized-resident 角色不满足 Formal IdealDir 的 `h64ExactLiveCount=0` 定义，
+因此图 3-3 只作为扩展趋势观测，不能替换 TC131 正式附加时延结论。
+
 ## 10. 第一版完成状态
 
 | 项目 | 状态 |
