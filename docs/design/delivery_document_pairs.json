@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "ac7f9f556ed1c4519cbde4b9af26271fd620620b03b92040082e08680121c0c7",
-      "embedded_source_sha256": "4252a1e6da63ad341220b1884a2c8a46ba7ede44c427c3848cef1741ce5c6675",
+      "docx_sha256": "b6d50c3bcc9c2c41da6b00affbce425b9c1d44575ba5de9a555650cbec756a7c",
+      "embedded_source_sha256": "6180de499ead3e4f955bff22bb582a66169971905bff8119454ac4c961089442",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
-      "markdown_sha256": "4252a1e6da63ad341220b1884a2c8a46ba7ede44c427c3848cef1741ce5c6675"
+      "markdown_sha256": "6180de499ead3e4f955bff22bb582a66169971905bff8119454ac4c961089442"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "a6c0942503c132a523f5fb325e27b335d5d8cc881aaf4b5b51eeef810ecf0b96",
-      "embedded_source_sha256": "f6dcb85191f1eb804835b9147191f0e4cbc9b4c289402b7ca289020beeab1e3c",
+      "docx_sha256": "3e43e65033878df141fb2ac9d6503fc5e0efad3c10681ddff214fa2e56109b77",
+      "embedded_source_sha256": "f37c1cb6439dcd7710270736318f4fdb0fcaae6d2776988666122513889e454f",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
-      "markdown_sha256": "f6dcb85191f1eb804835b9147191f0e4cbc9b4c289402b7ca289020beeab1e3c"
+      "markdown_sha256": "f37c1cb6439dcd7710270736318f4fdb0fcaae6d2776988666122513889e454f"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "cef00b85c365d76e1989431af87ad24422a998895e2fe2e5f458f0cf83c8957e",
-      "embedded_source_sha256": "a195ca8aa089a88a0299ee839dfcb6e33e069dadab77a9f297222a534cc005ac",
+      "docx_sha256": "77f69102abaef3e8c26ea228cd9d1a6053a7781d43030b332b0f56fbfd197d2b",
+      "embedded_source_sha256": "e6989f6af5490896ce7dd5ea37bb9a72500311c9e95d699a0cd891ae959c96ac",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "a195ca8aa089a88a0299ee839dfcb6e33e069dadab77a9f297222a534cc005ac"
+      "markdown_sha256": "e6989f6af5490896ce7dd5ea37bb9a72500311c9e95d699a0cd891ae959c96ac"
     }
   ],
   "schema_version": 1
