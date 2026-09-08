@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Structural and data-lineage QA for the delivery figure inventory."""
 
-from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -156,12 +155,6 @@ def expected_chart_values(stem, sources):
                        for level in levels for key, scope in
                        (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))],
         }
-    if stem == "ubcc-q1-q5-qualification":
-        matrix = source[sources[0]]
-        counts = Counter(row["qualification"] for row in matrix["cases"])
-        labels = [f"Q{i}" for i in range(1, 6)]
-        return "derived_values", {"qualification_counts": {label: counts[label] for label in labels},
-                                  "total": sum(counts[label] for label in labels)}
     if stem == "ubcc-metric1-extension-matrix":
         return "derived_values", {"rows": publication["charts"]["metric1_matrix"]}
     if stem in {"ubcc-tc120-124-scenarios", "ubcc-tc130-134-pressure", "ubcc-tc142-147-applications", "ubcc-metric3-per-tc-reductions"}:

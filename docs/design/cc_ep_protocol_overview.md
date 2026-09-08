@@ -62,7 +62,7 @@ UBCC 方案围绕以下目标进行设计：
 
 当前交付实现已形成完整的跨节点一致性数据通路和控制通路，覆盖远程读、所有权迁移、共享转写者、
 写回、逐出以及目录换入换出等关键路径。方案通过分层验证确认协议状态安全、消息幂等和
-事务收敛，并在正式性能验收中达到三项冻结指标。
+事务收敛，并在正式性能验收中达到三项正式指标。
 
 ### 1.4 结论与范围
 
@@ -70,7 +70,7 @@ UBCC 方案围绕以下目标进行设计：
 |---|---|---|
 | 架构 | 独立 Outer 域、分层目录和 EP 接入路径已形成 | 当前交付实现及已验证拓扑 |
 | 正确性 | 关键安全、活性与可恢复传输故障路径通过分层验证 | 形式化模型、定向验证与端到端执行所覆盖的机制 |
-| 性能 | 三项冻结验收指标达到门槛 | 冻结 workload、完成边界与参考模型条件 |
+| 性能 | 三项正式验收指标达到门槛 | 既定 workload、统一完成边界与参考模型条件 |
 | 范围外 | 不作本次交付能力主张 | 永久 Home 故障在线恢复和端口级 Switch 微体系结构 |
 
 ---
@@ -334,7 +334,7 @@ Outer 协议使用以下机制处理消息重复、延迟和重试：
 共享转写者路径用于将多个共享副本收敛为单一写者：
 
 1. requester 发起写权限请求；
-2. Home UBCC 控制器冻结本次事务的有效 sharer 目标集合；
+2. Home UBCC 控制器确定并保持本次事务的有效 sharer 目标集合；
 3. Home UBCC 控制器向目标节点发送 Invalidate；
 4. 每个目标完成本地失效并返回 Ack；
 5. Home UBCC 控制器在 Ack 集合收敛后向 requester 授权；
@@ -430,7 +430,7 @@ sharer 数，`F` 表示同时接收 Recall 或 Invalidate 的目标数。
 
 半定量时延可表示为：
 
-$T_visible ≈ K × τ_link + T_dir + T_local + T_queue + T_fanout_tail$。
+$T_{\mathrm{visible}} ≈ K × τ_{\mathrm{link}} + T_{\mathrm{dir}} + T_{\mathrm{local}} + T_{\mathrm{queue}} + T_{\mathrm{fanout\_tail}}$。
 
 该表达用于比较依赖关系和资源趋势；实际结果还取决于目录命中率、互连带宽、控制器并行度
 和具体实现时序。
@@ -484,7 +484,7 @@ gem5 CHI，在 Outer 层使用专用目录消息和 Home UBCC 控制器；两类
 | 远程 dirty owner 最新 | requester→Home→owner→Home→requester，`K≈4, D=2` | Home Recall/授权后 owner→requester，数据分支约 `K≈3, D=1` | MOESI 的 O 可保留 dirty shared 数据源 |
 
 直接数据路径减少 Home 数据带宽，但 requester 可见完成仍取决于数据与权限两个分支：
-`T_visible=max(T_data,T_authority)`。所有权迁移还需要旧 owner 完成释放，并由 Home UBCC
+$T_{\mathrm{visible}} = \max(T_{\mathrm{data}}, T_{\mathrm{authority}})$。所有权迁移还需要旧 owner 完成释放，并由 Home UBCC
 控制器提交新 owner；减少数据遍历不能取消这一依赖。
 
 ### 7.5 Shared-to-Writer 与失效扇出
@@ -529,9 +529,9 @@ F = S
 
 对 `N` 个可缓存节点，精确全位图目录的概念存储量可写为：
 
-$B_dir(N) = N + b_state + b_epoch + b_ctrl + b_tag$。
+$B_{\mathrm{dir}}(N) = N + b_{\mathrm{state}} + b_{\mathrm{epoch}} + b_{\mathrm{ctrl}} + b_{\mathrm{tag}}$。
 
-当前实现由 MESI 状态和 one-hot sharer 推导 owner，因此不单独保存 owner 编码。`b_ctrl`
+当前实现由 MESI 状态和 one-hot sharer 推导 owner，因此不单独保存 owner 编码。$b_{\mathrm{ctrl}}$
 包括 valid、dirty、驻留和持久化控制位。仅 sharer bitmap 对 1 Mi 条目录记录的原始存储为：
 N=2 时 0.25 MiB，N=8 时 1 MiB，N=16 时 2 MiB。VI/MSI/MESI 的状态均可在 2 bit 内编码，
 MOESI/MESIF 需要至少 3 bit；相对 sharer、tag 和 epoch，增加 1 bit 状态的容量增量较小。

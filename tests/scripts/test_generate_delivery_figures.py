@@ -32,11 +32,8 @@ class GenerateDeliveryFiguresTest(unittest.TestCase):
 
     def test_release_charts_have_one_performance_data_source(self):
         report, outer, preview = MOD.publication_sources(ROOT / MOD.PUBLICATION_DATA)
-        matrix = MOD.require_json(MOD.QUALIFICATION_MATRIX)
-        charts = MOD.chart_lineage(report, outer, matrix, preview)
+        charts = MOD.chart_lineage(report, outer, preview)
         for chart in charts:
-            if chart["name"] == "ubcc-q1-q5-qualification":
-                continue
             self.assertEqual(chart["source_artifacts"], [MOD.PUBLICATION_DATA])
 
 

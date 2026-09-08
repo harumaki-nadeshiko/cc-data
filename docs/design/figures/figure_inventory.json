@@ -247,34 +247,6 @@
       ]
     },
     {
-      "name": "ubcc-q1-q5-qualification",
-      "source_artifacts": [
-        "scripts/fault_qualification_matrix.json"
-      ],
-      "generator": "scripts/generate_delivery_figures.py::metric_charts",
-      "metric_definition": "Count of canonical fault-qualification matrix cases grouped by Q1-Q5 qualification.",
-      "derived_values": {
-        "qualification_counts": {
-          "Q1": 20,
-          "Q2": 8,
-          "Q3": 4,
-          "Q4": 8,
-          "Q5": 12
-        },
-        "total": 52
-      },
-      "document_references": [
-        {
-          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
-          "figure": "图 5-1"
-        },
-        {
-          "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-          "figure": "图 5-1"
-        }
-      ]
-    },
-    {
       "name": "ubcc-tc120-124-scenarios",
       "source_artifacts": [
         "docs/design/performance_publication_data.json"

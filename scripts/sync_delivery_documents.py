@@ -82,19 +82,44 @@ def prevent_short_line_tail(text, protected_characters=6):
 
 
 def run(text, bold=False, mono=False, heading=False, size=None,
-        nonbreaking_identifiers=False, protect_tail=False, math=False):
+        nonbreaking_identifiers=False, protect_tail=False, math=False,
+        subscript=False):
     font = MATH_FONT if math else "Consolas" if mono else "Calibri"
     east_asia = MATH_FONT if math else "Microsoft YaHei" if mono or not heading else "SimHei"
     if nonbreaking_identifiers and not math:
         text = prevent_ascii_identifier_breaks(text)
     if protect_tail and not math:
         text = prevent_short_line_tail(text)
+    effective_size = size if size is not None else (28 if subscript else None)
     props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" '
              f'w:eastAsia="{east_asia}" w:cs="{font}"/>'
-             + ("<w:b/>" if bold else "")
-             + (f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>'
-                if size else ""))
+              + ("<w:b/>" if bold else "")
+              + ('<w:vertAlign w:val="subscript"/>' if subscript else "")
+              + (f'<w:sz w:val="{effective_size}"/><w:szCs w:val="{effective_size}"/>'
+                 if effective_size else ""))
     return f"<w:r><w:rPr>{props}</w:rPr><w:t xml:space=\"preserve\">{escape(text)}</w:t></w:r>"
+
+
+def math_runs(text, **run_options):
+    """Render the small TeX subset used by delivery formulas as Word runs."""
+    output = []
+    position = 0
+    pattern = re.compile(r"_\{\\mathrm\{([^{}]+)\}\}|_\{([^{}]+)\}|_([A-Za-z0-9]+)")
+
+    def clean(value):
+        return value.replace(r"\_", "_").replace(r"\,", " ").replace(r"\max", "max")
+
+    for match in pattern.finditer(text):
+        if match.start() > position:
+            output.append(run(clean(text[position:match.start()]), math=True,
+                              **run_options))
+        subscript_text = next(group for group in match.groups() if group is not None)
+        output.append(run(clean(subscript_text), math=True, subscript=True,
+                          **run_options))
+        position = match.end()
+    if position < len(text):
+        output.append(run(clean(text[position:]), math=True, **run_options))
+    return "".join(output) if output else run(clean(text), math=True, **run_options)
 
 
 def inline_runs(text, **run_options):
@@ -107,7 +132,7 @@ def inline_runs(text, **run_options):
         if match.start() > position:
             output.append(run(text[position:match.start()], **run_options))
         if match.group(3) is not None:
-            output.append(run(match.group(3), math=True, **run_options))
+            output.append(math_runs(match.group(3), **run_options))
         else:
             output.append(run(match.group(1) or match.group(2), bold=True,
                               **run_options))

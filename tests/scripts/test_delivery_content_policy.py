@@ -55,6 +55,17 @@ class DeliveryContentPolicyTest(unittest.TestCase):
         self.assertIn("256 KiB", performance)
         self.assertIn("100% L3 压力", performance)
 
+    def test_formal_documents_use_release_ready_wording(self):
+        for path in FORMAL_DOCS:
+            self.assertNotIn("冻结", path.read_text(encoding="utf-8"), path.name)
+
+    def test_deliverable2_has_no_negative_boundary_section_or_q_chart(self):
+        text = FORMAL_DOCS[1].read_text(encoding="utf-8")
+        self.assertNotIn("### 8.2", text)
+        self.assertNotIn("本次交付范围外", text)
+        self.assertNotIn("ubcc-q1-q5-qualification", text)
+        self.assertNotIn("图 5-1", text)
+
 
 if __name__ == "__main__":
     unittest.main()

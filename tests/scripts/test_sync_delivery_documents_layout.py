@@ -180,21 +180,25 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
 
     def test_explicit_math_span_uses_stix_math_run(self):
         body, _ = MOD.convert_markdown(
-            "普通正文与 $T ≈ K_crossnode × τ_link + T_dir$ 共存。\n\n"
-            "| 模型 | 公式 |\n|---|---|\n| 时延 | $C_verify ∝ Stable × Transient$ |\n",
+            "普通正文与 $T_{\\mathrm{visible}} ≈ K × τ_{\\mathrm{link}} + T_{\\mathrm{dir}}$ 共存。\n\n"
+            "| 模型 | 公式 |\n|---|---|\n| 时延 | $C_{\\mathrm{verify}} ∝ Stable × Transient$ |\n",
             self.markdown)
         document = ET.fromstring(
             '<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
             body + '</w:body>')
         math_runs = []
+        subscripts = []
         for item in document.findall(f".//{W}r"):
             fonts = item.find(f"{W}rPr/{W}rFonts")
             if fonts is not None and fonts.get(f"{W}ascii") == MOD.MATH_FONT:
                 math_runs.append("".join(item.itertext()))
                 self.assertEqual(fonts.get(f"{W}hAnsi"), MOD.MATH_FONT)
                 self.assertEqual(fonts.get(f"{W}eastAsia"), MOD.MATH_FONT)
-        self.assertEqual(math_runs, ["T ≈ K_crossnode × τ_link + T_dir",
-                                     "C_verify ∝ Stable × Transient"])
+                if item.find(f"{W}rPr/{W}vertAlign") is not None:
+                    subscripts.append("".join(item.itertext()))
+        self.assertEqual("".join(math_runs),
+                         "Tvisible ≈ K × τlink + TdirCverify ∝ Stable × Transient")
+        self.assertEqual(subscripts, ["visible", "link", "dir", "verify"])
 
     def test_single_percentage_code_fence_becomes_bold_in_previous_sentence(self):
         body, _ = MOD.convert_markdown(

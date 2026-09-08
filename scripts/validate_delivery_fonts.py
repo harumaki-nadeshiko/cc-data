@@ -29,7 +29,6 @@ FIGURE_STEMS = (
     "ubcc-metric1-capacity-latency",
     "ubcc-metric2-reductions",
     "ubcc-ha-vi-comparison",
-    "ubcc-q1-q5-qualification",
     "ubcc-tc120-124-scenarios",
     "ubcc-tc130-134-pressure",
     "ubcc-tc142-147-applications",

@@ -522,39 +522,6 @@
       "status": "PASS"
     },
     {
-      "name": "ubcc-q1-q5-qualification",
-      "kind": "chart",
-      "width": 1129,
-      "height": 614,
-      "svg_report": {
-        "bytes": 9887,
-        "font_declared": true,
-        "minimum_font_size": 12.0
-      },
-      "drawio_report": null,
-      "checks": {
-        "png_present": true,
-        "svg_present": true,
-        "minimum_resolution": true,
-        "release_aspect_ratio": true,
-        "approved_svg_font": true,
-        "minimum_svg_font_size": true,
-        "metadata_name": true,
-        "metadata_source_artifacts": true,
-        "metadata_generator": true,
-        "metadata_metric_definition": true,
-        "metadata_document_references": true,
-        "metadata_values": true,
-        "source_artifacts_are_relative": true,
-        "source_artifacts_exist": true,
-        "generator_exists": true,
-        "document_references_exist": true,
-        "no_stale_guest_latency_field": true,
-        "values_match_source_json": true
-      },
-      "status": "PASS"
-    },
-    {
       "name": "ubcc-tc120-124-scenarios",
       "kind": "chart",
       "width": 1280,

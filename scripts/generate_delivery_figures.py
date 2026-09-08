@@ -8,7 +8,6 @@ release dependency or source.  Performance chart values are loaded from the
 checked-in evidence JSON and missing fields are fatal.
 """
 
-from collections import Counter
 from dataclasses import dataclass, field
 import json
 import os
@@ -57,7 +56,6 @@ CHART_STEMS = (
     "ubcc-metric1-capacity-latency",
     "ubcc-metric2-reductions",
     "ubcc-ha-vi-comparison",
-    "ubcc-q1-q5-qualification",
     "ubcc-tc120-124-scenarios",
     "ubcc-tc130-134-pressure",
     "ubcc-tc142-147-applications",
@@ -66,7 +64,6 @@ CHART_STEMS = (
 )
 
 GENERATOR = "scripts/generate_delivery_figures.py::metric_charts"
-QUALIFICATION_MATRIX = "scripts/fault_qualification_matrix.json"
 PUBLICATION_DATA = "docs/design/performance_publication_data.json"
 
 
@@ -127,7 +124,6 @@ CHART_DOCUMENT_REFERENCES = {
     "ubcc-metric1-capacity-latency": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-1"}],
     "ubcc-metric2-reductions": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 4-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 4-1"}],
     "ubcc-ha-vi-comparison": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 5-1"}],
-    "ubcc-q1-q5-qualification": [{"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md", "figure": "图 5-1"}, {"document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx", "figure": "图 5-1"}],
     "ubcc-metric1-extension-matrix": [{"document": "docs/design/cc_ep_deliverable3_performance_api.md", "figure": "图 3-3"}, {"document": "docs/design/cc_ep_deliverable3_performance_api.docx", "figure": "图 3-3"}],
 }
 
@@ -575,7 +571,6 @@ def metric_charts(publication_path=None):
     if publication_path is None:
         publication_path = ROOT / PUBLICATION_DATA
     report, outer, preview = publication_sources(publication_path)
-    matrix = require_json(QUALIFICATION_MATRIX)
 
     # Metric 1: capacity comes from the final contract; corrected Outer latency
     # comes from the dedicated spill-vs-IdealDir experiment.  The stale guest
@@ -636,21 +631,6 @@ def metric_charts(publication_path=None):
     ax.set_xticks(x, labels); ax.set_ylabel("ticks / operation"); ax.grid(axis="y", alpha=.22); ax.legend(frameon=False, ncol=2)
     ax.set_title("Metric 3: grouped UBCC vs HA-VI latency", color=NAVY, fontweight="bold")
     save_chart(fig, "ubcc-ha-vi-comparison")
-
-    # Qualification inventory is derived from the canonical JSON, not 52/52 literals.
-    rows = required(matrix.get("cases"), "fault qualification cases")
-    counts = Counter(required(row.get("qualification"), "case qualification") for row in rows)
-    qlabels = [f"Q{i}" for i in range(1, 6)]
-    if any(label not in counts for label in qlabels) or sum(counts[label] for label in qlabels) != int(required(matrix.get("case_count"), "case_count")):
-        raise ValueError("Q1-Q5 qualification inventory is incomplete or inconsistent")
-    qvalues = [counts[label] for label in qlabels]
-    fig, ax = plt.subplots(figsize=(7.2, 3.5)); bars = ax.bar(qlabels, qvalues, color=[BLUE, TEAL, GREEN, AMBER, ORANGE], width=.62)
-    ax.set_ylabel("Qualification case count"); ax.set_title("Q1-Q5 qualification inventory", color=NAVY, fontweight="bold"); ax.grid(axis="y", alpha=.22)
-    ax.set_ylim(0, max(qvalues) * 1.22)
-    for bar, value in zip(bars, qvalues):
-        ax.text(bar.get_x()+bar.get_width()/2, value+.35, str(value), ha="center", fontweight="bold")
-    ax.text(.99, .96, f"Total: {sum(qvalues)}", transform=ax.transAxes, ha="right", va="top", color="#375623", fontweight="bold")
-    save_chart(fig, "ubcc-q1-q5-qualification")
 
     def compact_bar(stem, title, rows, ylabel, width=8.8):
         fig, ax = plt.subplots(figsize=(width, 3.7))
@@ -721,15 +701,13 @@ def metric_charts(publication_path=None):
         ax.text(value + max(values) * .012, bar.get_y() + bar.get_height() / 2,
                 f"{value:.2f}%", va="center", ha="left", fontsize=10, color="#404040")
     save_chart(fig, "ubcc-metric3-per-tc-reductions")
-    return chart_lineage(report, outer, matrix, preview,
+    return chart_lineage(report, outer, preview,
                          PUBLICATION_DATA if publication_path == ROOT / PUBLICATION_DATA
                          else str(publication_path))
 
 
-def chart_lineage(report, outer, matrix, preview=None, publication_source=PUBLICATION_DATA):
+def chart_lineage(report, outer, preview=None, publication_source=PUBLICATION_DATA):
     first = outer["repeats"]["1"]
-    counts = Counter(row["qualification"] for row in matrix["cases"])
-    labels = [f"Q{i}" for i in range(1, 6)]
     charts = [
         {"name": "ubcc-metric1-capacity-latency", "source_artifacts": [publication_source],
          "generator": GENERATOR, "metric_definition": "Capacity ratio and increase use the final Metric1 capacity contract; latency is independently defined as mean(all completed spill Outer) - mean(all completed ideal Outer).",
@@ -749,10 +727,6 @@ def chart_lineage(report, outer, matrix, preview=None, publication_source=PUBLIC
          "metric_definition": "Grouped UBCC and HA-VI ticks per operation at the fixed 256 KiB L3, 100% pressure configuration.",
          "expected_values": {"groups": [{"pressure_level": level["pressure_level"], "scope": scope, "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]), "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])} for level in report["metric3"]["levels"] if int(level["pressure_level"]) == 100 for key, scope in (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))]},
          "document_references": CHART_DOCUMENT_REFERENCES["ubcc-ha-vi-comparison"]},
-        {"name": "ubcc-q1-q5-qualification", "source_artifacts": [QUALIFICATION_MATRIX], "generator": GENERATOR,
-         "metric_definition": "Count of canonical fault-qualification matrix cases grouped by Q1-Q5 qualification.",
-         "derived_values": {"qualification_counts": {label: counts[label] for label in labels}, "total": sum(counts[label] for label in labels)},
-         "document_references": CHART_DOCUMENT_REFERENCES["ubcc-q1-q5-qualification"]},
     ]
     if preview is not None:
         refs = {
@@ -818,8 +792,7 @@ def main(argv=None):
         except ValueError:
             publication_source = str(publication_path)
         report, outer, preview = publication_sources(publication_path)
-        matrix = require_json(QUALIFICATION_MATRIX)
-        charts = chart_lineage(report, outer, matrix, preview, publication_source)
+        charts = chart_lineage(report, outer, preview, publication_source)
         diagrams = [{"name": stem, "document_references": DIAGRAM_DOCUMENT_REFERENCES[stem]}
                     for stem in DIAGRAM_STEMS]
         existing = require_json("docs/design/figures/figure_inventory.json") if (OUT / "figure_inventory.json").is_file() else {}

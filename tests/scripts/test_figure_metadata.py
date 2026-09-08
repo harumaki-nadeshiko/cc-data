@@ -46,8 +46,7 @@ class FigureMetadataTest(unittest.TestCase):
         report, outer, preview = GENERATOR.publication_sources(
             ROOT / GENERATOR.PUBLICATION_DATA)
         lineage = next(row for row in GENERATOR.chart_lineage(
-            report, outer, GENERATOR.require_json(GENERATOR.QUALIFICATION_MATRIX),
-            preview)
+            report, outer, preview)
                        if row["name"] == chart["name"])
         self.assertEqual(lineage, chart)
 

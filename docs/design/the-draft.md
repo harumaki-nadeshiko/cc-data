@@ -158,7 +158,7 @@ TC142-TC147 使用外部冻结 16N1S 一轮正式矩阵，三个 profile 共 18/
 4. `ubcc-two-phase-commit.drawio/png`：两阶段提交。
 5. Metric1/Metric2 结果图：复用现有性能图并分别给出冻结口径 caption。
 6. `ubcc-ha-vi-comparison.png`：Metric3 四组聚合柱状图。
-7. Q1-Q5 资格结果图：正文保留图引用与 caption，图形制作不属于本轮文档修改。
+7. Q1-Q5 资格结果使用正文表格和52/52结论表达，不单独保留柱状图。
 
 当前标准 Docker 镜像没有 draw.io CLI。`.drawio` 文件作为可编辑源，PNG 由相同布局参数
 生成；视觉校验包括尺寸、边界、文字溢出、透明度、色彩和图例。若甲方要求“必须由
