@@ -2,10 +2,10 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "44866df6b6d6a498e6df7f43abd0dece4fc3663120abdfa5a14cd24466901d31",
-      "embedded_source_sha256": "81ce4b05bf4260e08ba514fd6bc22c554330d80bc0c54f5fa26ad90e0ac5bc37",
+      "docx_sha256": "ac7f9f556ed1c4519cbde4b9af26271fd620620b03b92040082e08680121c0c7",
+      "embedded_source_sha256": "4252a1e6da63ad341220b1884a2c8a46ba7ede44c427c3848cef1741ce5c6675",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
-      "markdown_sha256": "81ce4b05bf4260e08ba514fd6bc22c554330d80bc0c54f5fa26ad90e0ac5bc37"
+      "markdown_sha256": "4252a1e6da63ad341220b1884a2c8a46ba7ede44c427c3848cef1741ce5c6675"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",

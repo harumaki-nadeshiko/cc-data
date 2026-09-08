@@ -437,6 +437,71 @@ $T_{\mathrm{visible}} ≈ K × τ_{\mathrm{link}} + T_{\mathrm{dir}} + T_{\mathr
 
 ### 7.2 状态集合的性能影响
 
+稳定状态描述事务收敛后的副本关系，瞬态状态则承接数据返回、权限变更和确认之间的依赖。
+以下分别讨论五种状态集合；其性能收益以相应访问模式出现为前提，不等同于状态数量的排序。
+
+#### 7.2.1 VI：简洁副本状态与外部权限管理
+
+VI 用有效与无效表示本地副本是否可用，适合副本管理简单、权限责任由外部机制承担的组织。
+有效位本身不区分唯一写者、多个读者或脏数据责任，因此跨节点写入仍需借助目录、集中仲裁
+或探测来证明其他副本不再可写。VI 不意味着每次访问都广播，也不意味着可以省去一致性仲裁。
+
+其局部状态判断路径短，稳定状态至少需要 1 bit；但远程 miss 的 latency 取决于附加机制
+如何找到数据源。若采用探测，traffic 与接收端处理会随候选节点数增加，限制持续 throughput；
+若配合精确目录，则仍需保存节点级 sharer 和事务状态。因而 VI 的适用性应按整个权限管理
+组织的 storage 和消息成本评估，而非只比较一个有效位。
+
+#### 7.2.2 MSI：显式写者与共享集合
+
+MSI 以 M 表示持有修改责任的单一 owner，以 S 表示只读共享副本，以 I 表示无效。
+目录式组织可以据此向 owner 回收最新数据，或向实际 sharer 发起失效，避免向无关节点查询。
+对确实存在多个读者的缓存行，这种表达已经覆盖共享读取和单写者切换的主要稳定关系。
+
+单一干净副本在 MSI 中仍表现为 S，首次写入需要完成 S→M 权限升级，即使实际上没有其他
+sharer，也要由全局仲裁确认。私有读后写场景因此增加控制往返、Home 事务占用和排队机会；
+持续共享场景则不一定因缺少 E 而增加相同成本。MSI 至少使用 2 bit 稳定状态，精确目录
+仍需位图和身份字段，适合共享访问占主导、私有干净升级优化价值较低的场景。
+
+#### 7.2.3 MESI：利用干净独占副本缩短私有写升级
+
+MESI 增加 E，表示一个节点持有唯一的干净副本。全局独占关系成立时，该节点可按本地一致性
+规则完成 E→M，无需重新执行共享副本失效路径。这对初始化后由单个节点使用的私有数据、
+先读后写的数据结构尤其有利：写入 latency 降低，同时减少跨节点升级消息和 Home 事务槽占用。
+
+E 的收益来自“已知唯一”，而不是绕过全局权限管理。其他节点请求该缓存行时，仍需由
+Home UBCC 控制器协调降级或迁移；高共享度下 E 停留时间较短，其 throughput 收益也随之减少。
+MESI 与 MSI 均可用 2 bit 编码，新增成本主要是 E 相关转换和本地写升级的状态衔接，
+而非稳定状态位宽。当前 UBCC 的 MESI 类全局目录采用这一权限表达，并由第 4 章的授权与
+提交机制维护全局关系。
+
+#### 7.2.4 MOESI：保留脏共享数据责任
+
+MOESI 增加 O，使一个节点在其他节点持有只读副本时继续承担脏数据责任。对于一个节点产生
+数据、多个节点随后读取的模式，O 持有者可以作为后续读取的数据源，不必先使 Home memory
+成为最新副本再服务每个读者。收益集中在可避免的写回和内存访问，而非所有远程读取。
+
+O 不规定数据必须直接到 requester：Home 中转仍会占用两段数据带宽，直接转发才可能进一步
+减少数据遍历。长期保留 O 可以降低 Home memory traffic，但也会使供数节点承担热点带宽；
+O 逐出、责任迁移和共享转写者都需要额外协调，可能增加事务占用和尾延迟。稳定状态至少
+需要 3 bit，瞬态 storage 还要表达脏共享责任的释放与接续。该状态集合适合脏共享复用充分的
+访问模式，在本章作为架构比较选项，当前 UBCC 全局目录采用 MESI 类状态。
+
+#### 7.2.5 MESIF：为干净共享读取指定响应者
+
+MESIF 增加 F，在多个干净共享副本中指定一个转发响应者。新读者到达时，目录和消息规则
+可以选择该响应者供数，减少多个副本同时响应或重新选择数据源的工作。与 O 不同，F 表达
+响应责任而非脏数据责任，适合读多写少、共享副本能够持续复用的数据。
+
+若 cache-to-cache 路径优于 Home memory 路径，F 可降低读 latency 和内存 traffic；若响应者
+较远或已饱和，指定 F 并不自动改善 throughput。F 逐出、迁移或被失效时，需要保持响应者
+身份与目录一致，写密集模式会反复支付这些维护消息。至少 3 bit 的稳定状态只是 storage
+增量的一部分，还需相应瞬态和完成跟踪。MESIF 同样是本章的比较选项，不能由节点内 CHI
+供数能力推导为当前 Outer 已具备 F 语义。
+
+状态位本身通常不是目录存储的主要部分。精确目录还需要 sharer 位图、tag、epoch 和控制位；
+事务执行期间还需要 requester、目标位图、Ack 位图和可选的 64 B 数据缓冲。下表归纳各状态
+集合的主要取舍，实际资源应结合第 7.7 节的目录与瞬态开销评估。
+
 | 状态集合 | 直接表达能力 | Latency 影响 | Throughput、Traffic 与 Storage 影响 |
 |---|---|---|---|
 | VI | 只区分有效与无效 | 需要额外机制定位写者、共享者和脏数据源 | 状态处理简单；精确失效和数据源选择依赖附加目录或探测；至少 1 bit 状态 |
@@ -445,12 +510,61 @@ $T_{\mathrm{visible}} ≈ K × τ_{\mathrm{link}} + T_{\mathrm{dir}} + T_{\mathr
 | MOESI | 增加 Owned | dirty shared read 可由 O 持有者供数，减少回写后再读路径 | 降低部分 Home memory 数据流量，增加 O 回收、转发和逐出事务；至少 3 bit 状态 |
 | MESIF | 增加 Forward | 多 sharer 读取时由 F 提供确定的 cache-to-cache 数据源 | 减少响应者选择和部分 Home/memory 数据流量，增加 forwarder 选举、迁移和失效流量；至少 3 bit 状态 |
 
-状态位本身通常不是目录存储的主要部分。精确目录还需要 sharer 位图、tag、epoch 和控制位；
-事务执行期间还需要 requester、目标位图、Ack 位图和可选的 64 B 数据缓冲。状态集合的收益
-主要来自减少特定路径的消息和数据移动，代价主要来自新增瞬态分支和生命周期管理。当前交付
-实现采用 MESI 类全局目录语义；MOESI Owned 和 MESIF Forward 是可组合的状态扩展方向。
-
 ### 7.3 Outer 组织方式
+
+Outer 组织决定消息如何到达仲裁点、数据如何跨节点移动，以及压力由哪些端口与事务资源承担。
+这一比较轴独立于第 7.2 节的状态集合，图 7-1 展示了两者与全局权威的关系。
+
+#### 7.3.1 专用 Home-directory 与 Home 数据中转
+
+每条地址由唯一 Home UBCC 控制器管理目录和提交。远程 owner 返回最新数据后，Home 再将
+数据与授权组织为面向 requester 的响应，使数据回收和权限推进在同一事务上下文内关联。
+这也是当前 UBCC 的 Outer 组织，节点内 CHI 继续负责本地缓存层级的一致性。
+
+该方式适合需要独立全局目录资源、精确目标选择和分层元数据容量的系统。Home memory
+本身为最新数据源时，数据可以直接从 Home 返回；远程 owner 为最新数据源时，中转增加
+完整数据线的链路遍历和 Home 数据端口负载。吞吐因此同时受目录并行度、事务槽占用及
+数据带宽制约。storage 除稳定目录外还包括 Recall 数据缓冲和等待状态，第 3.1 节给出了
+当前配置的资源规模，不能只按目录条目数衡量整个控制器。
+
+#### 7.3.2 专用 Home-directory 与直接数据转发
+
+直接数据转发保留 Home 的权限判定和提交职责，只改变经授权的数据分支：Home 指定合法
+source 与 target 后，owner 将数据直接发给 requester。对 Home、owner 和 requester 分离的
+远程供数场景，这可省去一次完整数据线中转，降低 Home 数据带宽压力，并缩短数据分支。
+
+requester 仍需同时取得数据与有效权限，旧 owner 的释放及失效确认也仍属于完成条件。
+因此改善 latency 的幅度取决于权限分支是否更慢；对 Home memory 直接供数的访问则没有
+相同收益。throughput 的瓶颈可能从 Home 转移至供数节点或互连出口。事务 storage 需要
+关联授权、source/target 和数据完成，处理两个分支不同的到达次序。这种组织适合远程 owner
+数据流量成为主要约束的系统，是与当前 Home 中转组织相区分的架构选项。
+
+#### 7.3.3 Outer CHI：标准事务承载与跨域衔接
+
+Outer CHI 将跨节点事务组织为 CHI 的 RN/HN/SN 角色以及 Req/Rsp/Snp/Dat 通道，由相应的
+全局 Home 和目录规则管理一致性。对已有跨 die/Socket CHI fabric 或第三方 agent 互操作需求
+的系统，标准事务、数据路径和 credit 流控可以复用既有互连能力；具体 DMT/DCT 路径仍取决于
+所选配置和 agent 支持，协议名称本身不保证每条事务都采用最短数据路径。
+
+独立通道和流控有助于组织并行事务，但 credit 等待、ID 占用和 bridge 背压仍会增加 latency
+并限制 throughput。traffic 由 snoop 目标和实际数据路由决定，不能仅以采用 CHI 推断其低于
+专用目录消息。storage 需计入 agent 状态、TxnID/DBID 关联、通道缓冲及完成关系。当前 UBCC
+在节点内复用 gem5 CHI，Outer 使用专用目录消息；图 7-4 对比的是这一边界与 Outer CHI
+组织所需资源，而非将节点内能力等同于跨节点实现。
+
+#### 7.3.4 广播或探测式 Outer：以接收端工作换取较小目录
+
+在不保存完整精确 sharer 或只保存有限提示时，请求可以向候选节点广播或探测，再根据响应
+确定数据源和权限关系。这降低稳定目录位图的存储要求，适合节点数较少、探测域受控或
+目录 SRAM 预算极紧的组织。有限提示还可以缩小候选范围，但需要相应规则保证遗漏节点
+不会保留冲突权限。
+
+并行发送使探测段数不必随节点数线性增长，然而 traffic、接收端过滤和响应收敛工作会增长。
+在共享稀疏时，许多节点处理的是与自身无关的请求；在高负载时，这些工作增加链路和队列
+竞争，抬高 latency 尾部并压低有效 throughput。省下的稳定 storage 还应与网络缓冲、响应
+集合及接收端瞬态资源一起计算，尤其不能把广播包的单次注入等同于全网只有一份传输成本。
+
+下表将数据组织与权威位置分开归纳；采用何种稳定状态均需配套完整的授权和完成规则。
 
 | Outer 组织 | 目录与提交权威 | 数据路径 | 主要性能特征 |
 |---|---|---|---|
@@ -459,33 +573,98 @@ $T_{\mathrm{visible}} ≈ K × τ_{\mathrm{link}} + T_{\mathrm{dir}} + T_{\mathr
 | Outer CHI | 全局 CHI Home/目录和 agent 规则 | 由 CHI data path、DMT/DCT 等机制组织 | 标准互操作和硬件流控能力强；增加通道、credit、ID 和 bridge 状态 |
 | 广播或探测式 Outer | 不保存完整精确 sharer，或只保存有限提示 | 向候选节点广播或探测数据和权限 | 稳定目录较小；流量和接收端处理随节点数增长 |
 
-CHI 定义 RN/HN/SN 角色、Req/Rsp/Snp/Dat 通道、事务标识和流控。当前方案在节点内复用
-gem5 CHI，在 Outer 层使用专用目录消息和 Home UBCC 控制器；两类组织可以与不同状态集合
-独立组合。
-
 ### 7.4 远程读与所有权迁移
 
-比较数据路径前需要区分目录权威、数据位置和提交权威：
+比较数据路径前需要区分目录权威、数据位置和提交权威，再按最新数据所在位置分析路径。
+以下路径计数沿用第 7.1 节的 `K` 与 `D`，用于表示依赖与遍历，不包含所有实现细节或重试。
 
-| 概念 | 回答的问题 | 当前 UBCC 中的位置 |
-|---|---|---|
-| coherence authority | 谁能判定当前 owner、sharer 与可授予权限？ | 地址 Home UBCC 控制器的 committed directory |
-| data location | 最新 64 B 数据此刻在哪里？ | Home memory、远程 owner 或事务数据缓冲；可随 Recall/写回变化 |
-| serialization/commit authority | 谁为同址冲突定序并使 intended state 对后续请求可见？ | Home UBCC 控制器的主事务；匹配 Clear 后提交 |
+#### 7.4.1 Coherence authority：决定合法权限与目标
+
+Home UBCC 控制器依据 committed directory 判定当前 owner、节点级 sharer 和可授予权限。
+即使某个节点已经持有可供读取的数据，也需要这一判定来确保供数身份和新副本权限有效。
+对远程读，这决定向谁 Recall；对写请求，这决定必须收敛哪些共享副本。
+
+目录命中和目标选择位于权限关键路径，因此 ResidentDir 命中率影响 latency，查询端口和
+并发事务资源影响 throughput。精确节点级位图用稳定 storage 换取较少的无关探测 traffic；
+Socket 用于 requester 身份与节点内路由，并不扩大 sharer 数。这一权威职责与数据是否
+经过 Home 无关，直接转发同样需要有效的目录判定。
+
+#### 7.4.2 Data location：决定完整数据线的移动成本
+
+最新 64 B 数据可能位于 Home memory、远程 owner 或事务数据缓冲。Recall 与写回可以改变
+数据位置，但不会把全局目录权威随数据一起移交。区分这两个概念后，才能判断一次优化
+是在减少内存访问、缩短互连路径，还是只改变控制消息的组织。
+
+数据位置直接影响 `D`、供数 latency 与端口 traffic；热点 owner 的出口和 Home 中转端口
+都可能成为 throughput 限制。事务缓冲还需要保存回收中的数据，直到对应权限步骤能够推进。
+因此 storage 分析应将目录元数据与 64 B 数据缓冲分开：H64 保存冷目录元数据，不是保存
+这些缓存行数据的另一层数据缓存。
+
+#### 7.4.3 Serialization/commit authority：决定同址可见顺序
+
+Home UBCC 控制器以同址主事务协调冲突请求，将 intended state 与 committed state 分开。
+Grant 保留权限，匹配的 Clear 到达后提交新目录状态；数据提前抵达并不使下一笔冲突请求
+自动获得新的权限。该机制把供数完成与全局关系更新联系起来，同时保持两者的职责独立。
+
+同址热点的 throughput 受主事务占用时间限制，不同地址则可利用多个事务槽并行推进。
+等待请求和完成记录增加瞬态 storage，Clear 等控制消息增加 traffic，但提供了明确的
+提交顺序和幂等完成依据。第 7.1 节的 requester 可见 latency 与事务退役时间应分别观察：
+数据分支变短可以加快读者取得数据，却未必同比缩短同址排队和控制器资源占用。
+
+#### 7.4.4 Home memory 最新：直接由 Home 供数
+
+当 Home memory 是权威数据源时，请求与数据返回形成 requester→Home→requester，约为
+`K≈2, D=1`。这里的数据起点已经是 Home，增加远程转发角色不会再减少一次数据中转。
+E、O、F 影响副本责任表达，但不凭空改变本次数据的位置。
+
+这一场景的 latency 主要由请求往返、目录和内存访问决定；throughput 取决于 Home memory
+与返回链路的服务能力。数据 traffic 为一次完整数据线遍历，事务仍需授权与完成状态，
+但不需要为远程 owner Recall 额外建立供数分支。它适合作为比较远程供数组织的基准场景，
+尤其应与 owner 最新场景分开统计，避免把直接转发收益套用到所有远程 miss。
+
+#### 7.4.5 远程 clean holder/F 供数：路径与响应责任共同决定收益
+
+若组织允许并选择远程干净持有者供数，Home 中转路径是 requester→Home→holder→Home→
+requester，约为 `K≈4, D=2`；Home 授权后直接供数的数据分支约为 `K≈3, D=1`。
+MESIF 的 F 可指定唯一干净响应者，其他状态集合若采用 clean holder 供数也需要明确的
+数据源选择规则。该路径是组织方式比较，不表示当前 UBCC 已采用 F 或任意干净副本转发。
+
+当远程缓存访问与链路的组合成本低于 Home memory 访问时，cache-to-cache 可改善 latency；
+若 holder 较远或繁忙，目录选择和额外节点访问也可能抵消收益。直接供数降低 Home 数据
+traffic，却把服务压力转移到 holder，throughput 应连同该节点出口一起评估。storage 方面，
+F 责任维护与直接传输完成跟踪是两类独立成本，不能把前者视为自动提供后者。
+
+#### 7.4.6 远程 dirty owner 最新：先满足数据与权限依赖
+
+远程 owner 持有最新脏数据时，Home memory 不能替代该数据源。当前 Home 中转通过
+requester→Home→owner→Home→requester 回收并返回数据，约为 `K≈4, D=2`。直接转发组织
+在 Home Recall/授权后由 owner 向 requester 供数，数据分支约为 `K≈3, D=1`。
+MOESI 的 O 可以在只读共享形成后保留脏数据责任，而 MESI 类目录按其降级规则完成共享转换。
+
+所有权迁移还要求旧 owner 释放权限、其他有效副本完成必要失效。数据可能先到，权限也
+可能先就绪，requester 可见完成受较慢分支约束：
+$T_{\mathrm{visible}} = \max(T_{\mathrm{data}}, T_{\mathrm{authority}})$。这解释了为什么减少数据
+遍历能够降低 traffic，却不一定同比降低写迁移 latency。热点 owner 供数、失效尾部和
+主事务占用共同决定 throughput；Recall 数据缓冲、目标集合及两个分支的完成关联构成
+瞬态 storage。该场景最能体现数据路径优化的价值，也最需要保持权限依赖的完整分析。
+
+图 7-2 对比上述 Home 中转和直接转发的数据分支；下列两表分别总结职责与路径。
 
 ![图 7-2 跨节点数据路径：Home 中转与直接转发](figures/ubcc-path-central-vs-direct.png =13cm)
 
 图 7-2　Home 中转与直接数据转发
+
+| 概念 | 回答的问题 | 当前 UBCC 中的位置 |
+|---|---|---|
+| coherence authority | 谁判定 owner、sharer 与可授予权限？ | Home UBCC 控制器的 committed directory |
+| data location | 最新 64 B 数据在哪里？ | Home memory、远程 owner 或事务数据缓冲 |
+| serialization/commit authority | 谁定序并提交同址状态？ | Home UBCC 控制器主事务；匹配 Clear 后提交 |
 
 | 场景 | Home 中转 | 直接数据转发 | 状态集合影响 |
 |---|---|---|---|
 | Home memory 最新 | requester→Home→requester，`K≈2, D=1` | 数据已在 Home，无额外收益 | E/F/O 不改变该数据位置 |
 | 选择远程 clean holder/F 供数 | requester→Home→holder→Home→requester，`K≈4, D=2` | Home 授权后 holder→requester，数据分支约 `K≈3, D=1` | MESIF 的 F 可指定唯一 clean cache-to-cache 响应者 |
 | 远程 dirty owner 最新 | requester→Home→owner→Home→requester，`K≈4, D=2` | Home Recall/授权后 owner→requester，数据分支约 `K≈3, D=1` | MOESI 的 O 可保留 dirty shared 数据源 |
-
-直接数据路径减少 Home 数据带宽，但 requester 可见完成仍取决于数据与权限两个分支：
-$T_{\mathrm{visible}} = \max(T_{\mathrm{data}}, T_{\mathrm{authority}})$。所有权迁移还需要旧 owner 完成释放，并由 Home UBCC
-控制器提交新 owner；减少数据遍历不能取消这一依赖。
 
 ### 7.5 Shared-to-Writer 与失效扇出
 
@@ -547,9 +726,61 @@ TxnID/DBID、四通道完成关系和 credit 状态；直接数据转发需要 s
 
 ### 7.8 状态集合与组织方式的组合选择
 
+组合选择应先识别限制性能的访问模式与资源，再决定是否增加状态责任或改变数据组织。
+前者针对副本关系，后者针对消息与数据承载；两者可以组合，但收益和成本需要分别核算。
+
+#### 7.8.1 MESI、专用 Home-directory 与 Home 中转
+
+这一组合利用 E 缩短私有干净数据的写升级，通过精确节点级 sharer 限制失效范围，并将目录
+与同址提交集中在地址对应的 Home UBCC 控制器。它适合同时重视全局权限精度、节点内资源
+隔离和目录容量扩展的系统，也是当前 UBCC 所采用的组合。
+
+私有读后写访问减少全局升级占用，稀疏共享减少无效控制 traffic；远程脏数据则承担 Home
+中转的 latency 与数据带宽。throughput 需兼顾目录并行度和 Home 端口，而不是只提高事务槽
+数量。storage 由 2-bit 稳定状态、精确位图、分层元数据和专用事务资源组成。ResidentDir 与
+H64 的价值在于按冷热度分配元数据容量，不改变最新缓存行数据的供数责任。
+
+#### 7.8.2 MESI/MOESI、专用 Home-directory 与直接数据
+
+当 owner 供数占比高且 Home 数据端口成为主要瓶颈时，可以保持专用目录权威，将数据分支
+改为授权后的 source→requester。MESI 已可与该组织组合；若脏共享读取还能持续复用数据，
+MOESI 的 O 则进一步减少回写需求。因此“直接数据”和“Owned”分别优化路径与数据责任，
+不能视为必须同时采用的一项能力。
+
+这类组合减少完整数据线中转，有助于数据受限的 throughput，也可能缩短读或 handoff 的
+数据 latency；权限收敛占主导时，可见完成收益受限。storage 需增加传输授权与完成跟踪，
+采用 O 时还需管理脏共享生命周期。适用判断应同时检查供数节点出口、互连竞争和共享模式，
+避免以 Home traffic 下降代替整个系统收益。该组合在此用于架构取舍分析。
+
+#### 7.8.3 MOESI/MESIF 与 Outer CHI
+
+已有跨 die/Socket CHI fabric 的系统，可以将 O 的脏共享责任或 F 的干净响应责任映射到
+相应 agent、目录和事务规则中，复用标准 snoop 与 data 通道组织。O 与 F 解决不同共享模式，
+应由工作负载和 agent 能力选择；使用 CHI 本身不等于实现任意完整状态集合。
+
+其 latency 与 throughput 收益取决于实际转发路径、通道并行度和 credit 供给，traffic
+取决于 snoop 过滤与数据源选择。storage 则应包含 agent、channel、ID、credit 和跨域 bridge
+状态，而不仅是 3-bit 稳定状态。当互操作或现有 fabric 复用具有明确价值时，这些成本才有
+对应的系统收益。图 7-4 保持节点内 CHI 与 Outer 组织的职责区分，当前 UBCC 的 Outer
+仍由专用消息和 Home UBCC 控制器管理。
+
+#### 7.8.4 VI/MSI 与广播或探测
+
+小规模系统可用较简洁的稳定状态结合受控探测域来管理副本，以较小的稳定目录换取节点
+参与权限查询。VI 需要外部机制补足写者与脏数据责任，MSI 则已表达 M 与 S；二者均需完整
+的仲裁、失效和完成规则，不能由局部状态简单推导全局事务也同样简单。
+
+节点数少且互连负载较低时，并行探测的 latency 可以受到控制；规模扩大后，候选节点工作、
+响应尾部和网络排队会限制 throughput。尤其当实际 sharer 很少时，traffic 仍可能接近全节点
+范围。storage 评估应同时计入接收端与网络瞬态缓冲。该组合适用于探测域足够小或稳定目录
+预算极紧的条件；节点扩展和稀疏共享则更能体现精确目录的价值。
+
 ![图 7-4 本地 CHI 与假设 Outer CHI 的边界及成本](figures/ubcc-inner-chi-outer-boundary.png =13cm)
 
 图 7-4　本地 CHI 与 Outer 组织边界
+
+下表汇总组合取舍。当前组合以精确 sharer、稳定事务身份和独立分层目录兼顾权限、流量与
+容量；其他组合分别对应 owner 数据带宽、脏共享复用、互操作或目录预算等不同主导约束。
 
 | 组合 | Latency/Throughput 特征 | Traffic 特征 | Storage 特征 | 适用条件 |
 |---|---|---|---|---|
@@ -557,11 +788,6 @@ TxnID/DBID、四通道完成关系和 credit 状态；直接数据转发需要 s
 | MESI/MOESI + 专用 Home-directory + 直接数据 | dirty read/handoff 数据路径缩短 | 减少一次完整数据线中转 | 增加直接传输授权和完成状态 | owner 数据流量成为主要瓶颈 |
 | MOESI/MESIF + Outer CHI | 可复用标准转发和数据通道机制 | fabric 提供标准 snoop/data 路径 | 增加 agent、channel、credit 和 ID 状态 | 已有跨 die/Socket CHI fabric 或第三方互操作需求 |
 | VI/MSI + 广播/探测 | 控制简单，规模增大时排队和尾部上升 | 低共享度时仍接近全节点流量 | 稳定目录较小，网络瞬态开销较大 | 小规模或目录存储极受限系统 |
-
-当前交付实现采用“节点内 CHI + MESI 类专用 Outer Home-directory + Home 数据中转”。该组合
-将全局目录、事务资源和 H64 容量独立于节点内 HN-F，并以精确 sharer 和稳定事务身份控制
-失效流量与重试。直接数据转发、MOESI/MESIF 状态扩展和 Outer CHI 可以在对应数据路径、
-共享模式或互操作需求成为主要约束时组合引入。
 
 ### 7.9 综合结论
 
