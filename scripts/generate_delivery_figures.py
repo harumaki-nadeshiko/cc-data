@@ -25,7 +25,7 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib import font_manager
-    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle, Polygon
 except ModuleNotFoundError:  # Metadata-only validation does not require rendering dependencies.
     matplotlib = plt = font_manager = None
     FancyArrowPatch = FancyBboxPatch = Rectangle = None
@@ -148,6 +148,7 @@ class Box:
     rounded: bool = True
     container: bool = False
     font_family: str = FONT
+    shape: str = 'rectangle'
 
 
 @dataclass(frozen=True)
@@ -302,12 +303,12 @@ def protocol_diagram():
 def verification_diagram():
     labels = ("协议设计\n不变量", "TLA+ 形式化\nSafety · Liveness", "定向机制\n仲裁 · waiter · retry",
               "端到端正确性\n数据 · 权限 · 完成", "Q1-Q5 故障资格\n52 个用例", "多拓扑 / HA\n规模与恢复闭环")
-    boxes = [Box(f"v{i}", label, 55 + i * 245, 150, 205, 90,
+    boxes = [Box(f"v{i}", label, 40 + i * 42, 485 - i * 78, 620 - i * 84, 74,
                  (PALE_BLUE, PALE_GREEN, PALE_AMBER, "#EAF2F8", PALE_ORANGE, PALE_GRAY)[i],
-                 (BLUE, GREEN, AMBER, BLUE, ORANGE, GRAY)[i], NAVY, 14, True) for i, label in enumerate(labels)]
-    edges = tuple(Edge(f"v{i}", f"v{i+1}", ("抽象", "机制映射", "实现", "故障扩展", "规模扩展")[i], label_y=-18 if i % 2 == 0 else 18) for i in range(5))
-    note = "从协议不变量到形式化、定向机制、端到端、故障与多拓扑验证的单向证据链"
-    return Diagram("ubcc-verification-stack", "UBCC 分层验证体系", 1540, 350, tuple(boxes), edges, note)
+                  (BLUE, GREEN, AMBER, BLUE, ORANGE, GRAY)[i], NAVY, 12, True,
+                  rounded=False, shape='trapezoid') for i, label in enumerate(labels)]
+    note = "基础不变量 → 模型证明 → 运行时证据 → 故障与规模覆盖"
+    return Diagram("ubcc-verification-stack", "UBCC 分层验证体系", 700, 625, tuple(boxes), (), note)
 
 
 def two_phase_diagram():
@@ -432,7 +433,8 @@ def write_drawio(diagram):
     ET.SubElement(root, "mxCell", {"id": "0"}); ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
     title = Box("title", diagram.title, 30, 15, diagram.width - 60, 45, "#FFFFFF", "none", NAVY, 24, True, False, False)
     for box in (title,) + diagram.boxes:
-        cell = ET.SubElement(root, "mxCell", {"id": box.id, "value": box.label, "style": style_string(box), "vertex": "1", "parent": "1"})
+        shape_style = 'shape=trapezoid;size=0.08;' if box.shape == 'trapezoid' else ''
+        cell = ET.SubElement(root, "mxCell", {"id": box.id, "value": box.label, "style": style_string(box) + shape_style, "vertex": "1", "parent": "1"})
         ET.SubElement(cell, "mxGeometry", {"x": str(box.x), "y": str(box.y), "width": str(box.w), "height": str(box.h), "as": "geometry"})
     if diagram.note:
         note = Box("note", diagram.note, 80, diagram.height - 70, diagram.width - 160, 35, "#FFFFFF", "none", "#606060", 12)
@@ -493,6 +495,10 @@ def render_fallback(diagram):
     for box in sorted(diagram.boxes, key=lambda item: (not item.container, item.y, item.x)):
         patch = FancyBboxPatch((box.x, box.y), box.w, box.h, boxstyle="round,pad=0.01,rounding_size=10" if box.rounded else "square,pad=0",
             facecolor=box.fill, edgecolor=box.stroke, linewidth=1.5, linestyle="--" if box.dashed else "-")
+        if box.shape == 'trapezoid':
+            patch = Polygon([(box.x+40, box.y), (box.x+box.w-40, box.y),
+                             (box.x+box.w, box.y+box.h), (box.x, box.y+box.h)],
+                            facecolor=box.fill, edgecolor=box.stroke, linewidth=1.5)
         ax.add_patch(patch)
         ax.text(box.x + (12 if box.container else box.w / 2), box.y + (18 if box.container else box.h / 2), box.label,
                 ha="left" if box.container else "center", va="top" if box.container else "center", fontsize=box.size,

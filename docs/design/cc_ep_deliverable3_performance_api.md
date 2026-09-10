@@ -16,7 +16,7 @@
 8. 集成流程与验证模板
 9. 总结
 附录 A 指标口径
-附录 B TC120-TC147 与 TC217 场景明细
+附录 B TC120-TC140、TC142-TC147 与 TC217 场景明细
 附录 C TC228-TC235 场景明细
 附录 D 四拓扑扩展性数据
 附录 E 接口速查表
@@ -70,7 +70,7 @@ UBCC 最终性能验收包括容量效率、适用场景端到端时延和 HA-VI
 | 结果层级 | Testcase | 论证职责 |
 |---|---|---|
 | 合同计分集 | TC131、TC135-TC140、TC217 | 计算指标 1/2 最终合同数值 |
-| 容量与机制集 | TC120-TC129、TC141 | 验证访问模式、offload/onload、writeback、replay 和 shared-writer recovery |
+| 容量与机制集 | TC120-TC129 | 验证访问模式、offload/onload、writeback 和 replay |
 | 真实容量压力集 | TC130-TC134 | 验证热点复用、catalog、checkpoint、frontier 和 sliding window |
 | 代表应用集 | TC142-TC147 | 验证数据库、FaaS、图计算和 feature store 在 16N1S Level-A 下的应用价值 |
 
@@ -126,7 +126,7 @@ spill-IdealDir 是指标 1 附加时延使用的实验角色。它保持 spill-n
 | 指标 1 | TC131 | 8N1S | Home 目录服务、catalog 扫描与写权限升级 |
 | 指标 2 核心计分 | TC135-TC140 | 3N1S | owner、sharer、新 requester 与验证者分工 |
 | 指标 2 catalog | TC217 | 2N1S | catalog 提供者与 read-mostly 执行者 |
-| 机制与容量支撑 | TC120-TC132、TC135-TC141 | 主要为 3N1S | 共享、所有权迁移、换入换出与恢复 |
+| 机制与容量支撑 | TC120-TC132、TC135-TC140 | 主要为 3N1S | 共享、所有权迁移、换入换出与恢复 |
 | 多节点支撑 | TC133 | 8N1S | 多 reader 共享与压力后复用 |
 | 多 Socket 支撑 | TC134 | 8N2S | 16 个执行 plane 和跨 Socket 窗口复用 |
 | 代表应用 | TC142-TC147 | 16N1S Level-A | 数据库、FaaS、图计算和 feature store |
@@ -241,7 +241,6 @@ workload 发起目标操作，结束点为数据和权限满足该 workload 的�
 - TC120-TC124 比较多类访问模式下的完整场景行为；
 - TC125-TC129 验证 Backstore 机制路径的完成性；
 - TC130-TC134 展示固定容量压力下的真实数据复用场景；
-- TC141 验证 spill 后 shared-to-writer 恢复；
 - TC142-TC147 展示 16N1S Level-A 代表应用结果。
 
 ---
@@ -329,7 +328,6 @@ spill-IdealDir 不发生 Backstore fill。两角色的均值差为 10.535 ns。
 | TC127 | writeback offload/onload | 验证脏写回持久化和重新装入 |
 | TC128 | clean evict offload/onload | 验证干净逐出和元数据恢复 |
 | TC129 | long mixed integration | 验证多轮 spill/fill 与所有权迁移 |
-| TC141 | shared-writer recovery | 验证 spill 后共享转写者恢复 |
 
 TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径均通过。该组结果说明
 正式容量收益建立在完整的元数据生命周期之上。
@@ -349,7 +347,6 @@ TC120-TC124 的三 profile 运行均通过；TC125-TC129 的适用 spill 路径�
 | TC127 | naive N/A；适用 spill profiles 通过 | writeback-flush 61,996 ticks，2,463,499.705 ns |
 | TC128 | naive N/A；适用 spill profiles 通过 | verify-read 64 ticks/op，2543.132 ns/op |
 | TC129 | naive N/A；适用 spill profiles 通过 | V0 onload 61 ticks/op，2423.922 ns/op；V1 onload 79 ticks/op，3139.178 ns/op |
-| TC141 | naive N/A；spill-noopt/optimized 通过 | workload total node0/node1/node2 = 36,814 / 36,825 / 36,825 ticks |
 
 ![图 3-2 TC120-TC124 完整场景降幅](figures/ubcc-tc120-124-scenarios.png =10cm)
 
@@ -364,9 +361,9 @@ TC143/naive 采用 9 月 7 日完整通过的本地隔离重跑，不重复计�
 
 容量柱为 max(spill ResidentDir capacity, Home0/socket0 H64 exact live) / naive capacity，
 不把 resident 与 H64 重复相加。每个 TC 内五拓扑取几何平均（GM），末柱为六个 TC 的 GM。
-Delta 为每臂合并所有进程 completed Outer 事件后的均值差乘 2，单位 cycles @ 2 GHz；
+Delta 为每个实验配置合并所有进程 completed Outer 事件后的均值差，图中单位为 ns；
 每个 TC 内五拓扑取算术平均（AM），末柱为六个 TC AM 的 AM。汇总柱不重复计权。
-负 Delta 原样显示；参考线分别为 1.5× 以及 0、50 cycles。两个压力分面独立汇总。
+负 Delta 原样显示；参考线分别为 1.5× 以及 0、25 ns。两个压力分面独立汇总，表中保留 2 GHz 周期换算。
 
 | 目录目标压力 | 实测坐标 / 选定臂 | 容量层级 GM | Delta 层级 AM（cycles @ 2 GHz） |
 |---:|---:|---:|---:|
@@ -405,10 +402,9 @@ TC140 的 naive、spill-noopt 和 optimized 均值均为 119.209 ns，低于 500
 
 六个适用场景按 case 等权聚合，TC140 保留为中性控制项。
 
-![图 4-1 指标 2 适用场景端到端时延](figures/ubcc-metric2-reductions.png =11cm)
+![图 4-1 指标 2 适用场景端到端时延](figures/ubcc-metric2-reductions.png =16cm)
 
-图 4-1　指标 2 原场景单轮 speedup（naive / optimized，对数轴）；参考线 1× 与
-1/0.9×（时延下降 10%）。适用 TC 等权 GM 仅用于图示，不是正式 AM 降幅判据。
+图 4-1　适用场景 naive / optimized 时延比（对数轴）；虚线表示 10% reduction。聚合采用各 TC 百分比降幅的算术平均。
 
 ### 4.2 聚合结果
 
@@ -457,52 +453,36 @@ TC130、TC133 和 TC134 表明 UBCC 在目录压力后仍能保留有价值的�
 
 图 4-2　TC130-TC134 压力后主路径变化
 
-### 4.6 代表应用：历史 optimized 与新 spill-noopt 扩展分区
+### 4.6 代表应用：目录压力下的完整 episode
 
-TC142-TC147 覆盖数据库、FaaS、图计算和 feature store。每个 testcase 均完成 naive、
-spill-noopt 和 optimized 三个 profile 的正确性运行，共 18/18 通过。下表使用同一完成边界下
-可直接比较的历史 naive 与 optimized 端到端值；历史 spill-noopt 同口径性能主值缺失记为 N/A。
-此历史表不作为下方新图 4-3 的数值源。
+TC142–TC147 分别模拟 OLTP 缓冲池、索引页访问、WAL、租户热调用、图 frontier 和 feature store。每批访问配比分别为 28R/4W、60R/4W、32W、56R/8W、60R/4W、56R/8W；每 plane 的 seed 行数分别为 32、137、192、136、192、136。索引场景使用确定性索引页序列，而非真实指针追踪。
 
-| Testcase | 应用场景 | naive ns/op | spill-noopt ns/op | optimized ns/op | optimized 降幅 |
-|---|---|---:|---:|---:|---:|
-| TC142 | OLTP buffer pool | 5200.314 | N/A | 4437.245 | 14.674% |
-| TC143 | B-tree traversal | 3051.768 | N/A | 2267.770 | 25.690% |
-| TC144 | WAL/checkpoint | 5294.067 | N/A | 4400.848 | 16.872% |
-| TC145 | FaaS warm invocation | 2886.169 | N/A | 2291.965 | 20.588% |
-| TC146 | Graph frontier | 3184.057 | N/A | 2266.781 | 28.808% |
-| TC147 | Feature store | 2892.318 | N/A | 2321.671 | 19.730% |
+计时区间从批处理循环开始延续至最后一批同步完成，包含逐批压力写入、屏障和业务服务；seed 与 warm 阶段位于区间之前。分母仅为固定业务操作数（每 plane 1024 或 2048）。因此该量表示压力增长过程中每个有效业务操作摊销的完整 episode 成本。它适合评估容量压力与业务共同推进的端到端效果；服务阶段时延则用于解释业务访问路径，两者分别保留原有完成边界。
 
-六个代表应用均显示 optimized 相对 naive 的端到端收益，降幅范围为 14.67%–28.81%。
-该矩阵证明 UBCC 的容量和协议机制可以用于代表性应用模式与 16N1S Level-A 协议节点规模。
+对每个实验配置，先计算各 plane 的 counter_ticks × 10⁹ / counter_frequency_hz / operations，再对 plane 等权平均得到 ns/op。对每个 TC、拓扑、压力坐标计算 100 × (1 − spill-noopt ns/op / naive ns/op)，然后按拓扑等权算术平均。计数器频率为 25,165,824 Hz，每 tick 约 39.736 ns；2 GHz 处理器周期为 0.5 ns，gem5 仿真 tick 采用其独立时基。
 
-图 4-3 改用 2026-09-06–08 新批次全部 60 个 TC×拓扑×压力坐标的 naive 与 spill-noopt
-E2E 配对，共 120 个选定臂。应用臂不是 optimized，不与上方历史表混合。
-沿用 summarize_database_perf_matrix.py 的 mean_plane_ns_per_operation：每 plane 的
-counter_ticks × 10⁹ / frequency / operations 后跨 plane 等权平均；保留每 plane 的原始
-operations 与频率。TC142–147 分别采用 db_oltp、db_btree、db_wal、faas、graph、feature
-的 end_to_end phase，不用 service 或 Outer 顶替。全部预期 plane 必须齐全且不重复。
+全局目录目标 T = 65,536 × 压力百分比，压力写入量 Q = T − plane 数 × seed，压力行由各 plane 分摊，业务地址均指向 Home0/socket0。8N2S 的两个 worker 共享节点内资源，16N1S 为每节点一个 worker；16N1S 的 naive/spill ResidentDir 容量为 55,296/49,152，其余已测拓扑为 65,536/57,344。因此跨拓扑结果同时反映并行组织和资源预算，配对降幅在相同拓扑内计算。
 
-| 新应用目录压力 | 实测配对坐标 | naive / spill-noopt 层级 GM |
-|---:|---:|---:|
-| P175 | 30 / 30 | 1.107× |
-| P200 | 30 / 30 | 1.109× |
+| Testcase | P175 降幅 | P200 降幅 | 两压力等权降幅 |
+|---|---:|---:|---:|
+| TC142 | 6.210% | 7.393% | 6.801% |
+| TC143 | 13.135% | 12.983% | 13.059% |
+| TC144 | 8.557% | 8.930% | 8.743% |
+| TC145 | 8.181% | 8.393% | 8.287% |
+| TC146 | 12.718% | 13.065% | 12.891% |
+| TC147 | 8.122% | 8.761% | 8.441% |
 
-![图 4-3 TC142-TC147 新应用 E2E speedup](figures/ubcc-tc142-147-applications.png =16cm)
+![图 4-3 TC142-TC147 应用 E2E 降幅](figures/ubcc-tc142-147-applications.png =16cm)
 
-图 4-3　新应用 naive / spill-noopt E2E speedup；每 TC 内跨拓扑 GM，再跨 TC GM；
-P175/P200 分面独立汇总，参考线 1×、1/0.9×。不把该 GM 当作原场景 10% 正式通过判据。
+图 4-3　naive 与 spill-noopt 的完整 episode 降幅；每个 TC 内 3N1S、8N1S、16N1S 等权，两个压力分面独立展示。
+
+注：本节为单轮实测。TODO：补充其他拓扑及 optimized 配对结果；正式验收采用既定三轮与适用门槛。
 
 ---
 
 ## 5. 指标 3：UBCC 与 HA-VI 配对比较
 
-本章表与图 5-1、5-2 仍为历史 2N1S/P100 正式参考模型结果，不是 9 月 8 日多拓扑新实测。
-2026-09-08 多拓扑 P100 批次计划 480 臂（8 TC×6 拓扑×5 pairs×2），先做 96 臂 gate。
-本次只读检查时 state/progress.json 为 BLOCKED，首轮 2N1S/TC228 的 HA-VI 臂 runner
-return code 1，exit.json 为 1；未形成完整 gate，不发布新 P100 总体 GM，缺失不画零柱。
-9 月 7 日 metric23-single 的 M3 为 2N1S/P0 单对，不混入 P100。新补测尚不能支持
-TC×多拓扑比较，因此保留有覆盖的历史图，所有历史数值仅在原配置范围内解释。
+本章配对结果对应 2N1S、P100 的共同配置。扩展实验采用 3N1S、3N2S、8N1S、8N2S、16N1S 五种拓扑，八个 TC 在 UBCC 与 HA-VI 两种配置下各执行三轮，共 240 次。首轮覆盖全部 80 个实验配置，核验正确性、完成边界及配对指纹后，再执行两轮重复。核心组内三个 TC 等权，代表组内五个 TC 等权；轮次与拓扑权重固定。
 
 ### 5.1 场景定义与关键路径
 
@@ -658,7 +638,7 @@ UBCC 时延更低。
 且正确的协议执行。
 
 支撑结果还包括 TC120-TC129 的机制与性能路径、TC130-TC134 的真实容量压力场景、
-TC141 shared-writer recovery，以及 TC142-TC147 的 16N1S Level-A 三 profile 应用矩阵。
+以及 TC142-TC147 的 16N1S Level-A 三 profile 应用矩阵。
 
 ### 6.2 重型回归
 
@@ -783,7 +763,7 @@ UBCC 在容量效率、适用场景时延和 HA-VI 配对比较三个维度均�
 
 ---
 
-## 附录 B TC120-TC147 与 TC217 场景明细
+## 附录 B TC120-TC140、TC142-TC147 与 TC217 场景明细
 
 以下说明统一按发布事件组织：拓扑/角色定义参与者，阶段描述根操作序列，压力/工作集说明
 容量条件，主测量/完成边界定义可计量事件，能力列只陈述该 testcase 实际展示的性质。
@@ -810,7 +790,7 @@ TC122 为 25,265.33/25,270.33/25,266.67 ticks；TC123 为
 15,031.67/15,038.33/15,032.33 ticks，顺序均为 naive/spill-noopt/optimized。
 TC125-TC129 报告适用 spill 路径的绝对值；语义匹配的 naive 对照缺失，比较项记为 N/A。
 
-### B.2 TC130-TC141
+### B.2 TC130-TC140
 
 | TC | 拓扑/角色 | 阶段与操作序列 | 压力/工作集 | 主测量/完成边界 | 展示能力 |
 |---|---|---|---|---|---|
@@ -825,7 +805,6 @@ TC125-TC129 报告适用 spill 路径的绝对值；语义匹配的 naive 对照
 | TC138 | 3N1S；node1 dirty owner，node2 新 writer | dirty seed → pressure → 24 handoff stores → verify | 24 hot + 192 pressure | 24 handoff store samples | dirty owner handoff 及其成本 |
 | TC139 | 3N1S；node1 mixed executor，node2 验证 | seed/share/owner → pressure → 16×16 mixed ops | 16 hot + 192 pressure | 16 个 16-op batch samples | shared/owner 状态批量复用 |
 | TC140 | 3N1S；node0 两个 L2 cluster，node2 verifier | setup → 24 cross-L2 stores → verify | 24 lines | 24 store samples | 低时延 cross-L2 控制场景 |
-| TC141 | 3N1S；node1 share/write，node2 verify | seed 16 → share → pressure 192 → fill/release → writes | 16 hot + 192 pressure | release/fill/原 reqId 响应及 32 reads | spill 后 shared-writer recovery |
 
 ### B.3 TC142-TC147 与 TC217
 

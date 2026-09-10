@@ -136,7 +136,7 @@ TC232 hot-key read 略偏 HA-VI，write 明显偏 UBCC；TC234 queued-token stor
 ### 5.1 指标 1/2 结果分层说明
 
 正式合同总分保持冻结口径：指标 1 由 TC131 计分，指标 2 由 TC135-TC140 和 TC217
-计分。TC120-TC129、TC130-TC134、TC141、TC142-TC147 作为正式支撑结果进入正文，
+计分。TC120-TC129、TC130-TC134、TC142-TC147 作为正式支撑结果进入正文，
 但不在缺少冻结权重的情况下混入合同总分。
 
 该调整不是删除实验，而是明确每组实验的论证职责：
@@ -144,7 +144,6 @@ TC232 hot-key read 略偏 HA-VI，write 明显偏 UBCC；TC234 queued-token stor
 - TC120-TC124：访问模式和低/高复用条件；
 - TC125-TC129：Backstore 生命周期正确性；
 - TC130-TC134：真实容量压力和多拓扑；
-- TC141：shared-writer recovery 资格门禁；
 - TC142-TC147：16N1S 代表应用价值。
 
 TC142-TC147 使用外部冻结 16N1S 一轮正式矩阵，三个 profile 共 18/18 PASS。由于当前

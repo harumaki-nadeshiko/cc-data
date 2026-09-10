@@ -44,7 +44,7 @@
 携带、转发和完成；不要再按旧架构额外启动 barrier manager。
 
 源码强制拓扑如下：`32-35,39,81 -> 2s`；`82,90-94,133 -> 8n1s`；
-`95-101,134 -> 8n2s`；`135-141 -> 1s`；`210-227 -> 2n1s`。
+`95-101,134 -> 8n2s`；`135-140 -> 1s`；`210-227 -> 2n1s`。
 其余 TC 没有 runner 级硬约束，目录中的 canonical topology 是推荐和 workload
 语义基线。portable TC142-147 可由专用矩阵以 2N1S、3N1S、3N2S、8N1S、8N2S
 编译运行。
@@ -190,7 +190,7 @@ env TIMEOUT_SEC=10800 EP_SUPERVISOR=1 EP_SUPERVISOR_INTERVAL=60 \
 | `PERF6144` | bloom 512、SRAM 6144、ways 2；三 profile 同上 | 同上 | TC122-123 |
 | `PERF124` | naive/spill-noopt `--batch-rs=0`，optimized `--batch-rs=1` | direct-fwd 始终 0；其余按三 profile | TC124 |
 | `SPILL1` | bloom 512、SRAM 6144、ways 1、policy spill；noopt batch0，opt batch1 | noopt/opt 对应；naive 不适用 | TC125-129 |
-| `STRESS5000` | bloom=`UBCC_BLOOM_BYTES` 缺省512、SRAM5000、ways2、set-bits2；三 profile | TC130、135-139、141 强制 direct0；opt silent1/batch1 | benchmark/mechanism |
+| `STRESS5000` | bloom=`UBCC_BLOOM_BYTES` 缺省512、SRAM5000、ways2、set-bits2；三 profile | TC130、135-139 强制 direct0；opt silent1/batch1 | benchmark/mechanism |
 | `REALCAP` | TC131-134 的 policy 均由 `UBCC_POLICY` 独立选择；spill: bloom61440、SRAM524288、ways0、set-bits0；naive: bloom0；UBIO batch0 | gem5 profile 由 `EP_PERF_PROFILE` 独立选择：naive/noopt=`silent0 direct0 batch0`，optimized=`silent1 direct0 batch1` | TC131-134 |
 | `TC140P` | 只切 batch0/batch1 | noopt 或 opt，direct0；目录本身不施压 | TC140 |
 | `PORTABLE legacy` | bloom128、SRAM4352、ways1、set-bits0；naive/batch0、spill/batch0、spill/batch1 | noopt/opt 强制 direct0 | TC142-147 旧 tiny-directory stress |
@@ -352,7 +352,6 @@ pass 摘要以当前 verifier 为准。
 | 138 | dirty handoff | perf | 1s | `e2e_tc138_dirty_handoff_store` | STRESS5000 | 24 reads、24 store samples | common | 3600/600 | O | spill可慢于naive |
 | 139 | mixed throughput | perf | 1s | `e2e_tc139_mixed_batch_throughput` | STRESS5000 | 24 reads、16 batch samples、256-op timer | common | 3600/600 | O | 历史失败版不等于现版 |
 | 140 | cross-L2 owner store | perf | 1s | `e2e_tc140_cross_l2_owner_store` | TC140P | 24 reads、24 samples | common | 3600/600 | O | 目录无压力 |
-| 141 | spill writer recovery | correctness | 1s | `e2e_tc141_spill_shared_writer_recovery` | STRESS5000 | 32 reads+spill/fill/release证据 | common | 3600/600 | O | naive语义不适用 |
 | 142 | OLTP buffer pool | perf | portable | `e2e_tc142_db_oltp_buffer_pool` | PORTABLE/512K | 每plane 5读、32 samples、双timer | common | 21600/1800 | O/C | 最大支持拓扑8n2s；见扩展表 |
 | 143 | B-tree traversal | perf | portable | `e2e_tc143_db_btree_traversal` | PORTABLE/512K | 每plane 5读、32 samples、双timer | common | 21600/1800 | O/C | 最大支持拓扑8n2s |
 | 144 | WAL checkpoint | perf | portable | `e2e_tc144_db_wal_checkpoint` | PORTABLE/512K | 每plane 17读、32 samples、双timer | common | 21600/1800 | O/C | 最大支持拓扑8n2s |
@@ -434,13 +433,12 @@ pass 摘要以当前 verifier 为准。
 | 134 | 8n2s | spill-noopt | spill | noopt | 10800/1800 |
 | 134 | 8n2s | optimized | spill | silent1,batch1,direct0 | 10800/1800 |
 
-### 8.4 TC135-TC141 profile 展开
+### 8.4 TC135-TC140 profile 展开
 
 | TC | naive | spill-noopt | optimized | CASE/STALL |
 |---|---|---|---|---:|
 | 135-139 | RUN：STRESS5000 naive | RUN：spill batch0 | RUN：spill batch1 | 3600/600 |
 | 140 | RUN：default dir batch0 | RUN：batch0 | RUN：batch1 | 3600/600 |
-| 141 | SKIP：要求spill/fill/release证据 | RUN：STRESS5000 spill | RUN：STRESS5000 spill+opt | 3600/600 |
 
 ### 8.5 TC142-TC147 legacy tiny-directory
 
@@ -698,8 +696,8 @@ bash scripts/run_tc90_default_sweep.sh
 | 项 | 内容 |
 |---|---|
 | 目的 | 历史 PASS sentinel 少于3次的低频 correctness 队列 |
-| TC | 1-54、63-64、80-82、84-85，加128和141两profile；manifest期望64 targets |
-| topology/profile | optimized；双socket集合正确分到2s；128/141专用profile |
+| TC | 1-54、63-64、80-82、84-85，加128 spill-noopt；manifest期望62 targets |
+| topology/profile | optimized；双socket集合正确分到2s；128专用profile |
 | timeout/stall | CASE900、STALL600；容器内串行 |
 | 输出 | targets.tsv、matrix.tsv、queue_manifest.txt |
 | caveat | selection 是脚本创建时的历史扫描概念；现实现会无条件注册静态集合，不是动态只跑<3；TSV保留RUNNING和最终行 |

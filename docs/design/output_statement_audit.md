@@ -428,7 +428,7 @@ STEP5 ... Port enabled
 - `UBCC-WB-REQ`
 - `WB-DATA-PERSIST`
 
-代表依赖：TC125-TC129、TC141、TC200-TC203。
+代表依赖：TC125-TC129、TC200-TC203。
 
 这些 marker 暂时不能直接删除。但长期应将“test oracle”与普通调试日志分离：
 

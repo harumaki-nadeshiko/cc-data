@@ -10,7 +10,7 @@ PUBLICATION_PATH = ROOT / "docs/design/performance_publication_data.json"
 FORMAL_PATH = ROOT / "docs/design/cc_ep_deliverable3_performance_api.md"
 
 EXPECTED_TCS = {
-    *(f"TC{tc}" for tc in range(120, 148)),
+    *(f"TC{tc}" for tc in (*range(120, 141), *range(142, 148))),
     "TC217",
     *(f"TC{tc}" for tc in range(228, 236)),
 }
@@ -35,6 +35,7 @@ class PerformancePreviewDataTest(unittest.TestCase):
 
         self.assertEqual(set(data["required_testcases"]), EXPECTED_TCS)
         self.assertEqual(set(data["testcases"]), EXPECTED_TCS)
+        self.assertNotIn("TC141", formal)
         for tc in EXPECTED_TCS:
             self.assertIn(tc, appendix)
             item = data["testcases"][tc]
@@ -88,7 +89,7 @@ class PerformancePreviewDataTest(unittest.TestCase):
         data = json.loads(DATA_PATH.read_text(encoding="utf-8"))["testcases"]
         for tc in ("TC120", "TC121", "TC122", "TC123", "TC124"):
             self.assertTrue(any(key.startswith("retained_") for key in data[tc]["measurements"]))
-        for tc in ("TC125", "TC126", "TC127", "TC128", "TC129", "TC141"):
+        for tc in ("TC125", "TC126", "TC127", "TC128", "TC129"):
             self.assertTrue(any(key.startswith("retained_") for key in data[tc]["measurements"]))
 
     def test_formal_report_uses_docx_compatible_markdown_images(self):

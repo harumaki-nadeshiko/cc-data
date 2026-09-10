@@ -2,24 +2,24 @@
   "pairs": [
     {
       "docx": "docs/design/cc_ep_protocol_overview.docx",
-      "docx_sha256": "b6d50c3bcc9c2c41da6b00affbce425b9c1d44575ba5de9a555650cbec756a7c",
+      "docx_sha256": "9e39d30297fc770f9edb1448db19a12b3ef3a26bcecca77a3b92994ffe411e04",
       "embedded_source_sha256": "6180de499ead3e4f955bff22bb582a66169971905bff8119454ac4c961089442",
       "markdown": "docs/design/cc_ep_protocol_overview.md",
       "markdown_sha256": "6180de499ead3e4f955bff22bb582a66169971905bff8119454ac4c961089442"
     },
     {
       "docx": "docs/design/cc_ep_deliverable2_verification_reliability_ha.docx",
-      "docx_sha256": "3e43e65033878df141fb2ac9d6503fc5e0efad3c10681ddff214fa2e56109b77",
+      "docx_sha256": "0c1c8cc14601a89472b9c6ea4a3d110fc2a0c93993641203584b106d2310bc3a",
       "embedded_source_sha256": "f37c1cb6439dcd7710270736318f4fdb0fcaae6d2776988666122513889e454f",
       "markdown": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
       "markdown_sha256": "f37c1cb6439dcd7710270736318f4fdb0fcaae6d2776988666122513889e454f"
     },
     {
       "docx": "docs/design/cc_ep_deliverable3_performance_api.docx",
-      "docx_sha256": "00c136efef93fd4e4f9a481541f038194f58e823442719319315245b889acd7a",
-      "embedded_source_sha256": "3096d168b98c6b5bcce2c9f7f15ef18dc2dd173c6bbcabc26187ebecd4c89d45",
+      "docx_sha256": "4db88736d8f609384f1a2068e23d29d2a7fcd5dc7b04e5a100c495694c698822",
+      "embedded_source_sha256": "e97c647e8d0696aec6693242d4fee8dd4a63c3c58e385f1bcb281f89ae1c3211",
       "markdown": "docs/design/cc_ep_deliverable3_performance_api.md",
-      "markdown_sha256": "3096d168b98c6b5bcce2c9f7f15ef18dc2dd173c6bbcabc26187ebecd4c89d45"
+      "markdown_sha256": "e97c647e8d0696aec6693242d4fee8dd4a63c3c58e385f1bcb281f89ae1c3211"
     }
   ],
   "schema_version": 1

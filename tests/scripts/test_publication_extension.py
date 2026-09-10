@@ -73,6 +73,15 @@ class ExtensionTests(unittest.TestCase):
         values = [100*(1-r['means_ns']['optimized']/r['means_ns']['naive']) for r in m2['comparisons'] if r['applicable']]
         self.assertAlmostEqual(sum(values)/len(values),65.29371670248797)
 
+    def test_stage2_application_reduction_weights(self):
+        groups, total = hierarchy(self.rows, 175, 'reduction_pct')
+        self.assertTrue(all(len(g['values']) == 3 for g in groups))
+        self.assertAlmostEqual(groups[0]['summary'], 6.2096, places=4)
+        self.assertAlmostEqual(total, sum(g['summary'] for g in groups)/6)
+        self.assertTrue(any(r['reduction_pct'] < 0 for r in self.rows))
+        with self.assertRaises(ValueError):
+            hierarchy(self.rows[1:], 175, 'reduction_pct')
+
     def test_canonical_no_fallback(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'stderr.log'

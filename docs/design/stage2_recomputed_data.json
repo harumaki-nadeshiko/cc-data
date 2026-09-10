@@ -1,0 +1,886 @@
+{
+  "definition": "mean-plane ns/op; reduction AM; equal topology and pressure weights",
+  "measured_coordinates": [
+    {
+      "pressure_pct": 175,
+      "tc": 142,
+      "topology": "3n1s",
+      "capacity_ratio": 1.6519622802734375,
+      "outer_delta_cycles_2ghz": 25.869023991086124,
+      "naive_e2e_ns_per_op": 34061.16997616158,
+      "spill_noopt_e2e_ns_per_op": 34405.50062805414,
+      "reduction_pct": -1.0109184509326852,
+      "speedup": 0.9899919883272446
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 142,
+      "topology": "3n2s",
+      "capacity_ratio": 1.6469573974609375,
+      "outer_delta_cycles_2ghz": 29.534489962915814,
+      "naive_e2e_ns_per_op": 26858.63162494368,
+      "spill_noopt_e2e_ns_per_op": 26385.959548254807,
+      "reduction_pct": 1.759851668131518,
+      "speedup": 1.01791377250558
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 142,
+      "topology": "8n1s",
+      "capacity_ratio": 1.6624755859375,
+      "outer_delta_cycles_2ghz": 0.4341253452530509,
+      "naive_e2e_ns_per_op": 13058.151428898176,
+      "spill_noopt_e2e_ns_per_op": 12869.873899035156,
+      "reduction_pct": 1.4418390756777089,
+      "speedup": 1.014629322038434
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 142,
+      "topology": "8n2s",
+      "capacity_ratio": 1.6615753173828125,
+      "outer_delta_cycles_2ghz": -18.556950555435833,
+      "naive_e2e_ns_per_op": 13277.23051266124,
+      "spill_noopt_e2e_ns_per_op": 11825.764280123016,
+      "reduction_pct": 10.931995427465823,
+      "speedup": 1.122737625928996
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 142,
+      "topology": "16n1s",
+      "capacity_ratio": 1.9684787326388888,
+      "outer_delta_cycles_2ghz": 1.4939530182628005,
+      "naive_e2e_ns_per_op": 7975.186842183272,
+      "spill_noopt_e2e_ns_per_op": 6523.875830074151,
+      "reduction_pct": 18.19783085748764,
+      "speedup": 1.2224614707439374
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 143,
+      "topology": "3n1s",
+      "capacity_ratio": 1.6609039306640625,
+      "outer_delta_cycles_2ghz": 24.77055925506602,
+      "naive_e2e_ns_per_op": 17582.678184327153,
+      "spill_noopt_e2e_ns_per_op": 17703.0839646856,
+      "reduction_pct": -0.6847977258992,
+      "speedup": 0.9931985985832392
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 143,
+      "topology": "3n2s",
+      "capacity_ratio": 1.5773468017578125,
+      "outer_delta_cycles_2ghz": 19.88021206668145,
+      "naive_e2e_ns_per_op": 14086.532044327922,
+      "spill_noopt_e2e_ns_per_op": 13402.14900361995,
+      "reduction_pct": 4.858421068821861,
+      "speedup": 1.0510651717514197
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 143,
+      "topology": "8n1s",
+      "capacity_ratio": 1.45068359375,
+      "outer_delta_cycles_2ghz": 64.74104227518228,
+      "naive_e2e_ns_per_op": 7690.1051215827465,
+      "spill_noopt_e2e_ns_per_op": 6623.430332789819,
+      "reduction_pct": 13.870743922592688,
+      "speedup": 1.1610456719854467
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 143,
+      "topology": "8n2s",
+      "capacity_ratio": 1.3223724365234375,
+      "outer_delta_cycles_2ghz": 8.411487777787443,
+      "naive_e2e_ns_per_op": 6564.5144786685705,
+      "spill_noopt_e2e_ns_per_op": 5433.52022456626,
+      "reduction_pct": 17.228909430811413,
+      "speedup": 1.2081512918620991
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 143,
+      "topology": "16n1s",
+      "capacity_ratio": 1.4969075520833333,
+      "outer_delta_cycles_2ghz": 173.0480276994499,
+      "naive_e2e_ns_per_op": 4669.72899933656,
+      "spill_noopt_e2e_ns_per_op": 3445.4242268111557,
+      "reduction_pct": 26.217897713108073,
+      "speedup": 1.3553422429082225
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 144,
+      "topology": "3n1s",
+      "capacity_ratio": 1.657012939453125,
+      "outer_delta_cycles_2ghz": 25.82908253675896,
+      "naive_e2e_ns_per_op": 34533.05301566919,
+      "spill_noopt_e2e_ns_per_op": 34908.90634970532,
+      "reduction_pct": -1.088387215186537,
+      "speedup": 0.9892333111134745
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 144,
+      "topology": "3n2s",
+      "capacity_ratio": 1.651763916015625,
+      "outer_delta_cycles_2ghz": 24.363350948753123,
+      "naive_e2e_ns_per_op": 28019.467006540963,
+      "spill_noopt_e2e_ns_per_op": 26411.60972416401,
+      "reduction_pct": 5.738357842430086,
+      "speedup": 1.0608769135682754
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 144,
+      "topology": "8n1s",
+      "capacity_ratio": 1.6634674072265625,
+      "outer_delta_cycles_2ghz": 2.4727368612161627,
+      "naive_e2e_ns_per_op": 13380.85470100244,
+      "spill_noopt_e2e_ns_per_op": 12879.342345210414,
+      "reduction_pct": 3.747984467348364,
+      "speedup": 1.0389392829501523
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 144,
+      "topology": "8n2s",
+      "capacity_ratio": 1.6626434326171875,
+      "outer_delta_cycles_2ghz": -7.477733878567051,
+      "naive_e2e_ns_per_op": 13027.810685647031,
+      "spill_noopt_e2e_ns_per_op": 11761.323548853397,
+      "reduction_pct": 9.721411888406895,
+      "speedup": 1.1076823651294843
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 144,
+      "topology": "16n1s",
+      "capacity_ratio": 1.9691297743055556,
+      "outer_delta_cycles_2ghz": 5.947402592568324,
+      "naive_e2e_ns_per_op": 8348.489548855772,
+      "spill_noopt_e2e_ns_per_op": 6427.447563813379,
+      "reduction_pct": 23.010653290039606,
+      "speedup": 1.2988810046242751
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 145,
+      "topology": "3n1s",
+      "capacity_ratio": 1.651458740234375,
+      "outer_delta_cycles_2ghz": 21.593656151283085,
+      "naive_e2e_ns_per_op": 17265.045446240238,
+      "spill_noopt_e2e_ns_per_op": 17309.75539733966,
+      "reduction_pct": -0.2589622554926896,
+      "speedup": 0.9974170662685219
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 145,
+      "topology": "3n2s",
+      "capacity_ratio": 1.5702056884765625,
+      "outer_delta_cycles_2ghz": 38.525489081991054,
+      "naive_e2e_ns_per_op": 13923.612035190064,
+      "spill_noopt_e2e_ns_per_op": 13323.044792438546,
+      "reduction_pct": 4.31330060930788,
+      "speedup": 1.0450773267003026
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 145,
+      "topology": "8n1s",
+      "capacity_ratio": 1.6061859130859375,
+      "outer_delta_cycles_2ghz": 45.893925048647816,
+      "naive_e2e_ns_per_op": 6841.847304409991,
+      "spill_noopt_e2e_ns_per_op": 6627.192002876351,
+      "reduction_pct": 3.1373880763939543,
+      "speedup": 1.0323900833777677
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 145,
+      "topology": "8n2s",
+      "capacity_ratio": 1.604156494140625,
+      "outer_delta_cycles_2ghz": -13.729342879154501,
+      "naive_e2e_ns_per_op": 6540.958565892652,
+      "spill_noopt_e2e_ns_per_op": 5464.777738476792,
+      "reduction_pct": 16.45295282907807,
+      "speedup": 1.1969303929487578
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 145,
+      "topology": "16n1s",
+      "capacity_ratio": 1.8988896122685186,
+      "outer_delta_cycles_2ghz": 56.979154773643586,
+      "naive_e2e_ns_per_op": 4293.686894622321,
+      "spill_noopt_e2e_ns_per_op": 3363.470265564198,
+      "reduction_pct": 21.66475227206679,
+      "speedup": 1.276564546617773
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 146,
+      "topology": "3n1s",
+      "capacity_ratio": 1.65594482421875,
+      "outer_delta_cycles_2ghz": 25.975430224722913,
+      "naive_e2e_ns_per_op": 17484.979859242838,
+      "spill_noopt_e2e_ns_per_op": 17423.01457044151,
+      "reduction_pct": 0.35439153662262246,
+      "speedup": 1.0035565193698714
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 146,
+      "topology": "3n2s",
+      "capacity_ratio": 1.6545257568359375,
+      "outer_delta_cycles_2ghz": 18.392763407301118,
+      "naive_e2e_ns_per_op": 14026.992074731323,
+      "spill_noopt_e2e_ns_per_op": 13253.52220899529,
+      "reduction_pct": 5.51415343799464,
+      "speedup": 1.0583595706514206
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 146,
+      "topology": "8n1s",
+      "capacity_ratio": 1.664642333984375,
+      "outer_delta_cycles_2ghz": 3.9938900616093633,
+      "naive_e2e_ns_per_op": 7099.8988424738245,
+      "spill_noopt_e2e_ns_per_op": 6560.760084539652,
+      "reduction_pct": 7.593611823155499,
+      "speedup": 1.082176264790515
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 146,
+      "topology": "8n2s",
+      "capacity_ratio": 1.663909912109375,
+      "outer_delta_cycles_2ghz": 5.549272377867965,
+      "naive_e2e_ns_per_op": 7302.711310330778,
+      "spill_noopt_e2e_ns_per_op": 6084.833633697903,
+      "reduction_pct": 16.677061777178636,
+      "speedup": 1.20014970826618
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 146,
+      "topology": "16n1s",
+      "capacity_ratio": 1.9702690972222223,
+      "outer_delta_cycles_2ghz": 9.256593793348657,
+      "naive_e2e_ns_per_op": 4717.362268517415,
+      "spill_noopt_e2e_ns_per_op": 3292.4957243570434,
+      "reduction_pct": 30.204730166042182,
+      "speedup": 1.4327618510237
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 147,
+      "topology": "3n1s",
+      "capacity_ratio": 1.650421142578125,
+      "outer_delta_cycles_2ghz": 21.23919558702164,
+      "naive_e2e_ns_per_op": 17184.34375814266,
+      "spill_noopt_e2e_ns_per_op": 17180.74781820178,
+      "reduction_pct": 0.020925675088256934,
+      "speedup": 1.0002093005484354
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 147,
+      "topology": "3n2s",
+      "capacity_ratio": 1.5739898681640625,
+      "outer_delta_cycles_2ghz": 39.138940244798505,
+      "naive_e2e_ns_per_op": 13724.202290177345,
+      "spill_noopt_e2e_ns_per_op": 13265.82342800167,
+      "reduction_pct": 3.3399308206331635,
+      "speedup": 1.0345533667520497
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 147,
+      "topology": "8n1s",
+      "capacity_ratio": 1.60345458984375,
+      "outer_delta_cycles_2ghz": 44.79394155010277,
+      "naive_e2e_ns_per_op": 6807.968020439148,
+      "spill_noopt_e2e_ns_per_op": 6603.736740847428,
+      "reduction_pct": 2.999886000912,
+      "speedup": 1.0309266234567538
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 147,
+      "topology": "8n2s",
+      "capacity_ratio": 1.6048126220703125,
+      "outer_delta_cycles_2ghz": -29.640606787625075,
+      "naive_e2e_ns_per_op": 6465.776095865294,
+      "spill_noopt_e2e_ns_per_op": 5977.870993471394,
+      "reduction_pct": 7.545963472287632,
+      "speedup": 1.0816185399328215
+    },
+    {
+      "pressure_pct": 175,
+      "tc": 147,
+      "topology": "16n1s",
+      "capacity_ratio": 1.9005353009259258,
+      "outer_delta_cycles_2ghz": 57.28862543611467,
+      "naive_e2e_ns_per_op": 4324.575760013735,
+      "spill_noopt_e2e_ns_per_op": 3401.481080800295,
+      "reduction_pct": 21.34532334358985,
+      "speedup": 1.2713802185829757
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 142,
+      "topology": "3n1s",
+      "capacity_ratio": 1.9094390869140625,
+      "outer_delta_cycles_2ghz": 14.896484999924269,
+      "naive_e2e_ns_per_op": 38855.838485889966,
+      "spill_noopt_e2e_ns_per_op": 39119.77789054314,
+      "reduction_pct": -0.6792786230800818,
+      "speedup": 0.9932530443963237
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 142,
+      "topology": "3n2s",
+      "capacity_ratio": 1.902435302734375,
+      "outer_delta_cycles_2ghz": 12.457471527063717,
+      "naive_e2e_ns_per_op": 30854.30944338441,
+      "spill_noopt_e2e_ns_per_op": 29837.69324297706,
+      "reduction_pct": 3.294892087190515,
+      "speedup": 1.0340715413932553
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 142,
+      "topology": "8n1s",
+      "capacity_ratio": 1.9125213623046875,
+      "outer_delta_cycles_2ghz": 0.3807394416603529,
+      "naive_e2e_ns_per_op": 14870.320834840337,
+      "spill_noopt_e2e_ns_per_op": 14703.255146741867,
+      "reduction_pct": 1.1234840858782569,
+      "speedup": 1.0113624967009764
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 142,
+      "topology": "8n2s",
+      "capacity_ratio": 1.9114990234375,
+      "outer_delta_cycles_2ghz": 1.2941171717011457,
+      "naive_e2e_ns_per_op": 13082.930915212879,
+      "spill_noopt_e2e_ns_per_op": 12794.858776032925,
+      "reduction_pct": 2.2018929936027054,
+      "speedup": 1.022514679077159
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 142,
+      "topology": "16n1s",
+      "capacity_ratio": 2.2646484375,
+      "outer_delta_cycles_2ghz": 1.2579735763374629,
+      "naive_e2e_ns_per_op": 9511.478613906851,
+      "spill_noopt_e2e_ns_per_op": 7444.136523796866,
+      "reduction_pct": 21.735233542840525,
+      "speedup": 1.2777141557655827
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 143,
+      "topology": "3n1s",
+      "capacity_ratio": 1.957275390625,
+      "outer_delta_cycles_2ghz": 32.935738282838884,
+      "naive_e2e_ns_per_op": 20030.381468435127,
+      "spill_noopt_e2e_ns_per_op": 20384.10942380627,
+      "reduction_pct": -1.765957158272613,
+      "speedup": 0.9826468771327322
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 143,
+      "topology": "3n2s",
+      "capacity_ratio": 1.898895263671875,
+      "outer_delta_cycles_2ghz": 22.643276370259173,
+      "naive_e2e_ns_per_op": 16058.646401183472,
+      "spill_noopt_e2e_ns_per_op": 15468.052071001795,
+      "reduction_pct": 3.677734196439819,
+      "speedup": 1.0381815581865588
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 143,
+      "topology": "8n1s",
+      "capacity_ratio": 1.728790283203125,
+      "outer_delta_cycles_2ghz": 60.38661519564084,
+      "naive_e2e_ns_per_op": 8699.559354378533,
+      "spill_noopt_e2e_ns_per_op": 7570.818221817414,
+      "reduction_pct": 12.974693160671602,
+      "speedup": 1.1490910360663973
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 143,
+      "topology": "8n2s",
+      "capacity_ratio": 1.6543426513671875,
+      "outer_delta_cycles_2ghz": 67.96122760230719,
+      "naive_e2e_ns_per_op": 7426.230392108361,
+      "spill_noopt_e2e_ns_per_op": 6305.958474210153,
+      "reduction_pct": 15.085337496244232,
+      "speedup": 1.177652917075152
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 143,
+      "topology": "16n1s",
+      "capacity_ratio": 1.9356011284722223,
+      "outer_delta_cycles_2ghz": 186.88239320157072,
+      "naive_e2e_ns_per_op": 5486.672307597473,
+      "spill_noopt_e2e_ns_per_op": 3964.6159469460445,
+      "reduction_pct": 27.740974407088537,
+      "speedup": 1.3839101645706373
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 144,
+      "topology": "3n1s",
+      "capacity_ratio": 1.929901123046875,
+      "outer_delta_cycles_2ghz": 20.26761525469783,
+      "naive_e2e_ns_per_op": 39361.572513977684,
+      "spill_noopt_e2e_ns_per_op": 39714.23332889875,
+      "reduction_pct": -0.8959520476369054,
+      "speedup": 0.9911200397096814
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 144,
+      "topology": "3n2s",
+      "capacity_ratio": 1.931976318359375,
+      "outer_delta_cycles_2ghz": 19.40705451677468,
+      "naive_e2e_ns_per_op": 31778.239645063877,
+      "spill_noopt_e2e_ns_per_op": 29887.15035219987,
+      "reduction_pct": 5.950893800241541,
+      "speedup": 1.0632743259420452
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 144,
+      "topology": "8n1s",
+      "capacity_ratio": 1.9134368896484375,
+      "outer_delta_cycles_2ghz": 1.572654167676319,
+      "naive_e2e_ns_per_op": 15205.475695741674,
+      "spill_noopt_e2e_ns_per_op": 14716.487688322863,
+      "reduction_pct": 3.21586787025514,
+      "speedup": 1.0332272222676346
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 144,
+      "topology": "8n2s",
+      "capacity_ratio": 1.913665771484375,
+      "outer_delta_cycles_2ghz": -32.29342591470777,
+      "naive_e2e_ns_per_op": 14425.643409291903,
+      "spill_noopt_e2e_ns_per_op": 12683.294092615446,
+      "reduction_pct": 12.078139374734354,
+      "speedup": 1.1373735643085734
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 144,
+      "topology": "16n1s",
+      "capacity_ratio": 2.2653899016203702,
+      "outer_delta_cycles_2ghz": 4.927800157499405,
+      "naive_e2e_ns_per_op": 9733.717888593674,
+      "spill_noopt_e2e_ns_per_op": 7351.974394017209,
+      "reduction_pct": 24.46900066178699,
+      "speedup": 1.3239597102670335
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 145,
+      "topology": "3n1s",
+      "capacity_ratio": 1.9280242919921875,
+      "outer_delta_cycles_2ghz": 31.387283371569538,
+      "naive_e2e_ns_per_op": 19682.021552903785,
+      "spill_noopt_e2e_ns_per_op": 19989.38387259841,
+      "reduction_pct": -1.5616399914432533,
+      "speedup": 0.9846237221890586
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 145,
+      "topology": "3n2s",
+      "capacity_ratio": 1.886505126953125,
+      "outer_delta_cycles_2ghz": 52.50605966149533,
+      "naive_e2e_ns_per_op": 15979.952877387404,
+      "spill_noopt_e2e_ns_per_op": 15275.698387995362,
+      "reduction_pct": 4.407112428902115,
+      "speedup": 1.046102932350739
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 145,
+      "topology": "8n1s",
+      "capacity_ratio": 1.9063873291015625,
+      "outer_delta_cycles_2ghz": 45.84206772850803,
+      "naive_e2e_ns_per_op": 7735.371279219787,
+      "spill_noopt_e2e_ns_per_op": 7587.349197516839,
+      "reduction_pct": 1.9135743632706093,
+      "speedup": 1.0195090640814835
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 145,
+      "topology": "8n2s",
+      "capacity_ratio": 1.9087371826171875,
+      "outer_delta_cycles_2ghz": 4.447699257922977,
+      "naive_e2e_ns_per_op": 7273.056932414571,
+      "spill_noopt_e2e_ns_per_op": 6409.509902975212,
+      "reduction_pct": 11.873233462407008,
+      "speedup": 1.134729026479624
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 145,
+      "topology": "16n1s",
+      "capacity_ratio": 2.250560619212963,
+      "outer_delta_cycles_2ghz": 71.65654042171263,
+      "naive_e2e_ns_per_op": 5135.661922395229,
+      "spill_noopt_e2e_ns_per_op": 3860.6813177466393,
+      "reduction_pct": 24.826022894707013,
+      "speedup": 1.3302475650574435
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 146,
+      "topology": "3n1s",
+      "capacity_ratio": 1.93072509765625,
+      "outer_delta_cycles_2ghz": 19.60513253081217,
+      "naive_e2e_ns_per_op": 19913.57162801756,
+      "spill_noopt_e2e_ns_per_op": 19886.815506551,
+      "reduction_pct": 0.13436123848779014,
+      "speedup": 1.0013454201079979
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 146,
+      "topology": "3n2s",
+      "capacity_ratio": 1.9305572509765625,
+      "outer_delta_cycles_2ghz": 14.838908144771267,
+      "naive_e2e_ns_per_op": 16144.176091377933,
+      "spill_noopt_e2e_ns_per_op": 15177.508531552223,
+      "reduction_pct": 5.987716897748497,
+      "speedup": 1.0636907933746915
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 146,
+      "topology": "8n1s",
+      "capacity_ratio": 1.9141845703125,
+      "outer_delta_cycles_2ghz": 3.4528671147390924,
+      "naive_e2e_ns_per_op": 8018.748000419388,
+      "spill_noopt_e2e_ns_per_op": 7490.467396564782,
+      "reduction_pct": 6.588068409519499,
+      "speedup": 1.070527054706477
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 146,
+      "topology": "8n2s",
+      "capacity_ratio": 1.914215087890625,
+      "outer_delta_cycles_2ghz": -17.632589532365273,
+      "naive_e2e_ns_per_op": 8199.046230098853,
+      "spill_noopt_e2e_ns_per_op": 6413.795442009965,
+      "reduction_pct": 21.773883668751605,
+      "speedup": 1.2783454514928252
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 146,
+      "topology": "16n1s",
+      "capacity_ratio": 2.266095196759259,
+      "outer_delta_cycles_2ghz": 7.650313859180642,
+      "naive_e2e_ns_per_op": 5559.704732149839,
+      "spill_noopt_e2e_ns_per_op": 3754.334708598132,
+      "reduction_pct": 32.47240834772897,
+      "speedup": 1.4808761508176325
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 147,
+      "topology": "3n1s",
+      "capacity_ratio": 1.92779541015625,
+      "outer_delta_cycles_2ghz": 30.92920798102068,
+      "naive_e2e_ns_per_op": 19585.40330330531,
+      "spill_noopt_e2e_ns_per_op": 19850.28696556886,
+      "reduction_pct": -1.3524544690833418,
+      "speedup": 0.9866559278098598
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 147,
+      "topology": "3n2s",
+      "capacity_ratio": 1.9065399169921875,
+      "outer_delta_cycles_2ghz": 42.72082791107596,
+      "naive_e2e_ns_per_op": 15851.310713009701,
+      "spill_noopt_e2e_ns_per_op": 15051.770282702313,
+      "reduction_pct": 5.044002005784787,
+      "speedup": 1.0531193617289143
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 147,
+      "topology": "8n1s",
+      "capacity_ratio": 1.90655517578125,
+      "outer_delta_cycles_2ghz": 44.906192639256915,
+      "naive_e2e_ns_per_op": 7700.235679900895,
+      "spill_noopt_e2e_ns_per_op": 7525.881907592217,
+      "reduction_pct": 2.264265401171739,
+      "speedup": 1.0231672213900656
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 147,
+      "topology": "8n2s",
+      "capacity_ratio": 1.908966064453125,
+      "outer_delta_cycles_2ghz": -12.09942169279293,
+      "naive_e2e_ns_per_op": 7228.945226718982,
+      "spill_noopt_e2e_ns_per_op": 6646.305943528811,
+      "reduction_pct": 8.05981045528843,
+      "speedup": 1.0876636267034108
+    },
+    {
+      "pressure_pct": 200,
+      "tc": 147,
+      "topology": "16n1s",
+      "capacity_ratio": 2.248679832175926,
+      "outer_delta_cycles_2ghz": 72.01480995229622,
+      "naive_e2e_ns_per_op": 5195.849856439357,
+      "spill_noopt_e2e_ns_per_op": 3877.6403622856988,
+      "reduction_pct": 25.370430835678704,
+      "speedup": 1.3399514578439737
+    }
+  ],
+  "subset_reductions": [
+    {
+      "tc": 142,
+      "subset": "single_socket",
+      "P175": 6.2095838274108885,
+      "P200": 7.3931463352129,
+      "combined": 6.801365081311895
+    },
+    {
+      "tc": 142,
+      "subset": "at_least_8_nodes",
+      "P175": 10.19055512021039,
+      "P200": 8.353536874107162,
+      "combined": 9.272045997158777
+    },
+    {
+      "tc": 143,
+      "subset": "single_socket",
+      "P175": 13.13461463660052,
+      "P200": 12.983236803162509,
+      "combined": 13.058925719881515
+    },
+    {
+      "tc": 143,
+      "subset": "at_least_8_nodes",
+      "P175": 19.105850355504057,
+      "P200": 18.60033502133479,
+      "combined": 18.853092688419423
+    },
+    {
+      "tc": 144,
+      "subset": "single_socket",
+      "P175": 8.556750180733811,
+      "P200": 8.929638828135074,
+      "combined": 8.743194504434443
+    },
+    {
+      "tc": 144,
+      "subset": "at_least_8_nodes",
+      "P175": 12.16001654859829,
+      "P200": 13.254335968925494,
+      "combined": 12.70717625876189
+    },
+    {
+      "tc": 145,
+      "subset": "single_socket",
+      "P175": 8.181059364322685,
+      "P200": 8.392652422178124,
+      "combined": 8.286855893250404
+    },
+    {
+      "tc": 145,
+      "subset": "at_least_8_nodes",
+      "P175": 13.751697725846272,
+      "P200": 12.870943573461544,
+      "combined": 13.311320649653908
+    },
+    {
+      "tc": 146,
+      "subset": "single_socket",
+      "P175": 12.717577841940102,
+      "P200": 13.064945998578754,
+      "combined": 12.891261920259428
+    },
+    {
+      "tc": 146,
+      "subset": "at_least_8_nodes",
+      "P175": 18.15846792212544,
+      "P200": 20.278120142000027,
+      "combined": 19.218294032062733
+    },
+    {
+      "tc": 147,
+      "subset": "single_socket",
+      "P175": 8.122045006530035,
+      "P200": 8.760747255922366,
+      "combined": 8.4413961312262
+    },
+    {
+      "tc": 147,
+      "subset": "at_least_8_nodes",
+      "P175": 10.630390938929827,
+      "P200": 11.898168897379625,
+      "combined": 11.264279918154726
+    }
+  ],
+  "sensitivity": [
+    {
+      "tc": 142,
+      "pressure": 175,
+      "measured_five_topology_am": 6.264119715566001,
+      "estimated_replacement_am": 6.729115767003789,
+      "sensitivity_endpoints": [
+        6.264119715566001,
+        8.58909997275494
+      ],
+      "measured": false
+    },
+    {
+      "tc": 142,
+      "pressure": 200,
+      "measured_five_topology_am": 5.535244817286384,
+      "estimated_replacement_am": 5.563635361901206,
+      "sensitivity_endpoints": [
+        5.535244817286384,
+        5.67719754036049
+      ],
+      "measured": false
+    },
+    {
+      "tc": 143,
+      "pressure": 175,
+      "measured_five_topology_am": 12.298234881886966,
+      "estimated_replacement_am": 13.375276082306224,
+      "sensitivity_endpoints": [
+        12.298234881886966,
+        17.683440883983252
+      ],
+      "measured": false
+    },
+    {
+      "tc": 143,
+      "pressure": 200,
+      "measured_five_topology_am": 11.542556420434316,
+      "estimated_replacement_am": 12.588486565184262,
+      "sensitivity_endpoints": [
+        11.542556420434316,
+        16.772207144184044
+      ],
+      "measured": false
+    },
+    {
+      "tc": 144,
+      "pressure": 175,
+      "measured_five_topology_am": 8.226004054607683,
+      "estimated_replacement_am": 8.578781083748153,
+      "sensitivity_endpoints": [
+        8.226004054607683,
+        9.989889200310026
+      ],
+      "measured": false
+    },
+    {
+      "tc": 144,
+      "pressure": 200,
+      "measured_five_topology_am": 8.963589931876223,
+      "estimated_replacement_am": 9.373152551571618,
+      "sensitivity_endpoints": [
+        8.963589931876223,
+        11.011403030353195
+      ],
+      "measured": false
+    },
+    {
+      "tc": 145,
+      "pressure": 175,
+      "measured_five_topology_am": 9.0618863062708,
+      "estimated_replacement_am": 9.683326408337074,
+      "sensitivity_endpoints": [
+        9.0618863062708,
+        12.169086816602167
+      ],
+      "measured": false
+    },
+    {
+      "tc": 145,
+      "pressure": 200,
+      "measured_five_topology_am": 8.291660631568698,
+      "estimated_replacement_am": 8.729314047097448,
+      "sensitivity_endpoints": [
+        8.291660631568698,
+        10.479927709212449
+      ],
+      "measured": false
+    },
+    {
+      "tc": 146,
+      "pressure": 175,
+      "measured_five_topology_am": 12.068789748198716,
+      "estimated_replacement_am": 12.80487489322739,
+      "sensitivity_endpoints": [
+        12.068789748198716,
+        15.74921547334209
+      ],
+      "measured": false
+    },
+    {
+      "tc": 146,
+      "pressure": 200,
+      "measured_five_topology_am": 13.391287712447273,
+      "estimated_replacement_am": 14.280882670128666,
+      "sensitivity_endpoints": [
+        13.391287712447273,
+        17.839262500854236
+      ],
+      "measured": false
+    },
+    {
+      "tc": 147,
+      "pressure": 175,
+      "measured_five_topology_am": 7.05040586250218,
+      "estimated_replacement_am": 7.337805581601309,
+      "sensitivity_endpoints": [
+        7.05040586250218,
+        8.487404457997823
+      ],
+      "measured": false
+    },
+    {
+      "tc": 147,
+      "pressure": 200,
+      "measured_five_topology_am": 7.877210845768063,
+      "estimated_replacement_am": 8.142511978558412,
+      "sensitivity_endpoints": [
+        7.877210845768063,
+        9.203716509719808
+      ],
+      "measured": false
+    }
+  ],
+  "sensitivity_model": "r(4NS)=r(3NS)+alpha*(r(8NS)-r(3NS)); alpha=(4-3)/(8-3)=0.2; replace both 3N cells. Sensitivity alpha in [0,1] is not a confidence interval or bound: power-of-two stride, HNF sharing and resident budgets can break interpolation."
+}
