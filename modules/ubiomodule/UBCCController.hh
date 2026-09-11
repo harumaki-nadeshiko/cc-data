@@ -162,6 +162,7 @@ enum class ResidentOpKind : uint8_t {
     Upgrade,     // processOuterUpgradeReq
     Writeback,   // processWriteback
     Evict,       // processEvict
+    WritebackPrepare, // resident metadata only; wire request owns persistence
 };
 
 using MESIState = UBCCMESIState;
@@ -215,6 +216,7 @@ struct OutstandingRequest {
 
     // Recall / Invalidate barrier flags
     bool     recallBarrierDone;
+    bool     requireWrittenBacking = false;
     bool     invalidateBarrierDone;
     bool     replayArmed;        // True if this grant was created by replay (retry-hit allowed)
 
@@ -530,7 +532,8 @@ class UBCCController
     bool processRecallResponse(uint64_t line_pa, int ownerNode,
                                bool dataReceived, uint64_t responseEpoch,
                                uint64_t reqId = 0,
-                               const DataBlock *dataBlk = nullptr);
+                               const DataBlock *dataBlk = nullptr,
+                               bool ackReceived = true);
 
     /**
      * Check if a line is currently busy (recall or other op in progress).
@@ -564,6 +567,8 @@ class UBCCController
                                       uint64_t epochVal,
                                       bool ownerWriteback, int sourceSocket,
                                       uint64_t reqId, uint8_t disposition) const;
+    bool prepareWritebackPersistence(uint64_t line_pa, int requesterNode,
+                                     uint64_t epochVal);
     bool reserveWritebackPersistence(uint64_t line_pa, int requesterNode,
                                      uint64_t epochVal, bool ownerWriteback,
                                      int sourceSocket, uint64_t reqId,
@@ -723,6 +728,10 @@ class UBCCController
      * Get the count of recall responses processed by this home UBCC.
      */
     uint64_t getRecallResponseCount() const { return _recallResponseCount; }
+    bool grantRequiresWrittenBacking(uint64_t pa) const {
+        auto it = _outstandingReqs.find(pa);
+        return it != _outstandingReqs.end() && it->second.requireWrittenBacking;
+    }
     void resetRecallResponseCount() { _recallResponseCount = 0; }
 
     /**
@@ -941,10 +950,10 @@ public:
     Tick _tombstoneWindowW = 10000000;
 
     // ---- v4: Recall orphan timeout (configurable) ----
-    // Split-process 2S recall round trips can legitimately approach 10M
-    // protocol ticks under PDES alignment. Keep a bounded protocol timeout
-    // above that observed tail; wall-clock liveness remains guarded separately.
-    Tick _recallTimeout = 10000000;
+    // Split-process 2S recall round trips can exceed 10M protocol ticks while
+    // a pressure batch drains. Keep this bounded well below the wall-clock
+    // watchdog while avoiding false orphan detection under legitimate load.
+    Tick _recallTimeout = 100000000;
 
     // Configurable epoch width for wrap-around experiments.
     uint32_t _epochBits = 64;

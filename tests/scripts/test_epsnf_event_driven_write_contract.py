@@ -7,6 +7,14 @@ SOURCE = Path("/workspace/gem5/src/mem/ruby/protocol/chi/ep/EPSNFController.cc")
 
 
 class EpsnfEventDrivenWriteContractTest(unittest.TestCase):
+    def test_deferred_writeback_schedules_retry_after_retiring_attempt(self):
+        source = (SOURCE.parent / 'UBAdapter.cc').read_text(encoding='utf-8')
+        start = source.index('UBAdapter::sendWritebackReq')
+        start = source.index('if (deferred)', start)
+        block = source[start:source.index('return success ? 1 : 0;', start)]
+        self.assertIn('_onResponseWired();', block)
+        self.assertLess(block.index('_onResponseWired();'), block.index('return -2;'))
+
     def test_inflight_writes_do_not_schedule_full_map_polling(self):
         source = SOURCE.read_text(encoding="utf-8")
         start = source.index("void\nEPSNFController::processPendingHAWrites()")

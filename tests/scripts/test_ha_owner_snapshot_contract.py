@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKEND = ROOT / "gem5/gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc"
+BACKEND = ROOT / "gem5/src/mem/ruby/protocol/chi/ep/EPBackend.cc"
 
 
 class HaOwnerSnapshotContractTest(unittest.TestCase):
@@ -12,12 +12,18 @@ class HaOwnerSnapshotContractTest(unittest.TestCase):
     def setUpClass(cls):
         cls.source = BACKEND.read_text(encoding="utf-8")
 
-    def test_recall_snapshot_uses_registered_ha_data_cache(self):
+    def test_recall_payload_comes_from_completed_chi_transaction(self):
         start = self.source.index("EPBackend::handleRecallRequest")
         end = self.source.index("EPBackend::sendRecallResponse", start)
         body = self.source[start:end]
-        self.assertIn("readHADataCacheLine(recallMsg.sourceSocket", body)
+        self.assertIn('_epRnfCtrl->startReadShared(ownerLocalPa', body)
+        self.assertIn('_epRnfCtrl->startReadUnique(ownerLocalPa', body)
+        self.assertEqual(body.count('resp.ackReceived = success;'), 2)
+        self.assertEqual(body.count('resp.ackReceived && capturedDataValid;'), 2)
+        self.assertEqual(body.count('resp.dataPayload = capturedData;'), 2)
+        self.assertNotIn('readHADataCacheLine(', body)
         self.assertNotIn("_ruby_system->functionalRead", body)
+        self.assertNotIn('m_ruby_system->functionalRead', body)
 
     def test_snapshot_rejects_conflicting_readable_l1_copies(self):
         match = re.search(

@@ -25,6 +25,7 @@ class E2EProgressWatchdogContractTest(unittest.TestCase):
         self.assertIn("[WORKLOAD-PROGRESS]", source)
         self.assertIn('PORTABLE_PROGRESS_TEXT(" completed=")', source)
         self.assertIn('PORTABLE_PROGRESS_TEXT(" target=")', source)
+        self.assertIn('PORTABLE_PROGRESS_TEXT(" milestone=")', source)
         self.assertIn("portable_pressure_plane_target", source)
 
     def test_supervisor_uses_slowest_reporting_node(self):
@@ -33,6 +34,7 @@ class E2EProgressWatchdogContractTest(unittest.TestCase):
                       source.index("# ── Supervisor", source.index(
                           "_aggregate_workload_progress()"))]
         self.assertIn("slow_completed", body)
+        self.assertIn("slow_milestone", body)
         self.assertIn("node_completed * slow_target", body)
         self.assertIn("slow_completed * node_target", body)
         self.assertNotIn("completed=$((completed + node_completed))", body)
@@ -66,6 +68,10 @@ class E2EProgressWatchdogContractTest(unittest.TestCase):
         self.assertIn("eta_over_budget_count", source)
         self.assertIn('eta_over_budget_count" -ge 2', source)
         self.assertIn("infeasible_eta", source)
+        self.assertIn("prev_workload_target", source)
+        self.assertIn(
+            'workload_target" -ne "$prev_workload_target', source
+        )
 
     def test_protocol_tick_compared_before_previous_value_update(self):
         source = RUNNER.read_text(encoding="utf-8")

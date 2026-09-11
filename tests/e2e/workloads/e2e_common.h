@@ -18,6 +18,7 @@ static int e2e_workload_node;
 /* ── ARM64 syscall numbers ─────────────────────────────────────────── */
 #define SYS_WRITE      64
 #define SYS_SYNC_WAIT  436
+#define SYS_SWITCH_CPU 437
 #define SYS_EXIT       93
 
 /* ── Syscall wrappers ──────────────────────────────────────────────── */

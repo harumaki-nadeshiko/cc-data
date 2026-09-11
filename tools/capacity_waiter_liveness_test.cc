@@ -703,6 +703,17 @@ main()
         demandMergePa, UBCC_OuterReqType::GlobalReadShared, false,
         2, 0, 1, demandMergeReqId)) == -1);
     assert(demandOutbound.recallCount == 1);
+    // Failed wire ACK and malformed data claims cannot retire the barrier,
+    // increment completion counters, or send a grant (including dirty reads).
+    const auto recallId = demandOutbound.lastRecall.h.reqId;
+    assert(!demandMergeUbcc.processRecallResponse(
+        demandMergePa, 1, false, demandMergeEpoch, recallId, nullptr, false));
+    assert(!demandMergeUbcc.processRecallResponse(
+        demandMergePa, 1, true, demandMergeEpoch, recallId, nullptr, true));
+    assert(demandMergeUbcc.findOutstanding(demandMergePa)->opType == OpType::RECALL);
+    assert(!demandMergeUbcc.findOutstanding(demandMergePa)->recallBarrierDone);
+    assert(demandMergeUbcc.getRecallResponseCount() == 0);
+    assert(demandOutbound.grants.empty());
     uint8_t demandPayload[64];
     std::memset(demandPayload, 0x6b, sizeof(demandPayload));
     assert(demandMergeUbcc.processWritebackWithData(
@@ -759,9 +770,11 @@ main()
     // push. The existing GRANT_HANDSHAKE must retain the exact tuple and retry
     // from bounded outstanding state, without adding another PA queue.
     clearWakeOutbound.rejectedGrantPushes = 1;
+    DataBlock capacityRecallData(64);
+    std::memset(capacityRecallData.data, 0x93, 64);
     assert(clearWakeUbcc.processRecallResponse(
         clearWakeVictim, 2, true, clearWakeVictimEpoch,
-        clearWakeVictimEpoch));
+        clearWakeVictimEpoch, &capacityRecallData));
     assert(clearWakeOutbound.grantPushAttempts == 1);
     assert(clearWakeOutbound.grants.empty());
     OutstandingRequest *retryGrant =
@@ -846,7 +859,7 @@ main()
     assert(upgradeWakeUbcc.processRecallResponse(
         upgradeWakeVictim, 2, true,
         upgradeWakeOutbound.lastRecall.h.epoch,
-        upgradeWakeOutbound.lastRecall.h.reqId));
+        upgradeWakeOutbound.lastRecall.h.reqId, &capacityRecallData));
     assert(upgradeWakeOutbound.grants.size() == 1);
     assert(upgradeWakeOutbound.grants[0].h.homeLinePa == upgradeWakeTarget);
     assert(upgradeWakeOutbound.grants[0].h.reqId == upgradeWakeTargetReqId);
@@ -967,6 +980,24 @@ main()
     assert(reservationUbcc.directory().lookup(reservationPa, reservationEntry));
     assert(reservationEntry.epoch == 72);
     assert(reservationUbcc.findOutstanding(reservationPa) == nullptr);
+
+    // TC146: a clean metadata snapshot is not evictable while the real data
+    // persistence callback still owns its incarnation. Wrong tuple release
+    // must not remove the reservation or unpin the entry.
+    UBCCController dataPinUbcc(0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
+    constexpr uint64_t dataPinPa = 0x10007900;
+    assert(dataPinUbcc.debugSeedResidentForTest(
+        dataPinPa, static_cast<int>(MESIState::G_M), 1, 17, false));
+    assert(!dataPinUbcc.reserveWritebackPersistence(dataPinPa, 0, 16,
+                                                   true, 0, 5001, 1));
+    assert(!dataPinUbcc.directory().pinned(dataPinPa));
+    assert(dataPinUbcc.reserveWritebackPersistence(dataPinPa, 0, 17,
+                                                  true, 0, 5001, 1));
+    assert(dataPinUbcc.directory().pinned(dataPinPa));
+    dataPinUbcc.releaseWritebackPersistence(dataPinPa, 0, 17, true, 0, 5002, 1);
+    assert(dataPinUbcc.directory().pinned(dataPinPa));
+    dataPinUbcc.releaseWritebackPersistence(dataPinPa, 0, 17, true, 0, 5001, 1);
+    assert(!dataPinUbcc.directory().pinned(dataPinPa));
 
     std::fprintf(stderr, "capacity waiter liveness regression passed\n");
     return 0;

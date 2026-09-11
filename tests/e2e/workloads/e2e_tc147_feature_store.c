@@ -17,6 +17,7 @@ int main(int argc, char **argv)
     uint32_t shard = portable_shard(DATA_BASE, plane);
     uint32_t embedding = shard;
     uint32_t accumulator = shard + 0x6000u;
+    portable_wait_ready();
     portable_emit_meta(plane, "TC147");
     portable_emit_pressure_config(
         plane, PORTABLE_PLANES * HOT_LINES_PER_PLANE);

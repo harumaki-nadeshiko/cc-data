@@ -56,6 +56,11 @@ fi
 cc="aarch64-linux-gnu-gcc"
 cflags="-static -O0 -g -DNUM_NODES=${NUM_NODES:-3} -DNUM_SOCKETS=${NUM_SOCKETS:-1} ${WORKLOAD_CFLAGS:-} -I${WL_DIR}"
 case "$TC_ID" in
+    143)
+        if [ "${EP_CPU_MODEL:-timing}" = "hybrid" ]; then
+            cflags="$cflags -DE2E_TC143_HYBRID_SWITCH=1"
+        fi
+        ;;
     210) cflags="$cflags -DHA_SCENARIO=1" ;;
     211) cflags="$cflags -DHA_SCENARIO=2" ;;
     212) cflags="$cflags -DHA_SCENARIO=3" ;;

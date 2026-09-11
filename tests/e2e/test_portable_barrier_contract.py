@@ -10,7 +10,7 @@ class PortableBarrierContractTest(unittest.TestCase):
     def test_barrier_has_no_artificial_guest_work(self):
         source = SOURCE.read_text(encoding="utf-8")
         start = source.index("static inline void portable_barrier")
-        block = source[start:source.index("#define PORTABLE_SERIAL", start)]
+        block = source[start:source.index("\n}", start) + 2]
         self.assertIn("_syscall3(SYS_SYNC_WAIT", block)
         self.assertNotIn("coherence_settle", block)
         self.assertNotIn("dsb sy", block)

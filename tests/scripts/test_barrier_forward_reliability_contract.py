@@ -10,19 +10,18 @@ SOURCE = ROOT / "modules/ubiomodule/ubio_main.cc"
 class BarrierForwardReliabilityContractTest(unittest.TestCase):
     def test_nonleader_arrival_uses_reliable_network_queue(self):
         source = SOURCE.read_text(encoding="utf-8")
-        start = source.index(
-            "if (coh->h.type == CoherenceMessageType::BarrierReached)"
-        )
-        end = source.index('LogDebug("UBIO", "[ubio:{}]', start)
+        start = source.index("auto admitBarrier")
+        end = source.index("auto pollAndProcess", start)
         block = source[start:end]
 
         self.assertIn(
-            "sendNetworkResponse(\n                            *coh, "
-            "gidOf(leaderNode, leaderSocket));",
+            "sendNetworkResponse(msg, gidOf(leaderNode, leaderSocket));",
             block,
         )
         self.assertNotIn("AllocateSendMessage(netPort", block)
         self.assertNotIn("SendMessage(netPort", block)
+        self.assertIn('admitBarrier(mask, seq, src, fromNetwork);', source)
+        self.assertIn('admitBarrier(startupMask, startupSeq, nid * g_numSockets + sid, false);', source)
 
     def test_reliable_queue_retries_until_send_succeeds(self):
         source = SOURCE.read_text(encoding="utf-8")

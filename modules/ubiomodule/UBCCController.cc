@@ -813,6 +813,10 @@ UBCCController::refreshPinnedBit(uint64_t linePa)
     // An async metadata snapshot is in flight. Avoid racing a second eviction
     // or persistence operation for the same resident entry.
     pin = pin || (_asyncWbSnapshots.count(linePa) != 0);
+    // Data persistence owns the resident incarnation until its callback can
+    // publish the matching owner disposition. Metadata being clean does not
+    // make this entry an eligible spill victim during that interval.
+    pin = pin || (_writeReservations.count(linePa) != 0);
     pin = pin || _directory.fillPending(linePa);
     pin = pin || _directory.wbPending(linePa);
     // Spill must retain a dirty invalid entry until it is persisted. Pure
@@ -1191,6 +1195,12 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         bool restore = false;  // whether to push the waiter back
 
         switch (pr.opKind) {
+        case ResidentOpKind::WritebackPrepare: {
+            // Do not publish data or release ownership during metadata replay.
+            // The original wire transaction retries reservation after fill.
+            stop = !prepareWritebackPersistence(linePa, pr.node, pr.epoch);
+            break;
+        }
         case ResidentOpKind::Writeback: {
             bool ok = processWriteback(linePa, pr.node, pr.epoch,
                                        pr.wbKeepAsClean,
@@ -2464,8 +2474,10 @@ bool
 UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                                        bool dataReceived, uint64_t responseEpoch,
                                        uint64_t reqId,
-                                       const DataBlock *dataBlk)
+                                       const DataBlock *dataBlk, bool ackReceived)
 {
+    if (!ackReceived)
+        return false;
     responseEpoch = normalizeEpoch(responseEpoch);
 
     if (_evidenceEvents || _verboseLog) {
@@ -2474,6 +2486,8 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
             "owner={} epoch={} reqId={}",
             _nodeId, line_pa, ownerNode, responseEpoch, reqId);
     }
+    if (dataReceived && !dataBlk)
+        return false;
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry)) {
         framework::LogDebug("UBCC",
@@ -2659,6 +2673,10 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     grantOst->writeIntent = recallDone.writeIntent;
     grantOst->stage = OpStage::WAITING_CLEAR;
     grantOst->recallBarrierDone = true;
+    // HN-proven absence allows memory fallback, never an implicit first-touch
+    // zero for an owner that had dirty custody. Publication must have completed.
+    grantOst->requireWrittenBacking = !recallDone.dataValid &&
+                                     DirEntry::protoDirty(entry);
     grantOst->replayArmed = true;
     grantOst->dataValid = recallDone.dataValid;
     grantOst->dataSource = recallDone.dataValid
@@ -3439,17 +3457,26 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
     auto reservation = _writeReservations.find(line_pa);
     if (reservation != _writeReservations.end()) {
         const auto &r = reservation->second;
-        if (r.requesterNode != requesterNode || r.sourceSocket != sourceSocket ||
-            r.epoch != normalizeEpoch(epochVal) || r.reqId != reqId ||
-            r.ownerWriteback != ownerWriteback || r.disposition != disposition)
-            return false;
+        return r.requesterNode == requesterNode &&
+               r.sourceSocket == sourceSocket &&
+               r.epoch == normalizeEpoch(epochVal) &&
+               r.reqId == reqId &&
+               r.ownerWriteback == ownerWriteback &&
+               r.disposition == disposition;
     }
     // An HN-internal publication is identified by its source endpoint/reqId,
     // not by an architectural requester or permission epoch.  It serializes
-    // against directory activity but never validates or changes outer owner.
+    // against unrelated directory activity but never validates or changes
+    // outer owner. A recall/naive eviction may be waiting for this exact HN
+    // replacement to publish and release its TBE; rejecting it would deadlock
+    // publication behind the operation that depends on publication completing.
     if (!ownerWriteback && requesterNode == -1 && epochVal == 0 &&
-        disposition == 0)
-        return _outstandingReqs.find(line_pa) == _outstandingReqs.end();
+        disposition == 0) {
+        auto active = _outstandingReqs.find(line_pa);
+        return active == _outstandingReqs.end() ||
+               active->second.opType == OpType::RECALL ||
+               active->second.opType == OpType::NAIVE_EVICT_INVALIDATE;
+    }
     DirEntry entry;
     if (!_directory.lookup(line_pa, entry) ||
         normalizeEpoch(entry.epoch) != normalizeEpoch(epochVal) ||
@@ -3475,6 +3502,21 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
 }
 
 bool
+UBCCController::prepareWritebackPersistence(uint64_t line_pa,
+                                            int requesterNode,
+                                            uint64_t epochVal)
+{
+    DirEntry entry;
+    PendingRequester pr;
+    pr.opKind = ResidentOpKind::WritebackPrepare;
+    pr.node = requesterNode;
+    pr.epoch = normalizeEpoch(epochVal);
+    pr.reqType = UBCC_OuterReqType::GlobalWriteback;
+    return ensureResidentForAccess(line_pa, pr, entry) ==
+        ResidentAccessResult::Ready;
+}
+
+bool
 UBCCController::reserveWritebackPersistence(uint64_t line_pa,
                                             int requesterNode,
                                             uint64_t epochVal,
@@ -3496,6 +3538,7 @@ UBCCController::reserveWritebackPersistence(uint64_t line_pa,
         return false;
     _writeReservations[line_pa] = {requesterNode, sourceSocket,
         normalizeEpoch(epochVal), reqId, ownerWriteback, disposition};
+    refreshPinnedBit(line_pa);
     return true;
 }
 
@@ -3617,8 +3660,10 @@ UBCCController::releaseWritebackPersistence(uint64_t line_pa,
     const auto &r = found->second;
     if (r.requesterNode == requesterNode && r.sourceSocket == sourceSocket &&
         r.epoch == normalizeEpoch(epochVal) && r.reqId == reqId &&
-        r.ownerWriteback == ownerWriteback && r.disposition == disposition)
+        r.ownerWriteback == ownerWriteback && r.disposition == disposition) {
         _writeReservations.erase(found);
+        refreshPinnedBit(line_pa);
+    }
 }
 
 bool
@@ -3645,6 +3690,7 @@ UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
         return false;
     const uint64_t recallReqId = active->reqId;
     _writeReservations.erase(reservation);
+    refreshPinnedBit(line_pa);
     DataBlock payload(64);
     payload.setData(data, 0, 64);
     return processRecallResponse(line_pa, requesterNode, true, epochVal,

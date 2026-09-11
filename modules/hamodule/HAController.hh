@@ -73,6 +73,8 @@ class HAController {
         Payload data{};
         bool present = false;
         bool dirty = false;
+        // HN publication changes memory, not the node holder lease.
+        bool memoryOnly = false;
     };
     struct Action {
         ActionKind kind;
@@ -134,6 +136,7 @@ class HAController {
         std::uint64_t requestId = 0;
         Payload data{};
         bool retain = false;
+        bool memoryOnly = false;
     };
 
     void validateAddressNode(std::uint64_t address, std::uint32_t node) const;
