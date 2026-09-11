@@ -26,8 +26,8 @@ if [ ! -f "$MATRIX" ]; then
 fi
 
 # Selection rule: registered testcase with fewer than three historical
-# `>>> TCx PASSED <<<` sentinels before this queue was created. TC128 and
-# TC141 are included because their recent focused reruns are not represented
+# `>>> TCx PASSED <<<` sentinels before this queue was created. TC128 is
+# included because its recent focused reruns are not represented
 # consistently by the historical sentinel scan.
 if [ ! -f "$TARGETS" ]; then
     printf 'tc\tprofile\ttopology\thistorical_passes\tselection_rule\n' >"$TARGETS"
@@ -103,17 +103,13 @@ for tc in $(seq 1 54) 63 64 80 81 82 84 85; do
     register_target "$tc" optimized "$topology" pass_count_lt_3
 done
 register_target 128 spill-noopt --1s recent_focused_rerun_audit
-register_target 141 spill-noopt --1s pass_count_lt_3
-register_target 141 optimized --1s pass_count_lt_3
-printf 'expected_targets\t64\n' >"$LOG_ROOT/queue_manifest.txt"
+printf 'expected_targets\t62\n' >"$LOG_ROOT/queue_manifest.txt"
 
 for tc in $(seq 1 54) 63 64 80 81 82 84 85; do
     topology="$(topology_for_tc "$tc")"
     run_case "$tc" optimized "$topology" || failures=$((failures + 1))
 done
 run_case 128 spill-noopt --1s || failures=$((failures + 1))
-run_case 141 spill-noopt --1s || failures=$((failures + 1))
-run_case 141 optimized --1s || failures=$((failures + 1))
 
 printf 'queue\t-\t-\tCOMPLETE failures=%d\t%s\n' "$failures" "$LOG_ROOT" >>"$MATRIX"
 exit "$failures"

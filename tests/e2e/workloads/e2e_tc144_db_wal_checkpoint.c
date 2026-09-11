@@ -18,6 +18,7 @@ int main(int argc, char **argv)
     uint32_t shard = portable_shard(DATA_BASE, plane);
     uint32_t data = shard;
     uint32_t wal = shard + 0x4000u;
+    portable_wait_ready();
     portable_emit_meta(plane, "TC144");
     portable_emit_pressure_config(
         plane, PORTABLE_PLANES * HOT_LINES_PER_PLANE);

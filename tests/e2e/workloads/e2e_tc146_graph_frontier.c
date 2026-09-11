@@ -18,6 +18,7 @@ int main(int argc, char **argv)
     uint32_t frontier = shard;
     uint32_t adjacency = shard + 0x2000u;
     uint32_t property = shard + 0x6000u;
+    portable_wait_ready();
     portable_emit_meta(plane, "TC146");
     portable_emit_pressure_config(
         plane, PORTABLE_PLANES * HOT_LINES_PER_PLANE);

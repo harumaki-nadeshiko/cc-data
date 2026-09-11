@@ -117,7 +117,7 @@ export METRIC3_L3_SEED="${METRIC3_L3_SEED:-0}"
 export METRIC3_L3_EXPERIMENT_MODE="${METRIC3_L3_EXPERIMENT_MODE:-l3-only}"
 export L3_DIRECTORY_PRESSURE_LINES="${L3_DIRECTORY_PRESSURE_LINES:-0}"
 export EP_TRACK_L3_OCCUPANCY="${EP_TRACK_L3_OCCUPANCY:-0}"
-case "$L3_PRESSURE_LEVEL" in 0|100|150) ;; *) echo "FATAL: L3_PRESSURE_LEVEL must be 0, 100, or 150" >&2; exit 2 ;; esac
+case "$L3_PRESSURE_LEVEL" in 0|50|100|150) ;; *) echo "FATAL: L3_PRESSURE_LEVEL must be 0, 50, 100, or 150" >&2; exit 2 ;; esac
 if [ -n "$L3_PRESSURE_TARGET_LINES" ] && \
    ! [[ "$L3_PRESSURE_TARGET_LINES" =~ ^[0-9]+$ ]]; then
     echo "FATAL: L3_PRESSURE_TARGET_LINES must be empty or a non-negative integer" >&2
@@ -195,6 +195,16 @@ export UBIO_PEER_EXIT_RETRY_MS="${UBIO_PEER_EXIT_RETRY_MS:-100}"
 export UBIO_PEER_EXIT_QUIESCE_MS="${UBIO_PEER_EXIT_QUIESCE_MS:-2000}"
 export UBIO_PEER_EXIT_DELIVERY_BUDGET_MS="${UBIO_PEER_EXIT_DELIVERY_BUDGET_MS:-1000}"
 export EP_HA_PROFILE="${EP_HA_PROFILE:-ubcc}"
+export EP_WAIT_BLOOM_READY="${EP_WAIT_BLOOM_READY:-0}"
+export EP_BLOOM_READY_TIMEOUT_MS="${EP_BLOOM_READY_TIMEOUT_MS:-120000}"
+case "$EP_WAIT_BLOOM_READY" in
+    0|1) ;;
+    *) echo "FATAL: EP_WAIT_BLOOM_READY must be 0 or 1" >&2; exit 2 ;;
+esac
+if ! [[ "$EP_BLOOM_READY_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FATAL: EP_BLOOM_READY_TIMEOUT_MS must be a positive integer" >&2
+    exit 2
+fi
 export OURCC_CLEAR_PROFILE="${OURCC_CLEAR_PROFILE:-ack}"
 HA_EXACT_BYTES="${HA_EXACT_BYTES:-}"
 export HA_MAX_ACTIVE="${HA_MAX_ACTIVE:-256}"
@@ -268,6 +278,17 @@ if [ "$E2E_FORMAL" = 1 ]; then
     export EP_PORT_HWM=8192
     export EP_NSIM_MAX_PENDING=65536
 fi
+# Reject unsupported selections before generating files or starting processes.
+python3 - "$ROOT_DIR" "$@" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/tests/e2e")
+from test_e2e import TESTCASES
+for tc in sys.argv[2:]:
+    if not tc.isdecimal() or int(tc) not in TESTCASES:
+        print(f"FATAL: unsupported test case TC{tc}", file=sys.stderr)
+        sys.exit(2)
+PY
+
 if [ -n "$GENERATED_TOPO_NODES" ]; then
     JSON="$RUN_DIR/process_topology.json"
     mkdir -p "$RUN_DIR"
@@ -287,8 +308,10 @@ print(c['num_nodes'], c['num_sockets'])
 ")
 NMOD=$((NUM_NODES * NUM_SOCKETS))
 if [ -z "$HA_EXACT_BYTES" ]; then
-    # 512 KiB exact bitmap budget, one participant bit per node/socket plane.
-    HA_EXACT_BYTES=$(( (512 * 1024 * 8 / NMOD) * 64 ))
+    # Node-scoped HA: N bits per line in each homeSocket's 512 KiB bitmap.
+    HA_EXACT_BYTES=$(( (512 * 1024 * 8 / NUM_NODES) * 64 ))
+    # Exact coverage cannot exceed one 128 MiB DSM segment.
+    if [ "$HA_EXACT_BYTES" -gt 134217728 ]; then HA_EXACT_BYTES=134217728; fi
 fi
 export HA_EXACT_BYTES
 
@@ -431,7 +454,7 @@ ubio_extra_args_for_tc() {
                 *)         echo "--bloom-bytes=512 --sram-bytes=6144 --ways=1 --dir-overflow-policy=spill --batch-rs=0 ${UBCC_OPTS:-}" ;;
             esac
             ;;
-        130|135|136|137|138|139|141)
+        130|135|136|137|138|139)
             case "${EP_PERF_PROFILE:-spill-noopt}" in
                 naive|baseline) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=naive --batch-rs=0 ${UBCC_OPTS:-}" ;;
                 optimized) echo "--bloom-bytes=${UBCC_BLOOM_BYTES:-512} --sram-bytes=5000 --ways=2 --set-bits=2 --dir-overflow-policy=spill --batch-rs=1 ${UBCC_OPTS:-}" ;;
@@ -518,7 +541,7 @@ ubio_extra_args_for_tc() {
 
 ubio_evidence_events_for_tc() {
     case "$1" in
-        125|126|127|128|129|141|200|201|202|203) echo 1 ;;
+        125|126|127|128|129|200|201|202|203) echo 1 ;;
         *) echo 0 ;;
     esac
 }
@@ -566,6 +589,8 @@ export RUN_GEM5_BIN="$GEM5_BIN"
     echo "RUN_ID=$RUN_ID"
     echo "DOCKER_CPUSET=${EP_DOCKER_CPUSET:-unknown}"
     echo "HA_PROFILE=$EP_HA_PROFILE"
+    echo "EP_WAIT_BLOOM_READY=$EP_WAIT_BLOOM_READY"
+    echo "EP_BLOOM_READY_TIMEOUT_MS=$EP_BLOOM_READY_TIMEOUT_MS"
     echo "OURCC_CLEAR_PROFILE=$OURCC_CLEAR_PROFILE"
     echo "HA_EXACT_BYTES=$HA_EXACT_BYTES"
     echo "HA_MAX_ACTIVE=$HA_MAX_ACTIVE"
@@ -620,6 +645,7 @@ for name in (
     "EP_SYNC_INTERVAL_PS", "EP_LINK_LATENCY_PS", "EP_DSM_DATA_DELAY_PS", "EP_PORT_HWM",
     "EP_NSIM_MAX_PENDING", "EP_PERF_PROFILE", "UBCC_POLICY", "UBCC_OPTS",
     "EP_GEM5_OPTS", "EP_HA_PROFILE", "OURCC_CLEAR_PROFILE", "EP_L3_SIZE",
+    "EP_WAIT_BLOOM_READY", "EP_BLOOM_READY_TIMEOUT_MS",
     "EP_L3_ASSOC", "EP_L3_CACHE_LINES", "EP_L3_SETS",
     "L3_PRESSURE_LEVEL", "L3_PRESSURE_TARGET_LINES",
     "EP_L3_PRESSURE_TARGET_LINES", "METRIC3_L3_SEED",
@@ -751,22 +777,23 @@ _aggregate_protocol_tick() {
 # protocol heartbeat ticks alone do not.
 _aggregate_workload_progress() {
     local m5outdir="$1"
-    local num_nodes="$2"
-    local slow_completed=-1 slow_target=0 reporting=0 nid progress
-    for nid in $(seq 0 $((num_nodes - 1))); do
-        progress=$(perl -e '
-            $f = shift;
-            open(my $fh, "<", $f) or exit;
+    local expected_planes="$2"
+    local slow_completed=-1 slow_target=0 slow_milestone=0 reporting=0 progress
+    progress=$(perl -e '
+        for $f (@ARGV) {
+            open(my $fh, "<", $f) or next;
             while (<$fh>) {
-                if (/^\[WORKLOAD-PROGRESS\].* completed=(\d+) target=(\d+)/) {
-                    $completed = $1; $target = $2;
+                if (/^\[WORKLOAD-PROGRESS\].* node=(\d+).* completed=(\d+) target=(\d+) milestone=(\d+)/) {
+                    ($completed{$1}, $target{$1}, $milestone{$1}) = ($2, $3, $4);
                 }
             }
-            print "$completed $target" if defined $completed;
-        ' "$m5outdir/node${nid}/simout_n${nid}")
-        if [ -n "$progress" ]; then
-            local node_completed=${progress%% *}
-            local node_target=${progress##* }
+        }
+        for $node (sort {$a <=> $b} keys %completed) {
+            print "$node $completed{$node} $target{$node} $milestone{$node}\n";
+        }
+    ' "$m5outdir"/node*/simout_n* 2>/dev/null || true)
+    while read -r _ node_completed node_target node_milestone; do
+        if [ -n "${node_completed:-}" ]; then
             # Select the node with the lowest completed/target ratio. Keeping
             # that node's own pair avoids false incompletion when per-plane
             # targets differ by one line.
@@ -776,11 +803,16 @@ _aggregate_workload_progress() {
                 slow_completed="$node_completed"
                 slow_target="$node_target"
             fi
+            if [ "$slow_completed" -eq "$node_completed" ] && \
+               [ "$slow_target" -eq "$node_target" ]; then
+                slow_milestone="$node_milestone"
+            fi
             reporting=$((reporting + 1))
         fi
-    done
+    done <<< "$progress"
     [ "$slow_completed" -ge 0 ] || slow_completed=0
-    printf '%s %s %s\n' "$slow_completed" "$slow_target" "$reporting"
+    [ "$reporting" -le "$expected_planes" ] || reporting="$expected_planes"
+    printf '%s %s %s %s\n' "$slow_completed" "$slow_target" "$reporting" "$slow_milestone"
 }
 
 # ── Supervisor: opt-in long-run watchdog ───────────────────────────
@@ -792,6 +824,7 @@ _supervisor_start() {
     local m5outdir="$2"
     local num_nodes="$3"
     local tc_timeout="$4"
+    local expected_workloads="$5"
     local manifest="$LOG_BASE/supervisor_manifest_tc${tc}.txt"
     local status_file="$LOG_BASE/supervisor_status_tc${tc}.txt"
     local gem5_pids="$GEM5_PIDS"
@@ -828,6 +861,7 @@ _supervisor_start() {
         local prev_guest_progress=-1
         local prev_protocol_tick=-1
         local prev_workload_progress=-1
+        local prev_workload_target=0
         local guest_stall_count=0
         local protocol_stall_count=0
         local generic_stall_count=0
@@ -892,13 +926,21 @@ _supervisor_start() {
             done
             local current_protocol_tick
             current_protocol_tick=$(_aggregate_protocol_tick)
-            local workload_completed workload_target workload_reporting
-            read -r workload_completed workload_target workload_reporting <<< \
-                "$(_aggregate_workload_progress "$m5outdir" "$num_nodes")"
+            local workload_completed workload_target workload_reporting workload_milestone
+            read -r workload_completed workload_target workload_reporting workload_milestone <<< \
+                "$(_aggregate_workload_progress "$m5outdir" "$expected_workloads")"
+            if [ "$prev_workload_target" -gt 0 ] && \
+               [ "$workload_target" -ne "$prev_workload_target" ]; then
+                workload_start_wall=0
+                workload_start_completed="$workload_completed"
+                eta_over_budget_count=0
+                useful_stall_count=0
+                prev_workload_progress=-1
+            fi
             local guest_changed=0 protocol_changed=0 workload_changed=0
             [ "$current_guest_progress" -ne "$prev_guest_progress" ] && guest_changed=1
             [ "$current_protocol_tick" -gt "$prev_protocol_tick" ] && protocol_changed=1
-            [ "$workload_completed" -gt "$prev_workload_progress" ] && workload_changed=1
+            [ "$workload_milestone" -gt "$prev_workload_progress" ] && workload_changed=1
             if [ "$current_guest_progress" -gt 0 ] || [ "$current_protocol_tick" -gt 0 ]; then
                 ever_progressed=1
             fi
@@ -957,7 +999,7 @@ _supervisor_start() {
                 local now elapsed projected workload_elapsed workload_delta
                 now=$(date +%s)
                 elapsed=$((now - start_wall))
-                if [ "$workload_reporting" -eq "$num_nodes" ] && \
+                if [ "$workload_reporting" -eq "$expected_workloads" ] && \
                    [ "$workload_start_wall" -eq 0 ]; then
                     workload_start_wall="$now"
                     workload_start_completed="$workload_completed"
@@ -992,7 +1034,8 @@ _supervisor_start() {
             fi
             prev_guest_progress="$current_guest_progress"
             prev_protocol_tick="$current_protocol_tick"
-            prev_workload_progress="$workload_completed"
+            prev_workload_progress="$workload_milestone"
+            prev_workload_target="$workload_target"
 
             # ── 3. Log directory size check ───────────────────────
             local log_size
@@ -1022,7 +1065,7 @@ _supervisor_start() {
 
             # ── Heartbeat (only to status file, not stdout) ───────
             local ts; ts=$(date +%s)
-            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} guest_stall_sec=$((guest_stall_count * interval)) workload=${workload_completed}/${workload_target} workload_nodes=${workload_reporting}/${num_nodes} useful_stall_sec=$((useful_stall_count * interval)) protocol_tick=${current_protocol_tick} protocol_stall_sec=$((protocol_stall_count * interval)) log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
+            echo "OK ${ts} alive=${alive_count}/${num_nodes} completed=${completed_count} guest_bytes=${current_guest_progress} guest_stall_sec=$((guest_stall_count * interval)) workload=${workload_completed}/${workload_target} workload_nodes=${workload_reporting}/${expected_workloads} workload_milestone=${workload_milestone} useful_stall_sec=$((useful_stall_count * interval)) protocol_tick=${current_protocol_tick} protocol_stall_sec=$((protocol_stall_count * interval)) log_size=${log_size} disk_free=${disk_free:-na}" >> "$status_file"
         done
     ) &
     SUPERVISOR_PID=$!
@@ -1038,6 +1081,12 @@ _supervisor_stop() {
 
 run_tc() {
     local tc=$1
+    if [ "$EP_WAIT_BLOOM_READY" = 1 ]; then
+        if [ "$tc" -lt 142 ] || [ "$tc" -gt 147 ] || [ "$NUM_NODES" -lt 2 ]; then
+            echo "FATAL: Bloom readiness requires TC142-147 and at least two nodes" >&2
+            return 2
+        fi
+    fi
     CURRENT_TC=$tc
     export E2E_TC="$tc"
     : >"$LOG_BASE/launch_commands_tc${tc}.jsonl"
@@ -1228,7 +1277,7 @@ run_tc() {
             fi
             cmd="$GEM5_BIN $debug_args${cmd#"$GEM5_BIN"}"
         fi
-        if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ] || [ "$tc" = "141" ] ||
+        if [ "$tc" = "130" ] || [ "$tc" = "132" ] || [ "$tc" = "133" ] || [ "$tc" = "134" ] ||
            { [ "$tc" -ge 135 ] && [ "$tc" -le 139 ]; } ||
            { [ "$tc" -ge 142 ] && [ "$tc" -le 147 ]; }; then
             # These tests isolate directory policy; do not mix protocol optimizations.
@@ -1311,7 +1360,12 @@ run_tc() {
 
     # 6b. Supervisor: opt-in long-run watchdog (EP_SUPERVISOR=1)
     if [ "${EP_SUPERVISOR:-0}" = "1" ]; then
-        _supervisor_start "$tc" "$m5outdir" "$NUM_NODES" "$TC_TIMEOUT"
+        local expected_workloads="$NMOD"
+        if [ "$tc" -eq 143 ] && [ "$EP_CPU_MODEL" = "hybrid" ]; then
+            expected_workloads=$((2 * NMOD))
+        fi
+        _supervisor_start "$tc" "$m5outdir" "$NUM_NODES" "$TC_TIMEOUT" \
+            "$expected_workloads"
     fi
 
     # 6. Wait for all gem5 processes to finish (or timeout)
@@ -1348,6 +1402,23 @@ run_tc() {
                 _kill_infra
                 return 0
             fi
+        fi
+        # Scientific campaigns must not wait hours with gem5 blocked after an
+        # infrastructure peer has already failed. Preserve the original exit
+        # file and logs; terminate only this runner's remaining children.
+        if { [ "$tc" -ge 142 ] && [ "$tc" -le 147 ]; } ||
+           { [ "$tc" -ge 228 ] && [ "$tc" -le 235 ]; }; then
+            local exit_file exit_status
+            for exit_file in "$child_status_dir"/*.exit; do
+                [ -f "$exit_file" ] || continue
+                exit_status=$(tr -d '[:space:]' <"$exit_file")
+                if [ -n "$exit_status" ] && [ "$exit_status" != 0 ]; then
+                    echo "  TC${tc} CHILD FAILURE: ${exit_file##*/} status=$exit_status"
+                    _supervisor_stop
+                    _kill_infra
+                    return 1
+                fi
+            done
         fi
         sleep 1; waited=$((waited + 1))
         if [ "$progress_watchdog" -gt 0 ] 2>/dev/null; then
@@ -1591,7 +1662,7 @@ echo "Workload: $WORKLOAD  (compiled per-TC; path is constant)"
 # mismatch before compiling or starting any managed process.
 required_topology_for_tc() {
     case "$1" in
-        135|136|137|138|139|140|141)          printf '%s\n' 1s ;;
+        135|136|137|138|139|140)          printf '%s\n' 1s ;;
         32|33|34|35|39|81)                 printf '%s\n' 2s ;;
         82|90|91|92|93|94|133)             printf '%s\n' 8n1s ;;
         95|96|97|98|99|100|101|134)        printf '%s\n' 8n2s ;;

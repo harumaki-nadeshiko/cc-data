@@ -15,6 +15,7 @@ int main(int argc, char **argv)
     if (!portable_is_primary(cpu)) { _exit_program(0); return 0; }
     int plane = portable_plane(node, cpu);
     uint32_t shard = portable_shard(DATA_BASE, plane);
+    portable_wait_ready();
     portable_emit_meta(plane, "TC142");
     portable_emit_pressure_config(plane, PORTABLE_PLANES * HOT_PAGES);
     emit_timer_selftest(plane);

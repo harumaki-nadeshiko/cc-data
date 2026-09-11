@@ -62,6 +62,13 @@ bool HAController::submit(const Request &request)
     if (request.kind == RequestKind::Read && request.byteMask)
         throw std::invalid_argument("HAController read mask must be zero");
     if (!directory_.contains(request.address)) return submitOverflow(request);
+    // Do not install a new holder while an earlier release can still commit.
+    // The adapter retains the wire context and returns RetryableBusy for Reject.
+    if (writebacks_.find(request.address) != writebacks_.end()) {
+        actions_.push_back({ActionKind::Reject, request.address, request.requester,
+                            request.requester, request.requestId, {}});
+        return false;
+    }
     if (unavailable(request.address)) {
         actions_.push_back({ActionKind::Reject, request.address, request.requester,
                             request.requester, request.requestId, {}});
@@ -296,7 +303,8 @@ void HAController::accept(const Event &event)
         wire.request = {event.address, event.node, RequestKind::Write,
                         event.requestId, event.data};
         emit(ActionKind::PersistMemory, wire, event.node, event.node, event.data);
-        writebacks_[event.address] = {event.node, event.requestId, event.data, event.present};
+        writebacks_[event.address] = {event.node, event.requestId, event.data,
+                                      event.present, event.memoryOnly};
         return;
     }
     if (event.kind == EventKind::WritebackFailed) {
@@ -310,8 +318,10 @@ void HAController::accept(const Event &event)
         auto wb = writebacks_.find(event.address);
         if (wb != writebacks_.end() && wb->second.node == event.node &&
             wb->second.requestId == event.requestId) {
-            directory_.setSharers(event.address,
-                wb->second.retain ? (std::uint64_t{1} << event.node) : 0);
+            // A release describes this node only. Other nodes may still
+            // hold clean copies; publication must not erase their bits.
+            if (!wb->second.memoryOnly)
+                directory_.set(event.address, event.node, wb->second.retain);
             unavailable_[static_cast<std::size_t>(directory_.lineIndex(event.address))] = 0;
             writebacks_.erase(wb);
             return;
@@ -385,6 +395,11 @@ void HAController::accept(const Event &event)
         // subsequently busy.
         txn.destructiveAccepted = true;
         txn.persistBeforeGrant = false;
+        // The adapter proved node absence coherently. Retire its old lease
+        // within this serialized transaction, not via an unversioned L1 Evict.
+        txn.oldSharers &= ~nodeBit;
+        if (!txn.overflow)
+            directory_.set(event.address, event.node, false);
         txn.dataSource = txn.request.requester;
         txn.fetchingMemory = true;
         emit(ActionKind::FetchMemory, txn, txn.request.requester,

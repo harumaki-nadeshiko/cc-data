@@ -228,6 +228,30 @@ void testDifferentAddressConcurrencyAndBroadcast()
 void testWritebackEvictAndPeerExit()
 {
     auto ha = makeController();
+    const std::uint64_t publicationPa = 0x100740;
+    ha.directoryForTest().setSharers(publicationPa, 3);
+    auto publication = event(EK::Writeback, publicationPa, 0, 489,
+                             patternedPayload(), false, true);
+    publication.memoryOnly = true;
+    ha.accept(publication);
+    assert(has(drain(ha), AK::PersistMemory, 489));
+    ha.accept(event(EK::PersistenceComplete, publicationPa, 0, 489));
+    assert(ha.directory().sharers(publicationPa) == 3);
+    // Publication/release is not an assignment of the complete directory.
+    const std::uint64_t sharedPa = 0x100700;
+    ha.directoryForTest().setSharers(sharedPa, (1u << 1) | (1u << 2));
+    ha.accept(event(EK::Writeback, sharedPa, 1, 490,
+                    patternedPayload(), false, true));
+    assert(has(drain(ha), AK::PersistMemory, 490));
+    ha.accept(event(EK::PersistenceComplete, sharedPa, 1, 490));
+    assert(ha.directory().sharers(sharedPa) == (1u << 2));
+    ha.accept(event(EK::PersistenceComplete, sharedPa, 1, 490));
+    assert(ha.directory().sharers(sharedPa) == (1u << 2));
+    ha.accept(event(EK::Writeback, sharedPa, 1, 491,
+                    patternedPayload(), true, true));
+    assert(has(drain(ha), AK::PersistMemory, 491));
+    ha.accept(event(EK::PersistenceComplete, sharedPa, 1, 491));
+    assert(ha.directory().sharers(sharedPa) == ((1u << 1) | (1u << 2)));
     const std::uint64_t pa = 0x100140;
     const auto fullLine = patternedPayload();
     ha.accept(event(EK::Writeback, pa, 2, 50, fullLine, true, true));
@@ -344,6 +368,11 @@ void testMaskedWrites()
     auto finalLine = actions[0].data;
     assert(finalLine.bytes[1] == 0xaa && finalLine.bytes[63] == 0xbb);
     assert(finalLine.bytes[0] == base.bytes[0] && finalLine.bytes[62] == base.bytes[62]);
+    for (std::size_t i = 0; i < base.bytes.size(); ++i) {
+        const auto expected = (mask & (std::uint64_t{1} << i)) ?
+            patch.bytes[i] : base.bytes[i];
+        assert(finalLine.bytes[i] == expected);
+    }
     assert(ha.directory().sharers(pa) == (1u << 2));
     ha.accept({EK::InstallAck, pa, 2, 80});
     drain(ha);
@@ -355,6 +384,22 @@ void testMaskedWrites()
     actions = drain(ha);
     assert(has(actions, AK::FetchMemory, 81));
     assert(has(actions, AK::Invalidate, 81));
+    // Full-line memory data alone cannot grant while old participants retain
+    // copies. Both actual invalidation acknowledgements are required, and
+    // the eventual partial writer must preserve all other 62 bytes.
+    ha.accept(event(EK::OwnerData, memoryPa, 3, 81, base));
+    assert(drain(ha).empty());
+    ha.accept(event(EK::InvalidateAck, memoryPa, 0, 81));
+    assert(drain(ha).empty());
+    ha.accept(event(EK::InvalidateAck, memoryPa, 1, 81));
+    actions = drain(ha);
+    assert(actions.size() == 1 && actions[0].kind == AK::GrantWrite);
+    for (std::size_t i = 0; i < base.bytes.size(); ++i) {
+        assert(actions[0].data.bytes[i] ==
+               ((mask & (std::uint64_t{1} << i)) ? patch.bytes[i] : base.bytes[i]));
+    }
+    ha.accept(event(EK::InstallAck, memoryPa, 3, 81));
+    drain(ha);
 
     const std::uint64_t remotePa = pa + 192;
     ha.directoryForTest().setSharers(remotePa, 1u << 1);

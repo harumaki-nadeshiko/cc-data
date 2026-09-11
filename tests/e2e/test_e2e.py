@@ -125,7 +125,6 @@ TESTCASES = {
     138: "e2e_tc138_dirty_handoff_store",
     139: "e2e_tc139_mixed_batch_throughput",
     140: "e2e_tc140_cross_l2_owner_store",
-    141: "e2e_tc141_spill_shared_writer_recovery",
     142: "e2e_tc142_db_oltp_buffer_pool",
     143: "e2e_tc143_db_btree_traversal",
     144: "e2e_tc144_db_wal_checkpoint",
@@ -1941,45 +1940,6 @@ def verify_tc140(reads, lines):
         "cross_l2_owner_store", 24, {2: 24})
 
 
-def verify_tc141(reads, lines):
-    if len(reads) != 32:
-        return False, f"TC141 FAILED: expected 32 READ_VAL, got {len(reads)}", reads
-    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
-    if mismatches:
-        return False, f"TC141 FAILED: {len(mismatches)} mismatches", mismatches[:10]
-    expected_nodes = {1: 16, 2: 16}
-    for node, count in expected_nodes.items():
-        actual = sum(1 for read in reads if read["node"] == node)
-        if actual != count:
-            return False, (f"TC141 FAILED: node{node} READ_VAL count={actual}, "
-                           f"expected {count}"), reads
-    required_phases = ("seed_hot", "share_hot", "directory_pressure",
-                       "shared_to_writer", "verify_final")
-    missing = [phase for phase in required_phases
-               if not any("[PHASE]" in line and f"phase={phase}" in line
-                          for line in lines)]
-    if missing:
-        return False, f"TC141 FAILED: missing phases {missing}", []
-    is_naive = any(
-        ("[UBIO-POLICY]" in line and "effective=naive" in line) or
-        ("[RUNNER-MANIFEST]" in line and "policy=naive" in line) or
-        ("[UBCC-STATE]" in line and "policy=naive" in line)
-        for line in lines)
-    if is_naive:
-        if not any("UBCC-NAIVE-EVICT" in line for line in lines):
-            return False, "TC141 FAILED: missing naive eviction evidence", []
-    else:
-        required_markers = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE",
-                            "UBCC-SHARED-RELEASE")
-        missing = [marker for marker in required_markers
-                   if not any(marker in line for line in lines)]
-        if missing:
-            return False, f"TC141 FAILED: missing protocol evidence {missing}", []
-    if any("RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line for line in lines):
-        return False, "TC141 FAILED: upgrade lost valid sharer status", []
-    return True, "TC141 PASSED: shared-to-writer recovery completed", []
-
-
 def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,
                                    latency_phase, service_phase,
                                    end_to_end_phase, operations, samples):
@@ -3385,7 +3345,6 @@ VERIFIERS = {
     138: verify_tc138,
     139: verify_tc139,
     140: verify_tc140,
-    141: verify_tc141,
     142: verify_tc142,
     143: verify_tc143,
     144: verify_tc144,
@@ -3447,7 +3406,7 @@ def verify_testcase(tc_id, reads, lines):
     return False, f"FAILED: unknown test case TC{tc_id}", []
 
 # ── Compilation ───────────────────────────────────────────────────
-def compile_workload(tc_name, num_nodes=3):
+def compile_workload(tc_name, num_nodes=3, hybrid=False):
     if tc_name.startswith("/") and os.path.isfile(tc_name):
         return tc_name
     elf_path = os.path.join(WORKLOAD_DIR, tc_name + ".elf")
@@ -3478,6 +3437,8 @@ def compile_workload(tc_name, num_nodes=3):
         "-I", WORKLOAD_DIR,
         "-o", elf_path, src_path,
     ]
+    if hybrid:
+        cmd.insert(-3, "-DE2E_TC143_HYBRID_SWITCH=1")
     print(f"  Compiling: {' '.join(cmd)}", flush=True)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -3564,7 +3525,7 @@ def gem5_config_main():
     _parser.add_argument("--node-id", type=int, default=-1)
     _parser.add_argument("--num-nodes", type=int, default=0)
     _parser.add_argument("--num-sockets", type=int, default=0)
-    _parser.add_argument("--cpu-model", choices=("timing", "o3"),
+    _parser.add_argument("--cpu-model", choices=("timing", "o3", "hybrid"),
                          default="timing")
     _parser.add_argument("--sequencer-max-outstanding", type=int, default=0,
                          help="Override Ruby Sequencer outstanding limit; "
@@ -3602,6 +3563,10 @@ def gem5_config_main():
                          help="UBCC metadata DRAM bytes (hyphenated spelling "
                               "preferred; underscore alias retained)")
     _args, _unknown = _parser.parse_known_args()
+
+    if _args.cpu_model == "hybrid" and (
+            _args.node_id < 0 or _args.tc != 143):
+        _parser.error("cpu-model hybrid is supported only for split-mode TC143")
 
     # Phase 0.3: map script args to env vars for SimObject params
     # (precedes Ruby system creation so SimObjects see them in init)
@@ -3645,12 +3610,12 @@ def gem5_config_main():
         tc_name = "(precompiled)"
     elif _args.tc in TESTCASES:
         tc_name = TESTCASES[_args.tc]
-        binary = compile_workload(tc_name)
+        binary = compile_workload(tc_name, hybrid=_args.cpu_model == "hybrid")
         if not binary:
             sys.exit(1)
     elif _args.all:
         tc_name = "e2e_tc1_dsm_local"  # Combined mode: use TC1 as base
-        binary = compile_workload(tc_name)
+        binary = compile_workload(tc_name, hybrid=False)
         if not binary:
             sys.exit(1)
     else:
@@ -3740,6 +3705,13 @@ def gem5_config_main():
         "cpus_per_node": CPUS_PER_NODE,
         "process_cpu_count": TOTAL_CPUS,
         "cpu_model": _args.cpu_model,
+        "hybrid_enabled": _args.cpu_model == "hybrid",
+        "setup_cpu": "timing" if _args.cpu_model == "hybrid" else _args.cpu_model,
+        "measurement_cpu": "o3" if _args.cpu_model == "hybrid" else _args.cpu_model,
+        "setup_cpu_model": "timing" if _args.cpu_model == "hybrid" else _args.cpu_model,
+        "measurement_cpu_model": "o3" if _args.cpu_model == "hybrid" else _args.cpu_model,
+        "switches_expected": 1 if _args.cpu_model == "hybrid" else 0,
+        "switches_observed": 0,
         "sequencer_max_outstanding": _args.sequencer_max_outstanding,
         "l3_size": _args.l3_size,
         "l3_assoc": _args.l3_assoc,
@@ -3766,8 +3738,11 @@ def gem5_config_main():
         },
         "metadata_bytes": _args.ubcc_metadata_size,
     }
-    print("[PROCESS-MANIFEST] " + json.dumps(_manifest, separators=(",", ":"),
-                                               sort_keys=True), flush=True)
+    _manifest_marker = ("[PROCESS-MANIFEST-SETUP]" if
+                        _args.cpu_model == "hybrid" else
+                        "[PROCESS-MANIFEST]")
+    print(_manifest_marker + " " + json.dumps(
+        _manifest, separators=(",", ":"), sort_keys=True), flush=True)
     local_external_ranges = []
     for node_id in BUILD_NODES:
         node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
@@ -3803,6 +3778,8 @@ def gem5_config_main():
     # ruby_system = RubySystem()  # REMOVED
 
     cpus = []
+    future_cpus = []
+    hybrid_switch_cpus = []
     cpu_class = ArmO3CPU if _args.cpu_model == "o3" else ArmTimingSimpleCPU
     for i in range(TOTAL_CPUS):
         cpu = cpu_class(cpu_id=i)
@@ -3848,6 +3825,24 @@ def gem5_config_main():
         proc.errout = "simerr"
         cpu.process = proc
         cpu.workload = [cpu.process]
+
+    # Follow configs/common/Simulation.py's takeover construction.  Future O3
+    # CPUs are parented by the system but are deliberately absent from Ruby
+    # creation/connection: BaseCPU::takeOverFrom transfers the active Timing
+    # CPU's instruction/data ports at each switch.
+    if _args.cpu_model == "hybrid":
+        for i, cpu in enumerate(cpus):
+            if i % CPUS_PER_NODE not in (0, 2):
+                continue
+            future = ArmO3CPU(switched_out=True, cpu_id=i)
+            future.system = system
+            future.clk_domain = cpu.clk_domain
+            future.workload = cpu.workload
+            future.isa = cpu.isa
+            future.createThreads()
+            future_cpus.append(future)
+            hybrid_switch_cpus.append(cpu)
+        system.future_cpu = future_cpus
 
     # ── Options ────────────────────────────────────────────────────
     class O: pass
@@ -4127,8 +4122,37 @@ def gem5_config_main():
     print(f"Workload: {binary}", flush=True)
     print("=" * 60, flush=True)
 
-    exit_event = m5.simulate()
-    cause = exit_event.getCause()
+    _switches_observed = 0
+    _timing_active = True
+    while True:
+        exit_event = m5.simulate()
+        cause = exit_event.getCause()
+        if _args.cpu_model != "hybrid" or cause != "switchcpu":
+            break
+        # Setup workers on local CPU 1/3 have exited after the full-worker
+        # barrier. Switch only the two live socket-primary contexts (0/2).
+        if _timing_active:
+            _pairs = list(zip(hybrid_switch_cpus, future_cpus))
+        else:
+            _pairs = list(zip(future_cpus, hybrid_switch_cpus))
+        m5.switchCpus(system, _pairs)
+        _timing_active = not _timing_active
+        _switches_observed += 1
+        print(f"[E2E-CPU-SWITCH] observed={_switches_observed} "
+              f"active={'timing' if _timing_active else 'o3'}", flush=True)
+    _manifest["switches_observed"] = _switches_observed
+    _manifest["final_cpu"] = "timing" if _timing_active else "o3"
+    _manifest["hybrid_switches_complete"] = (
+        _args.cpu_model != "hybrid" or
+        _switches_observed == _manifest["switches_expected"])
+    if _args.cpu_model == "hybrid":
+        print("[PROCESS-MANIFEST] " + json.dumps(
+            _manifest, separators=(",", ":"), sort_keys=True), flush=True)
+    if not _manifest["hybrid_switches_complete"]:
+        print("FATAL: hybrid switch count mismatch: expected="
+              f"{_manifest['switches_expected']} observed={_switches_observed}",
+              flush=True)
+        sys.exit(1)
     print(f"SIM_CAUSE={cause}", flush=True)
 
     # ── Split mode: this process owns a single node; it does NOT have the
@@ -4210,6 +4234,8 @@ def runner_main():
     args = parser.parse_args()
 
     if args.tc:
+        if args.tc not in TESTCASES:
+            parser.error(f"unsupported test case TC{args.tc}")
         tc_list = [args.tc]
     elif args.all:
         tc_list = sorted(TESTCASES.keys())

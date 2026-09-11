@@ -165,6 +165,53 @@ static inline void portable_barrier(void)
     sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
 }
 
+/* Explicit startup namespace in SYS_SYNC_WAIT's existing mask argument.
+ * Bit 31 is not a plane: gem5 and UBIO retain it through the release. Both
+ * gate ON and OFF execute this same barrier and the same workload binary. */
+static inline void portable_wait_ready(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+#ifdef E2E_TC143_HYBRID_SWITCH
+    const long participants = 2 * NUM_SOCKETS;
+#else
+    const long participants = NUM_SOCKETS;
+#endif
+    long result = _syscall3(SYS_SYNC_WAIT,
+        (long)(PORTABLE_ALL_MASK | 0x80000000u), participants, 0);
+    if (result < 0) _exit_program(1);
+}
+
+static inline void portable_full_cpu_barrier(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
+              (long)(2 * NUM_SOCKETS), 0);
+}
+
+static inline void portable_switch_barrier(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
+              (long)NUM_SOCKETS, 0);
+}
+
+/*
+ * Simulator-only switch syscall. Using the normal syscall commit path makes
+ * repeated Timing/O3 handovers reliable; the ARM magic instruction can be
+ * lost when decoder state is transferred between different CPU models.
+ */
+static inline void portable_switch_cpu(int node_id, int cpu_index)
+{
+#ifdef E2E_TC143_HYBRID_SWITCH
+    if (node_id >= 0 && portable_socket(cpu_index) == 0) {
+        _syscall1(SYS_SWITCH_CPU, 0);
+    }
+#else
+    (void)node_id;
+    (void)cpu_index;
+#endif
+}
+
 #define PORTABLE_SERIAL_FOR_EACH_PLANE(plane_id, body) \
     do { \
         for (int portable_turn = 0; portable_turn < PORTABLE_PLANES; \
@@ -222,9 +269,57 @@ static inline int portable_pressure_plane_target(int plane)
     return total;
 }
 
+static inline int portable_pressure_worker_count(
+    int batch, int plane, int lane)
+{
+    int first = portable_pressure_begin(batch) + plane +
+        lane * PORTABLE_PLANES;
+    int last = portable_pressure_end(batch);
+    int stride = 2 * PORTABLE_PLANES;
+    return first < last ? 1 + (last - 1 - first) / stride : 0;
+}
+
+static inline int portable_pressure_worker_target(int plane, int lane)
+{
+    int total = 0;
+    for (int batch = 0; batch < PORTABLE_BATCHES; ++batch)
+        total += portable_pressure_worker_count(batch, plane, lane);
+    return total;
+}
+
+static inline int portable_pressure_worker_weight(int worker)
+{
+    static const unsigned char weights[12] = {
+        8, 4, 3, 2, 3, 2, 8, 4, 3, 2, 3, 2
+    };
+    return weights[worker];
+}
+
+static inline int portable_pressure_weight_prefix(int worker)
+{
+    int prefix = 0;
+    for (int i = 0; i < worker; ++i)
+        prefix += portable_pressure_worker_weight(i);
+    return prefix;
+}
+
+static inline int portable_weighted_worker_begin(int worker)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)portable_pressure_weight_prefix(worker)) / 44u);
+}
+
+static inline int portable_weighted_worker_end(int worker)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)(portable_pressure_weight_prefix(worker) +
+                             portable_pressure_worker_weight(worker))) / 44u);
+}
+
 static inline void portable_emit_workload_progress(
     int plane, const char *event, int batch, int completed, int target)
 {
+    static int milestone;
     char b[256]; int p = 0; const char *s;
 #define PORTABLE_PROGRESS_TEXT(text) \
     do { s = (text); while (*s) b[p++] = *s++; } while (0)
@@ -240,9 +335,35 @@ static inline void portable_emit_workload_progress(
     p = fmt_int(b, p, completed);
     PORTABLE_PROGRESS_TEXT(" target=");
     p = fmt_int(b, p, target);
+    PORTABLE_PROGRESS_TEXT(" milestone=");
+    p = fmt_int(b, p, ++milestone);
     b[p++] = '\n';
     _raw_write(b, p);
 #undef PORTABLE_PROGRESS_TEXT
+}
+
+static inline void portable_emit_switch_progress(
+    int plane, const char *event, int batch)
+{
+#ifdef E2E_TC143_HYBRID_SWITCH
+    static int switch_milestone;
+    char b[192]; int p = 0; const char *s;
+#define PORTABLE_SWITCH_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+    PORTABLE_SWITCH_TEXT("[SWITCH-PROGRESS] node=");
+    p = fmt_int(b, p, plane);
+    PORTABLE_SWITCH_TEXT(" event=");
+    PORTABLE_SWITCH_TEXT(event);
+    PORTABLE_SWITCH_TEXT(" batch=");
+    p = fmt_int(b, p, batch);
+    PORTABLE_SWITCH_TEXT(" milestone=");
+    p = fmt_int(b, p, ++switch_milestone);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_SWITCH_TEXT
+#else
+    (void)plane; (void)event; (void)batch;
+#endif
 }
 
 static inline void portable_emit_pressure_config(int plane, int hot_lines)

@@ -1459,10 +1459,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         pendingDataRequests[key] = request;
         const bool ownerWriteback = request.b.writebackReq.kind ==
             UBWritebackKind::OwnerWriteback;
+        const int persistenceRequester = request.b.writebackReq.kind ==
+            UBWritebackKind::InternalPublication ? -1 : request.h.requesterNode;
         const uint8_t disposition = static_cast<uint8_t>(
             request.b.writebackReq.disposition);
         if (!ubcc.reserveWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+                request.h.homeLinePa, persistenceRequester,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
                 request.h.reqId, disposition)) {
             pendingDataTxns.erase(key);
@@ -1474,18 +1476,18 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             request.h.homeLinePa, request.b.writebackReq.byteMask,
             request.b.writebackReq.data, tickRef,
             [this, request, keepAsClean, ownerWriteback,
-             disposition](DsmDataStatus status) {
+             disposition, persistenceRequester](DsmDataStatus status) {
             bool success = status == DsmDataStatus::Ok;
             if (success && ownerWriteback && !keepAsClean &&
                 ubcc.completeReservedOwnerWritebackRecall(
-                    request.h.homeLinePa, request.h.requesterNode,
+                    request.h.homeLinePa, persistenceRequester,
                     request.h.epoch, request.h.srcSocket, request.h.reqId,
                     request.b.writebackReq.data)) {
                 // Matching recall and owner writeback share this one completed
                 // persistence operation.
             } else {
                 ubcc.releaseWritebackPersistence(
-                    request.h.homeLinePa, request.h.requesterNode,
+                    request.h.homeLinePa, persistenceRequester,
                     request.h.epoch, ownerWriteback, request.h.srcSocket,
                     request.h.reqId, disposition);
                 if (success && ownerWriteback)
@@ -1518,15 +1520,15 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             response.h.reqId = waiter.h.reqId;
             response.b.writebackResp.success = success;
             completeDataResponse(dataTxnKey(waiter), waiter, response);
-        }, [this, request, ownerWriteback, disposition]() {
+        }, [this, request, ownerWriteback, disposition, persistenceRequester]() {
             return ubcc.validateWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+                request.h.homeLinePa, persistenceRequester,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
                 request.h.reqId, disposition);
         });
         if (!queued) {
             ubcc.releaseWritebackPersistence(
-                request.h.homeLinePa, request.h.requesterNode,
+                request.h.homeLinePa, persistenceRequester,
                 request.h.epoch, ownerWriteback, request.h.srcSocket,
                 request.h.reqId, disposition);
             auto pending = pendingDataWrites.find(request.h.homeLinePa);
@@ -1742,6 +1744,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                     slot.retryTick = tickRef + dsmData._dsmDramDelayPs;
                     return;
                 }
+                panic_if(status == DsmDataStatus::NotWritten &&
+                             ubcc.grantRequiresWrittenBacking(slot.push.h.homeLinePa),
+                         "dirty recall absence without persisted backing pa=0x{:x}",
+                         slot.push.h.homeLinePa);
                 if ((status == DsmDataStatus::Ok ||
                      status == DsmDataStatus::NotWritten) && data) {
                     std::memcpy(slot.push.b.readResp.grantData, data, 64);
@@ -2389,15 +2395,17 @@ struct HomeVIAdapter {
     {}
 
     uint32_t participant(uint32_t node, uint32_t socket) const {
-        return node * static_cast<uint32_t>(g_numSockets) + socket;
+        (void)socket; // Endpoint routing context is not a directory holder.
+        return node;
     }
 
     uint32_t participantNode(uint32_t plane) const {
-        return plane / static_cast<uint32_t>(g_numSockets);
+        return plane;
     }
 
     uint16_t participantSocket(uint32_t plane) const {
-        return static_cast<uint16_t>(plane % static_cast<uint32_t>(g_numSockets));
+        (void)plane;
+        return static_cast<uint16_t>(socketId); // Address-selected node HN.
     }
 
     uint64_t allocInternalReqId() {
@@ -2688,6 +2696,14 @@ struct HomeVIAdapter {
                 (msg.h.flags & static_cast<uint32_t>(CFLAG_ACCEPTED)) != 0;
             const bool dataReturned =
                 (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0;
+            const bool hasRecallData =
+                (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0;
+            if (!ackReceived || dataReturned != hasRecallData) {
+                ha.accept({EventKind::Unavailable, msg.h.homeLinePa, sourceParticipant,
+                           internalId, {}, false, false});
+                drainActions();
+                return true;
+            }
             cc::ha::HAController::Payload payload;
             if (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) {
                 auto it = requests.find(internalId);
@@ -2759,15 +2775,19 @@ struct HomeVIAdapter {
             // HA directory entries do not carry the UBCC permission epoch, so
             // this adapter cannot validate StoreCommit's exact tuple. Reject it
             // explicitly rather than routing it through owner writeback state.
-            if (msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback) {
+            const bool publication = msg.b.writebackReq.kind ==
+                UBWritebackKind::InternalPublication &&
+                msg.b.writebackReq.disposition == UBWriteDisposition::MemoryOnly;
+            if (msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback &&
+                !publication) {
                 rejectWriteback();
                 return true;
             }
             const bool keep = msg.b.writebackReq.disposition ==
                 UBWriteDisposition::KeepClean;
-            if (msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback ||
+            if ((!publication && msg.b.writebackReq.kind != UBWritebackKind::OwnerWriteback) ||
                 (msg.b.writebackReq.disposition != UBWriteDisposition::DropOwner &&
-                 !keep) || !msg.b.writebackReq.hasData ||
+                 !keep && !publication) || !msg.b.writebackReq.hasData ||
                 msg.b.writebackReq.byteMask != ~uint64_t{0}) {
                 rejectWriteback();
                 return true;
@@ -2782,6 +2802,13 @@ struct HomeVIAdapter {
                                      msg.h.reqId);
                     return true;
                 }
+                rejectWriteback();
+                return true;
+            }
+            // A node release cannot race an active install. Internal HN
+            // publication is different: a recall may be waiting on that exact
+            // replacement to finish, so it must retain its memory-only path.
+            if (!publication && ha.busy(msg.h.homeLinePa)) {
                 rejectWriteback();
                 return true;
             }
@@ -2817,7 +2844,7 @@ struct HomeVIAdapter {
             ha.accept({EventKind::Writeback, msg.h.homeLinePa,
                        sourceParticipant, internalId, payload,
                        keep,
-                       msg.b.writebackReq.hasData != 0});
+                       msg.b.writebackReq.hasData != 0, publication});
             writebacks[internalId] = {msg.h.srcNode, msg.h.srcSocket,
                                        msg.h.homeLinePa, msg.h.reqId, msg};
             drainActions();
@@ -3045,7 +3072,10 @@ struct HomeVIAdapter {
             const uint32_t recipient = action.kind == ActionKind::FetchOwner
                 ? action.source : action.target;
             const uint32_t recipientNode = participantNode(recipient);
-            const uint16_t recipientSocket = participantSocket(recipient);
+            const bool permissionResponse = action.kind == ActionKind::GrantRead ||
+                action.kind == ActionKind::GrantWrite || action.kind == ActionKind::Reject;
+            const uint16_t recipientSocket = permissionResponse
+                ? context.requesterSocket : participantSocket(recipient);
             CoherenceMessage out;
             out.h.srcNode = nodeId; out.h.srcSocket = socketId;
             out.h.dstNode = recipientNode;
@@ -3057,11 +3087,14 @@ struct HomeVIAdapter {
             out.h.homeLinePa = action.address;
             out.h.localLinePa = addressMap.buildDsmPA(
                 recipientNode, nodeId, addressMap.dsmOffset(action.address), socketId);
-            out.h.reqId = context.wireReqId;
+            // Owner controls use a Home-unique transaction ID: two requester
+            // sockets can legitimately allocate the same wire request ID.
+            out.h.reqId = permissionResponse ? context.wireReqId : action.requestId;
             if (action.kind == ActionKind::FetchOwner) {
                 out.h.type = CoherenceMessageType::RecallReq;
                 out.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-                if (context.operation == HAOperation::Read)
+                if (context.operation == HAOperation::Read ||
+                    recipientNode == context.requesterNode)
                     out.h.flags |= static_cast<uint32_t>(CFLAG_IS_READ_RECALL);
             } else if (action.kind == ActionKind::Invalidate) {
                 out.h.type = CoherenceMessageType::InvalidateReq;
@@ -3326,6 +3359,19 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         }
         const auto kind = msg.b.writebackReq.kind;
         const auto disposition = msg.b.writebackReq.disposition;
+        if (kind == UBWritebackKind::OwnerWriteback &&
+            !ubcc.prepareWritebackPersistence(msg.h.homeLinePa,
+                msg.h.requesterNode, msg.h.epoch)) {
+            response.h.type = CoherenceMessageType::WritebackResp;
+            response.h.srcNode = nid; response.h.srcSocket = sid;
+            response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
+            response.h.homeLinePa = msg.h.homeLinePa;
+            response.h.reqId = msg.h.reqId; response.h.epoch = msg.h.epoch;
+            response.h.flags = static_cast<uint32_t>(CFLAG_DEFERRED);
+            response.b.writebackResp.success = false;
+            hasResponse = true;
+            return true;
+        }
         const bool keepAsClean = disposition == UBWriteDisposition::KeepClean;
         const bool validKind = kind == UBWritebackKind::OwnerWriteback ||
             kind == UBWritebackKind::StoreCommit ||
@@ -3343,7 +3389,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
                                     msg.h.epoch);
         const bool validInternalIdentity =
             kind != UBWritebackKind::InternalPublication ||
-            (msg.h.requesterNode == -1 && msg.h.epoch == 0);
+            (msg.h.requesterNode == static_cast<uint16_t>(-1) && msg.h.epoch == 0);
         const int currentOwner = ubcc.getOwnerForLine(msg.h.homeLinePa);
         const bool plausibleOwner = kind != UBWritebackKind::OwnerWriteback ||
             currentOwner < 0 || currentOwner == msg.h.requesterNode;
@@ -3512,8 +3558,20 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::RecallResp: {
+        // Failed control completion is not proof of clean absence. Preserve the
+        // RECALL outstanding and its existing timeout/retry scheduler.
+        const bool ackReceived =
+            (msg.h.flags & static_cast<uint32_t>(CFLAG_ACCEPTED)) != 0;
         bool dataReturned = (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_RETURNED)) != 0;
         bool hasData = (msg.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0;
+        if (!ackReceived || dataReturned != hasData) {
+            if (g_debugUbioPerf || g_evidenceEvents)
+                LogInfo("UBIO", "[HOME-RECALL-RESULT] home={}:{} pa=0x{:x} "
+                        "reqId={} accepted=0 reason={}", nid, sid,
+                        msg.h.homeLinePa, msg.h.reqId,
+                        !ackReceived ? "recall-failed" : "recall-payload-invalid");
+            return true;
+        }
         cc::glob::DataBlock db(64);
         if (hasData && dataReturned)
             std::memcpy(db.data, msg.b.recallResp.data, 64);
@@ -3524,7 +3582,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         // RECALL outstanding forever and blocking all future upgrades (TC16).
         ubcc.processRecallResponse(msg.h.homeLinePa, msg.h.srcNode,
                                     dataReturned, msg.h.epoch, msg.h.reqId,
-                                    (hasData && dataReturned) ? &db : nullptr);
+                                    (hasData && dataReturned) ? &db : nullptr,
+                                    ackReceived);
         return true;
       }
 
@@ -4038,10 +4097,11 @@ main(int argc, char **argv)
         cc::ha::HAController::Config config;
         config.directory = {
             g_haExactBase, g_haExactBytes, 64,
-            static_cast<uint32_t>(g_numNodes * g_numSockets)};
+            static_cast<uint32_t>(g_numNodes)};
         config.perAddressQueueDepth = g_haQueueDepth;
         haController.reset(new cc::ha::HAController(config));
         haHost.reset(new HomeVIHost(gem5Port, netPort, nid, sid, tick));
+        haHost->dsmData._dsmDramDelayPs = g_dsmDataDelayPs;
         haAdapter.reset(new HomeVIAdapter(*haController, *haHost, nid, sid, tick,
                                          g_haMaxActive));
     }
@@ -4055,6 +4115,8 @@ main(int argc, char **argv)
 
     // ── Phase 3: Startup manifest & diagnostics ──────────────────────
     {
+        LogInfo("UBIO", "[PAIR-REVISION] revision=invalidateonly-persist-before-comp-20260910 "
+                "node={} socket={} invalidate_ack_requires_chi_barrier=1", nid, sid);
         if (g_homeControllerMode == HomeControllerMode::HaVi) {
             const auto &directory = haController->directory();
             LogInfo("UBIO",
@@ -4310,6 +4372,37 @@ main(int argc, char **argv)
         }
     };
     using BarrierKey = std::pair<uint32_t, uint32_t>;
+    constexpr uint32_t startupTag = 0x80000000u;
+    const char *readyEnv = std::getenv("EP_WAIT_BLOOM_READY");
+    panic_if(readyEnv && std::string(readyEnv) != "0" &&
+             std::string(readyEnv) != "1", "EP_WAIT_BLOOM_READY must be 0 or 1");
+    const bool waitBloomReady = readyEnv && std::string(readyEnv) == "1";
+    bool startupPending = false;
+    bool startupSeen = false;
+    uint32_t startupMask = 0, startupSeq = 0;
+    uint64_t startupStartMs = 0;
+    const char *budgetEnv = std::getenv("EP_BLOOM_READY_TIMEOUT_MS");
+    const uint64_t startupBudgetMs = budgetEnv ? std::stoull(budgetEnv) : 120000;
+    panic_if(startupBudgetMs == 0, "startup readiness timeout must be positive");
+    auto bloomValidMask = [&]() {
+        uint32_t mask = 0;
+        if (ubcc) {
+            for (int slice = 0; slice < ResidentDir::BloomGroups; ++slice) {
+                if (ubcc->directory().bloomSliceControl(slice).state ==
+                        ResidentDir::BloomSliceState::Valid &&
+                    !ubcc->directory().bloomSliceControl(slice).retryRequired)
+                    mask |= 1U << slice;
+            }
+        }
+        return mask;
+    };
+    auto needsBloomReady = [&]() {
+        return ubcc && ubcc->h64BloomAllMisses() &&
+            ubcc->directory().bloomSliceBytes() != 0 &&
+            ubcc->residentOverflowPolicy() != ResidentOverflowPolicy::NaiveEvict;
+    };
+    LogInfo("UBIO", "[BLOOM-READY-CONFIG] home={}:{} enabled={} required={} timeout_ms={}",
+            nid, sid, waitBloomReady, needsBloomReady(), startupBudgetMs);
     static constexpr size_t kMaxBarrierPlanes = 32;
     static constexpr size_t kMaxQueuedBarrierGenerations = 4;
     struct BarrierArrivals {
@@ -4321,7 +4414,7 @@ main(int argc, char **argv)
     std::map<BarrierKey, BarrierArrivals> barrierArrivals;
     auto barrierReady = [&](const BarrierKey &bk, const BarrierArrivals &arrivals) {
         for (size_t plane = 0; plane < kMaxBarrierPlanes; ++plane) {
-            if ((bk.first & (1U << plane)) == 0)
+            if (((bk.first & ~startupTag) & (1U << plane)) == 0)
                 continue;
             if (arrivals.count[plane] == 0)
                 return false;
@@ -4334,7 +4427,7 @@ main(int argc, char **argv)
             return;
 
         for (int targetPlane = 0; targetPlane < static_cast<int>(kMaxBarrierPlanes); ++targetPlane) {
-            if ((bk.first & (1U << targetPlane)) == 0)
+            if (((bk.first & ~startupTag) & (1U << targetPlane)) == 0)
                 continue;
             const int targetNode = targetPlane / g_numSockets;
             if (targetNode >= 32)
@@ -4355,6 +4448,9 @@ main(int argc, char **argv)
             // Each isolated gem5 process may have an independently observed
             // generation; release exactly the generation it reported.
             rmsg.b.barrier.seq = seq;
+            if (bk.first & startupTag)
+                LogInfo("UBIO", "[STARTUP-READY-RELEASE] home={}:{} target={} mask=0x{:x} seq={} tick={}",
+                        nid, sid, targetPlane, bk.first, seq, tick);
             panic_if(sizeof(rmsg) > GetMaxPayloadSize(),
                      "barrier release payload too large mask=0x{:x} plane={}",
                      bk.first, targetPlane);
@@ -4371,7 +4467,7 @@ main(int argc, char **argv)
         }
         bool empty = true;
         for (size_t plane = 0; plane < kMaxBarrierPlanes; ++plane) {
-            if ((bk.first & (1U << plane)) == 0)
+            if (((bk.first & ~startupTag) & (1U << plane)) == 0)
                 continue;
             it->second.head[plane] = static_cast<uint8_t>(
                 (it->second.head[plane] + 1) % kMaxQueuedBarrierGenerations);
@@ -4380,6 +4476,41 @@ main(int argc, char **argv)
         }
         if (empty)
             barrierArrivals.erase(it);
+    };
+
+    // Shared admission path for ordinary arrivals and the one deferred local
+    // startup arrival. Never retain a transport-owned Message pointer.
+    auto admitBarrier = [&](uint32_t mask, uint32_t seq, int src, bool fromNetwork) {
+        const uint32_t planes = mask & ~startupTag;
+        panic_if(planes == 0, "barrier mask must not be empty");
+        const int leaderPlane = __builtin_ctz(planes);
+        const int leaderNode = leaderPlane / g_numSockets;
+        const int leaderSocket = leaderPlane % g_numSockets;
+        if (nid == leaderNode && sid == leaderSocket) {
+            panic_if(src < 0 || src >= 31 || (planes & (1U << src)) == 0,
+                     "invalid barrier source={} mask=0x{:x}", src, mask);
+            BarrierKey bk{mask, 0};
+            BarrierArrivals &arrivals = barrierArrivals[bk];
+            const size_t plane = static_cast<size_t>(src);
+            panic_if(arrivals.count[plane] == kMaxQueuedBarrierGenerations,
+                     "barrier FIFO full mask=0x{:x} plane={}", mask, src);
+            const size_t tail = (arrivals.head[plane] + arrivals.count[plane]) %
+                                kMaxQueuedBarrierGenerations;
+            arrivals.seqs[plane][tail] = seq;
+            ++arrivals.count[plane];
+            releaseBarrier(bk);
+        } else if (!fromNetwork && netPort) {
+            Message *fwd = AllocateSendMessage(netPort, tick);
+            panic_if(!fwd, "barrier arrival allocation failed");
+            CoherenceMessage msg;
+            msg.h.type = CoherenceMessageType::BarrierReached;
+            msg.b.barrier.mask = mask;
+            msg.b.barrier.seq = seq;
+            SetMessagePayload(fwd, &msg, sizeof(msg));
+            SetMessageSourceId(fwd, gidOf(nid, sid));
+            SetMessageTargetId(fwd, gidOf(leaderNode, leaderSocket));
+            panic_if(!SendMessage(netPort, fwd), "barrier arrival send failed");
+        }
     };
 
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
@@ -4517,53 +4648,16 @@ main(int argc, char **argv)
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
                     int src = static_cast<int>(GetMessageSourceId(m));
-                    // Generations are local to isolated gem5 processes and
-                    // therefore cannot form a distributed key. Aggregate one
-                    // in-flight generation per mask and return each plane's
-                    // local sequence in its own release message.
-                    BarrierKey bk{mask, 0};
-                    panic_if(mask == 0, "barrier mask must not be empty");
-                    const int leaderPlane = __builtin_ctz(mask);
-                    const int leaderNode = leaderPlane / g_numSockets;
-                    const int leaderSocket = leaderPlane % g_numSockets;
-                    if (nid == leaderNode && sid == leaderSocket) {
-                        if (src < 0 || src >= static_cast<int>(kMaxBarrierPlanes) ||
-                            (mask & (1U << src)) == 0) {
-                            LogWarn("UBIO",
-                                         "[UBIO-BARRIER-WARN] n{} ignored source={} mask=0x{:x}",
-                                         nid, src, mask);
-                            m = ReceiveMessage(port, tick, &st);
-                            continue;
-                        }
-                        BarrierArrivals &arrivals = barrierArrivals[bk];
-                        const size_t plane = static_cast<size_t>(src);
-                        panic_if(arrivals.count[plane] == kMaxQueuedBarrierGenerations,
-                                 "barrier FIFO full mask=0x{:x} plane={}", mask, src);
-                        const size_t tail = (arrivals.head[plane] + arrivals.count[plane]) %
-                                            kMaxQueuedBarrierGenerations;
-                        arrivals.seqs[plane][tail] = seq;
-                        ++arrivals.count[plane];
-                        if (g_debugUbioPerf) {
-                            LogDebug("UBIO",
-                                "[DEBUG-UBIO-BARRIER] enqueue mask=0x{:x} plane={} seq={} depth={} tick={}",
-                                mask, src, seq, arrivals.count[plane], tick);
-                        }
-                        releaseBarrier(bk);
-                    } else if (!fromNetwork && netPort) {
-                        // A single deterministic leader aggregates arrivals.
-                        // Broadcast coordination allowed different nodes to
-                        // independently release incompatible generations.
-                        Message *fwd = AllocateSendMessage(netPort, tick);
-                        if (fwd) {
-                            CopyMessage(fwd, m);
-                            // CopyMessage preserves the gem5-local envelope.
-                            // This UBIO plane is the real network source and
-                            // the computed leader plane is the real target.
-                            SetMessageSourceId(fwd, gidOf(nid, sid));
-                            SetMessageTargetId(
-                                fwd, gidOf(leaderNode, leaderSocket));
-                            SendMessage(netPort, fwd);
-                        }
+                    if (!fromNetwork && (mask & startupTag)) {
+                        panic_if(startupSeen, "duplicate portable startup barrier");
+                        startupSeen = startupPending = true;
+                        startupMask = mask;
+                        startupSeq = seq;
+                        startupStartMs = peerExitNowMs();
+                        LogInfo("UBIO", "[STARTUP-READY-WAIT] home={}:{} mask=0x{:x} seq={} valid=0x{:x} tick={}",
+                                nid, sid, mask, seq, bloomValidMask(), tick);
+                    } else {
+                        admitBarrier(mask, seq, src, fromNetwork);
                     }
                 m = ReceiveMessage(port, tick, &st);
                 continue;
@@ -5093,6 +5187,19 @@ main(int argc, char **argv)
                 LogDebug("UBIO", "[DEBUG-H64-PDES-DRAIN] n={} cnt={} deferred={} tick={}",
                              nid, dd_cnt, host->_metaRNF._deferredCount, tick);
             host->_metaRNF.drainDeferred();
+        }
+
+        if (dataPlaneActive && startupPending) {
+            if (!waitBloomReady || !needsBloomReady() || ubcc->allH64BloomSlicesValid()) {
+                LogInfo("UBIO", "[BLOOM-READY] home={}:{} enabled={} required={} valid=0x{:x} tick={}",
+                        nid, sid, waitBloomReady, needsBloomReady(), bloomValidMask(), tick);
+                startupPending = false;
+                admitBarrier(startupMask, startupSeq, nid * g_numSockets + sid, false);
+            } else {
+                panic_if(peerExitNowMs() - startupStartMs >= startupBudgetMs,
+                         "BLOOM-READY timeout home={}:{} valid=0x{:x} tick={}",
+                         nid, sid, bloomValidMask(), tick);
+            }
         }
 
         // A release send can temporarily backpressure after all arrivals have

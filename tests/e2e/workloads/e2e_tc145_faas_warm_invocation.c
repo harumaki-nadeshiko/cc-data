@@ -18,6 +18,7 @@ int main(int argc, char **argv)
     uint32_t runtime = shard;
     uint32_t tenant = shard + 0x2000u;
     uint32_t result = shard + 0x4000u;
+    portable_wait_ready();
     portable_emit_meta(plane, "TC145");
     portable_emit_pressure_config(
         plane, PORTABLE_PLANES * HOT_LINES_PER_PLANE);
