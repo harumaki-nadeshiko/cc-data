@@ -10,6 +10,8 @@
 # Usage:
 #   bash tests/e2e/run_multi.sh [--1s|--2s|--16n1s] <tc> ... [<tc> ...]
 #
+# BloomReady: --wait-bloom-ready=0|1 --bloom-ready-timeout-ms=120000
+# CLI overrides EP_WAIT_BLOOM_READY / EP_BLOOM_READY_TIMEOUT_MS, then defaults.
 # Default is --1s. Dual-socket TCs (32-35,39) require --2s; if you pass a
 # dual-socket TC under --1s the script will auto-error.
 #
@@ -197,12 +199,41 @@ export UBIO_PEER_EXIT_DELIVERY_BUDGET_MS="${UBIO_PEER_EXIT_DELIVERY_BUDGET_MS:-1
 export EP_HA_PROFILE="${EP_HA_PROFILE:-ubcc}"
 export EP_WAIT_BLOOM_READY="${EP_WAIT_BLOOM_READY:-0}"
 export EP_BLOOM_READY_TIMEOUT_MS="${EP_BLOOM_READY_TIMEOUT_MS:-120000}"
+# Strip these options wherever they occur, preserving topology/TC ordering.
+# Forward effective values as UBIO argv, not merely inherited environment.
+bloom_remaining_args=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --wait-bloom-ready=*) EP_WAIT_BLOOM_READY="${1#*=}" ;;
+        --bloom-ready-timeout-ms=*) EP_BLOOM_READY_TIMEOUT_MS="${1#*=}" ;;
+        --wait-bloom-ready|--bloom-ready-timeout-ms)
+            if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then
+                echo "FATAL: $1 requires a value" >&2; exit 2
+            fi
+            if [ "$1" = --wait-bloom-ready ]; then
+                EP_WAIT_BLOOM_READY="$2"
+            else
+                EP_BLOOM_READY_TIMEOUT_MS="$2"
+            fi
+            shift ;;
+        *) bloom_remaining_args+=("$1") ;;
+    esac
+    shift
+done
+set -- "${bloom_remaining_args[@]}"
 case "$EP_WAIT_BLOOM_READY" in
     0|1) ;;
     *) echo "FATAL: EP_WAIT_BLOOM_READY must be 0 or 1" >&2; exit 2 ;;
 esac
 if ! [[ "$EP_BLOOM_READY_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
     echo "FATAL: EP_BLOOM_READY_TIMEOUT_MS must be a positive integer" >&2
+    exit 2
+fi
+if [ "${#EP_BLOOM_READY_TIMEOUT_MS}" -gt 20 ] || {
+    [ "${#EP_BLOOM_READY_TIMEOUT_MS}" -eq 20 ] &&
+    [[ "$EP_BLOOM_READY_TIMEOUT_MS" > 18446744073709551615 ]];
+}; then
+    echo "FATAL: EP_BLOOM_READY_TIMEOUT_MS exceeds uint64 milliseconds" >&2
     exit 2
 fi
 export OURCC_CLEAR_PROFILE="${OURCC_CLEAR_PROFILE:-ack}"
@@ -1209,6 +1240,7 @@ run_tc() {
     uextra="$uextra --tc=${tc} --metadata-dram-bytes=${UBCC_METADATA_SIZE}"
     uextra="$uextra --dsm-data-delay-ps=${EP_DSM_DATA_DELAY_PS}"
     uextra="$uextra --evidence-events=$(ubio_evidence_events_for_tc "$tc")"
+    uextra="$uextra --wait-bloom-ready=$EP_WAIT_BLOOM_READY --bloom-ready-timeout-ms=$EP_BLOOM_READY_TIMEOUT_MS"
     [ -n "$uextra" ] && echo "[launch] ubio extra args (TC${tc}): $uextra"
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
@@ -1635,15 +1667,10 @@ run_tc() {
             echo "  TC${tc} FAILED (PeerExit contract)"
             return 1
         fi
-        # Full traces retain every source event and can regenerate chains on
-        # demand. Avoid duplicating them into multi-GB JSON during campaigns.
-        if [ "${EP_TRACE_CHAIN_OUTPUT:-auto}" = "1" ] || {
-            [ "${EP_TRACE_CHAIN_OUTPUT:-auto}" = "auto" ] &&
-            [ "$EP_TRACE_PERF" != "full" ];
-        }; then
-            python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \
-                >"$LOG_BASE/trace_chains_tc${tc}.json" 2>/dev/null || true
-        fi
+        # Persist request issue-to-first-response chains for cross-run latency
+        # evaluation.  TRACE-PERF is emitted by gem5, UBIO, and networksim.
+        python3 "$ROOT_DIR/scripts/trace2chain.py" "$LOG_BASE" \
+            >"$LOG_BASE/trace_chains_tc${tc}.json" 2>/dev/null || true
         echo "  TC${tc} PASSED"
         return 0
     else

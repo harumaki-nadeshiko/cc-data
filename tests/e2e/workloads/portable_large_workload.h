@@ -162,8 +162,7 @@ static inline void portable_emit_meta(int plane, const char *test_name)
 
 static inline void portable_barrier(void)
 {
-    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
-              (long)NUM_SOCKETS, 0);
+    sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
 }
 
 /* Explicit startup namespace in SYS_SYNC_WAIT's existing mask argument.

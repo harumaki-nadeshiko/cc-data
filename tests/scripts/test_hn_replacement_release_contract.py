@@ -18,25 +18,20 @@ class ReplacementReleaseContract(unittest.TestCase):
         self.assertNotIn('ubccWriteDisposition := 1', partial)
 
     def test_snapshot_is_local_permission_not_qlm(self):
-        source = (CHI / 'ep/EPBackend.cc').read_text()
-        block = source.split('EPBackend::registerHnPersistence(', 1)[1].split('EPBackend::completeHnPersistence', 1)[0]
-        for guard in ('replacement && fullLine', '_requesterLines.find(linePa)',
-                      'RequesterLineState::R_M', 'HnPersistenceKind::OwnerDrop',
-                      'context.epoch = requester->second.epoch'):
+        source = (CHI / 'ep/EPSNFController.cc').read_text()
+        block = source.split('// The replacement TBE proves', 1)[1].split('if (_backend->haEndpointEnabled()', 1)[0]
+        for guard in ('inspectRequesterState', 'permission.valid',
+                      'RequesterLineState::R_M', 'pending.releaseRequester = _nodeId',
+                      'pending.releaseEpoch = permission.epoch'):
             self.assertIn(guard, block)
         self.assertNotIn('QueryLineMeta', block)
-        resolve = source.split('EPBackend::resolveWritePersistence(', 1)[1].split('EPBackend::registerHnPersistence', 1)[0]
-        self.assertIn('requesterNode = _nodeId', resolve)
-        self.assertIn('permissionEpoch = registered.epoch', resolve)
 
     def test_complete_payload_and_success_before_comp(self):
         source = (CHI / 'ep/EPSNFController.cc').read_text()
         body = source.split('EPSNFController::processPendingHAWrites()', 1)[1].split('EPSNFController::publishHAWrite', 1)[0]
         self.assertLess(body.index('!pending.dataComplete'), body.index('handleWritebackWithMeta'))
         self.assertLess(body.index('fatal_if(result != 1'), body.index('publishHAWrite(transactionId'))
-        source = (CHI / 'ep/EPSNFController.cc').read_text()
-        self.assertIn('pending.internalPublication = !_backend->haEndpointEnabled() &&\n            !pending.ownerWriteback;', source)
-        self.assertIn('result == 0 && pending.internalPublication', body)
+        self.assertIn('!pending.replacementOwnerRelease', body)
         self.assertNotIn('notifyHomeWritebackComplete', body)
 
 

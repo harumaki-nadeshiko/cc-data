@@ -200,7 +200,6 @@ int main(int argc, char **argv)
             } else {
                 (void)dsm_load(0, portable_line(record, page));
             }
-            __asm__ volatile("dsb sy" ::: "memory");
         }
         portable_emit_workload_progress(
             plane, "pre_transaction_dsb", batch,

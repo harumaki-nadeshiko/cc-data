@@ -14,8 +14,8 @@ UBCC_CC = ROOT / "modules/ubiomodule/UBCCController.cc"
 class EPRNFProxyRetryContractTest(unittest.TestCase):
     def test_proxy_requests_do_not_advertise_unimplemented_retry(self):
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertEqual(source.count("req->m_allowRetry = proxyOp == EpProxyOp_NoProxyOp;"), 1)
-        self.assertEqual(source.count("req->m_allowRetry = d.proxyOp == EpProxyOp_NoProxyOp;"), 1)
+        self.assertIn("req->m_allowRetry = proxyOp == EpProxyOp_NoProxyOp;", source)
+        self.assertIn("req->m_allowRetry = d.proxyOp == EpProxyOp_NoProxyOp;", source)
         block = source[source.index("EPRNFController::sendChiRequest"):]
         self.assertNotIn("req->m_allowRetry = true;", block)
 

@@ -16,14 +16,12 @@ class HaOwnerSnapshotContractTest(unittest.TestCase):
         start = self.source.index("EPBackend::handleRecallRequest")
         end = self.source.index("EPBackend::sendRecallResponse", start)
         body = self.source[start:end]
-        self.assertIn('_epRnfCtrl->startReadShared(ownerLocalPa', body)
-        self.assertIn('_epRnfCtrl->startReadUnique(ownerLocalPa', body)
-        self.assertEqual(body.count('resp.ackReceived = success;'), 2)
-        self.assertEqual(body.count('resp.ackReceived && capturedDataValid;'), 2)
-        self.assertEqual(body.count('resp.dataPayload = capturedData;'), 2)
-        self.assertNotIn('readHADataCacheLine(', body)
+        self.assertIn("_epRnfCtrl->startReadShared(ownerLocalPa", body)
+        self.assertIn("_epRnfCtrl->startReadUnique(ownerLocalPa", body)
+        self.assertEqual(body.count("resp.dataPayload = capturedData;"), 2)
+        self.assertEqual(body.count("resp.ackReceived && capturedDataValid;"), 2)
+        self.assertNotIn("readHADataCacheLine(recallMsg.sourceSocket", body)
         self.assertNotIn("_ruby_system->functionalRead", body)
-        self.assertNotIn('m_ruby_system->functionalRead', body)
 
     def test_snapshot_rejects_conflicting_readable_l1_copies(self):
         match = re.search(

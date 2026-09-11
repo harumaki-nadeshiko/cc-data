@@ -20,7 +20,7 @@ class HANodeRuntimeContract(unittest.TestCase):
     def test_wire_internal_publication_sentinel(self):
         text = (ROOT / 'modules/ubiomodule/ubio_main.cc').read_text()
         self.assertIn('msg.h.requesterNode == static_cast<uint16_t>(-1)', text)
-        self.assertIn('UBWritebackKind::InternalPublication\n            ? -1 : static_cast<int>(request.h.requesterNode)', text)
+        self.assertIn('InternalPublication ? -1 : request.h.requesterNode', text)
 
     def test_l1_eviction_is_not_node_release(self):
         text = (ROOT / 'gem5/src/mem/ruby/system/Sequencer.cc').read_text()
