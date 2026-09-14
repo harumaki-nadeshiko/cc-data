@@ -1,0 +1,155 @@
+diff --git a/tests/e2e/test_e2e.py b/tests/e2e/test_e2e.py
+index ca6e15e..89bc902 100644
+--- a/tests/e2e/test_e2e.py
++++ b/tests/e2e/test_e2e.py
+@@ -3704,10 +3704,14 @@ def gem5_config_main():
+         sys.path.insert(0, configs_path)
+ 
+     from ruby.CHI_basic_framework_config import (
+-        DEFAULT_N, DEFAULT_L, DEFAULT_D, DEFAULT_SEG_SIZE, NodeConfig,
++        DEFAULT_N, DEFAULT_L, DEFAULT_D, DEFAULT_SEG_SIZE,
++        NODE_ADDR_SHIFT, NodeConfig,
+     )
+     import ruby.CHI as chi_module
+-    from ruby.CHI_ubcc_framework import create_ubcc_system
++    from ruby.CHI_ubcc_framework import (
++        create_ubcc_system,
++        setup_dsm_va_mapping,
++    )
+ 
+     chi_module.create_system = create_ubcc_system
+ 
+@@ -3820,6 +3824,10 @@ def gem5_config_main():
+     # Setting it now ensures the workload exists when Process objects
+     # are constructed during m5.instantiate().
+     system.workload = SEWorkload.init_compatible(binary)
++    system.workload.allocatable_mem_ranges = [
++        AddrRange(nid << NODE_ADDR_SHIFT, size=DEFAULT_SEG_SIZE)
++        for nid in BUILD_NODES
++    ]
+ 
+     for i, cpu in enumerate(cpus):
+         # Map this process's CPU to its global (node_id, global_cpu_index).
+@@ -3960,98 +3968,6 @@ def gem5_config_main():
+                     hn, DEFAULT_SEG_SIZE, cfg.phy_base, _cfg_num_sockets, sid))
+     system.mem_ranges = all_ranges
+ 
+-    # ── Q2 FIX: Pre-map binary + stack pages per-node ──────────────
+-    # Process::initState() calls allocateMem() → MemPool::allocate(),
+-    # which fails because MemPools are not properly populated from
+-    # DDR4 controllers at the time SE workload is set up (the DDR4
+-    # controllers are created later during Ruby.create_system()).
+-    # Work around by pre-mapping all binary and initial stack virtual
+-    # pages to per-node physical pages, so pTable->translate() finds
+-    # the mapping and skips allocateMem() entirely.
+-    #
+-    # CRITICAL: Each node has its own PA space (node i base = i << 40).
+-    # Physical pages must be allocated in the CPU's own node space,
+-    # otherwise the EP_RNF controller rejects them as non-DSM.
+-    import struct as _struct
+-    _page_size = 4096  # ARM64 page size
+-    _NODE_ADDR_SHIFT = 40
+-    _CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
+-
+-    # Per-node physical page counters (start at 1 MiB offset).
+-    # Build for ALL global nodes so split-mode (local node != 0) is covered.
+-    _node_pa = {}
+-    for _nid in range(NODES):
+-        _node_pa[_nid] = (_nid << _NODE_ADDR_SHIFT) + 0x100000
+-
+-    # Parse ELF program headers to find PT_LOAD segments
+-    _elf_segments = []
+-    with open(binary, 'rb') as _f:
+-        # Read ELF header (64-bit)
+-        _e_hdr = _f.read(64)
+-        _e_phoff = _struct.unpack_from('<Q', _e_hdr, 32)[0]  # e_phoff
+-        _e_phentsize = _struct.unpack_from('<H', _e_hdr, 54)[0]  # e_phentsize
+-        _e_phnum = _struct.unpack_from('<H', _e_hdr, 56)[0]  # e_phnum
+-
+-        for _i in range(_e_phnum):
+-            _f.seek(_e_phoff + _i * _e_phentsize)
+-            _phdr = _f.read(_e_phentsize)
+-            _p_type = _struct.unpack_from('<I', _phdr, 0)[0]
+-            if _p_type == 1:  # PT_LOAD
+-                _p_offset = _struct.unpack_from('<Q', _phdr, 8)[0]
+-                _p_vaddr = _struct.unpack_from('<Q', _phdr, 16)[0]
+-                _p_filesz = _struct.unpack_from('<Q', _phdr, 32)[0]
+-                _p_memsz = _struct.unpack_from('<Q', _phdr, 40)[0]
+-                if _p_memsz > 0:
+-                    _elf_segments.append({
+-                        'va': _p_vaddr,
+-                        'memsz': _p_memsz,
+-                    })
+-
+-    _total_pages = 0
+-
+-    # Map binary segments: each CPU gets its own copy in its node's PA space.
+-    # In split mode, cpus holds only the local node's CPUs, so the global
+-    # node identity comes from BUILD_NODES (not the raw cpu index).
+-    for _cpu_idx, _cpu in enumerate(cpus):
+-        _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
+-        for _proc in _cpu.workload:
+-            if _proc is None:
+-                continue
+-            for _seg in _elf_segments:
+-                _va_start = _seg['va'] & ~(_page_size - 1)
+-                _va_end = (_seg['va'] + _seg['memsz'] + _page_size - 1) & ~(_page_size - 1)
+-                for _va in range(_va_start, _va_end, _page_size):
+-                    _pa = _node_pa[_node_id]
+-                    _node_pa[_node_id] += _page_size
+-                    _proc.defer_map(_va, _pa, _page_size, cacheable=True)
+-                    _total_pages += 1
+-
+-    # ── Map local_private_range for workloads that need direct
+-    #     local-memory access (TC112 TBE interference, etc.).
+-    #     VA 0x01000000 maps to the node's local_private physical base.
+-    #     Map 64 MB so explicit L3-pressure experiments can use a disjoint
+-    #     local-private window at offset 32 MB without touching program data.
+-    _local_va_base = 0x01000000   # 16 MB — well below mmap_end=0x40000000
+-    _local_map_bytes = 64 * 1024 * 1024
+-    _local_pages = 0
+-    for _cpu_idx, _cpu in enumerate(cpus):
+-        _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
+-        _local_pa_base = _node_id << _NODE_ADDR_SHIFT
+-        for _proc in _cpu.workload:
+-            if _proc is None:
+-                continue
+-            for _va in range(_local_va_base,
+-                             _local_va_base + _local_map_bytes,
+-                             _page_size):
+-                _pa = _local_pa_base + (_va - _local_va_base)
+-                _proc.defer_map(_va, _pa, _page_size, cacheable=True)
+-                _local_pages += 1
+-    _total_pages += _local_pages
+-
+-    print(f"[E2E-Q2] Pre-mapped {_total_pages} pages ({_total_pages * _page_size} bytes)"
+-           f" for {len(cpus)} CPUs (per-node PA ranges)",
+-           flush=True)
+-
+     # ── Ensure system.memories includes DDR4 DRAMs ──────────────
+     from m5.objects import AbstractMemory
+     _all_memories = [obj for obj in system.descendants()
+@@ -4118,6 +4034,23 @@ def gem5_config_main():
+     # the ubio process.
+ 
+     m5.instantiate()
++
++    processes = []
++    req_node_ids = []
++    for cpu_index, cpu in enumerate(cpus):
++        node_id = BUILD_NODES[cpu_index // CPUS_PER_NODE]
++        for proc in cpu.workload:
++            if proc is not None:
++                processes.append(proc)
++                req_node_ids.append(node_id)
++
++    setup_dsm_va_mapping(
++        processes,
++        num_nodes=NODES,
++        seg_size=DEFAULT_SEG_SIZE,
++        num_sockets=_cfg_num_sockets,
++        req_node_ids=req_node_ids,
++    )
+     print(f"[FAULT-DEBUG] NODES={NODES} ruby_system type={type(ruby_system)}", flush=True)
+ 
+     _cnt = sum(1 for x in dir(ruby_system)); print(f"[FAULT-DEBUG] attrs={_cnt}", flush=True)

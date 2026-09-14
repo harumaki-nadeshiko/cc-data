@@ -1,0 +1,107 @@
+diff --git a/configs/ruby/CHI_ubcc_framework.py b/configs/ruby/CHI_ubcc_framework.py
+index 3b769038a6..c9b3cf0b80 100644
+--- a/configs/ruby/CHI_ubcc_framework.py
++++ b/configs/ruby/CHI_ubcc_framework.py
+@@ -47,8 +47,8 @@ def _make_hnf(ruby_system, addr_ranges, llcache_type, node_id):
+ 
+ 
+ # ---- Q1: DSM VA Mapping Helper ----
+-# Call this from test scripts AFTER creating Process objects but BEFORE
+-# m5.instantiate().  Maps DSM_VA_BASE + k*SEG_SIZE → node-k's DSM PA base.
++# Call this after m5.instantiate() and before m5.simulate(). Maps
++# DSM_VA_BASE + k*SEG_SIZE → node-k's DSM PA base.
+ # This ensures ARM workload ldr/str to DSM VA addresses correctly traverse
+ # the page table to the CHI Ruby physical address space.
+ 
+@@ -94,7 +94,7 @@ def setup_dsm_va_mapping(processes, num_nodes=DEFAULT_N, seg_size=DEFAULT_SEG_SI
+             for sid in range(num_sockets):
+                 dsm_pa_base = _req_node_base + (2 + seg_idx) * seg_size
+                 dsm_va = dsm_va_base + seg_idx * seg_size
+-                proc.defer_map(dsm_va, dsm_pa_base, seg_size, cacheable=True)
++                proc.map(dsm_va, dsm_pa_base, seg_size, cacheable=True)
+                 seg_idx += 1
+ 
+     print(f"[Q1-DSM-MAP] Installed DSM VA→PA mappings for {num_nodes} nodes, "
+@@ -547,19 +547,4 @@ def create_ubcc_system(options, full_system, system, dma_ports, bootmem,
+     else:
+         m5.fatal(f"{options.topology} not supported!")
+ 
+-    # ---- Q1: DSM VA mapping for processes ----
+-    # Collect all Process objects across all CPUs and map DSM VA regions
+-    # to the corresponding home node's DSM PA base for each node.
+-    processes = [proc for cpu in cpus for proc in cpu.workload]
+-    # Each CPU belongs to node_list[cpu_index // cpus_per_node]; build a
+-    # per-process node-id list so DSM VA mapping uses the correct requesting
+-    # node base even in split mode (where only the local node's CPUs exist).
+-    req_node_ids = []
+-    for _cpu_idx, cpu in enumerate(cpus):
+-        _nid = node_list[_cpu_idx // cpus_per_node]
+-        for _proc in cpu.workload:
+-            req_node_ids.append(_nid)
+-    setup_dsm_va_mapping(processes, num_nodes, seg_size, num_sockets,
+-                         req_node_ids=req_node_ids)
+-
+     return (cpu_sequencers, [], topology)
+diff --git a/src/sim/Workload.py b/src/sim/Workload.py
+index 6e5aeefa64..850d740913 100644
+--- a/src/sim/Workload.py
++++ b/src/sim/Workload.py
+@@ -137,6 +137,10 @@ class SEWorkload(Workload, metaclass=SEWorkloadMeta):
+     cxx_class = "gem5::SEWorkload"
+     abstract = True
+ 
++    allocatable_mem_ranges = VectorParam.AddrRange(
++        [], "Physical ranges available to SE Process::allocateMem"
++    )
++
+     @classmethod
+     def _is_compatible_with(cls, obj):
+         return False
+diff --git a/src/sim/se_workload.cc b/src/sim/se_workload.cc
+index 4371ba613e..7fb87d106d 100644
+--- a/src/sim/se_workload.cc
++++ b/src/sim/se_workload.cc
+@@ -36,7 +36,9 @@ namespace gem5
+ {
+ 
+ SEWorkload::SEWorkload(const Params &p, Addr page_shift) :
+-    Workload(p), memPools(page_shift)
++    Workload(p), memPools(page_shift),
++    allocatableMemRanges(p.allocatable_mem_ranges.begin(),
++                         p.allocatable_mem_ranges.end())
+ {}
+ 
+ void
+@@ -44,7 +46,9 @@ SEWorkload::setSystem(System *sys)
+ {
+     Workload::setSystem(sys);
+ 
+-    AddrRangeList memories = sys->getPhysMem().getConfAddrRanges();
++    AddrRangeList memories = allocatableMemRanges;
++    if (memories.empty())
++        memories = sys->getPhysMem().getConfAddrRanges();
+     const auto &m5op_range = sys->m5opRange();
+ 
+     if (m5op_range.valid())
+diff --git a/src/sim/se_workload.hh b/src/sim/se_workload.hh
+index 9a8b790d38..3814088f48 100644
+--- a/src/sim/se_workload.hh
++++ b/src/sim/se_workload.hh
+@@ -28,6 +28,7 @@
+ #ifndef __SIM_SE_WORKLOAD_HH__
+ #define __SIM_SE_WORKLOAD_HH__
+ 
++#include "base/addr_range.hh"
+ #include "params/SEWorkload.hh"
+ #include "sim/mem_pool.hh"
+ #include "sim/workload.hh"
+@@ -41,6 +42,9 @@ class SEWorkload : public Workload
+     /** Memory allocation objects for all physical memories in the system. */
+     MemPools memPools;
+ 
++    /** Optional explicit ranges used to populate the process page pools. */
++    const AddrRangeList allocatableMemRanges;
++
+   public:
+     using Params = SEWorkloadParams;
+ 
