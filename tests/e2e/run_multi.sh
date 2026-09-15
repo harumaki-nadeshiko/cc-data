@@ -1303,7 +1303,7 @@ run_tc() {
         # Optional per-node gem5 tracing for long-running E2E diagnosis.
         # Keep the debug stream separate from stderr so runner diagnostics stay usable.
         if [ -n "${GEM5_DEBUG_FLAGS:-}" ]; then
-            local debug_args="--debug-flags=${GEM5_DEBUG_FLAGS} --debug-file=$gdir/gem5_debug.log"
+            local debug_args="--debug-flags=${GEM5_DEBUG_FLAGS} --debug-file=$gdir/gem5_debug.log${GEM5_DEBUG_GZIP:+.gz}"
             if [ -n "${GEM5_DEBUG_START:-}" ]; then
                 debug_args="$debug_args --debug-start=${GEM5_DEBUG_START}"
             fi

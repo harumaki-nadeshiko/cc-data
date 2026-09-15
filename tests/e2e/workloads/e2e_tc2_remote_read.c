@@ -36,6 +36,31 @@ int main(int argc, char **argv)
         int match = (got == expected);
         emit_read_val(node_id, 1, expected, got, match);
         if (!match) fail++;
+#ifdef EP_CLOSE_WRAP_MICRO
+        // Real distinct coherent reads, not synthetic completion notifications.
+        for (unsigned i = 1; i <= 300; ++i) {
+            (void)dsm_load(1, i * 64);
+            asm volatile("dmb osh" ::: "memory");
+        }
+#endif
+#ifdef EP_AUTHORITY_OVERFLOW_MICRO
+        for (unsigned i = 1; i <= 17; ++i) {
+#ifdef EP_AUTHORITY_DIRTY_MICRO
+            dsm_store(1, i * 64, 0x24680000u + i);
+#else
+            (void)dsm_load(1, i * 64);
+#endif
+            asm volatile("dsb sy" ::: "memory");
+        }
+        for (unsigned i = 1; i <= 17; ++i) {
+            uint32_t v = dsm_load(1, i * 64);
+#ifdef EP_AUTHORITY_DIRTY_MICRO
+            if (v != 0x24680000u + i) fail++;
+#else
+            if (v != 0) fail++;
+#endif
+        }
+#endif
     }
 
     sync_wait(0b011, 1);

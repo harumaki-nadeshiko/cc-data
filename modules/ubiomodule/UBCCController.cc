@@ -275,6 +275,7 @@ UBCCController::finishH64BloomRebuild(bool ok)
 void
 UBCCController::wakeup()
 {
+    retryCreditBlockedControls();
     cleanupTombstones();
     cleanupExpiredRecalls();
     cleanupExpiredInvalidations();
@@ -404,6 +405,10 @@ UBCCController::retryPendingH64Lookups()
             // fill pin behind forever.
             _directory.setFillPending(linePa, false);
             refreshPinnedBit(linePa);
+            // This is an unfilled placeholder, not a negative H64 lookup.
+            // Removing the fill bit alone would expose fabricated G_I metadata
+            // as Ready on the next exact-owner writeback retry.
+            _directory.remove(linePa);
             continue;
         }
         retryPas[retryCount++] = linePa;
@@ -640,6 +645,17 @@ UBCCController::handleResidentMiss(
         return ResidentAccessResult::Busy;
     }
 
+    // Admission must precede placeholder creation and the asynchronous lookup.
+    // If the bounded waiter table is full, the original wire requester retains
+    // custody and retries; there is no local completion descriptor to own a fill.
+    if (shouldFill) {
+        PendingRequester fillRequester = pr;
+        fillRequester.waitReason = ResidentWaitReason::BackstoreFill;
+        if (enqueueResidentWaiterIfNew(line_pa, fillRequester) ==
+            ResidentWaiterEnqueueResult::Full)
+            return ResidentAccessResult::Busy;
+    }
+
     DirEntry placeholder;
     placeholder.lineAddr = line_pa;
     placeholder.state = MESIState::G_I;
@@ -672,9 +688,7 @@ UBCCController::handleResidentMiss(
 
     _directory.setFillPending(line_pa, true);
     _directory.setPinned(line_pa, true);
-    PendingRequester pr2 = pr;  // copy caller's envelope
-    pr2.waitReason = ResidentWaitReason::BackstoreFill;
-    enqueueResidentWaiter(line_pa, pr2);
+    // The fill's bounded waiter was reserved before installing the placeholder.
 
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
@@ -2448,6 +2462,15 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
     framework::LogInfo("UBCC","[RECALL-TRACE-A] UBCC n={} initiateRecall PA=0x{:x} owner={} requester={}",
            _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
 
+    if (!_outbound->controlCreditAvailable(msg)) {
+        if (auto *pending = findOutstanding(line_pa)) {
+            if (!pending->recallUnsent)
+                framework::LogInfo("UBCC", "[CONTROL-CREDIT-WAIT] home={} target={} reqId={} window=4",
+                    _nodeId, ownerNode, msg.h.reqId);
+            pending->recallUnsent = true;
+        }
+        return true; // owner retains the unsent descriptor; not a wire ACK
+    }
     if (!_outbound->sendRecallReq(msg)) {
         warn("UBCC node_id={}: sendRecallReq failed PA=0x{:x} owner={} requester={}",
              _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
@@ -2461,7 +2484,8 @@ bool
 UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                                        bool dataReceived, uint64_t responseEpoch,
                                        uint64_t reqId,
-                                       const DataBlock *dataBlk, bool ackReceived)
+                                        const DataBlock *dataBlk, bool ackReceived,
+                                        bool directDataSent)
 {
     if (!ackReceived)
         return false;
@@ -2640,6 +2664,9 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     }
 
     grantOst->reservedEpoch = recallDone.reservedEpoch;
+    grantOst->dataOwner = ownerNode;
+    grantOst->directDataSent = directDataSent && recallDone.dataValid;
+    grantOst->dataEpoch = responseEpoch;
     grantOst->reqId = recallDone.reqId;
     grantOst->baseEpoch = recallDone.baseEpoch;
     grantOst->reqType = recallDone.reqType;
@@ -2836,6 +2863,13 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                 _nodeId, line_pa, ackNode);
         return true;
     }
+
+    // A transport ACK cannot retire the parent of a reserved memory write.
+    auto publication = _writeReservations.find(line_pa);
+    if (publication != _writeReservations.end() &&
+        publication->second.parentReqId == reqId &&
+        publication->second.sourceNode == ackNode)
+        return false;
 
     // Record the ack
     effAckMask |= nodeBit;
@@ -3425,8 +3459,34 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
                                              bool ownerWriteback,
                                              int sourceSocket,
                                              uint64_t reqId,
-                                             uint8_t disposition) const
+                                             uint8_t disposition,
+                                             uint64_t parentReqId,
+                                             uint64_t parentEpoch,
+                                             int sourceNode) const
 {
+    if (parentReqId != 0) {
+        // Check the parent BEFORE reservation replay: a reservation must not
+        // extend an invalidation publication into a newer directory era.
+        auto active = _outstandingReqs.find(line_pa);
+        DirEntry entry;
+        if (ownerWriteback || requesterNode != -1 || epochVal != 0 ||
+            disposition != 0 || sourceSocket != _socketId ||
+            sourceNode < 0 || sourceNode >= 64 || reqId == 0 ||
+            active == _outstandingReqs.end() ||
+            !_directory.lookup(line_pa, entry) ||
+            normalizeEpoch(entry.epoch) != normalizeEpoch(parentEpoch))
+            return false;
+        const auto &o = active->second;
+        const bool upgrade = o.opType == OpType::UPGRADE_PENDING;
+        if (o.reqId != parentReqId || o.stage != OpStage::WAITING_ALL_ACKS ||
+            (!upgrade && o.opType != OpType::INVALIDATE &&
+             o.opType != OpType::NAIVE_EVICT_INVALIDATE))
+            return false;
+        const uint64_t bit = uint64_t{1} << sourceNode;
+        if (!((upgrade ? o.upgradeTargetMask : o.totalMask) & bit) ||
+            ((upgrade ? o.upgradeAckMask : o.ackMask) & bit))
+            return false;
+    }
     auto reservation = _writeReservations.find(line_pa);
     if (reservation != _writeReservations.end()) {
         const auto &r = reservation->second;
@@ -3435,8 +3495,11 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
                r.epoch == normalizeEpoch(epochVal) &&
                r.reqId == reqId &&
                r.ownerWriteback == ownerWriteback &&
-               r.disposition == disposition;
+               r.disposition == disposition &&
+               r.parentReqId == parentReqId && r.parentEpoch == parentEpoch &&
+               r.sourceNode == sourceNode;
     }
+    if (parentReqId != 0) return true;
     // An HN-internal publication is identified by its source endpoint/reqId,
     // not by an architectural requester or permission epoch.  It serializes
     // against unrelated directory activity but never validates or changes
@@ -3446,6 +3509,14 @@ UBCCController::validateWritebackPersistence(uint64_t line_pa,
     if (!ownerWriteback && requesterNode == -1 && epochVal == 0 &&
         disposition == 0) {
         auto active = _outstandingReqs.find(line_pa);
+        if (line_pa == 0x14030000)
+            framework::LogDebug("UBCC", "[WB-DIAG] stage=VALIDATE_INTERNAL home={} pa=0x{:x} socket={} req={} parent={} active={} op={} stage={} target={} activeReq={}",
+                _nodeId, line_pa, sourceSocket, reqId, parentReqId,
+                active != _outstandingReqs.end(),
+                active == _outstandingReqs.end() ? -1 : static_cast<int>(active->second.opType),
+                active == _outstandingReqs.end() ? -1 : static_cast<int>(active->second.stage),
+                active == _outstandingReqs.end() ? -1 : active->second.targetNode,
+                active == _outstandingReqs.end() ? 0 : active->second.reqId);
         return active == _outstandingReqs.end() ||
                active->second.opType == OpType::RECALL ||
                active->second.opType == OpType::NAIVE_EVICT_INVALIDATE;
@@ -3492,21 +3563,19 @@ UBCCController::reserveWritebackPersistence(uint64_t line_pa,
                                             bool ownerWriteback,
                                             int sourceSocket,
                                             uint64_t reqId,
-                                            uint8_t disposition)
+                                             uint8_t disposition,
+                                             uint64_t parentReqId,
+                                             uint64_t parentEpoch,
+                                             int sourceNode)
 {
-    auto found = _writeReservations.find(line_pa);
-    if (found != _writeReservations.end()) {
-        const auto &r = found->second;
-        return r.requesterNode == requesterNode && r.sourceSocket == sourceSocket &&
-            r.epoch == normalizeEpoch(epochVal) && r.reqId == reqId &&
-            r.ownerWriteback == ownerWriteback && r.disposition == disposition;
-    }
     if (!validateWritebackPersistence(line_pa, requesterNode, epochVal,
                                       ownerWriteback, sourceSocket, reqId,
-                                      disposition))
+                                      disposition, parentReqId, parentEpoch,
+                                      sourceNode))
         return false;
     _writeReservations[line_pa] = {requesterNode, sourceSocket,
-        normalizeEpoch(epochVal), reqId, ownerWriteback, disposition};
+        normalizeEpoch(epochVal), reqId, ownerWriteback, disposition,
+        parentReqId, parentEpoch, sourceNode};
     refreshPinnedBit(line_pa);
     return true;
 }
@@ -3537,10 +3606,19 @@ UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
                                                      uint64_t epochVal,
                                                      int sourceSocket,
                                                      uint64_t reqId,
-                                                     const uint8_t *data)
+                                                     const uint8_t *data,
+                                                     uint64_t *mergedRecallReqId)
 {
+    if (mergedRecallReqId) *mergedRecallReqId = 0;
     auto reservation = _writeReservations.find(line_pa);
     OutstandingRequest *active = findOutstanding(line_pa);
+    if (line_pa == 0x14030000)
+        framework::LogDebug("UBCC", "[WB-DIAG] stage=RECALL_MERGE_CHECK home={} pa=0x{:x} requester={} socket={} epoch={} req={} reservation={} data={} active={} op={} stage={} target={} recallReq={}",
+            _nodeId, line_pa, requesterNode, sourceSocket, epochVal, reqId,
+            reservation != _writeReservations.end(), data != nullptr, active != nullptr,
+            active ? static_cast<int>(active->opType) : -1,
+            active ? static_cast<int>(active->stage) : -1,
+            active ? active->targetNode : -1, active ? active->reqId : 0);
     if (reservation == _writeReservations.end() || !active || !data)
         return false;
     const auto &r = reservation->second;
@@ -3556,8 +3634,10 @@ UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
     refreshPinnedBit(line_pa);
     DataBlock payload(64);
     payload.setData(data, 0, 64);
-    return processRecallResponse(line_pa, requesterNode, true, epochVal,
-                                 recallReqId, &payload);
+    const bool completed = processRecallResponse(line_pa, requesterNode, true,
+                                                 epochVal, recallReqId, &payload);
+    if (completed && mergedRecallReqId) *mergedRecallReqId = recallReqId;
+    return completed;
 }
 
 // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----
@@ -4730,11 +4810,36 @@ UBCCController::cleanupExpiredRecallIfNeeded(uint64_t linePa,
 }
 
 void
+UBCCController::retryCreditBlockedControls()
+{
+    for (auto &item : _outstandingReqs) {
+        auto &ost = item.second;
+        if (!ost.recallUnsent && !ost.controlUnsentMask) continue;
+        DirEntry entry;
+        if (!_directory.lookup(item.first, entry)) continue;
+        if (ost.recallUnsent) {
+            ost.recallUnsent = false;
+            if (!initiateRecall(item.first, entry, ost)) ost.recallUnsent = true;
+        }
+        if (ost.controlUnsentMask) {
+            const auto mask = ost.controlUnsentMask;
+            ost.controlUnsentMask = 0;
+            if (!fanoutInvalidateTargets(item.first, mask, entry.epoch,
+                    ost.reqId, ost.requesterNode, ost.reqType, ost.writeIntent))
+                ost.controlUnsentMask |= mask;
+        }
+        // Resource waiting is not a failed protocol attempt. Start the
+        // response watchdog only after all owed sends have left admission.
+        ost.createTick = curTick();
+    }
+}
+
+void
 UBCCController::cleanupExpiredRecalls()
 {
     std::vector<uint64_t> expired;
     for (const auto &kv : _outstandingReqs) {
-        if (isExpiredRecall(kv.second))
+        if (!kv.second.recallUnsent && isExpiredRecall(kv.second))
             expired.push_back(kv.first);
     }
     for (uint64_t linePa : expired)
@@ -4753,7 +4858,7 @@ UBCCController::cleanupExpiredInvalidations()
             (ost.opType == OpType::INVALIDATE ||
              ost.opType == OpType::NAIVE_EVICT_INVALIDATE ||
              ost.opType == OpType::UPGRADE_PENDING);
-        if (invalidating && now >= ost.createTick + _recallTimeout)
+        if (invalidating && !ost.controlUnsentMask && now >= ost.createTick + _recallTimeout)
             expired.push_back(kv.first);
     }
 
@@ -5536,6 +5641,11 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
         framework::LogInfo("UBCC","[UBCC-FANOUT] home={} pa=0x{:x} target={} epoch={} reqId={}",
                _nodeId, linePa, target, committedEpoch, reqId);
 
+        if (!_outbound->controlCreditAvailable(msg)) {
+            if (auto *pending = findOutstanding(linePa))
+                pending->controlUnsentMask |= uint64_t(1) << target;
+            continue;
+        }
         if (!_outbound->sendInvalidateReq(msg)) {
             warn("UBCC node_id={}: invalidate fanout failed target={}",
                  _nodeId, target);
@@ -5734,7 +5844,8 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.recallOwnerNode = -1;
     push.b.readResp.authEpoch = grantOst.baseEpoch;
     push.b.readResp.grantEpoch = grantOst.reservedEpoch;
-    push.b.readResp.committedEpoch = 0;
+    push.b.readResp.committedEpoch = grantOst.dataEpoch;
+    push.h.targetNode = grantOst.dataOwner >= 0 ? grantOst.dataOwner : 0xffff;
     push.b.readResp.pendingInvMask = 0;
 
     // Push grants only carry transaction-owned data. The router supplies
@@ -5742,6 +5853,11 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
     } else {
+        std::memset(push.b.readResp.grantData, 0, 64);
+    }
+    if (grantOst.directDataSent) {
+        push.h.flags &= ~static_cast<uint32_t>(CFLAG_HAS_DATA);
+        push.h.flags |= static_cast<uint32_t>(CFLAG_DIRECT_GRANT);
         std::memset(push.b.readResp.grantData, 0, 64);
     }
     // ── Phase C4 trace point 6: push grant payload word ──

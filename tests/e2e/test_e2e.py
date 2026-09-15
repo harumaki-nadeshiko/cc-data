@@ -178,6 +178,9 @@ TESTCASES = {
     301: "e2e_tc301_o3_dirty_handoff",
     302: "e2e_tc302_o3_multiline_mlp",
     303: "e2e_tc303_o3_invalidation_race",
+    304: "e2e_tc304_park_dual_socket",
+    305: "e2e_tc305_park_store",
+    306: "e2e_tc306_foreign_retirement",
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -3400,6 +3403,9 @@ VERIFIERS = {
     301: lambda reads, lines: verify_o3_exact_reads(301, reads, 2),
     302: lambda reads, lines: verify_o3_exact_reads(302, reads, 32),
     303: lambda reads, lines: verify_o3_exact_reads(303, reads, 16),
+    304: lambda reads, lines: verify_o3_exact_reads(304, reads, 2),
+    305: lambda reads, lines: verify_o3_exact_reads(305, reads, 3),
+    306: lambda reads, lines: verify_o3_exact_reads(306, reads, 192),
 }
 
 def verify_testcase(tc_id, reads, lines):

@@ -371,8 +371,10 @@ void NetworkSim::step() {
         }
     }
 
-    while (!_fifo.empty() && _fifo.front().readyTick <= _tick) {
-        PendingFwd pf = _fifo.front(); _fifo.pop_front();
+    std::set<int> blockedDestinations;
+    for (auto queued = _fifo.begin(); queued != _fifo.end() && queued->readyTick <= _tick; ) {
+        if (blockedDestinations.count(queued->dst_mod)) { ++queued; continue; }
+        PendingFwd pf = *queued;
         totalFwdAttempted++;
         auto it = _ports.find(pf.dst_mod);
         if (it != _ports.end() && !_donePorts.count(pf.dst_mod)) {
@@ -397,8 +399,15 @@ void NetworkSim::step() {
                         coh->h.type == CoherenceMessageType::UpgradeResp;
                 }
             }
-            const bool sent = SendMessage(it->second, pf.msg);
-            // SendMessage consumes pf.msg even on failure; never reuse it.
+            Message *attempt = AllocateSendMessage(it->second, pf.readyTick);
+            if (!attempt) { blockedDestinations.insert(pf.dst_mod); ++queued; continue; }
+            CopyMessage(attempt, pf.msg);
+            const bool sent = TrySendMessage(it->second, attempt);
+            // Retain the original bounded FIFO cell and timestamp on failure.
+            // Other destinations must continue, particularly exit ACK routes.
+            if (!sent) { blockedDestinations.insert(pf.dst_mod); ++queued; continue; }
+            ReleaseMessage(pf.msg);
+            queued = _fifo.erase(queued);
             if (sent) {
                 totalFwdSuccessful++;
             } else {
@@ -428,6 +437,7 @@ void NetworkSim::step() {
             }
         } else {
             ReleaseMessage(pf.msg);
+            queued = _fifo.erase(queued);
             static int miss_ct = 0;
             if (it == _ports.end() && ++miss_ct <= 3)
                 LogWarn("NetworkSim", "[NSIM-MISS] tick={} dst={}:{} (no port)",

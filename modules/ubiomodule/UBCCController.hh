@@ -100,6 +100,7 @@ class UBCCOutboundIf
   public:
     virtual ~UBCCOutboundIf() = default;
     virtual bool sendRecallReq(const CoherenceMessage &msg) = 0;
+    virtual bool controlCreditAvailable(const CoherenceMessage &) const { return true; }
     virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeResp(const CoherenceMessage &msg) = 0;
@@ -186,6 +187,11 @@ enum class OpStage {
 
 // §7.2: OutstandingRequest with full v4 fields for all four op types.
 struct OutstandingRequest {
+    int dataOwner = -1;
+    bool directDataSent = false;
+    uint64_t dataEpoch = 0;
+    uint64_t controlUnsentMask = 0;
+    bool recallUnsent = false;
     uint64_t linePa;           // Associated cache line address (home PA view)
     uint64_t baseEpoch;        // Requester-observed committed epoch (validation baseline)
     uint64_t reservedEpoch;    // Epoch to be committed on Clear or UpgradeDone
@@ -527,7 +533,7 @@ class UBCCController
                                bool dataReceived, uint64_t responseEpoch,
                                uint64_t reqId = 0,
                                const DataBlock *dataBlk = nullptr,
-                               bool ackReceived = true);
+                                bool ackReceived = true, bool directDataSent = false);
 
     /**
      * Check if a line is currently busy (recall or other op in progress).
@@ -560,13 +566,19 @@ class UBCCController
     bool validateWritebackPersistence(uint64_t line_pa, int requesterNode,
                                       uint64_t epochVal,
                                       bool ownerWriteback, int sourceSocket,
-                                      uint64_t reqId, uint8_t disposition) const;
+                                      uint64_t reqId, uint8_t disposition,
+                                      uint64_t parentReqId = 0,
+                                      uint64_t parentEpoch = 0,
+                                      int sourceNode = -1) const;
     bool prepareWritebackPersistence(uint64_t line_pa, int requesterNode,
                                      uint64_t epochVal);
     bool reserveWritebackPersistence(uint64_t line_pa, int requesterNode,
                                      uint64_t epochVal, bool ownerWriteback,
                                      int sourceSocket, uint64_t reqId,
-                                     uint8_t disposition);
+                                     uint8_t disposition,
+                                     uint64_t parentReqId = 0,
+                                     uint64_t parentEpoch = 0,
+                                     int sourceNode = -1);
     void releaseWritebackPersistence(uint64_t line_pa, int requesterNode,
                                      uint64_t epochVal, bool ownerWriteback,
                                      int sourceSocket, uint64_t reqId,
@@ -576,7 +588,8 @@ class UBCCController
                                               uint64_t epochVal,
                                               int sourceSocket,
                                               uint64_t reqId,
-                                              const uint8_t *data);
+                                              const uint8_t *data,
+                                              uint64_t *mergedRecallReqId = nullptr);
 
     /**
      * Notify UBCC that dirty data for a home PA has been written to DRAM
@@ -1089,6 +1102,7 @@ public:
     bool isExpiredRecall(const OutstandingRequest &ost) const;
     bool cleanupExpiredRecallIfNeeded(uint64_t linePa, bool replayWaiters);
     void cleanupExpiredRecalls();
+    void retryCreditBlockedControls();
     void cleanupExpiredInvalidations();
 
     /**
@@ -1156,6 +1170,9 @@ public:
         uint64_t reqId = 0;
         bool ownerWriteback = false;
         uint8_t disposition = 0;
+        uint64_t parentReqId = 0;
+        uint64_t parentEpoch = 0;
+        int sourceNode = -1;
     };
     std::map<uint64_t, WritebackPersistenceReservation> _writeReservations;
 

@@ -328,6 +328,17 @@ bool SendMessage(Port* port, Message* message)
     return result;
 }
 
+bool TrySendMessage(Port* port, Message* message)
+{
+    LogAssertIf(port != nullptr && message != nullptr, "framework", "invalid message/port");
+    LogAssertIf(message->header.type == static_cast<std::uint32_t>(MessageType::Payload) &&
+                message->sourceIdSet && message->targetIdSet,
+                "framework", "Payload requires explicit route");
+    const bool result = SendWire(port, *message, zmq::send_flags::dontwait);
+    delete message;
+    return result;
+}
+
 const Message* ReceiveMessage(Port* port, std::uint64_t currentTimestamp,
                               ReceiveStatus* status)
 {
@@ -436,8 +447,9 @@ bool EmitSync(Port* port, std::uint64_t currentTimestamp)
     sync.header.type = static_cast<std::uint32_t>(MessageType::ControlSync);
     // Heartbeats are retryable and must not block a simulator thread while
     // the peer is still binding or reconnecting.
-    if (!SendWire(port, sync, zmq::send_flags::dontwait))
+    if (!SendWire(port, sync, zmq::send_flags::dontwait)) {
         return false;
+    }
     port->lastSyncTimestamp = currentTimestamp;
     port->hasEmittedSync = true;
     return true;

@@ -29,7 +29,8 @@ HAController::Payload HAController::Payload::fromU64(std::uint64_t value)
 }
 
 HAController::HAController(const Config &config)
-    : directory_(config.directory), queueDepth_(config.perAddressQueueDepth),
+    : directory_(config.directory), holderLeases_(config.directory.nodeCount),
+      queueDepth_(config.perAddressQueueDepth),
       unavailable_(static_cast<std::size_t>(directory_.lineCount()), 0)
 {
     if (!queueDepth_)
@@ -443,6 +444,46 @@ bool HAController::busy(std::uint64_t address) const
 {
     auto found = work_.find(address);
     return found != work_.end() && found->second.active.has_value();
+}
+
+bool HAController::reserveHolder(uint64_t address, unsigned node)
+{
+    if (!directory_.contains(address) || address % directory_.config().lineBytes)
+        return false;
+    return holderLeases_.reserve(directory_.lineIndex(address), node);
+}
+
+void HAController::abandonHolder(uint64_t address, unsigned node)
+{
+    if (directory_.contains(address))
+        holderLeases_.abandon(directory_.lineIndex(address), node);
+}
+
+bool HAController::commitHolder(uint64_t address, unsigned node, uint64_t lease)
+{
+    return directory_.contains(address) && holderLeases_.commit(
+        directory_.lineIndex(address), node, lease, directory_.sharers(address));
+}
+
+HolderLeases::Result HAController::releaseHolder(uint64_t address, unsigned node,
+    uint64_t lease, uint64_t request, unsigned socket)
+{
+    if (!directory_.contains(address) || address % directory_.config().lineBytes)
+        return HolderLeases::Result::Invalid;
+    const auto result = holderLeases_.release(directory_.lineIndex(address), node,
+        lease, request, socket, busy(address) || writebacks_.count(address));
+    // Busy includes NeedInstall and queued successors. Thus no active oldSharers
+    // snapshot can subsequently resurrect a bit after this ACK.
+    if (result == HolderLeases::Result::Applied)
+        directory_.set(address, node, false);
+    return result;
+}
+
+bool HAController::acknowledgeRelease(uint64_t address, unsigned node,
+    uint64_t lease, uint64_t request, unsigned socket)
+{
+    return directory_.contains(address) && ! (address % directory_.config().lineBytes) &&
+        holderLeases_.acknowledge(directory_.lineIndex(address), node, lease, request, socket);
 }
 
 bool HAController::retryTransient(std::uint64_t address, std::uint64_t requestId)
