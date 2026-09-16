@@ -1,0 +1,99 @@
+diff --git a/gem5 b/gem5
+--- a/gem5
++++ b/gem5
+@@ -1 +1 @@
+-Subproject commit 0cc044529827d8d4177641ed61e223a73a86440a
++Subproject commit 0cc044529827d8d4177641ed61e223a73a86440a-dirty
+diff --git a/tests/e2e/test_e2e.py b/tests/e2e/test_e2e.py
+index e911ef5..8c277e7 100644
+--- a/tests/e2e/test_e2e.py
++++ b/tests/e2e/test_e2e.py
+@@ -3962,80 +3962,23 @@ def gem5_config_main():
+                     hn, DEFAULT_SEG_SIZE, cfg.phy_base, _cfg_num_sockets, sid))
+     system.mem_ranges = all_ranges
+ 
+-    # ── Q2 FIX: Pre-map binary + stack pages per-node ──────────────
+-    # Process::initState() calls allocateMem() → MemPool::allocate(),
+-    # which fails because MemPools are not properly populated from
+-    # DDR4 controllers at the time SE workload is set up (the DDR4
+-    # controllers are created later during Ruby.create_system()).
+-    # Work around by pre-mapping all binary and initial stack virtual
+-    # pages to per-node physical pages, so pTable->translate() finds
+-    # the mapping and skips allocateMem() entirely.
+-    #
+-    # CRITICAL: Each node has its own PA space (node i base = i << 40).
+-    # Physical pages must be allocated in the CPU's own node space,
+-    # otherwise the EP_RNF controller rejects them as non-DSM.
+-    import struct as _struct
+-    _page_size = 4096  # ARM64 page size
+-    _NODE_ADDR_SHIFT = 40
+-    _CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
+-
+-    # Per-node physical page counters (start at 1 MiB offset).
+-    # Build for ALL global nodes so split-mode (local node != 0) is covered.
+-    _node_pa = {}
+-    for _nid in range(NODES):
+-        _node_pa[_nid] = (_nid << _NODE_ADDR_SHIFT) + 0x100000
+-
+-    # Parse ELF program headers to find PT_LOAD segments
+-    _elf_segments = []
+-    with open(binary, 'rb') as _f:
+-        # Read ELF header (64-bit)
+-        _e_hdr = _f.read(64)
+-        _e_phoff = _struct.unpack_from('<Q', _e_hdr, 32)[0]  # e_phoff
+-        _e_phentsize = _struct.unpack_from('<H', _e_hdr, 54)[0]  # e_phentsize
+-        _e_phnum = _struct.unpack_from('<H', _e_hdr, 56)[0]  # e_phnum
+-
+-        for _i in range(_e_phnum):
+-            _f.seek(_e_phoff + _i * _e_phentsize)
+-            _phdr = _f.read(_e_phentsize)
+-            _p_type = _struct.unpack_from('<I', _phdr, 0)[0]
+-            if _p_type == 1:  # PT_LOAD
+-                _p_offset = _struct.unpack_from('<Q', _phdr, 8)[0]
+-                _p_vaddr = _struct.unpack_from('<Q', _phdr, 16)[0]
+-                _p_filesz = _struct.unpack_from('<Q', _phdr, 32)[0]
+-                _p_memsz = _struct.unpack_from('<Q', _phdr, 40)[0]
+-                if _p_memsz > 0:
+-                    _elf_segments.append({
+-                        'va': _p_vaddr,
+-                        'memsz': _p_memsz,
+-                    })
+-
+-    _total_pages = 0
+-
+-    # Map binary segments: each CPU gets its own copy in its node's PA space.
+-    # In split mode, cpus holds only the local node's CPUs, so the global
+-    # node identity comes from BUILD_NODES (not the raw cpu index).
+-    for _cpu_idx, _cpu in enumerate(cpus):
+-        _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
+-        for _proc in _cpu.workload:
+-            if _proc is None:
+-                continue
+-            for _seg in _elf_segments:
+-                _va_start = _seg['va'] & ~(_page_size - 1)
+-                _va_end = (_seg['va'] + _seg['memsz'] + _page_size - 1) & ~(_page_size - 1)
+-                for _va in range(_va_start, _va_end, _page_size):
+-                    _pa = _node_pa[_node_id]
+-                    _node_pa[_node_id] += _page_size
+-                    _proc.defer_map(_va, _pa, _page_size, cacheable=True)
+-                    _total_pages += 1
++    # ELF auto-allocation: Process::initState() uses the standard
++    # SETranslatingPortProxy path.  Unmapped ELF VAs trigger
++    # allocateMem() -> MemPool[phys_pool_id], so no explicit ELF
++    # pre-mapping is needed here.
+ 
+     # ── Map local_private_range for workloads that need direct
+     #     local-memory access (TC112 TBE interference, etc.).
+     #     VA 0x01000000 maps to the node's local_private physical base.
+     #     Map 64 MB so explicit L3-pressure experiments can use a disjoint
+     #     local-private window at offset 32 MB without touching program data.
++    _page_size = 4096
++    _NODE_ADDR_SHIFT = 40
++    _CPUS_PER_NODE = DEFAULT_L * DEFAULT_D
+     _local_va_base = 0x01000000   # 16 MB — well below mmap_end=0x40000000
+     _local_map_bytes = 64 * 1024 * 1024
+     _local_pages = 0
++    _total_pages = 0
+     for _cpu_idx, _cpu in enumerate(cpus):
+         _node_id = BUILD_NODES[_cpu_idx // _CPUS_PER_NODE]
+         _local_pa_base = _node_id << _NODE_ADDR_SHIFT
