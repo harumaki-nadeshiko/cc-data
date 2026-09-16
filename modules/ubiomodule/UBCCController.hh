@@ -492,7 +492,7 @@ class UBCCController
      */
     bool processOuterUpgradeDone(
         uint64_t line_pa, int requesterNode,
-        uint64_t epoch, uint64_t reqId);
+        uint64_t epoch, uint64_t reqId, uint64_t *committedEpoch = nullptr);
 
     // ---- v4: Clear / ClearAck (§3.5) ----
     /**
@@ -611,7 +611,19 @@ class UBCCController
      * @return               True if evict accepted (epoch matched)
      */
     bool processEvict(uint64_t line_pa, int evictingNode,
-                      uint64_t epochVal);
+                      uint64_t epochVal, uint64_t reqId = 0, int sourceSocket = 0);
+    struct EvictReceipt {
+        uint64_t reqId = 0, linePa = 0, epoch = 0;
+    };
+    // Conditional releases are serial per source adapter. A monotonic
+    // high-water fence rejects any older attempt after receipt replacement.
+    std::array<EvictReceipt, 64 * 4> _evictReceipts{};
+    struct AuthorityCommitOutput {
+        bool live = false;
+        CoherenceMessage message;
+    };
+    std::array<AuthorityCommitOutput, 64> _authorityCommitOutputs{};
+    void drainAuthorityCommits();
 
     /**
      * Check whether a response epoch is valid for the current line epoch.
@@ -974,7 +986,7 @@ public:
     int _asyncWbInterval = 10000;
     int _asyncWbCounter = 0;
     static constexpr size_t kMaxAsyncWbSnapshots = 128;
-    std::map<uint64_t, uint64_t> _asyncWbSnapshots; // pa → snapshot epoch
+    std::map<uint64_t, DirEntry> _asyncWbSnapshots; // complete persisted metadata
     uint64_t _asyncWbCount = 0;
 
     // ---- M8: Invalidation counters ----
@@ -1061,6 +1073,8 @@ public:
      * Allocate a new reserved epoch (increments committed epoch + 1).
      */
     uint64_t allocateReservedEpoch(DirEntry &entry);
+    uint64_t reserveReadEpoch(DirEntry &entry, UBCC_OuterReqType type,
+                             bool writeIntent);
 
     /**
      * Commit intended directory result from OutstandingRequest to DirEntry.

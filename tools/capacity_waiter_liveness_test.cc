@@ -40,8 +40,10 @@ class CaptureOutbound final : public UBCCOutboundIf
     CoherenceMessage lastRecall;
     CoherenceMessage lastInvalidate;
     std::vector<CoherenceMessage> grants;
+    std::vector<CoherenceMessage> upgradeReplies;
     int grantPushAttempts = 0;
     int rejectedGrantPushes = 0;
+    int rejectedAuthorityCommits = 0;
     std::function<void(const CoherenceMessage&)> onUpgradeAck;
 
     bool sendRecallReq(const CoherenceMessage &msg) override
@@ -61,7 +63,13 @@ class CaptureOutbound final : public UBCCOutboundIf
         if (onUpgradeAck) onUpgradeAck(msg);
         return true;
     }
-    bool sendUpgradeResp(const CoherenceMessage&) override { return true; }
+    bool sendUpgradeResp(const CoherenceMessage &msg) override {
+        if (msg.h.type == CoherenceMessageType::RetainedAuthorityCommit &&
+            rejectedAuthorityCommits > 0) {
+            --rejectedAuthorityCommits; return false;
+        }
+        upgradeReplies.push_back(msg); return true;
+    }
     bool sendGrantPush(const CoherenceMessage &msg) override
     {
         ++grantPushAttempts;
@@ -79,6 +87,7 @@ class RetryLookupHost final : public UBCCHostIf
   public:
     UBCCController *controller = nullptr;
     int lookupCount = 0;
+    bool returnOwner = false;
 
     uint64_t hostCurrentTick() const override { return lookupCount + 1; }
     void hostIssueBackstoreRead(uint64_t pa) override
@@ -91,7 +100,12 @@ class RetryLookupHost final : public UBCCHostIf
         completion.status = lookupCount == 1
             ? BackstoreStatus::RetryableBusy
             : BackstoreStatus::Ok;
-        completion.found = false;
+        completion.found = returnOwner && lookupCount > 1;
+        if (completion.found) {
+            completion.state = UBCCMESIState::G_M;
+            completion.sharersMask = uint64_t{1} << 1;
+            completion.epoch = 1;
+        }
         controller->onBackstoreH64Complete(completion);
     }
     void hostIssueBackstoreWrite(uint64_t) override {}
@@ -151,6 +165,45 @@ main()
            std::string::npos);
     assert(lookupProgressed.find("\"resident_waiter_depth\":0") !=
            std::string::npos);
+
+    // Saturated waiter admission must not create a resident G_I placeholder
+    // that a later OwnerWB mistakes for completed authoritative metadata.
+    UBCCController saturatedFillUbcc(
+        0, 0, nullptr, 64, lookupRetryCfg.bloom_bytes, 0, 1, 3,
+        &lookupRetryCfg);
+    RetryLookupHost saturatedHost;
+    saturatedHost.controller = &saturatedFillUbcc;
+    saturatedFillUbcc.setHost(&saturatedHost);
+    saturatedFillUbcc.setResidentOverflowPolicy(ResidentOverflowPolicy::Spill);
+    saturatedFillUbcc.setH64BloomAllMisses(true);
+    for (unsigned i = 0; i < UBCCController::MAX_RESIDENT_WAITERS_TOTAL; ++i) {
+        assert(saturatedFillUbcc.debugEnqueueResidentWaiterTupleForTest(
+            0x11000000 + i * 64, ResidentOpKind::WritebackPrepare,
+            1, 0, 1, i + 1, 0));
+    }
+    constexpr uint64_t saturatedPa = 0x1405df40;
+    assert(!saturatedFillUbcc.prepareWritebackPersistence(saturatedPa, 1, 1));
+    saturatedFillUbcc.wakeup();
+    assert(!saturatedFillUbcc.prepareWritebackPersistence(saturatedPa, 1, 1));
+    assert(saturatedHost.lookupCount == 0);
+    assert(saturatedFillUbcc.inspectOffloadLineForTest(saturatedPa).find(
+        "\"resident_present\":false") != std::string::npos);
+    // Releasing one bounded waiter makes the exact original WB retry admissible.
+    // Busy does not grant permission; the actual H64 owner must be loaded first.
+    for (unsigned i = 0; i < UBCCController::MAX_RESIDENT_WAITERS_TOTAL; ++i)
+        assert(saturatedFillUbcc.debugClearResidentWaitersForTest(0x11000000 + i * 64));
+    saturatedHost.returnOwner = true;
+    assert(!saturatedFillUbcc.prepareWritebackPersistence(saturatedPa, 1, 1));
+    assert(saturatedHost.lookupCount == 1);
+    assert(!saturatedFillUbcc.prepareWritebackPersistence(saturatedPa, 1, 1));
+    saturatedFillUbcc.wakeup();
+    assert(saturatedHost.lookupCount == 2);
+    assert(saturatedFillUbcc.prepareWritebackPersistence(saturatedPa, 1, 1));
+    assert(saturatedFillUbcc.getOwnerForLine(saturatedPa) == 1);
+    assert(saturatedFillUbcc.validateWritebackPersistence(
+        saturatedPa, 1, 1, true, 0, 77, 1));
+    assert(!saturatedFillUbcc.validateWritebackPersistence(
+        saturatedPa, 1, 2, true, 0, 77, 1));
 
     constexpr uint64_t victim = 0x10000000; // home-0 DSM, set 0
     constexpr uint64_t target = 0x10000080; // same set as victim
@@ -494,7 +547,7 @@ main()
         liveOverTombstonePa, OpType::GRANT_HANDSHAKE, 1, -1, 0);
     assert(recreated);
     recreated->baseEpoch = historicalClearEpoch;
-    recreated->reservedEpoch = 12;
+    recreated->reservedEpoch = 11; // shared membership-only commit preserves authority
     recreated->reqId = liveOverTombstoneReqId;
     recreated->stage = OpStage::WAITING_CLEAR;
     recreated->intendedState = MESIState::G_S;
@@ -716,8 +769,26 @@ main()
     assert(demandOutbound.grants.empty());
     uint8_t demandPayload[64];
     std::memset(demandPayload, 0x6b, sizeof(demandPayload));
-    assert(demandMergeUbcc.processWritebackWithData(
-        demandMergePa, 1, demandMergeEpoch, false, demandPayload));
+    constexpr uint64_t boundaryWriteId = 98765;
+    assert(demandMergeUbcc.reserveWritebackPersistence(
+        demandMergePa, 1, demandMergeEpoch, true, 1, boundaryWriteId, 1));
+    uint64_t mergedParent = 999;
+    assert(!demandMergeUbcc.completeReservedOwnerWritebackRecall(
+        demandMergePa, 1, demandMergeEpoch, 0, boundaryWriteId,
+        demandPayload, &mergedParent));
+    assert(mergedParent == 0);
+    assert(!demandMergeUbcc.completeReservedOwnerWritebackRecall(
+        demandMergePa, 1, demandMergeEpoch + 1, 1, boundaryWriteId,
+        demandPayload, &mergedParent));
+    assert(mergedParent == 0);
+    assert(demandMergeUbcc.completeReservedOwnerWritebackRecall(
+        demandMergePa, 1, demandMergeEpoch, 1, boundaryWriteId,
+        demandPayload, &mergedParent));
+    assert(mergedParent == recallId);
+    assert(!demandMergeUbcc.completeReservedOwnerWritebackRecall(
+        demandMergePa, 1, demandMergeEpoch, 1, boundaryWriteId,
+        demandPayload, &mergedParent));
+    assert(mergedParent == 0);
     assert(demandOutbound.grants.size() == 1);
     const CoherenceMessage &demandGrant = demandOutbound.grants.front();
     assert((demandGrant.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) != 0);
@@ -940,10 +1011,57 @@ main()
     DirEntry cachedDoneEntry;
     assert(cachedDoneUbcc.directory().lookup(cachedDonePa, cachedDoneEntry));
     assert(cachedDoneEntry.epoch == cachedDoneEpoch + 1);
+    // Asynchronous early Done must return the committed authority identity,
+    // not the echoed requester epoch or a fresh directory query after replay.
+    UBCCController asyncDoneUbcc(0, 0, nullptr, 64, 0, 0, 1, 3, &clearWakeCfg);
+    HoldBackstoreHost asyncDoneHost;
+    CaptureOutbound asyncDoneOutbound;
+    asyncDoneUbcc.setHost(&asyncDoneHost);
+    asyncDoneUbcc.setOutbound(&asyncDoneOutbound);
+    assert(asyncDoneUbcc.debugSeedResidentForTest(cachedDonePa,
+        static_cast<int>(MESIState::G_S), (1ULL << 1) | (1ULL << 2), 81, false));
+    assert(asyncDoneUbcc.processOuterUpgradeReq(cachedDonePa, 2, 123, 4002, 1,
+        UBCC_UpgradeCause::LocalStoreUpgrade));
+    uint64_t committed = 999;
+    assert(asyncDoneUbcc.processOuterUpgradeDone(cachedDonePa, 2, 123, 4002, &committed));
+    assert(committed == 0);
+    assert(asyncDoneUbcc.processInvalidationAck(cachedDonePa, 1,
+        asyncDoneOutbound.lastInvalidate.h.epoch, asyncDoneOutbound.lastInvalidate.h.reqId));
+    assert(asyncDoneOutbound.upgradeReplies.size() == 1);
+    const auto &receipt = asyncDoneOutbound.upgradeReplies.front();
+    assert(receipt.h.type == CoherenceMessageType::UpgradeDoneResp);
+    assert(receipt.h.epoch == 123 && receipt.h.reqId == 4002);
+    assert(receipt.b.upgradeDoneResp.accepted && receipt.b.upgradeDoneResp.committedEpoch == 82);
+    UBCCController retainedUbcc(0, 0, nullptr, 64, 0, 0, 1, 3, &clearWakeCfg);
+    HoldBackstoreHost retainedHost;
+    CaptureOutbound retainedOutbound;
+    retainedUbcc.setHost(&retainedHost);
+    retainedUbcc.setOutbound(&retainedOutbound);
+    assert(retainedUbcc.debugSeedResidentForTest(cachedDonePa,
+        static_cast<int>(MESIState::G_M), 1ULL << 1, 2, true));
+    assert(static_cast<int>(retainedUbcc.processOuterRequest(cachedDonePa,
+        UBCC_OuterReqType::GlobalReadShared, false, 2, 0, 91, 5001)) == -1);
+    DataBlock retainedData(64);
+    std::memset(retainedData.data, 0x5a, 64);
+    assert(retainedUbcc.processRecallResponse(cachedDonePa, 1, true, 2, 5001, &retainedData));
+    assert(retainedOutbound.upgradeReplies.empty()); // not at reserved grant
+    auto *retainedGrant = retainedUbcc.findOutstanding(cachedDonePa);
+    assert(retainedGrant);
+    const auto retainedClearEpoch = retainedGrant->baseEpoch;
+    retainedOutbound.rejectedAuthorityCommits = 1;
+    assert(retainedUbcc.processClear(cachedDonePa, 2, retainedClearEpoch, 5001));
+    assert(retainedOutbound.upgradeReplies.empty());
+    retainedUbcc.wakeup();
+    assert(retainedOutbound.upgradeReplies.size() == 1);
+    const auto &update = retainedOutbound.upgradeReplies.front();
+    assert(update.h.type == CoherenceMessageType::RetainedAuthorityCommit);
+    assert(update.h.dstNode == 1 && update.h.epoch == 2 && update.h.reqId == 5001);
+    assert(update.b.upgradeDoneResp.committedEpoch == 3);
 
     // TC98 regression: a home reservation at epoch 69 reserves 70 while the
     // requester carries its own base epoch 10. Pending Batch-RS replay must not
-    // cross that live reservation and advance the directory to 71 before Clear.
+    // cross the live reservation. Read joins preserve coherence epoch69 while
+    // each transaction still has an independent reqId/Clear identity.
     UBCCController reservationUbcc(
         0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
     HoldBackstoreHost reservationHost;
@@ -964,7 +1082,7 @@ main()
     OutstandingRequest *reservationOutstanding =
         reservationUbcc.findOutstanding(reservationPa);
     assert(reservationOutstanding);
-    assert(reservationOutstanding->reservedEpoch == 70);
+    assert(reservationOutstanding->reservedEpoch == 69);
     assert(reservationUbcc.debugEnqueuePendingRequesterForTest(
         reservationPa, 5, 0, true, requesterBaseEpoch, 4002));
     assert(reservationUbcc.debugEnqueuePendingRequesterForTest(
@@ -978,8 +1096,54 @@ main()
     assert(reservationUbcc.processClear(
         reservationPa, 4, requesterBaseEpoch, reservationReqId));
     assert(reservationUbcc.directory().lookup(reservationPa, reservationEntry));
-    assert(reservationEntry.epoch == 72);
+    assert(reservationEntry.epoch == 69);
+    assert(reservationEntry.sharersMask == ((1ULL << 0) | (1ULL << 4) |
+                                          (1ULL << 5) | (1ULL << 6)));
     assert(reservationUbcc.findOutstanding(reservationPa) == nullptr);
+    // Same-epoch metadata membership changes must not let an old asynchronous
+    // write ACK mark a newer mask durable. Sweep captures before the join.
+    UBCCController snapshotUbcc(0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
+    HoldBackstoreHost snapshotHost;
+    snapshotUbcc.setHost(&snapshotHost);
+    assert(snapshotUbcc.debugSeedResidentForTest(reservationPa,
+        static_cast<int>(MESIState::G_S), 1, 69, true));
+    for (unsigned tick = 0; tick < 10000; ++tick) snapshotUbcc.wakeup();
+    assert(static_cast<int>(snapshotUbcc.processOuterRequest(reservationPa,
+        UBCC_OuterReqType::GlobalReadShared, false, 4, 0, 10, 6001)) >= 0);
+    assert(snapshotUbcc.processClear(reservationPa, 4, 10, 6001));
+    snapshotUbcc.onBackstoreWriteAck(reservationPa, 69);
+    DirEntry snapshotResult;
+    assert(snapshotUbcc.directory().lookup(reservationPa, snapshotResult));
+    assert(snapshotResult.epoch == 69 && snapshotResult.sharersMask == 17);
+    assert(snapshotResult.residentDirty);
+    // A delayed duplicate conditional release must not evict a reacquired
+    // reader in the same shared coherence episode.
+    UBCCController replayEvictUbcc(0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
+    replayEvictUbcc.setHost(&snapshotHost);
+    assert(replayEvictUbcc.debugSeedResidentForTest(reservationPa,
+        static_cast<int>(MESIState::G_S), 3, 69, false));
+    assert(replayEvictUbcc.processEvict(reservationPa, 1, 69, 7001, 0));
+    assert(static_cast<int>(replayEvictUbcc.processOuterRequest(reservationPa,
+        UBCC_OuterReqType::GlobalReadShared, false, 1, 0, 22, 7002)) >= 0);
+    assert(replayEvictUbcc.processClear(reservationPa, 1, 22, 7002));
+    assert(replayEvictUbcc.processEvict(reservationPa, 1, 69, 7001, 0));
+    assert(replayEvictUbcc.directory().lookup(reservationPa, snapshotResult));
+    assert(snapshotResult.sharersMask == 3 && snapshotResult.epoch == 69);
+    assert(replayEvictUbcc.processEvict(reservationPa, 1, 69, 7003, 0));
+    assert(!replayEvictUbcc.processEvict(reservationPa, 1, 69, 7001, 0));
+    // Metadata eviction holds wbPending: a same-epoch join waits rather than
+    // mutating the resident entry underneath the snapshot being evicted.
+    UBCCController evictionAudit(0, 0, nullptr, 64, 0, 0, 1, 8, &clearWakeCfg);
+    HoldBackstoreHost evictionHost;
+    evictionAudit.setHost(&evictionHost);
+    evictionAudit.setResidentOverflowPolicy(ResidentOverflowPolicy::Spill);
+    assert(evictionAudit.debugSeedResidentForTest(reservationPa,
+        static_cast<int>(MESIState::G_S), 1, 69, true));
+    assert(evictionAudit.debugForceResidentEvictForTest(reservationPa));
+    assert(static_cast<int>(evictionAudit.processOuterRequest(reservationPa,
+        UBCC_OuterReqType::GlobalReadShared, false, 4, 0, 20, 8001)) == -1);
+    assert(evictionAudit.directory().lookup(reservationPa, snapshotResult));
+    assert(snapshotResult.sharersMask == 1 && snapshotResult.epoch == 69);
 
     // TC146: a clean metadata snapshot is not evictable while the real data
     // persistence callback still owns its incarnation. Wrong tuple release

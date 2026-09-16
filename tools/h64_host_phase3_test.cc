@@ -697,6 +697,44 @@ static void test_empty_group_scan() {
 // ============================================================
 // Main
 // ============================================================
+static void test_same_epoch_serialization() {
+    MockMetaRNF mock;
+    H64HostConfig cfg;
+    cfg.num_groups = 1; cfg.buckets_per_group = 8;
+    cfg.metadata_socket_lines = cfg.num_groups + cfg.totalBuckets() + 1;
+    BackstoreHostH64 host(cfg, &mock);
+    const uint64_t pa = 0x10000040;
+    int completed = 0, busy = 0;
+    auto ok = [&](const BackstoreCompletion &c) {
+        assert(c.status == BackstoreStatus::Ok); ++completed;
+    };
+    host.upsert(pa, UBCCMESIState::G_S, 1, 69, ok);
+    host.upsert(pa, UBCCMESIState::G_S, 17, 69,
+        [&](const BackstoreCompletion &c) {
+            assert(c.status == BackstoreStatus::RetryableBusy); ++busy;
+        });
+    assert(busy == 1 && completed == 0);
+    mock.drain();
+    assert(completed == 1);
+    host.upsert(pa, UBCCMESIState::G_S, 17, 69, ok);
+    host.upsert(pa, UBCCMESIState::G_S, 1, 69,
+        [&](const BackstoreCompletion &c) {
+            assert(c.status == BackstoreStatus::RetryableBusy); ++busy;
+        });
+    mock.drain();
+    assert(completed == 2 && busy == 2);
+    host.upsert(pa, UBCCMESIState::G_S, 1, 69, ok);
+    mock.drain();
+    bool found = false;
+    host.lookup(pa, [&](const BackstoreCompletion &c) {
+        assert(c.status == BackstoreStatus::Ok && c.found);
+        assert(c.sharersMask == 1 && c.epoch == 69); found = true;
+    });
+    mock.drain();
+    assert(found && completed == 3);
+    std::fprintf(stderr, "[T17] PASS same-epoch 1->17->1 serialized, no queued stale upsert\n");
+}
+
 int main() {
     std::fprintf(stderr,"=== Phase3 H64 Production Test Suite ===\n");
 
@@ -716,7 +754,8 @@ int main() {
     test_collision_delete_probe_continuity();
     test_group_live_scan();
     test_empty_group_scan();
+    test_same_epoch_serialization();
 
-    std::fprintf(stderr,"\n=== 16/16 TESTS PASSED ===\n");
+    std::fprintf(stderr,"\n=== 17/17 TESTS PASSED ===\n");
     return 0;
 }

@@ -26,6 +26,7 @@ class Contracts(unittest.TestCase):
         self.assertEqual(len(queue['absent_ids']), 28)
         jobs = {j['tc']: j for j in queue['jobs']}
         self.assertEqual(jobs[27]['budget'], 3000)
+        self.assertEqual(jobs[43]['budget'], 2400)
         self.assertEqual((jobs[35]['n'], jobs[35]['s']), (3, 2))
         self.assertEqual(jobs[36]['topology'], '1s')
 

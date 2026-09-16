@@ -123,6 +123,7 @@ isGem5Ingress(CoherenceMessageType t)
       case CoherenceMessageType::EvictResp:
       case CoherenceMessageType::UpgradeResp:
       case CoherenceMessageType::UpgradeDoneResp:
+      case CoherenceMessageType::RetainedAuthorityCommit:
       case CoherenceMessageType::ClearResp:
       case CoherenceMessageType::UpgradeAckNotify:
       case CoherenceMessageType::QueryLineMetaResp:
@@ -3633,7 +3634,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 
       case CoherenceMessageType::EvictReq: {
         bool success = ubcc.processEvict(
-            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch);
+            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch,
+            msg.h.reqId, msg.h.srcSocket);
         response.h.type = CoherenceMessageType::EvictResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3706,8 +3708,10 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::UpgradeDoneReq: {
+        uint64_t committedEpoch = 0;
         bool accepted = ubcc.processOuterUpgradeDone(
-            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
+            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId,
+            &committedEpoch);
         response.h.type = CoherenceMessageType::UpgradeDoneResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3717,7 +3721,10 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
         response.b.upgradeDoneResp.accepted = accepted;
-        hasResponse = true;
+        response.b.upgradeDoneResp.committedEpoch = committedEpoch;
+        // An early Done is retained by Home until invalidations finish. Keep
+        // the requester's response reservation for the later committed reply.
+        hasResponse = !accepted || committedEpoch != 0;
         return true;
       }
 

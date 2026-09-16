@@ -275,6 +275,7 @@ UBCCController::finishH64BloomRebuild(bool ok)
 void
 UBCCController::wakeup()
 {
+    drainAuthorityCommits();
     retryCreditBlockedControls();
     cleanupTombstones();
     cleanupExpiredRecalls();
@@ -814,6 +815,8 @@ UBCCController::refreshPinnedBit(uint64_t linePa)
         return;
     }
     bool pin = false;
+    for (const auto &output : _authorityCommitOutputs)
+        pin = pin || (output.live && output.message.h.homeLinePa == linePa);
     pin = pin || (_outstandingReqs.find(linePa) != _outstandingReqs.end());
     auto pit = _pendingRequesters.find(linePa);
     pin = pin || (pit != _pendingRequesters.end() && !pit->second.empty());
@@ -1098,8 +1101,9 @@ UBCCController::doAsyncWriteback()
             if (_asyncWbSnapshots.count(pa) > 0)
                 continue;
 
-            uint64_t epoch = _directory.getEpoch(set, way);
-            _asyncWbSnapshots[pa] = epoch;
+            DirEntry snapshot;
+            if (!_directory.lookup(pa, snapshot)) continue;
+            _asyncWbSnapshots[pa] = snapshot;
             // The snapshot owns this entry until its ack. Materialize the
             // derived pin before issuing the asynchronous metadata write.
             refreshPinnedBit(pa);
@@ -1117,15 +1121,17 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
     if (it == _asyncWbSnapshots.end())
         return;
 
-    uint64_t snapshotEpoch = it->second;
+    const DirEntry snapshot = it->second;
+    uint64_t snapshotEpoch = snapshot.epoch;
     _asyncWbSnapshots.erase(it);
 
     DirEntry entry;
     if (!_directory.lookup(linePa, entry))
         return;
 
-    // Epoch check: if unchanged, entry was not modified → safe to clear dirty
-    if (entry.epoch == snapshotEpoch) {
+    // Same coherence epoch does not mean unchanged shared membership.
+    if (entry.epoch == snapshotEpoch && entry.state == snapshot.state &&
+        entry.sharersMask == snapshot.sharersMask) {
         entry.residentDirty = false;
         _directory.update(linePa, entry);
         _asyncWbCount++;
@@ -1241,7 +1247,8 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             break;
         }
         case ResidentOpKind::Evict: {
-            bool ok = processEvict(linePa, pr.node, pr.epoch);
+            bool ok = processEvict(linePa, pr.node, pr.epoch, pr.reqId,
+                                   pr.socket < 0 ? 0 : pr.socket);
             if (!ok) {
                 restore = (!_directory.fillPending(linePa) &&
                            !_directory.wbPending(linePa));
@@ -1821,7 +1828,7 @@ UBCCController::processOuterRequest(
     Tick sentinelVisibleTick = curTick();
 
     // v4: Allocate reserved epoch (committed epoch + 1, NOT committed yet)
-    uint64_t reservedEpoch = allocateReservedEpoch(entry);
+    uint64_t reservedEpoch = reserveReadEpoch(entry, reqType, writeIntent);
 
     UBCC_OuterGrantType grant = UBCC_OuterGrantType::GlobalGrantShared;
     MESIState prevState = entry.state;
@@ -2737,6 +2744,8 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 bool
 UBCCController::isLineBusy(uint64_t line_pa) const
 {
+    for (const auto &output : _authorityCommitOutputs)
+        if (output.live && output.message.h.homeLinePa == line_pa) return true;
     if (_writeReservations.count(line_pa))
         return true;
     // v4: Check outstanding requests for non-terminal stages
@@ -3027,10 +3036,23 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                     return true;
                 }
                 _directory.update(line_pa, currentEntry);
+                CoherenceMessage committedReply;
+                committedReply.h.type = CoherenceMessageType::UpgradeDoneResp;
+                committedReply.h.srcNode = _nodeId;
+                committedReply.h.srcSocket = _socketId;
+                committedReply.h.dstNode = requesterNode;
+                committedReply.h.dstSocket = requesterSocket;
+                committedReply.h.homeLinePa = line_pa;
+                committedReply.h.epoch = baseEpoch;
+                committedReply.h.reqId = activeReqId;
+                committedReply.b.upgradeDoneResp.accepted = true;
+                committedReply.b.upgradeDoneResp.committedEpoch = currentEntry.epoch;
                 current->stage = OpStage::DONE;
                 current->respTick = curTick();
                 removeOutstanding(line_pa);
                 refreshPinnedBit(line_pa);
+                panic_if(!_outbound->sendUpgradeResp(committedReply),
+                         "cached UpgradeDone lost its committed response");
 
                 framework::LogInfo("UBCC","[UBCC-UPGRADE-COMMIT] pa=0x{:x} owner={} reservedEpoch={}",
                        line_pa, intendedOwner, reservedEp);
@@ -3685,9 +3707,17 @@ UBCCController::notifyHomeWritebackComplete(uint64_t homePa)
 
 bool
 UBCCController::processEvict(uint64_t line_pa, int evictingNode,
-                              uint64_t epochVal)
+                              uint64_t epochVal, uint64_t reqId, int sourceSocket)
 {
     epochVal = normalizeEpoch(epochVal);
+    if (evictingNode < 0 || evictingNode >= 64 || sourceSocket < 0 || sourceSocket >= 4)
+        return false;
+    auto &receipt = _evictReceipts[evictingNode * 4 + sourceSocket];
+    if (reqId && receipt.reqId) {
+        if (reqId == receipt.reqId)
+            return receipt.linePa == line_pa && receipt.epoch == epochVal;
+        if (reqId < receipt.reqId) return false;
+    }
 
     framework::LogInfo("UBCC",
             "UBCC node_id={}: processEvict PA=0x{:x} "
@@ -3698,11 +3728,11 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     PendingRequester prCtx;
     prCtx.opKind = ResidentOpKind::Evict;
     prCtx.node = evictingNode;
-    prCtx.socket = -1;
+    prCtx.socket = sourceSocket;
     prCtx.reqType = UBCC_OuterReqType::GlobalEvict;
     prCtx.writeIntent = false;
     prCtx.epoch = epochVal;
-    prCtx.reqId = 0;
+    prCtx.reqId = reqId;
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
@@ -3802,6 +3832,7 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     _directory.update(line_pa, entry);
     _directory.touch(line_pa);
     refreshPinnedBit(line_pa);
+    if (reqId) receipt = {reqId, line_pa, epochVal};
     // UBInvariant: validate canonical form after evict
     validateSharersCanonical(line_pa);
     // v4-A3: Don't force-delete G_I — let ResidentDir eviction handle cleanup
@@ -3993,8 +4024,9 @@ UBCCController::processOuterUpgradeReq(
 bool
 UBCCController::processOuterUpgradeDone(
     uint64_t line_pa, int requesterNode,
-    uint64_t epoch, uint64_t reqId)
+    uint64_t epoch, uint64_t reqId, uint64_t *committedEpoch)
 {
+    if (committedEpoch) *committedEpoch = 0;
     epoch = normalizeEpoch(epoch);
 
     framework::LogInfo("UBCC",
@@ -4083,6 +4115,7 @@ UBCCController::processOuterUpgradeDone(
     validateSharersCanonical(line_pa);
 
     // Retire UPGRADE_PENDING
+    if (committedEpoch) *committedEpoch = entry.epoch;
     ost->stage = OpStage::DONE;
     ost->respTick = curTick();
     removeOutstanding(line_pa);
@@ -4342,6 +4375,14 @@ UBCCController::processClear(
     // GRANT_HANDSHAKE after all barriers (RECALL/INVALIDATE) have completed.
 
     // v4: §3.3, §3.5 — commit intended result to committed DirEntry
+    AuthorityCommitOutput *authorityOutput = nullptr;
+    if (ost->dataOwner >= 0 && ost->dataEpoch &&
+        ost->intendedState == MESIState::G_S &&
+        (ost->intendedSharersMask & (uint64_t{1} << ost->dataOwner))) {
+        for (auto &output : _authorityCommitOutputs)
+            if (!output.live) { authorityOutput = &output; break; }
+        if (!authorityOutput) return false; // preserve original handshake
+    }
     MESIState oldState = entry.state;
     if (!commitIntendedResult(entry, *ost, "Clear")) {
         retireToTombstone(*ost, false);
@@ -4355,6 +4396,22 @@ UBCCController::processClear(
     validateSharersCanonical(line_pa);
 
     // v4-latency: log COMMIT state change
+    if (ost->dataOwner >= 0 && ost->dataEpoch &&
+        entry.state == MESIState::G_S &&
+        (entry.sharersMask & (uint64_t{1} << ost->dataOwner))) {
+        CoherenceMessage update;
+        update.h.type = CoherenceMessageType::RetainedAuthorityCommit;
+        update.h.srcNode = _nodeId; update.h.srcSocket = _socketId;
+        update.h.dstNode = ost->dataOwner; update.h.dstSocket = _socketId;
+        update.h.homeNode = _nodeId; update.h.homeSocket = _socketId;
+        update.h.homeLinePa = line_pa;
+        update.h.epoch = ost->dataEpoch;
+        update.h.reqId = ost->reqId;
+        update.b.upgradeDoneResp.accepted = true;
+        update.b.upgradeDoneResp.committedEpoch = entry.epoch;
+        authorityOutput->message = update;
+        authorityOutput->live = true;
+    }
     if (_verboseLog) {
         framework::LogInfo("UBCC-latency",
                 "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=COMMIT",
@@ -4371,6 +4428,7 @@ UBCCController::processClear(
     refreshPinnedBit(line_pa);
 
     // recall_done_fix.md §5: Replay queued pending requesters using the
+    drainAuthorityCommits();
     // newly committed state (just committed by this Clear).
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
@@ -4469,6 +4527,34 @@ UBCCController::allocateReservedEpoch(DirEntry &entry)
     return normalizeEpoch(entry.epoch + 1);
 }
 
+void
+UBCCController::drainAuthorityCommits()
+{
+    if (!_outbound) return;
+    for (auto &output : _authorityCommitOutputs) {
+        if (!output.live) continue;
+        const auto message = output.message;
+        if (!_outbound->sendUpgradeResp(message)) continue;
+        output.live = false;
+        refreshPinnedBit(message.h.homeLinePa);
+        replayPendingRequesters(message.h.homeLinePa);
+        replayResidentWaiters(message.h.homeLinePa);
+    }
+}
+
+uint64_t
+UBCCController::reserveReadEpoch(DirEntry &entry, UBCC_OuterReqType type,
+                                 bool writeIntent)
+{
+    // A read-only membership addition preserves the shared data/permission
+    // generation. Transaction identity remains baseEpoch + reqId; metadata
+    // persistence compares the full logical snapshot independently.
+    if (entry.state == MESIState::G_S &&
+        type == UBCC_OuterReqType::GlobalReadShared && !writeIntent)
+        return normalizeEpoch(entry.epoch);
+    return allocateReservedEpoch(entry);
+}
+
 // ---- H64 async DSM persistence completion ----
 void
 UBCCController::onDsmPersistComplete(uint64_t linePa)
@@ -4543,7 +4629,12 @@ bool
 UBCCController::commitIntendedResult(
     DirEntry &entry, const OutstandingRequest &ost, const char *path)
 {
-    const uint64_t predecessor = normalizeEpoch(ost.reservedEpoch - 1);
+    const bool sharedJoin = entry.state == MESIState::G_S &&
+        ost.intendedState == MESIState::G_S && !ost.writeIntent &&
+        ost.reqType == UBCC_OuterReqType::GlobalReadShared &&
+        (entry.sharersMask & ~ost.intendedSharersMask) == 0 && !ost.dataValid;
+    const uint64_t predecessor = sharedJoin ? normalizeEpoch(ost.reservedEpoch)
+        : normalizeEpoch(ost.reservedEpoch - 1);
     if (normalizeEpoch(entry.epoch) != predecessor) {
         framework::LogError("UBCC",
                 "[UBCC-RESERVATION-SUPERSEDED] path={} home={}:{} "
@@ -5462,7 +5553,7 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             OutstandingRequest tempOst;
             tempOst.linePa = linePa;
             tempOst.baseEpoch = rebaseEpoch;
-            tempOst.reservedEpoch = allocateReservedEpoch(entry);
+            tempOst.reservedEpoch = reserveReadEpoch(entry, pr.reqType, false);
             tempOst.reqId = pr.reqId;
             tempOst.opType = OpType::GRANT_HANDSHAKE;
             tempOst.stage = OpStage::WAITING_CLEAR;

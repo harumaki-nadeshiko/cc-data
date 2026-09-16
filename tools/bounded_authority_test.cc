@@ -166,6 +166,14 @@ static void transactions() {
     assert(t.finishWriteResult(w, 1, 0) == R::Applied);
     assert(t.get(w)); // publication before Recall must keep credit
     assert(t.finishWriteResult(w, 1, 0) == R::Duplicate);
+    // All eight execution-control credits are occupied. A persisted late
+    // receipt retains its ordinary credit, but cannot bypass control admission.
+    assert(!t.recall(0, 3, 0, true, 900, 0).valid());
+    const auto control = t.find(64 * 64);
+    const auto *controlEntry = t.get(control);
+    assert(controlEntry);
+    assert(t.finishRecallResult(control, controlEntry->recallId,
+        controlEntry->recallSocket) == R::Applied);
     assert(t.recall(0, 3, 0, true, 900, 0).valid());
     assert(t.finishRecallResult(w, 900, 0) == R::Applied);
     assert(!t.get(w));

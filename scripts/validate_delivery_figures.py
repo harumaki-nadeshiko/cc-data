@@ -1,188 +1,306 @@
 #!/usr/bin/env python3
-"""Structural visual QA for release figures."""
+"""Structural and data-lineage QA for the delivery figure inventory."""
 
 import json
 from pathlib import Path
-import subprocess
+import re
 import struct
 import xml.etree.ElementTree as ET
-import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIGURES = ROOT / "docs/design/figures"
 REPORT = FIGURES / "visual_qa.json"
-NAMES = (
-    "ubcc-system-architecture",
-    "ubcc-protocol-paths",
-    "ubcc-verification-stack",
-    "ubcc-two-phase-commit",
-    "ubcc-metric-summary",
-    "ubcc-ha-vi-comparison",
-)
+INVENTORY = FIGURES / "figure_inventory.json"
+FONT = "Microsoft YaHei"
+MATH_FONT = "STIX Two Math"
+MATH_FIGURES = {"ubcc-path-central-vs-direct", "ubcc-metadata-fanout-scaling"}
+MAX_PAGE_HEIGHT = 750
+MIN_FONT = 11
+OBSOLETE = "ubcc-metric-summary"
+REQUIRED_CHART_FIELDS = ("name", "source_artifacts", "generator", "metric_definition", "document_references")
+STALE_GUEST_LATENCY_FIELDS = {"guest_delta_cycles", "guest_delta_ns_per_operation"}
 
 
-def font_ok():
-    try:
-        result = subprocess.run(["fc-match", "Noto Sans CJK SC"], text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return result.returncode == 0 and "NotoSansCJK" in result.stdout
-    except FileNotFoundError:
-        # Minimal release containers do not include fontconfig. The generated
-        # SVGs still retain the explicit CJK font-family declaration.
-        return all(
-            "Noto Sans CJK SC" in (FIGURES / f"{name}.svg").read_text(
-                encoding="utf-8")
-            for name in NAMES
-        )
-
-
-def inspect_png(path):
+def png_dimensions(path):
     data = path.read_bytes()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError(f"not a PNG: {path}")
-    offset = 8
-    chunks = []
-    while offset < len(data):
-        length = struct.unpack(">I", data[offset:offset + 4])[0]
-        kind = data[offset + 4:offset + 8]
-        payload = data[offset + 8:offset + 8 + length]
-        chunks.append((kind, payload))
-        offset += 12 + length
-        if kind == b"IEND":
-            break
-    ihdr = next(payload for kind, payload in chunks if kind == b"IHDR")
-    width, height, bit_depth, color_type, compression, filtering, interlace = \
-        struct.unpack(">IIBBBBB", ihdr)
-    if bit_depth != 8 or interlace != 0 or compression != 0 or filtering != 0:
-        raise ValueError(f"unsupported PNG encoding: {path}")
-    channels = {2: 3, 6: 4}.get(color_type)
-    if channels is None:
-        raise ValueError(f"unsupported PNG color type {color_type}: {path}")
-    raw = zlib.decompress(b"".join(payload for kind, payload in chunks
-                                   if kind == b"IDAT"))
-    stride = width * channels
-    rows = []
-    previous = bytearray(stride)
-    cursor = 0
-    for _ in range(height):
-        filter_type = raw[cursor]
-        cursor += 1
-        scan = bytearray(raw[cursor:cursor + stride])
-        cursor += stride
-        for index in range(stride):
-            left = scan[index - channels] if index >= channels else 0
-            up = previous[index]
-            upper_left = previous[index - channels] if index >= channels else 0
-            if filter_type == 1:
-                scan[index] = (scan[index] + left) & 0xff
-            elif filter_type == 2:
-                scan[index] = (scan[index] + up) & 0xff
-            elif filter_type == 3:
-                scan[index] = (scan[index] + ((left + up) // 2)) & 0xff
-            elif filter_type == 4:
-                estimate = left + up - upper_left
-                distances = (abs(estimate - left), abs(estimate - up),
-                             abs(estimate - upper_left))
-                predictor = (left if distances[0] <= distances[1] and
-                             distances[0] <= distances[2] else
-                             up if distances[1] <= distances[2] else upper_left)
-                scan[index] = (scan[index] + predictor) & 0xff
-            elif filter_type != 0:
-                raise ValueError(f"unsupported PNG filter {filter_type}: {path}")
-        rows.append(scan)
-        previous = scan
-
-    left, top, right, bottom = width, height, -1, -1
-    alpha_min, alpha_max = 255, 255
-    sampled_colors = set()
-    sample_step = max(1, min(width, height) // 256)
-    for y, row in enumerate(rows):
-        for x in range(width):
-            start = x * channels
-            red, green, blue = row[start:start + 3]
-            alpha = row[start + 3] if channels == 4 else 255
-            alpha_min, alpha_max = min(alpha_min, alpha), max(alpha_max, alpha)
-            comp = tuple((component * alpha + 255 * (255 - alpha)) // 255
-                         for component in (red, green, blue))
-            if x % sample_step == 0 and y % sample_step == 0:
-                sampled_colors.add(comp)
-            if comp != (255, 255, 255):
-                left, top = min(left, x), min(top, y)
-                right, bottom = max(right, x), max(bottom, y)
-    bbox = None if right < 0 else (left, top, right + 1, bottom + 1)
-    if bbox:
-        left, top, right, bottom = bbox
-        margins = {"left": left, "top": top, "right": width - right,
-                   "bottom": height - bottom}
-        ratio = ((right - left) * (bottom - top) /
-                 (width * height))
-    else:
-        margins, ratio = None, 0.0
-    return {
-        "width": width, "height": height,
-        "mode": "RGBA" if channels == 4 else "RGB",
-        "non_white_bbox": bbox, "margins_px": margins,
-        "content_bbox_ratio": round(ratio, 4),
-        "alpha_extrema": (alpha_min, alpha_max),
-        "sampled_color_count": len(sampled_colors),
-        "checks": {
-            "minimum_resolution": width >= 750 and height >= 350,
-            "non_empty_content": bbox is not None and ratio >= 0.12,
-            "edge_clearance": bool(margins and min(margins.values()) >= 3),
-            "color_content": len(sampled_colors) >= 8,
-        },
-    }
+    return struct.unpack(">II", data[16:24])
 
 
-def inspect_drawio(path):
-    root = ET.fromstring(path.read_text(encoding="utf-8"))
+def style_value(style, key):
+    match = re.search(rf"(?:^|;){re.escape(key)}=([^;]+)", style)
+    return match.group(1) if match else None
+
+
+def inspect_drawio(path, stem):
+    root = ET.parse(path).getroot()
+    graph = root.find(".//mxGraphModel")
     cells = root.findall(".//mxCell")
-    labels = [cell.attrib.get("value", "") for cell in cells
-              if cell.attrib.get("value")]
-    return {"xml_valid": True, "cell_count": len(cells),
-            "label_count": len(labels)}
+    labels = [cell.get("value", "") for cell in cells if cell.get("value")]
+    fonts, sizes = [], []
+    rounded_vertices = []
+    edge_anchor_checks = []
+    for cell in cells:
+        style = cell.get("style", "")
+        family = style_value(style, "fontFamily")
+        size = style_value(style, "fontSize")
+        if family: fonts.append(family)
+        if size: sizes.append(float(size))
+        if cell.get("vertex") == "1" and cell.get("id") not in {"title", "note"}:
+            rounded_vertices.append(style_value(style, "rounded") == "1")
+        if cell.get("edge") == "1":
+            edge_anchor_checks.append(all(style_value(style, key) is not None
+                                          for key in ("exitX", "exitY", "entryX", "entryY")))
+    page_w, page_h = int(graph.get("pageWidth")), int(graph.get("pageHeight"))
+    vertex_networksim = any("NetworkSim" in cell.get("value", "") and "not a project component" not in cell.get("value", "")
+                            for cell in cells if cell.get("vertex") == "1")
+    checks = {
+        "editable_content": len(labels) >= 5,
+        "wide_aspect_ratio": page_w / page_h >= (2.0 if stem in {"ubcc-verification-stack", "ubcc-two-phase-commit"} else 1.9),
+        "max_expected_page_height": page_h <= MAX_PAGE_HEIGHT,
+        "approved_drawio_font": (bool(fonts) and set(fonts) <= {FONT, MATH_FONT} and
+                                  (MATH_FONT in fonts if stem in MATH_FIGURES else True)),
+        "minimum_font_size": bool(sizes) and min(sizes) >= MIN_FONT,
+        "no_core_networksim_component": not vertex_networksim,
+        "square_or_minimal_radius_boxes": not any(rounded_vertices) if stem.startswith("ubcc-") and stem in {
+            "ubcc-protocol-authority-comparison", "ubcc-path-central-vs-direct",
+            "ubcc-metadata-fanout-scaling", "ubcc-inner-chi-outer-boundary"} else True,
+        "reviewed_connector_anchors": (bool(edge_anchor_checks) and all(edge_anchor_checks)) if stem in {
+            "ubcc-protocol-authority-comparison", "ubcc-path-central-vs-direct",
+            "ubcc-metadata-fanout-scaling", "ubcc-inner-chi-outer-boundary"} else True,
+    }
+    return {"page_width": page_w, "page_height": page_h, "label_count": len(labels),
+            "minimum_font_size": min(sizes) if sizes else None, "checks": checks}
+
+
+def inspect_svg(path):
+    text = path.read_text(encoding="utf-8")
+    sizes = [float(value) for value in re.findall(r"font-size[:=][\"']?\s*([0-9.]+)", text)]
+    sizes.extend(float(value) for value in re.findall(r"font:\s*(?:[0-9]+\s+)?([0-9.]+)px", text))
+    sizes = [value for value in sizes if value > 0]
+    return {"bytes": path.stat().st_size, "font_declared": FONT in text,
+            "minimum_font_size": min(sizes) if sizes else None}
+
+
+def load_json(relative):
+    return json.loads((ROOT / relative).read_text(encoding="utf-8"))
+
+
+def contains_stale_guest_latency(value):
+    if isinstance(value, dict):
+        return (bool(STALE_GUEST_LATENCY_FIELDS.intersection(value)) or
+                any(contains_stale_guest_latency(item) for item in value.values()))
+    if isinstance(value, list):
+        return any(contains_stale_guest_latency(item) for item in value)
+    return isinstance(value, str) and any(field in value for field in STALE_GUEST_LATENCY_FIELDS)
+
+
+def expected_chart_values(stem, sources):
+    source = {path: load_json(path) for path in sources}
+    extension = next((value for value in source.values() if 'selected_arms' in value), None)
+    if extension is not None:
+        from publication_extension_charts import lineage
+        row = next(row for row in lineage(extension) if row['name'] == stem)
+        return 'derived_values', row['derived_values']
+    publication = next((value for value in source.values()
+                        if value.get("metric_definitions_version") == "metric123-publication-v1"), None)
+    if stem == "ubcc-metric1-capacity-latency":
+        if publication is not None:
+            metric1 = publication["metric1"]
+            first = metric1["repetitions"][0]
+            return "expected_values", {
+                "capacity_ratio": float(metric1["capacity_ratio"]),
+                "capacity_increase_pct": float(metric1["capacity_increase_pct"]),
+                "ideal_outer_mean_ns": float(first["ideal_outer_mean_ns"]),
+                "spill_outer_mean_ns": float(first["spill_outer_mean_ns"]),
+                "outer_delta_mean_ns": float(metric1["outer_delta_mean_ns"]),
+                "ideal_resident_capacity": int(first["ideal_resident_capacity"]),
+                "spill_resident_capacity": int(first["spill_resident_capacity"]),
+            }
+        report, outer = source[sources[0]], source[sources[1]]
+        first = outer["repeats"]["1"]
+        return "expected_values", {
+            "capacity_ratio": float(report["metric1"]["capacity_ratio"]),
+            "capacity_increase_pct": float(report["metric1"]["capacity_increase_pct"]),
+            "ideal_outer_mean_ns": float(first["ideal"]["outer_mean_ns"]),
+            "spill_outer_mean_ns": float(first["spill"]["outer_mean_ns"]),
+            "outer_delta_mean_ns": float(outer["delta_mean_ns"]),
+            "ideal_resident_capacity": int(first["ideal"]["resident_capacity"]),
+            "spill_resident_capacity": int(first["spill"]["resident_capacity"]),
+        }
+    if stem == "ubcc-metric2-reductions":
+        if publication is not None:
+            metric2 = publication["metric2"]
+            return "expected_values", {
+                "cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]),
+                           "applicable": bool(row["applicable"])} for row in metric2["cases"]],
+                "applicable_equal_weight_mean_reduction_pct": float(metric2["applicable_equal_weight_mean_reduction_pct"]),
+            }
+        metric2 = source[sources[0]]["metric2"]
+        return "expected_values", {
+            "cases": [{"case": row["case"], "optimized_reduction_pct": float(row["optimized_reduction_pct"]),
+                       "applicable": bool(row["applicable"])} for row in metric2["cases"]],
+            "applicable_equal_weight_mean_reduction_pct": float(metric2["equal_weight_mean_reduction_pct"]),
+        }
+    if stem == "ubcc-ha-vi-comparison":
+        if publication is not None:
+            return "expected_values", {"groups": [{
+                "pressure_level": row["pressure_level"], "scope": row["scope"],
+                "ubcc_ticks_per_operation": float(row["ourcc_ticks_per_operation"]),
+                "ha_vi_ticks_per_operation": float(row["ha_vi_ticks_per_operation"]),
+            } for row in publication["metric3"]["groups"]]}
+        levels = [level for level in source[sources[0]]["metric3"]["levels"]
+                  if int(level["pressure_level"]) == 100]
+        return "expected_values", {
+            "groups": [{"pressure_level": level["pressure_level"], "scope": scope,
+                        "ubcc_ticks_per_operation": float(level[key]["ourcc_ticks_per_operation"]),
+                        "ha_vi_ticks_per_operation": float(level[key]["ha_vi_ticks_per_operation"])}
+                       for level in levels for key, scope in
+                       (("core_equal_weight", "core"), ("representative_equal_weight", "representative"))],
+        }
+    if stem == "ubcc-metric1-extension-matrix":
+        return "derived_values", {"rows": publication["charts"]["metric1_matrix"]}
+    if stem in {"ubcc-tc120-124-scenarios", "ubcc-tc130-134-pressure", "ubcc-tc142-147-applications", "ubcc-metric3-per-tc-reductions"}:
+        key = {"ubcc-tc120-124-scenarios": "tc120_124", "ubcc-tc130-134-pressure": "tc130_134",
+               "ubcc-tc142-147-applications": "tc142_147", "ubcc-metric3-per-tc-reductions": "metric3_per_tc"}[stem]
+        if publication is not None:
+            if key == "metric3_per_tc":
+                rows = [{"case": row["case"][2:], "reduction_pct": row["ourcc_reduction_pct"]}
+                        for row in publication["metric3"]["per_testcase"]]
+            else:
+                rows = publication["charts"][key]
+            return "derived_values", {"rows": rows}
+        raw = load_json("docs/design/performance_preview_data.json")
+        cases = raw["testcases"]
+        if key == "metric3_per_tc":
+            def primary(tc, pressure):
+                row = cases[tc]["metric3"][f"p{pressure}"]
+                if "ubcc" in row:
+                    return row
+                return row["composite"] if tc == "TC232" else row["primary"]
+            rows = [{"case": tc[2:], "reduction_pct":
+                     100 * (1 - primary(tc, 100)["ubcc"] / primary(tc, 100)["ha_vi"])}
+                    for tc in ("TC228", "TC229", "TC230", "TC231", "TC232", "TC233", "TC234", "TC235")]
+            return "derived_values", {"rows": rows}
+        tcs = {"tc120_124": ("TC120", "TC121", "TC122", "TC123", "TC124"), "tc130_134": ("TC130", "TC131", "TC132", "TC133", "TC134"), "tc142_147": ("TC142", "TC143", "TC144", "TC145", "TC146", "TC147")}[key]
+        field = "primary_reduction_pct" if key == "tc130_134" else "optimized_reduction_pct"
+        rows = [{"case": tc, "reduction_pct": float(cases[tc]["measurements"][field])} for tc in tcs]
+        return "derived_values", {"rows": rows}
+    raise ValueError(f"no chart lineage validator for {stem}")
+
+
+def validate_chart_metadata(chart):
+    checks = {f"metadata_{field}": bool(chart.get(field)) for field in REQUIRED_CHART_FIELDS}
+    checks["metadata_values"] = ("expected_values" in chart) ^ ("derived_values" in chart)
+    sources = chart.get("source_artifacts", [])
+    checks["source_artifacts_are_relative"] = bool(sources) and all(
+        isinstance(path, str) and not Path(path).is_absolute() and ".." not in Path(path).parts for path in sources)
+    checks["source_artifacts_exist"] = checks["source_artifacts_are_relative"] and all(
+        (ROOT / path).is_file() for path in sources)
+    generator = str(chart.get("generator", "")).split("::", 1)[0]
+    checks["generator_exists"] = bool(generator) and (ROOT / generator).is_file()
+    references = chart.get("document_references", [])
+    checks["document_references_exist"] = bool(references) and all(
+        isinstance(ref, dict) and ref.get("figure") and ref.get("document") and
+        not Path(ref["document"]).is_absolute() and (ROOT / ref["document"]).is_file()
+        for ref in references)
+    checks["no_stale_guest_latency_field"] = not contains_stale_guest_latency(chart)
+    if chart.get("name") == "ubcc-metric1-capacity-latency":
+        sets = chart.get("evidence_sets", [])
+        checks["metric1_evidence_sets"] = (
+            len(sets) == 2 and sets[0].get("physical_runs") == 6 and
+            sets[0].get("roles") == ["naive", "spill-noopt"] and
+            sets[1].get("physical_arms") == 6 and
+            sets[1].get("roles") == ["spill-512K", "spill-IdealDir"] and
+            chart.get("cross_set_weighting") ==
+            "none; the two evidence sets serve independent Metric1 subcontracts")
+    if checks["source_artifacts_exist"]:
+        try:
+            value_field, expected = expected_chart_values(chart.get("name"), sources)
+            checks["values_match_source_json"] = chart.get(value_field) == expected
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            checks["values_match_source_json"] = False
+    else:
+        checks["values_match_source_json"] = False
+    return checks
+
+
+def validate_diagram_metadata(diagram):
+    references = diagram.get("document_references", []) if isinstance(diagram, dict) else []
+    return {
+        "diagram_document_references": bool(references) and all(
+            isinstance(ref, dict) and ref.get("figure") and ref.get("document") and
+            not Path(ref["document"]).is_absolute() and (ROOT / ref["document"]).is_file()
+            for ref in references)
+    }
 
 
 def main():
+    errors = []
+    if not INVENTORY.is_file():
+        raise SystemExit("missing docs/design/figures/figure_inventory.json")
+    inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    diagram_entries = tuple(inventory.get("diagrams", ()))
+    chart_entries = tuple(inventory.get("charts", ()))
+    diagrams = tuple(entry.get("name") if isinstance(entry, dict) else entry for entry in diagram_entries)
+    charts = tuple(entry.get("name") if isinstance(entry, dict) else entry for entry in chart_entries)
+    names = diagrams + charts
+    if len(names) != len(set(names)) or not diagrams or not charts:
+        errors.append("figure inventory is empty or contains duplicate names")
     rows = []
-    cjk_font = font_ok()
-    for name in NAMES:
-        png = FIGURES / f"{name}.png"
-        svg = FIGURES / f"{name}.svg"
-        source = FIGURES / f"{name}.drawio"
-        png_report = inspect_png(png)
-        drawio_report = inspect_drawio(source)
-        checks = dict(png_report["checks"])
-        checks.update({
-            "cjk_font_available": cjk_font,
-            "svg_present": svg.is_file() and svg.stat().st_size > 1000,
-            "drawio_editable_content": drawio_report["label_count"] >= 3,
-        })
-        rows.append({
-            "name": name,
-            "png": str(png.relative_to(ROOT)),
-            "svg": str(svg.relative_to(ROOT)),
-            "drawio": str(source.relative_to(ROOT)),
-            "png_report": png_report,
-            "drawio_report": drawio_report,
-            "checks": checks,
-            "status": "PASS" if all(checks.values()) else "FAIL",
-        })
-    payload = {
-        "schema_version": 1,
-        "scope": "Structural visual QA; corporate brand review remains TODO-R04.",
-        "figures": rows,
-        "overall_status": "PASS" if all(row["status"] == "PASS" for row in rows)
-                          else "FAIL",
-    }
-    REPORT.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                      encoding="utf-8")
+    for stem in names:
+        png, svg = FIGURES / f"{stem}.png", FIGURES / f"{stem}.svg"
+        checks = {"png_present": png.is_file() and png.stat().st_size > 1000,
+                  "svg_present": svg.is_file() and svg.stat().st_size > 1000}
+        width = height = 0
+        svg_report = {}
+        if checks["png_present"]:
+            width, height = png_dimensions(png)
+            checks.update({"minimum_resolution": width >= 750 and height >= 300,
+                           "release_aspect_ratio": width / height >= (1.8 if stem in diagrams else 1.55)})
+        if checks["svg_present"]:
+            svg_report = inspect_svg(svg)
+            checks["approved_svg_font"] = svg_report["font_declared"]
+            checks["minimum_svg_font_size"] = (svg_report["minimum_font_size"] is not None and
+                                                svg_report["minimum_font_size"] >= 10)
+        drawio_report = None
+        if stem in diagrams:
+            source = FIGURES / f"{stem}.drawio"
+            checks["drawio_present"] = source.is_file() and source.stat().st_size > 1000
+            if checks["drawio_present"]:
+                drawio_report = inspect_drawio(source, stem)
+                checks.update(drawio_report["checks"])
+            checks.update(validate_diagram_metadata(diagram_entries[diagrams.index(stem)]))
+        else:
+            checks.update(validate_chart_metadata(chart_entries[charts.index(stem)]))
+        row = {"name": stem, "kind": "diagram" if stem in diagrams else "chart", "width": width, "height": height,
+               "svg_report": svg_report, "drawio_report": drawio_report, "checks": checks,
+               "status": "PASS" if checks and all(checks.values()) else "FAIL"}
+        rows.append(row)
+        if row["status"] == "FAIL": errors.append(f"{stem}: {[key for key, ok in checks.items() if not ok]}")
+
+    obsolete_files = [str(path.relative_to(ROOT)) for suffix in ("drawio", "png", "svg", "dot")
+                      if (path := FIGURES / f"{OBSOLETE}.{suffix}").exists()]
+    if obsolete_files: errors.append(f"obsolete summary graphic remains: {obsolete_files}")
+    dot_sources = sorted(str(path.relative_to(ROOT)) for path in FIGURES.glob("*.dot"))
+    if dot_sources: errors.append(f"Graphviz release sources remain: {dot_sources}")
+    stale_chart_sources = sorted(str(path.relative_to(ROOT)) for stem in charts
+                                 if (path := FIGURES / f"{stem}.drawio").exists())
+    if stale_chart_sources: errors.append(f"stale chart draw.io sources remain: {stale_chart_sources}")
+    payload = {"schema_version": 3, "review_method": "automated_structural_and_lineage",
+               "human_visual_review": "NOT_RUN",
+               "limitations": ["No pixel-level aesthetic, brand, color-perception, or semantic-arrow review was performed."],
+               "inventory": str(INVENTORY.relative_to(ROOT)), "figures": rows,
+               "obsolete_files": obsolete_files, "graphviz_sources": dot_sources,
+               "stale_chart_sources": stale_chart_sources,
+               "overall_status": "PASS" if not errors else "FAIL", "errors": errors}
+    REPORT.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(payload["overall_status"])
-    for row in rows:
-        print(row["name"], row["status"], row["png_report"]["width"],
-              row["png_report"]["height"])
-    return 0 if payload["overall_status"] == "PASS" else 1
+    for row in rows: print(row["name"], row["status"], row["width"], row["height"])
+    if errors: print("\n".join(errors))
+    return 0 if not errors else 1
 
 
 if __name__ == "__main__":

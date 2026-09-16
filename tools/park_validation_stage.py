@@ -34,11 +34,17 @@ def stage(root):
         n, s, topology = prior['n'], prior['s'], prior['topology']
         if tc == 35:
             n, s, topology = 3, 2, '2s'
+        # TC43 is a legitimate long-running ownership-wrap regression.  Prior
+        # timing-CPU evidence completed in 1229s, so the generic 1200s budget
+        # can kill an otherwise progressing run before verifier/exit closure.
+        # Keep the workload and topology unchanged; only give this case a
+        # case-specific controller wall-clock budget.
+        budget = 3000 if tc == 27 else (2400 if tc == 43 else 1200)
         jobs.append(dict(key='final72/tc%d' % tc, tc=tc, role='regression', n=n, s=s,
-                         topology=topology, workload=registered[tc],
-                         budget=3000 if tc == 27 else 1200,
-                          cpu_floor=math.floor(1.5 * (1 + n + n * s)),
-                         verifier='frozen-exact-negative' if tc == 9 else 'frozen-positive'))
+                          topology=topology, workload=registered[tc],
+                          budget=budget,
+                           cpu_floor=math.floor(1.5 * (1 + n + n * s)),
+                          verifier='frozen-exact-negative' if tc == 9 else 'frozen-positive'))
     return dict(schema=1, state='STAGED_NOT_STARTED', registry_sha256=digest(root / 'tests/e2e/test_e2e.py'),
                 verifier_sha256=digest(root / 'tests/e2e/verify.py'),
                 frozen_queue_sha256=digest(root / 'boundary-evidence/remote-launch/queue.json'),

@@ -53,7 +53,7 @@ class InvalidateOnlyContract(unittest.TestCase):
         text = (CHI/'ep/EPRNFController.cc').read_text()
         self.assertIn('!msg->m_stale && msg->m_type == CHIResponseType_Comp_UC', text)
         self.assertIn('finishChiTxn(linePa, completionOk)', text)
-        self.assertIn('_deferredInvalidations[linePa].push_back(std::move(onComplete))', text)
+        self.assertIn('{std::move(onComplete), sourceSocket}', text)
         unique = text.split('EPRNFController::handleSnpUnique(')[1].split('EPRNFController::handleSnpOnce(')[0]
         self.assertIn('msg->m_ep_proxy_op == EpProxyOp_NoProxyOp', unique)
         self.assertIn('backend->isDsmAddrCrossNode(msg->m_addr)', unique)
@@ -61,6 +61,17 @@ class InvalidateOnlyContract(unittest.TestCase):
                         unique.index('sendResponseReliable(rsp)'))
         backend = (CHI/'ep/EPBackend.cc').read_text()
         self.assertIn('fatal_if(!ok,\n                         "InvalidateOnly failed; refusing outer ACK', backend)
+
+    def test_control_source_survives_both_deferral_paths(self):
+        text = (CHI/'ep/EPRNFController.cc').read_text()
+        self.assertIn('req->m_ubcc_ingress_socket = sourceSocket;', text)
+        self.assertIn('req->m_ubcc_ingress_socket = d.sourceSocket;', text)
+        self.assertEqual(text.count('d.sourceSocket = sourceSocket;'), 3)
+        self.assertIn('invalidation.sourceSocket);', text)
+        backend = (CHI/'ep/EPBackend.cc').read_text()
+        self.assertIn('}, capturedMsg.sourceSocket);', backend)
+        snf = (CHI/'ep/EPSNFController.cc').read_text()
+        self.assertIn('pending.linePa, pending.sourceSocket, parent)', snf)
 
 
 if __name__ == '__main__':
