@@ -43,9 +43,6 @@ Message* AllocateSendMessage(Port* port, std::uint64_t timestamp);
 // Payload sourceId and targetId must have been set explicitly (or copied from
 // a received Payload). SendMessage consumes message whether it succeeds.
 bool SendMessage(Port* port, Message* message);
-// Same ownership contract, but never blocks the progress/exit event loop.
-// Only callers retaining an exact retry obligation may use this function.
-bool TrySendMessage(Port* port, Message* message);
 
 // The returned Message is borrowed and remains valid only until the next call
 // to ReceiveMessage on the same Port.

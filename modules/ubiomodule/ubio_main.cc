@@ -669,11 +669,11 @@ sendCoh(Port *port, uint64_t tick, uint32_t srcModule, uint32_t dstModule,
     }
     SetMessagePayload(buf, &msg, sizeof(msg));
     uint64_t sendTs = GetMessageTimestamp(buf);
-    // Both exit protocols retain exact identity and retry on wall clock. A
-    // blocking send here can deadlock two quiescing peers at transport HWM=1.
-    bool ok = (msg.h.type == CoherenceMessageType::PeerExit ||
-               msg.h.type == CoherenceMessageType::NetworkExit)
-        ? TrySendMessage(port, buf) : SendMessage(port, buf);
+    // Framework exposes only the blocking send; exit senders keep the
+    // wall-clock retry obligation in the exit coordinator loop, and peers
+    // keep pumping receives while quiescing, so the blocking send only
+    // waits for a live quiescing peer.
+    bool ok = SendMessage(port, buf);
     if (msg.h.type == CoherenceMessageType::UpgradeReq ||
         msg.h.type == CoherenceMessageType::UpgradeResp) {
         LogInfo("UBIO", "[UPGRADE-FORENSIC] stage={} routeSrcGid={} "
@@ -921,7 +921,10 @@ struct MetaRNFClient : public MetaRNFClientIF {
             SetMessageSourceId(wire, gid); SetMessageTargetId(wire, gid);
             SetMessageRequestId(wire, slot.message.h.reqId);
             SetMessagePayload(wire, &slot.message, sizeof(slot.message));
-            if (!TrySendMessage(_gem5Port, wire)) return;
+            // Only the blocking send exists in the framework now; the 64-slot
+            // pageFlights bound is the backpressure guard, and an unsent slot
+            // keeps its exact retry obligation for the next pump.
+            SendMessage(_gem5Port, wire);
             slot.sent = true;
         }
     }
