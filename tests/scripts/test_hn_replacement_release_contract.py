@@ -21,10 +21,25 @@ class ReplacementReleaseContract(unittest.TestCase):
         source = (CHI / 'ep/EPSNFController.cc').read_text()
         block = source.split('// The replacement TBE proves', 1)[1].split('if (_backend->haEndpointEnabled()', 1)[0]
         for guard in ('inspectRequesterState', 'permission.valid',
-                      'RequesterLineState::R_M', 'pending.releaseRequester = _nodeId',
-                      'pending.releaseEpoch = permission.epoch'):
+                      'RequesterLineState::R_M',
+                      'pending.releaseRequester = stable ? stable->owner : _nodeId',
+                      'pending.releaseEpoch = stable ? stable->epoch : permission.epoch'):
             self.assertIn(guard, block)
         self.assertNotIn('QueryLineMeta', block)
+
+    def test_release_consumes_only_persisted_exact_writeback(self):
+        source = (CHI / 'ep/EPBackend.cc').read_text()
+        callback = source.split('auto launch =', 1)[1].split('unsigned branches', 1)[0]
+        for guard in ('joined->writeId', 'joined->epoch == r.identity',
+                      'joined->owner == _nodeId', '!writebackOwnsCustody'):
+            self.assertIn(guard, callback)
+        progress = source.split('void EPBackend::progressAuthorityRelease()', 1)[1].split(
+            'bool EPBackend::holdAuthority', 1)[0]
+        self.assertIn('if (joinedWrite && !joined->persisted) return;', progress)
+        self.assertIn('const bool joinedRecall = joinedWrite && joined->mergedRecallId;', progress)
+        self.assertIn('r.access == RequesterLineState::R_M && !joinedRecall', progress)
+        self.assertLess(progress.index('if (joinedWrite && !joined->persisted) return;'),
+                        progress.index('homeDone = true;'))
 
     def test_complete_payload_and_success_before_comp(self):
         source = (CHI / 'ep/EPSNFController.cc').read_text()
