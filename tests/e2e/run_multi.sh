@@ -235,6 +235,9 @@ def r(s):
     s = s.replace("{node_outdir}", os.environ.get("NODE_OUTDIR",""))
     s = s.replace("{fault_rules_args}", frules)
     s = s.replace("{ubio_extra_args}", uextra)
+    cpu_opts = os.environ.get("EP_CPU_MODEL") or ""
+    if cpu_opts and mod_id.startswith("gem5_"):
+        s = s.rstrip() + (" --cpu-model=" + cpu_opts)
     return s
 print(r(mod["cmd"]))
 PY
