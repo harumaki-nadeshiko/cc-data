@@ -103,30 +103,13 @@ TESTCASES = {
     117: "e2e_tc117_clear_reorder",
     118: "e2e_tc118_mixed_fault",
     119: "e2e_tc119_triple_fault",
-    120: "e2e_tc120_baseline_perf_mix",
-    121: "e2e_tc121_perf_cold_stream",
-    122: "e2e_tc122_perf_hot_reuse",
-    123: "e2e_tc123_perf_shared_upgrade",
-    124: "e2e_tc124_perf_direct_fwd",
-    125: "e2e_tc125_read_offload_onload",
-    126: "e2e_tc126_resident_upgrade_replay",
-    127: "e2e_tc127_writeback_offload_onload",
-    128: "e2e_tc128_clean_evict_offload_onload",
-    129: "e2e_tc129_long_mixed_integration",
-    130: "e2e_tc130_directory_overflow_benchmark",
-    131: "e2e_tc131_catalog_fullscan",
-    132: "e2e_tc132_dirty_checkpoint_stream",
-    133: "e2e_tc133_8n1s_shared_frontier",
-    134: "e2e_tc134_8n2s_sliding_window",
-    200: "e2e_a3_naive_recall",   # Phase A3: targeted naive dirty recall test
-    201: "e2e_a5_spill_recall",   # Phase A5: targeted spill backstore + recall test
-    202: "e2e_c1_spill_cache_push", # Phase C1: spill authoritative home-data push-grant test
-    203: "e2e_d1_overflow",          # Phase D1: backstore page overflow test
-    210: "e2e_ha_2n1s_core",         # HA01 local reuse portable core
-    211: "e2e_ha_2n1s_core",         # HA02 remote read portable core
-    212: "e2e_ha_2n1s_core",         # HA03 ownership portable core
-    213: "e2e_ha_2n1s_core",         # HA04 shared-to-writer portable core
-    214: "e2e_ha_2n1s_core",         # HA07 producer-consumer portable core
+    142: "e2e_tc142_db_oltp_buffer_pool",
+    143: "e2e_tc143_db_btree_traversal",
+    144: "e2e_tc144_db_wal_checkpoint",
+    145: "e2e_tc145_faas_warm_invocation",
+    146: "e2e_tc146_graph_frontier",
+    147: "e2e_tc147_feature_store",
+
 }
 
 # ── Output parser ─────────────────────────────────────────────────
@@ -141,6 +124,8 @@ _RE_E2E_META = re.compile(r"\[E2E_META\]\s+node=(\d+)\s+test=(\S+)")
 _RE_READ_VAL_TAIL = re.compile(
     r"(\w+)\s+(MATCH|MISMATCH)"
 )
+
+
 
 def parse_read_vals(lines):
     reads = []
@@ -1896,6 +1881,434 @@ def verify_tc119(reads, lines):
     return True, f"TC119 PASSED: triple fault converged (fault_evidence={fault_seen})", []
 
 
+def verify_perf_workload(tc_id, reads, lines):
+    if len(reads) < 1:
+        return False, f"TC{tc_id} FAILED: no READ_VAL", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    phase_count = sum(1 for l in lines if "[PHASE]" in l and "status=done" in l)
+    stats_count = sum(1 for l in lines if "[ResidentDirStats]" in l or "[UBCC-STATS]" in l)
+    naive_count = sum(1 for l in lines if "[UBCC-NAIVE-EVICT]" in l)
+    opt_count = sum(1 for l in lines
+                    if "BATCH-RS" in l or "SILENT" in l or "C4" in l or "DIRECT-FWD" in l)
+    if phase_count < 2:
+        return False, f"TC{tc_id} FAILED: insufficient phase markers ({phase_count})", []
+    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, phases={phase_count}, "
+                  f"stats={stats_count}, naive={naive_count}, opt_markers={opt_count}"), []
+
+
+def verify_tc121(reads, lines):
+    return verify_perf_workload(121, reads, lines)
+
+
+def verify_tc122(reads, lines):
+    return verify_perf_workload(122, reads, lines)
+
+
+def verify_tc123(reads, lines):
+    return verify_perf_workload(123, reads, lines)
+
+
+def verify_tc124(reads, lines):
+    return verify_perf_workload(124, reads, lines)
+
+
+def verify_tc130(reads, lines):
+    """TC130: high-footprint naive-vs-spill directory benchmark."""
+    if len(reads) < 24:
+        return False, f"TC130 FAILED: expected >=24 hot-line checks, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC130 FAILED: {len(mismatches)} hot-line mismatches", mismatches[:10]
+    required = ("hot_populate", "hot_share", "overflow_pressure", "hot_reuse")
+    missing = [phase for phase in required
+               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
+    if missing:
+        return False, f"TC130 FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC130 FAILED: {timer_error}", []
+    return True, f"TC130 PASSED: hot checks={len(reads)}, guest timer healthy", []
+
+
+def verify_guest_timer(lines):
+    samples = [_RE_GUEST_TIMER.search(line) for line in lines]
+    samples = [sample for sample in samples if sample]
+    selftests = [sample for sample in samples if sample.group(2) == "timer_selftest"]
+    if not selftests:
+        return "missing arm_cntvct_el0 timer_selftest"
+    if any(int(sample.group(4)) == 0 or int(sample.group(5)) == 0
+           for sample in selftests):
+        return "zero timer_selftest counter_ticks or counter_frequency_hz"
+    return None
+
+
+def verify_real_capacity_workload(tc_id, reads, lines, phases, min_reads):
+    if len(reads) < min_reads:
+        return False, f"TC{tc_id} FAILED: expected >= {min_reads} READ_VAL, got {len(reads)}", reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    missing = [phase for phase in phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line for line in lines)]
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
+    return True, f"TC{tc_id} PASSED: reads={len(reads)}, real-capacity pressure completed", []
+
+
+def verify_tc131(reads, lines):
+    return verify_real_capacity_workload(131, reads, lines,
+                                         ("catalog_seed", "catalog_share", "full_scan", "catalog_reuse",
+                                          "exclusive_upgrade"), 8)
+
+
+def verify_tc132(reads, lines):
+    return verify_real_capacity_workload(132, reads, lines,
+                                         ("checkpoint_seed", "dirty_stream", "checkpoint_recover"), 16)
+
+
+def verify_tc133(reads, lines):
+    return verify_real_capacity_workload(133, reads, lines,
+                                         ("frontier_seed", "frontier_share", "frontier_pressure", "frontier_reuse"), 7)
+
+
+def verify_tc134(reads, lines):
+    return verify_real_capacity_workload(134, reads, lines,
+                                         ("window_seed", "window_share", "window_pressure", "window_reuse"), 7)
+
+
+def verify_latency_distribution_workload(tc_id, reads, lines, phases,
+                                         latency_phase, sample_count,
+                                         expected_reads_by_node,
+                                         required_timer_phase=None):
+    expected_reads = sum(expected_reads_by_node.values())
+    if len(reads) != expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [r for r in reads if r["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    missing = [phase for phase in phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line
+                          for line in lines)]
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
+    for node, count in expected_reads_by_node.items():
+        actual = sum(1 for read in reads if read["node"] == node)
+        if actual != count:
+            return False, (f"TC{tc_id} FAILED: node{node} READ_VAL count="
+                           f"{actual}, expected {count}"), reads
+    unexpected_nodes = sorted({read["node"] for read in reads} -
+                              set(expected_reads_by_node))
+    if unexpected_nodes:
+        return False, (f"TC{tc_id} FAILED: unexpected READ_VAL nodes "
+                       f"{unexpected_nodes}"), reads
+    if required_timer_phase and not any(
+            sample and sample.group(2) == required_timer_phase
+            for sample in (_RE_GUEST_TIMER.search(line) for line in lines)):
+        return False, (f"TC{tc_id} FAILED: missing GUEST-TIMER phase "
+                       f"{required_timer_phase}"), []
+
+    samples = [_RE_PERF_LATENCY.search(line) for line in lines]
+    samples = [sample for sample in samples
+               if sample and sample.group(2) == latency_phase]
+    if len(samples) != 1:
+        return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
+                       f"PERF-LATENCY marker, got {len(samples)}"), []
+    sample = samples[0]
+    latency_node = {
+        135: 1, 136: 1, 137: 2, 138: 2, 139: 1, 140: 0,
+    }[tc_id]
+    if int(sample.group(1)) != latency_node:
+        return False, (f"TC{tc_id} FAILED: latency marker node="
+                       f"{sample.group(1)}, expected {latency_node}"), []
+    if int(sample.group(3)) != sample_count:
+        return False, (f"TC{tc_id} FAILED: {latency_phase} samples="
+                       f"{sample.group(3)}, expected {sample_count}"), []
+    values = [int(sample.group(i)) for i in range(4, 10)]
+    minimum, p50, p95, p99, maximum, mean = values
+    frequency = int(sample.group(10))
+    if minimum == 0 or frequency == 0:
+        return False, f"TC{tc_id} FAILED: zero latency or counter frequency", []
+    if not minimum <= p50 <= p95 <= p99 <= maximum:
+        return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
+    if not minimum <= mean <= maximum:
+        return False, f"TC{tc_id} FAILED: mean outside latency range", []
+    return True, (f"TC{tc_id} PASSED: reads={len(reads)}, phase={latency_phase}, "
+                  f"samples={sample_count}, p50={p50}, p99={p99}"), []
+
+
+def verify_tc135(reads, lines):
+    return verify_latency_distribution_workload(
+        135, reads, lines,
+        ("seed_hot", "share_hot", "directory_pressure", "first_revisit"),
+        "preserved_sharer_first_load", 24, {1: 48})
+
+
+def verify_tc136(reads, lines):
+    return verify_latency_distribution_workload(
+        136, reads, lines,
+        ("dirty_owner_seed", "directory_pressure", "owner_store_reuse", "verify_final"),
+        "preserved_owner_store_complete", 24, {2: 24})
+
+
+def verify_tc137(reads, lines):
+    return verify_latency_distribution_workload(
+        137, reads, lines,
+        ("seed_hot", "share_hot", "directory_pressure", "new_requester_load"),
+        "new_requester_first_load", 24, {1: 24, 2: 24})
+
+
+def verify_tc138(reads, lines):
+    return verify_latency_distribution_workload(
+        138, reads, lines,
+        ("dirty_owner_seed", "directory_pressure", "ownership_handoff", "verify_final"),
+        "dirty_owner_handoff_store", 24, {0: 24})
+
+
+def verify_tc139(reads, lines):
+    return verify_latency_distribution_workload(
+        139, reads, lines,
+        ("seed_hot", "share_hot", "owner_hot", "directory_pressure",
+         "mixed_batches", "verify_final"),
+        "mixed_batch_16ops", 16, {1: 16, 2: 8},
+        "mixed_batch_throughput")
+
+
+def verify_tc140(reads, lines):
+    return verify_latency_distribution_workload(
+        140, reads, lines,
+        ("cross_l2_store", "verify_final"),
+        "cross_l2_owner_store", 24, {2: 24})
+
+
+def verify_tc141(reads, lines):
+    if len(reads) != 32:
+        return False, f"TC141 FAILED: expected 32 READ_VAL, got {len(reads)}", reads
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC141 FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    expected_nodes = {1: 16, 2: 16}
+    for node, count in expected_nodes.items():
+        actual = sum(1 for read in reads if read["node"] == node)
+        if actual != count:
+            return False, (f"TC141 FAILED: node{node} READ_VAL count={actual}, "
+                           f"expected {count}"), reads
+    required_phases = ("seed_hot", "share_hot", "directory_pressure",
+                       "shared_to_writer", "verify_final")
+    missing = [phase for phase in required_phases
+               if not any("[PHASE]" in line and f"phase={phase}" in line
+                          for line in lines)]
+    if missing:
+        return False, f"TC141 FAILED: missing phases {missing}", []
+    is_naive = any(
+        ("[UBIO-POLICY]" in line and "effective=naive" in line) or
+        ("[RUNNER-MANIFEST]" in line and "policy=naive" in line) or
+        ("[UBCC-STATE]" in line and "policy=naive" in line)
+        for line in lines)
+    if is_naive:
+        if not any("UBCC-NAIVE-EVICT" in line for line in lines):
+            return False, "TC141 FAILED: missing naive eviction evidence", []
+    else:
+        required_markers = ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE",
+                            "UBCC-SHARED-RELEASE")
+        missing = [marker for marker in required_markers
+                   if not any(marker in line for line in lines)]
+        if missing:
+            return False, f"TC141 FAILED: missing protocol evidence {missing}", []
+    if any("RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER" in line for line in lines):
+        return False, "TC141 FAILED: upgrade lost valid sharer status", []
+    return True, "TC141 PASSED: shared-to-writer recovery completed", []
+
+
+def verify_portable_large_workload(tc_id, reads, lines, phases, reads_per_plane,
+                                   latency_phase, service_phase,
+                                   end_to_end_phase, operations, samples):
+    meta = [_RE_E2E_META.search(line) for line in lines]
+    planes = sorted({int(match.group(1)) for match in meta
+                     if match and match.group(2) == f"TC{tc_id}"})
+    if not planes:
+        return False, f"TC{tc_id} FAILED: no E2E_META participants", []
+    topology = [_RE_TOPOLOGY.search(line) for line in lines]
+    topology = [(int(match.group(1)), int(match.group(2))) for match in topology
+                if match]
+    declared_counts = {count for _, count in topology}
+    if len(declared_counts) != 1:
+        return False, (f"TC{tc_id} FAILED: inconsistent topology declarations "
+                       f"{sorted(declared_counts)}"), []
+    expected_planes = declared_counts.pop()
+    expected_set = list(range(expected_planes))
+    if planes != expected_set:
+        return False, (f"TC{tc_id} FAILED: planes={planes}, expected "
+                       f"{expected_set}"), []
+    topology_planes = sorted(plane for plane, _ in topology)
+    if topology_planes != expected_set:
+        return False, (f"TC{tc_id} FAILED: topology markers={topology_planes}, "
+                       f"expected {expected_set}"), []
+    pressure = [_RE_PORTABLE_PRESSURE.search(line) for line in lines]
+    pressure = [match for match in pressure if match]
+    if len(pressure) != expected_planes:
+        return False, (f"TC{tc_id} FAILED: expected {expected_planes} portable "
+                       f"pressure records, got {len(pressure)}"), []
+    pressure_nodes = sorted(int(match.group(1)) for match in pressure)
+    if pressure_nodes != expected_set:
+        return False, (f"TC{tc_id} FAILED: pressure nodes={pressure_nodes}, "
+                       f"expected {expected_set}"), []
+    configs = {tuple(int(match.group(index)) for index in range(2, 10))
+               for match in pressure}
+    if len(configs) != 1:
+        return False, f"TC{tc_id} FAILED: inconsistent pressure configs", []
+    (config_planes, hot_lines, pressure_lines, total_unique,
+     naive_capacity, target_footprint, pressure_pct, config_batches) = configs.pop()
+    if config_planes != expected_planes or config_batches != samples:
+        return False, f"TC{tc_id} FAILED: invalid pressure topology/batches", []
+    if total_unique != hot_lines + pressure_lines or naive_capacity <= 0:
+        return False, f"TC{tc_id} FAILED: invalid pressure footprint", []
+    if target_footprint != 0 and total_unique != target_footprint:
+        return False, (f"TC{tc_id} FAILED: total_unique={total_unique}, "
+                       f"target={target_footprint}"), []
+    if pressure_pct != 0 and total_unique * 100 != naive_capacity * pressure_pct:
+        return False, (f"TC{tc_id} FAILED: footprint {total_unique}/{naive_capacity} "
+                       f"does not equal {pressure_pct}%"), []
+    expected_reads = len(planes) * reads_per_plane
+    if len(reads) != expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches[:10]
+    for plane in planes:
+        actual = sum(1 for read in reads if read["node"] == plane)
+        if actual != reads_per_plane:
+            return False, (f"TC{tc_id} FAILED: plane{plane} READ_VAL count="
+                           f"{actual}, expected {reads_per_plane}"), reads
+    unexpected = sorted({read["node"] for read in reads} - set(planes))
+    if unexpected:
+        return False, f"TC{tc_id} FAILED: unexpected READ_VAL nodes {unexpected}", reads
+
+    missing = []
+    for phase in phases:
+        for plane in planes:
+            if not any("[PHASE]" in line and f"node={plane}" in line and
+                       f"phase={phase}" in line for line in lines):
+                missing.append(f"{phase}@plane{plane}")
+    if missing:
+        return False, f"TC{tc_id} FAILED: missing phases {missing}", []
+    timer_error = verify_guest_timer(lines)
+    if timer_error:
+        return False, f"TC{tc_id} FAILED: {timer_error}", []
+
+    timers = {service_phase: {}, end_to_end_phase: {}}
+    for line in lines:
+        match = _RE_GUEST_TIMER.search(line)
+        if match and match.group(2) in (service_phase, end_to_end_phase):
+            timers[match.group(2)].setdefault(int(match.group(1)), []).append(match)
+    for phase in (service_phase, end_to_end_phase):
+        for plane in planes:
+            matches = timers[phase].get(plane, [])
+            if len(matches) != 1:
+                return False, (f"TC{tc_id} FAILED: expected one {phase} timer "
+                               f"for plane{plane}, got {len(matches)}"), []
+            match = matches[0]
+            if int(match.group(3)) != operations:
+                return False, (f"TC{tc_id} FAILED: {phase} plane{plane} "
+                               f"operations={match.group(3)}, expected {operations}"), []
+            if int(match.group(4)) == 0 or int(match.group(5)) == 0:
+                return False, f"TC{tc_id} FAILED: zero {phase} ticks/frequency", []
+    service_ticks = {plane: int(timers[service_phase][plane][0].group(4))
+                     for plane in planes}
+    end_to_end_ticks = {plane: int(timers[end_to_end_phase][plane][0].group(4))
+                        for plane in planes}
+    for plane in planes:
+        if end_to_end_ticks[plane] < service_ticks[plane]:
+            return False, (f"TC{tc_id} FAILED: plane{plane} end-to-end ticks "
+                           f"{end_to_end_ticks[plane]} below service ticks "
+                           f"{service_ticks[plane]}"), []
+
+    latency = [match for line in lines
+               if (match := _RE_PERF_LATENCY.search(line)) and
+               match.group(2) == latency_phase]
+    by_plane = {}
+    for sample in latency:
+        by_plane.setdefault(int(sample.group(1)), []).append(sample)
+    for plane in planes:
+        plane_samples = by_plane.get(plane, [])
+        if len(plane_samples) != 1:
+            return False, (f"TC{tc_id} FAILED: expected one {latency_phase} "
+                           f"for plane{plane}, got {len(plane_samples)}"), []
+        sample = plane_samples[0]
+        if int(sample.group(3)) != samples:
+            return False, (f"TC{tc_id} FAILED: {latency_phase} plane{plane} "
+                           f"samples={sample.group(3)}, expected {samples}"), []
+        minimum, p50, p95, p99, maximum, mean = (
+            int(sample.group(index)) for index in range(4, 10))
+        if minimum == 0 or int(sample.group(10)) == 0:
+            return False, f"TC{tc_id} FAILED: zero latency/frequency", []
+        if not minimum <= p50 <= p95 <= p99 <= maximum:
+            return False, f"TC{tc_id} FAILED: unordered latency percentiles", []
+        if not minimum <= mean <= maximum:
+            return False, f"TC{tc_id} FAILED: mean outside latency range", []
+    return True, (f"TC{tc_id} PASSED: planes={len(planes)}, "
+                  f"operations={operations * len(planes)}, batches={samples}"), []
+
+def verify_tc142(reads, lines):
+    return verify_portable_large_workload(
+        142, reads, lines,
+        ("buffer_pool_seed", "buffer_pool_warm", "incremental_pressure",
+         "oltp_transactions", "oltp_verify"),
+        5, "db_oltp_batch_32ops", "db_oltp_service",
+        "db_oltp_end_to_end", 1024, 32)
+
+
+def verify_tc143(reads, lines):
+    return verify_portable_large_workload(
+        143, reads, lines,
+        ("btree_seed", "btree_warm", "btree_pressure", "btree_transactions",
+         "btree_verify"),
+        5, "db_btree_batch_64ops", "db_btree_service",
+        "db_btree_end_to_end", 2048, 32)
+
+
+def verify_tc144(reads, lines):
+    return verify_portable_large_workload(
+        144, reads, lines,
+        ("database_seed", "database_warm", "checkpoint_pressure",
+         "wal_transactions", "recovery_verify"),
+        17, "db_wal_batch_32ops", "db_wal_service",
+        "db_wal_end_to_end", 1024, 32)
+
+
+def verify_tc145(reads, lines):
+    return verify_portable_large_workload(
+        145, reads, lines,
+        ("faas_runtime_seed", "faas_runtime_warm", "faas_invocations",
+         "faas_verify"),
+        9, "faas_batch_64ops", "faas_service", "faas_end_to_end", 2048, 32)
+
+
+def verify_tc146(reads, lines):
+    return verify_portable_large_workload(
+        146, reads, lines,
+        ("graph_seed", "graph_frontier_warm", "graph_iterations",
+         "graph_verify"),
+        5, "graph_batch_64ops", "graph_service", "graph_end_to_end", 2048, 32)
+
+
+def verify_tc147(reads, lines):
+    return verify_portable_large_workload(
+        147, reads, lines,
+        ("feature_store_seed", "feature_store_warm", "feature_batches",
+         "feature_verify"),
+        9, "feature_batch_64ops", "feature_service",
+        "feature_end_to_end", 2048, 32)
+
 def verify_tc80(reads, lines):
     if len(reads) < 1:
         return False, "TC80 FAILED: no READ_VAL", reads
@@ -1982,30 +2395,13 @@ VERIFIERS = {
     117: verify_tc117,
     118: verify_tc118,
     119: verify_tc119,
-    120: verify_tc120,
-    121: verify_tc121,
-    122: verify_tc122,
-    123: verify_tc123,
-    124: verify_tc124,
-    125: verify_tc125,
-    126: verify_tc126,
-    127: verify_tc127,
-    128: verify_tc128,
-    129: verify_tc129,
-    130: verify_tc130,
-    131: verify_tc131,
-    132: verify_tc132,
-    133: verify_tc133,
-    134: verify_tc134,
-    200: verify_tc200,
-    201: verify_tc201,
-    202: verify_tc202,
-    203: verify_tc203,
-    210: verify_ha_2n1s,
-    211: verify_ha_2n1s,
-    212: verify_ha_2n1s,
-    213: verify_ha_2n1s,
-    214: verify_ha_2n1s,
+    142: verify_tc142,
+    143: verify_tc143,
+    144: verify_tc144,
+    145: verify_tc145,
+    146: verify_tc146,
+    147: verify_tc147,
+
 }
 
 def verify_testcase(tc_id, reads, lines):
@@ -2173,6 +2569,8 @@ def gem5_config_main():
     _parser.add_argument("--ep-wait-cap", type=int, default=-1)
     _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
     _parser.add_argument("--ubcc-batch-rs", type=int, default=-1)
+    _parser.add_argument("--cpu-model", choices=("timing", "o3"),
+                         default="timing")
     _args, _ = _parser.parse_known_args()
 
     # Phase 0.3: map script args to env vars for SimObject params
@@ -2242,8 +2640,9 @@ def gem5_config_main():
     # ── Build gem5 system ──────────────────────────────────────────
     import m5
     from m5.objects import (
-        System, SrcClockDomain, VoltageDomain, RubySystem,
-        TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, ArmEmuLinux,
+        System, ArmSystem, SrcClockDomain, VoltageDomain, RubySystem,
+        ArmTimingSimpleCPU, ArmO3CPU, Process, SEWorkload, Root, AddrRange,
+        ArmEmuLinux,
     )
 
     gem5_root = os.path.dirname(os.path.dirname(os.path.dirname(GEM5_BIN)))
@@ -2271,7 +2670,14 @@ def gem5_config_main():
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    system = System(mem_mode="timing", cache_line_size=64)
+    local_external_ranges = []
+    for node_id in BUILD_NODES:
+        node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
+                              _cfg_num_sockets)
+        local_external_ranges.extend(node_cfg.all_local_private_ranges())
+    system = ArmSystem(
+        mem_mode="timing", cache_line_size=64,
+        external_memory_ranges=local_external_ranges)
     root.system = system
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
@@ -2281,7 +2687,8 @@ def gem5_config_main():
 
     cpus = []
     for i in range(TOTAL_CPUS):
-        cpu = TimingSimpleCPU(cpu_id=i)
+        cpu_class = ArmO3CPU if _args.cpu_model == "o3" else ArmTimingSimpleCPU
+        cpu = cpu_class(cpu_id=i)
         cpu.clk_domain = SrcClockDomain(
             clock="2GHz",
             voltage_domain=system.clk_domain.voltage_domain)
@@ -2371,7 +2778,8 @@ def gem5_config_main():
     options.access_backing_store = True
     options.enable_dram_powerdown = False
     options.protocol = "CHI"
-    options.cpu_type = "TimingSimpleCPU"
+    options.cpu_type = "ArmO3CPU" if _args.cpu_model == "o3" \
+        else "ArmTimingSimpleCPU"
     options.simple_physical_channels = []
     options.vcs_per_vnet = 1
     options.mesh_rows = 1

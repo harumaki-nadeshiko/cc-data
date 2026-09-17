@@ -85,6 +85,9 @@ case "${1:-}" in
     --1s)          TOPO_KIND="1s"; shift ;;
     --1s-tinydir)  TOPO_KIND="1s_tinydir"; shift ;;
     --2s)          TOPO_KIND="2s"; shift ;;
+    --2n1s)        TOPO_KIND="2n1s"; shift ;;
+    --3n1s)        TOPO_KIND="3n1s"; shift ;;
+    --3n2s)        TOPO_KIND="3n2s"; shift ;;
     --8n1s)        TOPO_KIND="8n1s"; shift ;;
     --8n2s)        TOPO_KIND="8n2s"; shift ;;
     --2n1s)        TOPO_KIND="2n1s"; shift ;;
@@ -192,6 +195,18 @@ ubio_extra_args_for_tc() {
             esac
             ;;
         98)  echo "--ways=1" ;;
+        142|143|144|145|146|147)
+            if [ "${PORTABLE_512K_DIR:-0}" = "1" ]; then
+                local portable_policy=spill portable_bloom=61440 portable_batch=0
+                case "${EP_PERF_PROFILE:-spill-noopt}" in
+                    naive|baseline) portable_policy=naive; portable_bloom=0 ;;
+                    optimized) portable_batch=1 ;;
+                esac
+                echo "--bloom-bytes=$portable_bloom --sram-bytes=524288 --ways=0 --set-bits=0 --dir-overflow-policy=$portable_policy --batch-rs=$portable_batch ${UBCC_OPTS:-}"
+                return
+            fi
+            echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
+            ;;
         *)   echo "" ;;
     esac
 }

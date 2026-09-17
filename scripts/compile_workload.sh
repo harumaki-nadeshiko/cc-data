@@ -56,11 +56,39 @@ fi
 cc="aarch64-linux-gnu-gcc"
 cflags="-static -O0 -g -DNUM_NODES=${NUM_NODES:-3} -DNUM_SOCKETS=${NUM_SOCKETS:-1} ${WORKLOAD_CFLAGS:-} -I${WL_DIR}"
 case "$TC_ID" in
+    143)
+        if [ "${EP_CPU_MODEL:-timing}" = "hybrid" ]; then
+            cflags="$cflags -DE2E_TC143_HYBRID_SWITCH=1"
+        fi
+        ;;
+
     210) cflags="$cflags -DHA_SCENARIO=1" ;;
     211) cflags="$cflags -DHA_SCENARIO=2" ;;
     212) cflags="$cflags -DHA_SCENARIO=3" ;;
     213) cflags="$cflags -DHA_SCENARIO=4" ;;
     214) cflags="$cflags -DHA_SCENARIO=7" ;;
+    215) cflags="$cflags -DHA_SCENARIO=5" ;;
+    216) cflags="$cflags -DHA_SCENARIO=6" ;;
+    217) cflags="$cflags -DHA_SCENARIO=10" ;;
+    218) cflags="$cflags -DHA_SCENARIO=8" ;;
+    219) cflags="$cflags -DHA_SCENARIO=9" ;;
+    220) cflags="$cflags -DHA_SCENARIO=11" ;;
+    221) cflags="$cflags -DHA_SCENARIO=12" ;;
+    222) cflags="$cflags -DHA_CGROUP_SCENARIO=1" ;;
+    223) cflags="$cflags -DHA_CGROUP_SCENARIO=2" ;;
+    224) cflags="$cflags -DHA_CGROUP_SCENARIO=3" ;;
+    225) cflags="$cflags -DHA_CGROUP_SCENARIO=4" ;;
+    226) cflags="$cflags -DHA_CGROUP_SCENARIO=5" ;;
+    227) cflags="$cflags -DHA_CGROUP_SCENARIO=6" ;;
+    228) cflags="$cflags -DHA_TOPOLOGY_SCENARIO=1" ;;
+    229) cflags="$cflags -DHA_TOPOLOGY_SCENARIO=2" ;;
+    230) cflags="$cflags -DHA_TOPOLOGY_SCENARIO=3" ;;
+    231) cflags="$cflags -DHA_EXT_SCENARIO=1" ;;
+    232) cflags="$cflags -DHA_EXT_SCENARIO=2" ;;
+    233) cflags="$cflags -DHA_EXT_SCENARIO=3" ;;
+    234) cflags="$cflags -DHA_EXT_SCENARIO=4" ;;
+    235) cflags="$cflags -DHA_EXT_SCENARIO=5" ;;
+
 esac
 echo "[compile_workload] tc=$TC_ID name=$TC_NAME sockets=$NUM_SOCKETS nodes=${NUM_NODES:-3}"
 echo "[compile_workload] $cc $cflags -o $OUT $SRC"

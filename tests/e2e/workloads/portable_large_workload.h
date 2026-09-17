@@ -1,0 +1,414 @@
+#ifndef PORTABLE_LARGE_WORKLOAD_H
+#define PORTABLE_LARGE_WORKLOAD_H
+
+#include "dsm_access.h"
+#include "perf_latency.h"
+
+#define PORTABLE_PLANES (NUM_NODES * NUM_SOCKETS)
+#define PORTABLE_ALL_MASK ((1u << PORTABLE_PLANES) - 1u)
+
+#ifndef L3_PRESSURE_LEVEL
+#define L3_PRESSURE_LEVEL 0
+#endif
+#ifndef L3_PRESSURE_CACHE_LINES
+#define L3_PRESSURE_CACHE_LINES 4096
+#endif
+#ifndef L3_PRESSURE_SETS
+#define L3_PRESSURE_SETS 256
+#endif
+#ifndef L3_PRESSURE_SEED
+#define L3_PRESSURE_SEED 0
+#endif
+#ifndef L3_PRESSURE_TARGET_LINES_OVERRIDE
+#define L3_PRESSURE_TARGET_LINES_OVERRIDE -1
+#endif
+#if L3_PRESSURE_TARGET_LINES_OVERRIDE >= 0
+#define L3_PRESSURE_TARGET_LINES L3_PRESSURE_TARGET_LINES_OVERRIDE
+#define L3_PRESSURE_EFFECTIVE_PCT \
+    ((L3_PRESSURE_TARGET_LINES * 100) / L3_PRESSURE_CACHE_LINES)
+#else
+#define L3_PRESSURE_TARGET_LINES \
+    ((L3_PRESSURE_CACHE_LINES * L3_PRESSURE_LEVEL) / 100)
+#define L3_PRESSURE_EFFECTIVE_PCT L3_PRESSURE_LEVEL
+#endif
+#define L3_PRESSURE_PRIVATE_CACHE_LINES 4096
+#define L3_PRESSURE_LINES \
+    (L3_PRESSURE_PRIVATE_CACHE_LINES + L3_PRESSURE_TARGET_LINES)
+#define L3_PRESSURE_BASE 0x2000000u
+#ifndef L3_DIRECTORY_PRESSURE_LINES
+#define L3_DIRECTORY_PRESSURE_LINES 0
+#endif
+#define L3_DIRECTORY_PRESSURE_BASE 0x4000000u
+
+static inline void l3_pressure_marker(int plane, const char *phase, int done)
+{
+    char b[224]; int p = 0; const char *s;
+#define L3_APPEND_TEXT(text) do { s = (text); while (*s) b[p++] = *s++; } while (0)
+#define L3_APPEND_INT(value) do { p = fmt_int(b, p, (int)(value)); } while (0)
+    L3_APPEND_TEXT("[L3-PRESSURE] node="); L3_APPEND_INT(plane);
+    L3_APPEND_TEXT(" level_pct="); L3_APPEND_INT(L3_PRESSURE_EFFECTIVE_PCT);
+    L3_APPEND_TEXT(" target_lines_per_hnf=");
+    L3_APPEND_INT(L3_PRESSURE_TARGET_LINES);
+    L3_APPEND_TEXT(" generated_lines="); L3_APPEND_INT(L3_PRESSURE_LINES);
+    L3_APPEND_TEXT(" private_cache_lines=");
+    L3_APPEND_INT(L3_PRESSURE_PRIVATE_CACHE_LINES);
+    L3_APPEND_TEXT(" source=local_private_writeback");
+    L3_APPEND_TEXT(" cache_lines_per_hnf="); L3_APPEND_INT(L3_PRESSURE_CACHE_LINES);
+    L3_APPEND_TEXT(" sets="); L3_APPEND_INT(L3_PRESSURE_SETS);
+    L3_APPEND_TEXT(" seed="); L3_APPEND_INT(L3_PRESSURE_SEED);
+    L3_APPEND_TEXT(" phase="); L3_APPEND_TEXT(phase);
+    L3_APPEND_TEXT(" progress="); L3_APPEND_INT(done);
+    b[p++] = '\n'; _raw_write(b, p);
+#undef L3_APPEND_INT
+#undef L3_APPEND_TEXT
+}
+
+static inline int l3_pressure_fill(int node, int socket, int plane,
+                                   uint32_t base, int disjoint_tag)
+{
+#if L3_PRESSURE_TARGET_LINES > 0
+    const uint32_t start = base + (uint32_t)disjoint_tag * 0x100000u;
+    l3_pressure_marker(plane, "fill_begin", 0);
+    for (int line = 0; line < L3_PRESSURE_LINES; ++line) {
+        const uint32_t tag = (uint32_t)line / L3_PRESSURE_SETS;
+        const uint32_t set = ((uint32_t)line + (uint32_t)L3_PRESSURE_SEED) %
+            L3_PRESSURE_SETS;
+        const uint32_t pressure_line = tag * L3_PRESSURE_SETS + set;
+        local_dram_store(start + pressure_line * 64u,
+                         0xD3000000u ^ ((uint32_t)plane << 16) ^
+                         pressure_line);
+        if ((line & 1023) == 1023)
+            l3_pressure_marker(plane, "local_write", line + 1);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+    l3_pressure_marker(plane, "fill_done", L3_PRESSURE_LINES);
+    return 0;
+#else
+    (void)node; (void)socket; (void)plane; (void)base; (void)disjoint_tag;
+    return 0;
+#endif
+}
+
+static inline void l3_directory_pressure_fill(int node, int socket, int plane)
+{
+#if L3_DIRECTORY_PRESSURE_LINES > 0
+    l3_pressure_marker(plane, "directory_begin", 0);
+    for (int line = 0; line < L3_DIRECTORY_PRESSURE_LINES; ++line) {
+        dsm_store_plane(node, socket,
+                        L3_DIRECTORY_PRESSURE_BASE + (uint32_t)line * 64u,
+                        0xD4000000u ^ ((uint32_t)plane << 16) ^
+                        (uint32_t)line);
+        if ((line & 4095) == 4095)
+            l3_pressure_marker(plane, "directory", line + 1);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+    l3_pressure_marker(plane, "directory_done",
+                       L3_DIRECTORY_PRESSURE_LINES);
+#else
+    (void)node; (void)socket; (void)plane;
+#endif
+}
+
+static inline int l3_prepare_pressure(int node, int socket, int plane,
+                                      uint32_t base, int disjoint_tag)
+{
+    l3_directory_pressure_fill(node, socket, plane);
+    if (L3_DIRECTORY_PRESSURE_LINES > 0)
+        sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
+    return l3_pressure_fill(node, socket, plane, base, disjoint_tag);
+}
+
+#ifndef PORTABLE_BATCHES
+#define PORTABLE_BATCHES 32
+#endif
+
+#ifndef PORTABLE_PRESSURE_LINES
+#define PORTABLE_PRESSURE_LINES 768
+#endif
+
+#ifndef PORTABLE_TARGET_FOOTPRINT_LINES
+#define PORTABLE_TARGET_FOOTPRINT_LINES 0
+#endif
+
+#ifndef PORTABLE_NAIVE_CAPACITY_LINES
+#define PORTABLE_NAIVE_CAPACITY_LINES 65536
+#endif
+
+#ifndef PORTABLE_PRESSURE_LEVEL_PCT
+#define PORTABLE_PRESSURE_LEVEL_PCT 0
+#endif
+
+static inline int portable_socket(int cpu_index)
+{
+    return (cpu_index % 4) / 2;
+}
+
+static inline int portable_is_primary(int cpu_index)
+{
+    int local_cpu = cpu_index % 4;
+    return (local_cpu % 2) == 0 && portable_socket(cpu_index) < NUM_SOCKETS;
+}
+
+static inline int portable_plane(int node_id, int cpu_index)
+{
+    return node_id * NUM_SOCKETS + portable_socket(cpu_index);
+}
+
+static inline void portable_emit_meta(int plane, const char *test_name)
+{
+    emit_e2e_meta(plane, test_name);
+    emit_topology(plane, PORTABLE_PLANES);
+}
+
+static inline void portable_barrier(void)
+{
+    sync_wait(PORTABLE_ALL_MASK, NUM_SOCKETS);
+}
+
+/* Explicit startup namespace in SYS_SYNC_WAIT's existing mask argument.
+ * Bit 31 is not a plane: gem5 and UBIO retain it through the release. Both
+ * gate ON and OFF execute this same barrier and the same workload binary. */
+static inline void portable_wait_ready(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+#ifdef E2E_TC143_HYBRID_SWITCH
+    const long participants = 2 * NUM_SOCKETS;
+#else
+    const long participants = NUM_SOCKETS;
+#endif
+    long result = _syscall3(SYS_SYNC_WAIT,
+        (long)(PORTABLE_ALL_MASK | 0x80000000u), participants, 0);
+    if (result < 0) _exit_program(1);
+}
+
+static inline void portable_full_cpu_barrier(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
+              (long)(2 * NUM_SOCKETS), 0);
+}
+
+static inline void portable_switch_barrier(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+    _syscall3(SYS_SYNC_WAIT, (long)PORTABLE_ALL_MASK,
+              (long)NUM_SOCKETS, 0);
+}
+
+/*
+ * Simulator-only switch syscall. Using the normal syscall commit path makes
+ * repeated Timing/O3 handovers reliable; the ARM magic instruction can be
+ * lost when decoder state is transferred between different CPU models.
+ */
+static inline void portable_switch_cpu(int node_id, int cpu_index)
+{
+#ifdef E2E_TC143_HYBRID_SWITCH
+    if (node_id >= 0 && portable_socket(cpu_index) == 0) {
+        _syscall1(SYS_SWITCH_CPU, 0);
+    }
+#else
+    (void)node_id;
+    (void)cpu_index;
+#endif
+}
+
+#define PORTABLE_SERIAL_FOR_EACH_PLANE(plane_id, body) \
+    do { \
+        for (int portable_turn = 0; portable_turn < PORTABLE_PLANES; \
+             ++portable_turn) { \
+            if ((plane_id) == portable_turn) { body; } \
+            portable_barrier(); \
+        } \
+    } while (0)
+
+static inline uint32_t portable_line(uint32_t base, int line)
+{
+    return base + (uint32_t)line * 64u;
+}
+
+static inline uint32_t portable_shard(uint32_t base, int plane)
+{
+    return base + (uint32_t)plane * 0x10000u;
+}
+
+static inline uint32_t portable_pressure(uint32_t base, int plane, int line)
+{
+    return base + (uint32_t)plane * 0x200000u + (uint32_t)line * 64u;
+}
+
+static inline uint32_t portable_global_pressure(uint32_t base, int line)
+{
+    return base + (uint32_t)line * 64u;
+}
+
+static inline int portable_pressure_begin(int batch)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES * (uint64_t)batch) /
+                 (uint64_t)PORTABLE_BATCHES);
+}
+
+static inline int portable_pressure_end(int batch)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)(batch + 1)) /
+                 (uint64_t)PORTABLE_BATCHES);
+}
+
+static inline int portable_pressure_plane_count(int batch, int plane)
+{
+    int first = portable_pressure_begin(batch) + plane;
+    int last = portable_pressure_end(batch);
+    return first < last ? 1 + (last - 1 - first) / PORTABLE_PLANES : 0;
+}
+
+static inline int portable_pressure_plane_target(int plane)
+{
+    int total = 0;
+    for (int batch = 0; batch < PORTABLE_BATCHES; ++batch)
+        total += portable_pressure_plane_count(batch, plane);
+    return total;
+}
+
+static inline int portable_pressure_worker_count(
+    int batch, int plane, int lane)
+{
+    int first = portable_pressure_begin(batch) + plane +
+        lane * PORTABLE_PLANES;
+    int last = portable_pressure_end(batch);
+    int stride = 2 * PORTABLE_PLANES;
+    return first < last ? 1 + (last - 1 - first) / stride : 0;
+}
+
+static inline int portable_pressure_worker_target(int plane, int lane)
+{
+    int total = 0;
+    for (int batch = 0; batch < PORTABLE_BATCHES; ++batch)
+        total += portable_pressure_worker_count(batch, plane, lane);
+    return total;
+}
+
+static inline int portable_pressure_worker_weight(int worker)
+{
+    static const unsigned char weights[12] = {
+        8, 4, 3, 2, 3, 2, 8, 4, 3, 2, 3, 2
+    };
+    return weights[worker];
+}
+
+static inline int portable_pressure_weight_prefix(int worker)
+{
+    int prefix = 0;
+    for (int i = 0; i < worker; ++i)
+        prefix += portable_pressure_worker_weight(i);
+    return prefix;
+}
+
+static inline int portable_weighted_worker_begin(int worker)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)portable_pressure_weight_prefix(worker)) / 44u);
+}
+
+static inline int portable_weighted_worker_end(int worker)
+{
+    return (int)(((uint64_t)PORTABLE_PRESSURE_LINES *
+                  (uint64_t)(portable_pressure_weight_prefix(worker) +
+                             portable_pressure_worker_weight(worker))) / 44u);
+}
+
+static inline void portable_emit_workload_progress(
+    int plane, const char *event, int batch, int completed, int target)
+{
+    static int milestone;
+    char b[256]; int p = 0; const char *s;
+#define PORTABLE_PROGRESS_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+    PORTABLE_PROGRESS_TEXT("[WORKLOAD-PROGRESS] node=");
+    p = fmt_int(b, p, plane);
+    PORTABLE_PROGRESS_TEXT(" phase=pressure event=");
+    PORTABLE_PROGRESS_TEXT(event);
+    PORTABLE_PROGRESS_TEXT(" batch=");
+    p = fmt_int(b, p, batch);
+    PORTABLE_PROGRESS_TEXT(" batches=");
+    p = fmt_int(b, p, PORTABLE_BATCHES);
+    PORTABLE_PROGRESS_TEXT(" completed=");
+    p = fmt_int(b, p, completed);
+    PORTABLE_PROGRESS_TEXT(" target=");
+    p = fmt_int(b, p, target);
+    PORTABLE_PROGRESS_TEXT(" milestone=");
+    p = fmt_int(b, p, ++milestone);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_PROGRESS_TEXT
+}
+
+static inline void portable_emit_switch_progress(
+    int plane, const char *event, int batch)
+{
+#ifdef E2E_TC143_HYBRID_SWITCH
+    static int switch_milestone;
+    char b[192]; int p = 0; const char *s;
+#define PORTABLE_SWITCH_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+    PORTABLE_SWITCH_TEXT("[SWITCH-PROGRESS] node=");
+    p = fmt_int(b, p, plane);
+    PORTABLE_SWITCH_TEXT(" event=");
+    PORTABLE_SWITCH_TEXT(event);
+    PORTABLE_SWITCH_TEXT(" batch=");
+    p = fmt_int(b, p, batch);
+    PORTABLE_SWITCH_TEXT(" milestone=");
+    p = fmt_int(b, p, ++switch_milestone);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_SWITCH_TEXT
+#else
+    (void)plane; (void)event; (void)batch;
+#endif
+}
+
+static inline void portable_emit_pressure_config(int plane, int hot_lines)
+{
+    char b[384]; int p = 0; const char *s;
+#define PORTABLE_APPEND_TEXT(text) \
+    do { s = (text); while (*s) b[p++] = *s++; } while (0)
+#define PORTABLE_APPEND_INT(value) \
+    do { p = fmt_int(b, p, (int)(value)); } while (0)
+    PORTABLE_APPEND_TEXT("[PORTABLE-PRESSURE] node=");
+    PORTABLE_APPEND_INT(plane);
+    PORTABLE_APPEND_TEXT(" planes=");
+    PORTABLE_APPEND_INT(PORTABLE_PLANES);
+    PORTABLE_APPEND_TEXT(" hot_lines=");
+    PORTABLE_APPEND_INT(hot_lines);
+    PORTABLE_APPEND_TEXT(" pressure_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_PRESSURE_LINES);
+    PORTABLE_APPEND_TEXT(" total_unique_lines=");
+    PORTABLE_APPEND_INT(hot_lines + PORTABLE_PRESSURE_LINES);
+    PORTABLE_APPEND_TEXT(" naive_capacity_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_NAIVE_CAPACITY_LINES);
+    PORTABLE_APPEND_TEXT(" target_footprint_lines=");
+    PORTABLE_APPEND_INT(PORTABLE_TARGET_FOOTPRINT_LINES);
+    PORTABLE_APPEND_TEXT(" pressure_level_pct=");
+    PORTABLE_APPEND_INT(PORTABLE_PRESSURE_LEVEL_PCT);
+    PORTABLE_APPEND_TEXT(" batches=");
+    PORTABLE_APPEND_INT(PORTABLE_BATCHES);
+    b[p++] = '\n';
+    _raw_write(b, p);
+#undef PORTABLE_APPEND_INT
+#undef PORTABLE_APPEND_TEXT
+}
+
+static inline void portable_emit_results(int plane, const char *service_phase,
+                                         const char *end_to_end_phase,
+                                         const char *latency_phase,
+                                         uint32_t operations,
+                                         uint64_t service_ticks,
+                                         uint64_t end_to_end_ticks,
+                                         uint64_t *samples,
+                                         uint32_t sample_count)
+{
+    emit_guest_timer(plane, service_phase, operations, service_ticks);
+    emit_guest_timer(plane, end_to_end_phase, operations, end_to_end_ticks);
+    emit_latency_summary(plane, latency_phase, samples, sample_count);
+}
+
+#endif
