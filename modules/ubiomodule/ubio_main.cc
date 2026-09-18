@@ -935,10 +935,16 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                      pa, g, pages.size(), _groupIdx[g].page_directory[0],
                      _groupIdx[g].page_directory[1]);
 
-        // Try local cache first (L1 cache role — keep _pages as write-through cache)
+        // Try local cache first. Schema A's _pages is a non-evicting
+        // write-through cache, so if every candidate page is present, a local
+        // miss is authoritative and must not issue a redundant MetaRNF read.
+        bool allCandidatePagesCached = !pages.empty();
         for (auto pagePa : pages) {
             cc::glob::BackstorePage* p = _getPage(pagePa);
-            if (!p) continue;
+            if (!p) {
+                allCandidatePagesCached = false;
+                continue;
+            }
             cc::glob::BackstoreEntry schemaEntry;
             if (_schema.lookupInPage(pa, *p, schemaEntry) && !schemaEntry.deleted) {
                 e.state = static_cast<MESIState>(schemaEntry.state);
@@ -949,12 +955,12 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             }
         }
 
-        if (found || pages.empty()) {
-            // Local cache hit or no candidates — complete immediately
-            if (_ubioDramDelayPs > 0)
-                _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
-            else
-                ubcc.onBackstoreFillComplete(pa, found, e);
+        if (found || pages.empty() || allCandidatePagesCached) {
+            // Always defer completion at least one tick.  A synchronous fill
+            // can replay a waiter before its caller has finished enqueueing
+            // its writeback payload.
+            _pendingFills.push_back({tickRef + std::max<uint64_t>(1, _ubioDramDelayPs),
+                                     pa, found, e});
 
             std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=1\n",
                          pa, found ? 1 : 0);
