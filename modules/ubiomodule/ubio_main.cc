@@ -440,8 +440,9 @@ struct DsmDataStore {
 };
 
 // Phase 3: MetaRNFClient — async metadata page read/write via gem5 MetaRNFController
-// Implements MetaRNFClientIF for BackstoreHostH64 integration.
-struct MetaRNFClient : public MetaRNFClientIF {
+struct MetaRNFClient {
+    static constexpr size_t MaxDeferred = 64;
+
     Port *_gem5Port = nullptr;
     uint64_t &_tickRef;
     int _nodeId = 0;
@@ -453,6 +454,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
         std::function<void(const uint8_t* data256)> callback;
     };
     std::map<uint64_t, PendingRead> _pendingReads;
+    std::deque<CoherenceMessage> _deferredSends;
 
     MetaRNFClient(uint64_t &tick) : _tickRef(tick) {}
 
@@ -475,7 +477,13 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = rid;
         req.b.metaRNF.pagePa = pagePa;
         _pendingReads[rid] = {rid, callback};
-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        if (_deferredSends.size() >= MaxDeferred) {
+            std::fprintf(stderr,
+                "FATAL: MetaRNF deferred queue full node=%d socket=%d\n",
+                _nodeId, _socketId);
+            std::abort();
+        }
+        _deferredSends.push_back(req);
     }
 
     // Send MetaRNFWriteReq to gem5 (fire-and-forget)
@@ -490,7 +498,28 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = _nextReqId++;
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
+        if (_deferredSends.size() >= MaxDeferred) {
+            std::fprintf(stderr,
+                "FATAL: MetaRNF deferred queue full node=%d socket=%d\n",
+                _nodeId, _socketId);
+            std::abort();
+        }
+        _deferredSends.push_back(req);
+    }
+
+    bool hasDeferred() const { return !_deferredSends.empty(); }
+
+    void drainDeferred() {
+        // Called only from the outer ubio loop, never from Port receive
+        // dispatch. This avoids reentrant sends on the gem5 Port.
+        size_t budget = _deferredSends.size();
+        while (!_deferredSends.empty() && budget-- != 0) {
+            const CoherenceMessage req = _deferredSends.front();
+            if (!sendCoh(_gem5Port, _tickRef, _nodeId, req)) {
+                break;
+            }
+            _deferredSends.pop_front();
+        }
     }
 
     // Phase D1: writePage variant that returns send success
@@ -2243,18 +2272,10 @@ main(int argc, char **argv)
         if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
         if (netPort && !netDone) pollAndProcess(netPort, netPort, true, &netDone);
 
-        // 2.5 Drain deferred H64 MetaRNF operations.  These were enqueued
-        // during port message dispatch (reentrantDepth > 0) and must be sent
-        // OUTSIDE the port receive/message-dispatch stack to avoid PDES
-        // reentrant-send deadlocks.  One deferred send may trigger a callback
-        // that creates MORE deferred ops; these are drained in the NEXT outer
-        // loop iteration (bounded to avoid starvation).
-        // Call stack: main() → while(!done) → drainDeferred() → sendCoh().
+        // Metadata reads/writes may be requested by callbacks reached from the
+        // Port receive stack. Publish them only after both receive drains have
+        // returned, so the framework never observes a reentrant send.
         if (host._metaRNF.hasDeferred()) {
-            static int dd_cnt = 0;
-            if (host._metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))
-                std::fprintf(stderr, "[DEBUG-H64-PDES-DRAIN] n=%d cnt=%d deferred=%d tick=%lu\n",
-                             nid, dd_cnt, host._metaRNF._deferredCount, tick);
             host._metaRNF.drainDeferred();
         }
 
