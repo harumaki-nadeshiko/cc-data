@@ -753,13 +753,12 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         entry.residentDirty = false;
         _directory.update(linePa, entry);
         _asyncWbCount++;
-        // A spill-policy G_I tombstone is pinned solely while its metadata is
-        // dirty.  Once the async persistence snapshot is durable, recalculate
-        // the derived pin and wake capacity waiters in this set.  Without this
-        // transition, an entire set can remain permanently non-evictable even
-        // though every tombstone is now safe to reclaim.
+        // G_I metadata is pinned only while its resident state is dirty. Once
+        // the async snapshot is durable, release that derived pin and wake
+        // capacity waiters which may now evict this clean entry.
         refreshPinnedBit(linePa);
-        replayResidentWaitersForCapacity(linePa);
+        replayResidentWaitersForCapacity();
+
         printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
                _nodeId, linePa, snapshotEpoch);
     } else {
@@ -800,49 +799,31 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         return;
     }
 
-    // A replay may cause a capacity miss to re-enqueue the same request.  Only
-    // process waiters that existed when this pass began so a failed retry
-    // cannot consume its own freshly queued copy forever at one simulation tick.
+    // A replay may re-enqueue the same logical request. Process only the
+    // waiters present at entry so fresh work cannot consume itself forever.
+
     size_t replayBudget = it->second.size();
     while (!it->second.empty() && replayBudget-- != 0) {
         PendingRequester pr = it->second.front();
         it->second.pop_front();
-
-        fprintf(stderr, "[RESIDENT-WAITER-REPLAY] tick=%lu home=%d pa=0x%lx opKind=%d "
-                "node=%d socket=%d reqId=%lu epoch=%lu\n",
-                _host ? _host->hostCurrentTick() : 0,
-                _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
-                pr.socket, pr.reqId, pr.epoch);
-        fflush(stderr);
-
         bool stop = false;
-        bool restore = false;  // whether to push the waiter back
-
-        switch (pr.opKind) {
-        case ResidentOpKind::Writeback: {
-            bool ok = processWriteback(linePa, pr.node, pr.epoch,
-                                       pr.wbKeepAsClean,
-                                       pr.hasData ? pr.data.data() : nullptr);
-            if (!ok) {
-                // If fill/wb is now pending, the operation re-enqueued itself
-                // behind a resident fill/writeback.  Do NOT restore the old
-                // popped copy — it would duplicate the waiter and corrupt the
-                // queue on later replay.
-                restore = (!_directory.fillPending(linePa) &&
-                           !_directory.wbPending(linePa));
-            }
-            if (pr.hasData && _host) {
-                _host->writeDsmData(linePa, pr.data.data());
-                updateLineDataCache(linePa, pr.data.data());
-                std::fprintf(stderr,
-                             "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=resident_replay\n",
-                             _nodeId, linePa, pr.node);
-                std::fflush(stderr);
+        bool restore = false;
+        if (pr.reqType == UBCC_OuterReqType::GlobalWriteback) {
+            if (!processWriteback(linePa, pr.node, pr.epoch, pr.writeIntent,
+                                  pr.hasData ? pr.data.data() : nullptr)) {
+                // processWriteback may have re-enqueued this waiter while it
+                // started a fill/writeback.  Do not restore the old copy or
+                // the same dirty payload would commit twice on replay.
+                if (!_directory.fillPending(linePa) && !_directory.wbPending(linePa)) {
+                    restore = true;
+                }
+                stop = true;
             }
         } else if (pr.reqType == UBCC_OuterReqType::GlobalEvict) {
             if (!processEvict(linePa, pr.node, pr.epoch)) {
-                it->second.push_front(pr);
-                break;
+                restore = !_directory.fillPending(linePa) &&
+                    !_directory.wbPending(linePa);
+                stop = true;
 
             }
             stop = !ok;
@@ -886,14 +867,30 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                                           pr.node, pr.socket, pr.epoch, pr.reqId,
                                           nullptr, nullptr, nullptr, nullptr,
                                           nullptr, nullptr);
-            if (static_cast<int>(g) == -1) {
-                it->second.push_front(pr);
-                break;
-            }
             OutstandingRequest *ost = findOutstanding(linePa);
-            if (ost && ost->opType == OpType::GRANT_HANDSHAKE &&
+            const bool grantCreated = ost &&
+                ost->opType == OpType::GRANT_HANDSHAKE &&
                 ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
-                ost->stage == OpStage::WAITING_CLEAR && _outbound) {
+                ost->stage == OpStage::WAITING_CLEAR;
+            DirEntry resolved;
+            const bool residentResolved =
+                _directory.lookup(linePa, resolved) &&
+                !_directory.fillPending(linePa) &&
+                !_directory.wbPending(linePa) && !findOutstanding(linePa);
+            const bool replaySucceeded = grantCreated || residentResolved;
+            if (static_cast<int>(g) == -1 && grantCreated) {
+                // Nested capacity replay owns the grant push and may erase the
+                // queue entry. Do not touch the stale outer iterator.
+                return;
+            }
+            if (static_cast<int>(g) == -1 && !replaySucceeded) {
+                // A capacity miss already retained/re-enqueued this request.
+                // Restoring the popped copy would duplicate and pin it.
+                restore = pr.waitReason != ResidentWaitReason::Capacity &&
+                    !_directory.fillPending(linePa) &&
+                    !_directory.wbPending(linePa);
+                stop = true;
+            } else if (grantCreated && _outbound) {
                 CoherenceMessage push;
                 buildGrantResponse(*ost, push);
                 _outbound->sendGrantPush(push);
@@ -904,18 +901,35 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             }
 
         }
+
+        // Recursive replay or a synchronous Clear can erase this queue.
+        it = _residentWaiters.find(linePa);
+        if (restore) {
+            if (it == _residentWaiters.end()) {
+                it = _residentWaiters.emplace(
+                    linePa, std::deque<PendingRequester>{}).first;
+            }
+            it->second.push_front(pr);
+        }
+        if (stop) {
+            refreshPinnedBit(linePa);
+            return;
+        }
         if (_directory.fillPending(linePa) || _directory.wbPending(linePa)) {
-            // A fill/wb was started mid-replay; stop iterating.
+
             refreshPinnedBit(linePa);
             return;
         }
     }
 
-    // A replay may have queued fresh work after the bounded pass began.  Keep
-    // it for the next concrete capacity/state-change event.
-    if (!it->second.empty()) {
+    it = _residentWaiters.find(linePa);
+    if (it == _residentWaiters.end()) {
         refreshPinnedBit(linePa);
         return;
+    }
+    if (it->second.empty()) {
+        _residentWaiters.erase(it);
+
     }
 
     // Queue drained
@@ -926,6 +940,10 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
 void
 UBCCController::replayResidentWaitersForCapacity()
 {
+    if (_capacityReplayActive) {
+        return;
+    }
+    _capacityReplayActive = true;
     std::vector<uint64_t> keys;
     keys.reserve(_residentWaiters.size());
     for (const auto &kv : _residentWaiters) {
@@ -940,6 +958,7 @@ UBCCController::replayResidentWaitersForCapacity()
         fflush(stderr);
         replayResidentWaiters(pa);
     }
+    _capacityReplayActive = false;
 
 }
 

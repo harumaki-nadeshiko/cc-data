@@ -768,6 +768,7 @@ class UBCCController
     // the same PA are queued here.  Replayed on Clear commit.
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
+    bool _capacityReplayActive = false;
     std::set<uint64_t> _evictionPendingRemoval;
     // Replay can synchronously execute another protocol path. Suppress nested
     // capacity sweeps; the outer pass owns the current finite snapshot.
