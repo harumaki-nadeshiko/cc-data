@@ -1943,8 +1943,10 @@ main(int argc, char **argv)
 
         std::fflush(stderr);
 
-        // Hard budget assertion (includes host duplicate)
-        if (total_on_chip > 512 * 1024) {
+        // Hard budget assertion (includes host duplicate).
+        // The --allow-oversized-resident-dir-for-test counterfactual override
+        // skips this abort (mirrors the ResidentDir budget exception).
+        if (total_on_chip > 512 * 1024 && !g_rdcfg.allow_oversized_for_test) {
             std::fprintf(stderr,
                 "[UBIO-FATAL] total on-chip budget %zu KiB exceeds 512 KiB "
                 "limit. Reduce bloom/blc/desc or increase sram.\n",
