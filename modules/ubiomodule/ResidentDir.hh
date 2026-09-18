@@ -82,6 +82,10 @@ struct ResidentDirConfig {
     int    epoch_bits     = 24;           // width of epoch field
     int    ways           = 0;            // 0 = auto-search optimal
     int    set_bits       = 0;            // 0 = auto-search optimal
+    // Explicit counterfactual experiment only. Production must remain within
+    // the 512 KiB on-chip budget. Enabled by
+    // --allow-oversized-resident-dir-for-test.
+    bool   allow_oversized_for_test = false;
 
     // Effective group index budget (normalized from deprecated field or
     // explicit group_index_bytes).  For production configs this must

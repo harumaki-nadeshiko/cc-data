@@ -250,7 +250,7 @@ ResidentDir::init(const ResidentDirConfig &cfg)
         "[ResidentDir-BUDGET] total_on_chip=%zu KiB  breakdown: "
         "dir=%zu KiB  bloom=%zu KiB  groupIndex[16]=%zu KiB  "
         "blc_reserved=%zu KiB  desc_reserved=%zu KiB  "
-        "sram_budget=%zu KiB  limit=512 KiB %s\n",
+        "sram_budget=%zu KiB  limit=512 KiB experimental_oversized=%d\n",
         total_on_chip / 1024,
         total_dir_bytes / 1024,
         _bloomBytes / 1024,
@@ -258,10 +258,10 @@ ResidentDir::init(const ResidentDirConfig &cfg)
         blc_reserved / 1024,
         desc_reserved / 1024,
         cfg.sram_bytes / 1024,
-        cfg.sram_bytes < 64 * 1024 ? "(tiny-test: assertion skipped)" : "");
+        cfg.allow_oversized_for_test ? 1 : 0);
 
     if (cfg.sram_bytes >= 64 * 1024) {
-        if (cfg.sram_bytes > 512 * 1024) {
+        if (cfg.sram_bytes > 512 * 1024 && !cfg.allow_oversized_for_test) {
             std::fprintf(stderr, "[ResidentDir-BUDGET] ERROR: sram_bytes=%zu exceeds 512 KiB hard limit\n",
                          cfg.sram_bytes);
             std::abort();
@@ -273,7 +273,7 @@ ResidentDir::init(const ResidentDirConfig &cfg)
                 total_on_chip, cfg.sram_bytes);
             std::abort();
         }
-        if (total_on_chip > 512 * 1024) {
+        if (total_on_chip > 512 * 1024 && !cfg.allow_oversized_for_test) {
             std::fprintf(stderr,
                 "[ResidentDir-BUDGET] ERROR: total_on_chip=%zu > 512 KiB hard limit\n",
                 total_on_chip);
