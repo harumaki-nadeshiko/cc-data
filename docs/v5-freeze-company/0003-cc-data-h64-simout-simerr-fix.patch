@@ -1,0 +1,106 @@
+diff --git a/tests/e2e/test_e2e.py b/tests/e2e/test_e2e.py
+index d384d56..a3a71e9 100644
+--- a/tests/e2e/test_e2e.py
++++ b/tests/e2e/test_e2e.py
+@@ -8,6 +8,7 @@ USAGE (Python runner mode):
+     python3 tests/e2e/test_e2e.py --tc <N>           # Run single TC
+ """
+ 
++import glob
+ import sys, os, re, subprocess, argparse, tempfile, shutil
+ 
+ # gem5 v25.1 SimObject hierarchy can be deep; increase recursion limit.
+@@ -2353,8 +2354,8 @@ def gem5_config_main():
+         # Q2 FIX: Redirect workload stdout/stderr to files in outdir
+         # so the harness can parse [READ_VAL] markers.
+         # Default "cout"/"cerr" map to simulator terminal (not files).
+-        proc.output = f"simout_n{node_id}"
+-        proc.errout = "simerr"
++        proc.output = f"simout_n{node_id}_c{global_cpu_index}"
++        proc.errout = f"simerr_n{node_id}_c{global_cpu_index}"
+         cpu.workload = [proc]
+ 
+     # ── Q2 FIX: Targeted proxy resolution (v25.1 workaround) ─────
+@@ -2683,11 +2684,13 @@ def gem5_config_main():
+     #    (run_multi.sh) after all per-node gem5 processes finish. Here we
+     #    just flush our own simout and exit cleanly. ───────────────────
+     if _local_node >= 0:
+-        my_simout = os.path.join(m5.options.outdir, f"simout_n{_local_node}")
++        # Aggregated simout across the per-CPU outputs of this node.
++        simout_glob = os.path.join(m5.options.outdir, f"simout_n{_local_node}_c*")
++        my_simout = sorted(glob.glob(simout_glob))
+         nlines = 0
+-        if os.path.exists(my_simout):
+-            with open(my_simout) as _f:
+-                nlines = sum(1 for _ in _f)
++        for _path in my_simout:
++            with open(_path) as _f:
++                nlines += sum(1 for _ in _f)
+         print(f">>> NODE{_local_node} SIM DONE (cause={cause}, "
+               f"simout_lines={nlines}) <<<", flush=True)
+         # Multi-process split: explicitly run gem5 exit callbacks BEFORE exiting
+@@ -2710,15 +2713,13 @@ def gem5_config_main():
+ 
+     # ── Collect output ─────────────────────────────────────────────
+     raw_lines = []
+-    # Q2: Per-node output files avoid interleaving from concurrent CPUs
++    # Q2: Per-node-per-CPU output files avoid interleaving from concurrent CPUs
+     for nid in range(NODES):
+-        simout_path = os.path.join(m5.options.outdir, f"simout_n{nid}")
+-        if os.path.exists(simout_path):
+-            with open(simout_path, "r") as f:
++        for _simout_path in sorted(glob.glob(os.path.join(m5.options.outdir, f"simout_n{nid}_c*"))):
++            with open(_simout_path, "r") as f:
+                 raw_lines.extend(line.rstrip("\n") for line in f)
+ 
+-    simerr_path = os.path.join(m5.options.outdir, "simerr")
+-    if os.path.exists(simerr_path):
++    for simerr_path in sorted(glob.glob(os.path.join(m5.options.outdir, "simerr_n*"))):
+         with open(simerr_path, "r") as f:
+             raw_lines.extend(line.rstrip("\n") for line in f)
+ 
+@@ -2865,11 +2866,19 @@ def verify_split_main():
+ 
+     raw_lines = []
+     found = 0
++    deduped_raw_lines = []
++    seen_lines = set()
+     for path in args.simout:
+         if os.path.exists(path):
+             found += 1
+             with open(path) as f:
+-                raw_lines.extend(line.rstrip("\n") for line in f)
++                for line in f:
++                    stripped = line.rstrip("\n")
++                    if stripped in seen_lines:
++                        continue
++                    seen_lines.add(stripped)
++                    deduped_raw_lines.append(stripped)
++    raw_lines = deduped_raw_lines
+     expected = len(args.simout)
+ 
+     # Pull fault-injection evidence ([UBFAULT]) from the ubio logs so the
+
+diff --git a/tests/e2e/run_multi.sh b/tests/e2e/run_multi.sh
+index f642601..33afbc9 100755
+--- a/tests/e2e/run_multi.sh
++++ b/tests/e2e/run_multi.sh
+@@ -324,9 +324,15 @@ run_tc() {
+     # 7. Verify via independent verify.py
+     local simouts=()
+     for nid in $(seq 0 $((NUM_NODES-1))); do
+-        local simout="$m5outdir/node${nid}/simout_n${nid}"
+-        simouts+=("$simout")
+-        if [ -f "$simout" ]; then
++        for _simout_file in "$m5outdir"/node${nid}/simout_n${nid}_c*; do
++            [ -f "$_simout_file" ] || continue
++            simouts+=("$_simout_file")
++            cp "$_simout_file" "$LOG_BASE/simout_tc${tc}_node${nid}_c$(basename $_simout_file | sed "s/.*_c//").log" 2>/dev/null || true
++        done
++        # fall back to legacy single-simout if no per-CPU files exist.
++        if [ ${#simouts[@]} -le $nid ]; then
++            local simout="$m5outdir/node${nid}/simout_n${nid}"
++            simouts+=("$simout")
+             cp "$simout" "$LOG_BASE/simout_tc${tc}_node${nid}.log" 2>/dev/null || true
+         fi
+     done

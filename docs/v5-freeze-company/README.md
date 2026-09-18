@@ -112,3 +112,9 @@ All three should use `EP_CPU_MODEL=timing`.
 baa51fde032a5d384932522b2dea9ff4332f11f2b5b782ddb0049ac4fa3db1ed  0001-gem5-0717-pem5-companion.patch
 7cfeb6fe437b55590b2cdd279da5e14301dd25303e2e5fdea13f7324c40355e3  0002-cc-data-0717-m1-m2.patch
 ```
+
+## 0003 per-CPU simout fix (h64-only)
+
+- 0723-era Process output mechanism writes markers to simulator cout. Per-CPU private filenames sidestep the append: parser without touching src/sim/process.cc.
+- 0717-era plain ofstream truncate semantics remain,
+- verifier y is updated to glob `simout_n{nid}_c*` and likewise dedupe.

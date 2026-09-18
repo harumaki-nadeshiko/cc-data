@@ -20,8 +20,26 @@
     "deletions": 425
   },
   "qualification": [
-    {"tc": 142, "profile": "naive"},
-    {"tc": 143, "profile": "spill-noopt"},
-    {"tc": 147, "profile": "optimized"}
-  ]
+    {
+      "tc": 142,
+      "profile": "naive"
+    },
+    {
+      "tc": 143,
+      "profile": "spill-noopt"
+    },
+    {
+      "tc": 147,
+      "profile": "optimized"
+    }
+  ],
+  "patch_0003": {
+    "name": "cc-data-h64-simout-simerr-fix",
+    "sha256": "09d203581ef61118f01b885a44dd4da8cd7f38011fd981396548a01964754f96",
+    "purpose": "per-CPU simout filenames + verified simerr glob + H64-era cc-data-side spill fix",
+    "depends_on": [
+      "0001-gem5-0717-pem5-companion.patch",
+      "0002-cc-data-0717-m1-m2.patch"
+    ]
+  }
 }
