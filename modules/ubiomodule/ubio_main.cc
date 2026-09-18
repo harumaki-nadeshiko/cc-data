@@ -935,15 +935,18 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                      pa, g, pages.size(), _groupIdx[g].page_directory[0],
                      _groupIdx[g].page_directory[1]);
 
-        // Try local cache first. Schema A's _pages is a non-evicting
-        // write-through cache, so if every candidate page is present, a local
-        // miss is authoritative and must not issue a redundant MetaRNF read.
-        bool allCandidatePagesCached = !pages.empty();
-        for (auto pagePa : pages) {
+        // Schema A returns the chain head. Walk every locally cached page via
+        // next_page_ptr; request only the first missing page. A complete local
+        // chain miss is authoritative because _pages is non-evicting and
+        // write-through.
+        uint64_t missingPagePa = 0;
+        uint64_t pagePa = pages.empty() ? 0 : pages[0];
+        size_t chainBudget = 1024;
+        while (pagePa != 0 && chainBudget-- != 0) {
             cc::glob::BackstorePage* p = _getPage(pagePa);
             if (!p) {
-                allCandidatePagesCached = false;
-                continue;
+                missingPagePa = pagePa;
+                break;
             }
             cc::glob::BackstoreEntry schemaEntry;
             if (_schema.lookupInPage(pa, *p, schemaEntry) && !schemaEntry.deleted) {
@@ -953,9 +956,10 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
                 found = true;
                 break;
             }
+            pagePa = p->hdr.next_page_ptr;
         }
 
-        if (found || pages.empty() || allCandidatePagesCached) {
+        if (found || pages.empty() || missingPagePa == 0) {
             // Always defer completion at least one tick.  A synchronous fill
             // can replay a waiter before its caller has finished enqueueing
             // its writeback payload.
@@ -967,20 +971,23 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             return;
         }
 
-        // Phase D8: if any candidate page is dirty (MetaRNF write in-flight),
-        // defer this fill until the durable callback fires.
-        for (auto pagePa : pages) {
-            if (_pagesDirty.count(pagePa)) {
-                std::fprintf(stderr,
-                    "[BACKSTORE-READ-WAIT-DURABLE] pa=0x%lx group=%d page=0x%lx\n",
-                    pa, g, pagePa);
-                std::fflush(stderr);
-                _deferredReadsByPage[pagePa].push_back(pa);
+        // Local miss — issue MetaRNF read for the first candidate page
+        uint64_t targetPagePa = missingPagePa;
+        _metaRNF.readPage(targetPagePa, [this, pa, targetPagePa](const uint8_t* data256) {
+            if (data256) {
+                // Cache the page locally
+                cc::glob::BackstorePage pg;
+                memcpy(&pg, data256, std::min(sizeof(pg), (size_t)256));
+                _pages[targetPagePa] = pg;
+                // Rewalk the chain: this page may point to another missing
+                // page, or may complete an authoritative local lookup.
+                hostIssueBackstoreRead(pa);
                 return;
             }
             std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=0 page=0x%lx\n",
-                         pa, found2 ? 1 : 0, targetPagePa);
-            ubcc.onBackstoreFillComplete(pa, found2, e2);
+                         pa, 0, targetPagePa);
+            UBCCController::BackstoreEntry empty{};
+            ubcc.onBackstoreFillComplete(pa, false, empty);
 
         });
     }
