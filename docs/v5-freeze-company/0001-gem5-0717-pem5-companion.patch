@@ -1,0 +1,55 @@
+diff --git a/src/arch/arm/system.cc b/src/arch/arm/system.cc
+index 6de3cc6753f19cc3f03c441c73c803c079c5d846..b964d1453c59afcca5ae600ce536af1e57febcb8 100644
+--- a/src/arch/arm/system.cc
++++ b/src/arch/arm/system.cc
+@@ -84,16 +84,24 @@ ArmSystem::ArmSystem(const Params &p)
+       release(p.release),
+       multiProc(p.multi_proc)
+ {
+-    if (p.auto_reset_addr) {
+-        _resetAddr = workload->getEntry();
++    // SEWorkload has no kernel entry point. Only full-system configurations
++    // may derive reset/ISA state from the workload object.
++    if (FullSystem && workload) {
++        if (p.auto_reset_addr) {
++            _resetAddr = workload->getEntry();
++        } else {
++            _resetAddr = p.reset_addr;
++            warn_if(workload->getEntry() != _resetAddr,
++                    "Workload entry point %#x and reset address %#x are different",
++                    workload->getEntry(), _resetAddr);
++        }
+     } else {
+         _resetAddr = p.reset_addr;
+-        warn_if(workload->getEntry() != _resetAddr,
+-                "Workload entry point %#x and reset address %#x are different",
+-                workload->getEntry(), _resetAddr);
+     }
+ 
+-    bool wl_is_64 = (workload->getArch() == loader::Arm64);
++    bool wl_is_64 = FullSystem && workload
++        ? (workload->getArch() == loader::Arm64)
++        : _highestELIs64;
+     if (wl_is_64 != _highestELIs64) {
+         warn("Highest ARM exception-level set to AArch%d but the workload "
+               "is for AArch%d. Assuming you wanted these to match.",
+diff --git a/src/sim/sync_wait.cc b/src/sim/sync_wait.cc
+index 7fa9d68e399cc7374f67f254470c7d5715eeca36..4cbf7c646071d03d32eef60891c027ce10d96cb6 100644
+--- a/src/sim/sync_wait.cc
++++ b/src/sim/sync_wait.cc
+@@ -29,11 +29,13 @@ int
+ SyncWaitManager::barrierArrive(ThreadContext *tc, uint32_t mask,
+                                 uint32_t activeThreads)
+ {
+-    if (mask == 0)
++    // Bit 31 tags the portable startup barrier; it is not a plane.
++    const uint32_t planeMask = mask & ~0x80000000u;
++    if (planeMask == 0)
+         return -EINVAL;
+ 
+     uint32_t max_valid = (1u << MAX_NODE_COUNT) - 1u;
+-    if (mask & ~max_valid)
++    if (planeMask & ~max_valid)
+         return -EINVAL;
+ 
+     auto &bs = _barriers[mask];

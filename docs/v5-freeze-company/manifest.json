@@ -1,0 +1,27 @@
+{
+  "name": "v5-freeze-company-patches",
+  "generated": "2026-09-18",
+  "cpu_model": "timing",
+  "gem5": {
+    "baseline": "63bc49e9ce427e2db424c6feb553a043cb3db821",
+    "patch": "0001-gem5-0717-pem5-companion.patch",
+    "sha256": "f5ae6afeb5e9f14b702b32045d5782a4a7238208d7607489d7e53b49f14a8f5f",
+    "files_changed": 2,
+    "insertions": 18,
+    "deletions": 8
+  },
+  "cc_data": {
+    "baseline": "2d063fb",
+    "patch": "0002-cc-data-0717-m1-m2.patch",
+    "sha256": "f750f17c3a862039f702423ebfd648cdf7a28e51a5e25547bb1345d0af2af156",
+    "excludes_gem5_submodule_pointer": true,
+    "files_changed": 26,
+    "insertions": 3151,
+    "deletions": 224
+  },
+  "qualification": [
+    {"tc": 142, "profile": "naive"},
+    {"tc": 143, "profile": "spill-noopt"},
+    {"tc": 147, "profile": "optimized"}
+  ]
+}
