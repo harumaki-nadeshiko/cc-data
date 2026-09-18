@@ -1,52 +1,165 @@
 diff --git a/src/arch/arm/system.cc b/src/arch/arm/system.cc
-index 6de3cc6753f19cc3f03c441c73c803c079c5d846..b964d1453c59afcca5ae600ce536af1e57febcb8 100644
+index 6de3cc6753f19cc3f03c441c73c803c079c5d846..9df96e40bfc1eebe0c079788d62178ff2a89f1f0 100644
 --- a/src/arch/arm/system.cc
 +++ b/src/arch/arm/system.cc
-@@ -84,16 +84,24 @@ ArmSystem::ArmSystem(const Params &p)
+@@ -84,7 +84,7 @@ ArmSystem::ArmSystem(const Params &p)
        release(p.release),
        multiProc(p.multi_proc)
  {
 -    if (p.auto_reset_addr) {
--        _resetAddr = workload->getEntry();
-+    // SEWorkload has no kernel entry point. Only full-system configurations
-+    // may derive reset/ISA state from the workload object.
-+    if (FullSystem && workload) {
-+        if (p.auto_reset_addr) {
-+            _resetAddr = workload->getEntry();
-+        } else {
-+            _resetAddr = p.reset_addr;
-+            warn_if(workload->getEntry() != _resetAddr,
-+                    "Workload entry point %#x and reset address %#x are different",
-+                    workload->getEntry(), _resetAddr);
-+        }
++    if (FullSystem && workload && p.auto_reset_addr) {
+         _resetAddr = workload->getEntry();
      } else {
          _resetAddr = p.reset_addr;
--        warn_if(workload->getEntry() != _resetAddr,
--                "Workload entry point %#x and reset address %#x are different",
--                workload->getEntry(), _resetAddr);
+@@ -93,7 +93,9 @@ ArmSystem::ArmSystem(const Params &p)
+                 workload->getEntry(), _resetAddr);
      }
  
 -    bool wl_is_64 = (workload->getArch() == loader::Arm64);
-+    bool wl_is_64 = FullSystem && workload
-+        ? (workload->getArch() == loader::Arm64)
++    bool wl_is_64 = FullSystem && workload\
++        ? (workload->getArch() == loader::Arm64)\
 +        : _highestELIs64;
      if (wl_is_64 != _highestELIs64) {
          warn("Highest ARM exception-level set to AArch%d but the workload "
                "is for AArch%d. Assuming you wanted these to match.",
+diff --git a/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh b/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh
+index 082d75d15c9afb5c0c7f28aed80eb9e33fb770c8..fc41fa85c3a2bdad32821fb79aae302d569722b7 100644
+--- a/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh
++++ b/src/mem/ruby/protocol/chi/ep/MetaRNFController.hh
+@@ -41,6 +41,8 @@ class MetaRNFController : public EPController
+     int activeFlightCount() const;
+     int activeSlots() const { return activeFlightCount(); }
+     int maxFlightSlots() const { return _maxFlights; }
++    uint64_t metadataRangeStart() const { return _metadataRange.start(); }
++    uint64_t metadataRangeEnd() const { return _metadataRange.end(); }
+ 
+   protected:
+     bool recvRequestMsg(const CHIRequestMsg *msg) override;
+diff --git a/src/mem/ruby/protocol/chi/ep/UBAdapter.cc b/src/mem/ruby/protocol/chi/ep/UBAdapter.cc
+index 03b2cfe3d51357b2a95ae17e37d984ad728c7327..b809ee0a63218426cdb357cf77c220c3ef8bf20b 100644
+--- a/src/mem/ruby/protocol/chi/ep/UBAdapter.cc
++++ b/src/mem/ruby/protocol/chi/ep/UBAdapter.cc
+@@ -1163,27 +1163,49 @@ UBAdapter::recvFromRouter(const CoherenceMessage &msg)
+         }
+ 
+         case CoherenceMessageType::MetaRNFReadReq: {
+-            uint64_t pagePa = msg.h.homeLinePa;
++            const uint64_t pageId = msg.h.homeLinePa;
+             uint64_t reqId = msg.h.reqId;
+             auto *metaRNF = MetaRNFController::getInstance(_nodeId, _socketId);
+             if (!metaRNF) break;
+-            auto tport = _port;
++            constexpr uint64_t pageBytes = 256;
++            const uint64_t pagePa =
++                metaRNF->metadataRangeStart() + pageId * pageBytes;
++            if (pagePa < metaRNF->metadataRangeStart() ||
++                pagePa + pageBytes > metaRNF->metadataRangeEnd()) {
++                warn("UBAdapter node=%d: metadata page ID 0x%lx out of range",
++                     _nodeId, pageId);
++                break;
++            }
++            const int srcNode = _nodeId;
++            const int srcSocket = _socketId;
++            const int dstNode = msg.h.srcNode;
++            const int dstSocket = msg.h.srcSocket;
+             struct MRState { int done; uint8_t buf[256]; };
+             auto *state = new MRState{0, {}};
+             for (int i = 0; i < 4; i++) {
+                 uint64_t blockPa = pagePa + i * 64;
+-                metaRNF->issueRead(blockPa, [tport, reqId, state, i, pagePa](bool ok, const MetaRNFController::MetaLine &db) {
++                metaRNF->issueRead(blockPa,
++                    [this, reqId, state, i, pageId, srcNode, srcSocket,
++                     dstNode, dstSocket]
++                    (bool ok, const MetaRNFController::MetaLine &db) {
+                     if (ok) memcpy(&state->buf[i*64], db.data(), 64);
+                     if (++state->done == 4) {
+                         CoherenceMessage resp;
+                         resp.h.type = CoherenceMessageType::MetaRNFReadResp;
+-                        resp.h.srcNode = 0; resp.h.dstNode = 0;
++                        resp.h.srcNode = static_cast<uint16_t>(srcNode);
++                        resp.h.srcSocket = static_cast<uint16_t>(srcSocket);
++                        resp.h.dstNode = static_cast<uint16_t>(dstNode);
++                        resp.h.dstSocket = static_cast<uint16_t>(dstSocket);
+                         resp.h.reqId = reqId;
+-                        resp.h.homeLinePa = pagePa;
+-                        resp.b.metaRNF.pagePa = pagePa;
++                        resp.h.homeLinePa = pageId;
++                        resp.b.metaRNF.pagePa = pageId;
+                         memcpy(resp.b.metaRNF.data, state->buf, 256);
+-                        framework::MemMessage *buf = tport->allocateSendBuffer(0);
+-                        if (buf) { buf->setPayload(resp); tport->send(buf); }
++                        // MetaRNF callbacks execute under another controller's
++                        // receive stack. Publish from UBAdapter::wakeup instead
++                        // of re-entering framework::Port::send here.
++                        if (_deferredOutputs.size() >= 64)
++                            fatal("UBAdapter deferred MetaRNF output overflow");
++                        _deferredOutputs.push_back(resp);
+                         delete state;
+                     }
+                 });
+@@ -1191,9 +1213,18 @@ UBAdapter::recvFromRouter(const CoherenceMessage &msg)
+             break;
+         }
+         case CoherenceMessageType::MetaRNFWriteReq: {
+-            uint64_t pagePa = msg.h.homeLinePa;
++            const uint64_t pageId = msg.h.homeLinePa;
+             auto *metaRNF = MetaRNFController::getInstance(_nodeId, _socketId);
+             if (!metaRNF) break;
++            constexpr uint64_t pageBytes = 256;
++            const uint64_t pagePa =
++                metaRNF->metadataRangeStart() + pageId * pageBytes;
++            if (pagePa < metaRNF->metadataRangeStart() ||
++                pagePa + pageBytes > metaRNF->metadataRangeEnd()) {
++                warn("UBAdapter node=%d: metadata page ID 0x%lx out of range",
++                     _nodeId, pageId);
++                break;
++            }
+             for (int i = 0; i < 4; i++) {
+                 MetaRNFController::MetaLine ml;
+                 memcpy(ml.data(), &msg.b.metaRNF.data[i * 64], 64);
+@@ -1280,6 +1311,15 @@ UBAdapter::wakeup()
+     // 3. Drain deferred async control messages before checking responses
+     drainDeferredControls();
+ 
++    // MetaRNF completion callbacks may run under a controller receive stack.
++    // Drain their responses only from this adapter's outer event context.
++    size_t outputBudget = _deferredOutputs.size();
++    while (!_deferredOutputs.empty() && outputBudget-- != 0) {
++        if (!transportSend(_deferredOutputs.front()))
++            break;
++        _deferredOutputs.pop_front();
++    }
++
+     // 4. Check for matched responses (for retry-based callers)
+     checkResponseCallbacks();
+ 
+diff --git a/src/mem/ruby/protocol/chi/ep/UBAdapter.hh b/src/mem/ruby/protocol/chi/ep/UBAdapter.hh
+index 077d89a07b8dab59b69a76c42dc1957210489081..b1bb9aed170a6012916149e9b45c0b166224e4ec 100644
+--- a/src/mem/ruby/protocol/chi/ep/UBAdapter.hh
++++ b/src/mem/ruby/protocol/chi/ep/UBAdapter.hh
+@@ -245,6 +245,7 @@ class UBAdapter : public SimObject
+ 
+     // Deferred async control messages (InvalidateReq/RecallReq/UpgradeAckNotify)
+     std::deque<CoherenceMessage> _deferredControls;
++    std::deque<CoherenceMessage> _deferredOutputs;
+     bool _drainingDeferredControls = false;
+ };
+ 
 diff --git a/src/sim/sync_wait.cc b/src/sim/sync_wait.cc
-index 7fa9d68e399cc7374f67f254470c7d5715eeca36..4cbf7c646071d03d32eef60891c027ce10d96cb6 100644
+index 7fa9d68e399cc7374f67f254470c7d5715eeca36..5b9ff7b97b120367adde015bd3b9ac9d27d23f1e 100644
 --- a/src/sim/sync_wait.cc
 +++ b/src/sim/sync_wait.cc
-@@ -29,11 +29,13 @@ int
- SyncWaitManager::barrierArrive(ThreadContext *tc, uint32_t mask,
-                                 uint32_t activeThreads)
- {
--    if (mask == 0)
-+    // Bit 31 tags the portable startup barrier; it is not a plane.
-+    const uint32_t planeMask = mask & ~0x80000000u;
-+    if (planeMask == 0)
+@@ -32,8 +32,15 @@ SyncWaitManager::barrierArrive(ThreadContext *tc, uint32_t mask,
+     if (mask == 0)
          return -EINVAL;
  
++    // Bit 31 explicitly identifies portable startup, not an actual plane.
++    // Keep the tagged mask as the state/wire key so ordinary barriers cannot
++    // consume a startup release (or vice versa). (0726 upstream semantics)
++    const uint32_t planeMask = mask & ~0x80000000u;
++    if (planeMask == 0)
++        return -EINVAL;
++
      uint32_t max_valid = (1u << MAX_NODE_COUNT) - 1u;
 -    if (mask & ~max_valid)
 +    if (planeMask & ~max_valid)

@@ -5,19 +5,19 @@
   "gem5": {
     "baseline": "63bc49e9ce427e2db424c6feb553a043cb3db821",
     "patch": "0001-gem5-0717-pem5-companion.patch",
-    "sha256": "f5ae6afeb5e9f14b702b32045d5782a4a7238208d7607489d7e53b49f14a8f5f",
-    "files_changed": 2,
-    "insertions": 18,
-    "deletions": 8
+    "sha256": "baa51fde032a5d384932522b2dea9ff4332f11f2b5b782ddb0049ac4fa3db1ed",
+    "files_changed": 5,
+    "insertions": 64,
+    "deletions": 12
   },
   "cc_data": {
     "baseline": "2d063fb",
     "patch": "0002-cc-data-0717-m1-m2.patch",
-    "sha256": "f750f17c3a862039f702423ebfd648cdf7a28e51a5e25547bb1345d0af2af156",
+    "sha256": "7cfeb6fe437b55590b2cdd279da5e14301dd25303e2e5fdea13f7324c40355e3",
     "excludes_gem5_submodule_pointer": true,
     "files_changed": 26,
-    "insertions": 3151,
-    "deletions": 224
+    "insertions": 3354,
+    "deletions": 425
   },
   "qualification": [
     {"tc": 142, "profile": "naive"},

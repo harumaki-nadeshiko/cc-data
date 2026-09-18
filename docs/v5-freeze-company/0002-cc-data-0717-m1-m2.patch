@@ -23,7 +23,7 @@ index 0000000000000000000000000000000000000000..f7544eb880c359c5f0a3e7e50c6fb165
 +  ]
 +}
 diff --git a/modules/networksim/networksim_main.cc b/modules/networksim/networksim_main.cc
-index b2a6a8c9b2149d438bdd9832f8dbdafdbf14b6ef..a4cb9bf79fbb9bebcc8f91af2abc72139615ae24 100644
+index b2a6a8c9b2149d438bdd9832f8dbdafdbf14b6ef..fc46e55c4eb6fb796ad1762387ee18e4d153afae 100644
 --- a/modules/networksim/networksim_main.cc
 +++ b/modules/networksim/networksim_main.cc
 @@ -36,6 +36,7 @@ class NetworkSim {
@@ -69,7 +69,7 @@ index b2a6a8c9b2149d438bdd9832f8dbdafdbf14b6ef..a4cb9bf79fbb9bebcc8f91af2abc7213
  void NetworkSim::loadTopology(const std::string& path) {
      std::ifstream f(path);
      if (!f.is_open()) { std::fprintf(stderr,"[NetworkSim] bad topo %s\n",path.c_str()); return; }
-@@ -108,8 +130,17 @@ void NetworkSim::step() {
+@@ -108,12 +130,21 @@ void NetworkSim::step() {
          if (_donePorts.count(mod)) continue;
          Port* p = kv.second.get();
          p->emitSync(_tick);
@@ -88,9 +88,49 @@ index b2a6a8c9b2149d438bdd9832f8dbdafdbf14b6ef..a4cb9bf79fbb9bebcc8f91af2abc7213
 +            }
              if (m->hdr.type == (uint32_t)MemMessageType::CONTROL_SYNC) continue;
              totalRecv++;
-             std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
+-            std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|RECV|src=%u dst=%u\n",
+-                         m->hdr.timestamp, mod, m->hdr.req_id, m->hdr.sourceId, m->hdr.targetId);
++// debug-io removed ([TRACE-PERF])
++
+ 
+             uint64_t lat = 1;
+             auto lit = _linkLatency.find({(int)m->hdr.sourceId,
+@@ -142,28 +173,17 @@ void NetworkSim::step() {
+                 *buf = pf.msg;
+                 buf->hdr.timestamp = ts;
+                 it->second->send(buf);
+-                std::fprintf(stderr, "[TRACE-PERF] %lu|%d|nsim|%lu|0x0|FWD|dst=%u\n",
+-                             pf.readyTick, pf.dst_mod, pf.msg.hdr.req_id, pf.dst_mod);
++// debug-io removed ([TRACE-PERF])
++
+             } else {
+-                static int no_ct = 0;
+-                if (++no_ct <= 3)
+-                    std::fprintf(stderr, "[NSIM-NOBUF] tick=%lu dst=%u:%u\n",
+-                                 _tick, pf.dst_mod, 0);
++// debug-io removed (NSIM-NOBUF)
+             }
+         } else {
+-            static int miss_ct = 0;
+-            if (++miss_ct <= 3)
+-                std::fprintf(stderr, "[NSIM-MISS] tick=%lu dst=%u:%u (no port)\n",
+-                             _tick, pf.dst_mod, 0);
++// debug-io removed (NSIM-NOBUF)
+         }
+     }
+ 
+-    if (totalRecv > 0 || totalFwd > 0 || _fifo.size() > 500) {
+-        static int stat_ct = 0;
+-        if (++stat_ct <= 30 || _fifo.size() > 10000)
+-            std::fprintf(stderr, "[NSIM-STAT] tick=%lu recv=%d fwd=%d fifo=%zu\n",
+-                         _tick, totalRecv, totalFwd, _fifo.size());
+-    }
++// debug-io removed ([NSIM-STAT[] per-interval)
+ }
+ 
+ void NetworkSim::run(int maxSteps) {
 diff --git a/modules/ubiomodule/UBCCController.cc b/modules/ubiomodule/UBCCController.cc
-index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fdea8b634b5 100644
+index 1f0e316cef81cf77a2e1d7adad6a04e371328695..3da550eb71656d741d1282a82b71cbec46d97109 100644
 --- a/modules/ubiomodule/UBCCController.cc
 +++ b/modules/ubiomodule/UBCCController.cc
 @@ -63,6 +63,7 @@ UBCCController::UBCCController(int node_id, int socket_id,
@@ -188,7 +228,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
              enqueueResidentWaiter(line_pa, pr);
              refreshPinnedBit(line_pa);
              return _directory.fillPending(line_pa)
-@@ -190,18 +255,50 @@ UBCCController::ensureResidentForAccess(
+@@ -190,18 +255,46 @@ UBCCController::ensureResidentForAccess(
      }
  
      return handleResidentMiss(line_pa, reqType, writeIntent,
@@ -208,12 +248,8 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  {
      const bool mayContain = _directory.bloomMayContain(line_pa);
 -    if (!_directory.hasFreeSlotForPa(line_pa) && !evictOneVictim(line_pa)) {
-+    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx req=%d requester=%d "
-+           "mayContain=%d count=%zu capacity=%zu freeForPa=%d policy=%d\n",
-+           _nodeId, line_pa, static_cast<int>(reqType), requesterNode,
-+           mayContain ? 1 : 0, _directory.count(), _directory.capacity(),
-+           _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
-+           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
++// debug-io removed ([RESIDENT-MISS])
++
 +    fflush(stderr);
 +    if (!_directory.hasFreeSlotForPa(line_pa)) {
 +        PendingRequester pr;
@@ -243,7 +279,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
          return ResidentAccessResult::Busy;
      }
  
-@@ -221,6 +318,9 @@ UBCCController::handleResidentMiss(
+@@ -221,6 +314,9 @@ UBCCController::handleResidentMiss(
  
      if (!mayContain) {
          entry = placeholder;
@@ -253,7 +289,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
          refreshPinnedBit(line_pa);
          return ResidentAccessResult::Ready;
      }
-@@ -237,11 +337,19 @@ UBCCController::handleResidentMiss(
+@@ -237,11 +333,19 @@ UBCCController::handleResidentMiss(
      pr.writeIntent = writeIntent;
      pr.epoch = baseEpoch;
      pr.reqId = reqId;
@@ -273,7 +309,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      return ResidentAccessResult::Queued;
  }
  
-@@ -285,19 +393,38 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
+@@ -285,19 +389,38 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
      uint64_t victimPa = 0;
      DirEntry victim;
      if (!_directory.pickVictim(avoidPa, victimPa, victim)) {
@@ -312,7 +348,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      if (victim.state == MESIState::G_I) {
          scheduleBackstoreDelete(victimPa);
      } else {
-@@ -306,6 +433,77 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
+@@ -306,6 +429,77 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
      return false;
  }
  
@@ -390,7 +426,19 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  void
  UBCCController::scheduleBackstoreWrite(uint64_t linePa)
  {
-@@ -388,6 +586,25 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
+@@ -379,6 +573,11 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
+         entry.residentDirty = false;
+         _directory.update(linePa, entry);
+         _asyncWbCount++;
++        // G_I metadata is pinned only while its resident state is dirty. Once
++        // the async snapshot is durable, release that derived pin and wake
++        // capacity waiters which may now evict this clean entry.
++        refreshPinnedBit(linePa);
++        replayResidentWaitersForCapacity();
+         printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
+                _nodeId, linePa, snapshotEpoch);
+     } else {
+@@ -388,6 +587,25 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
      }
  }
  
@@ -416,59 +464,123 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  void
  UBCCController::replayResidentWaiters(uint64_t linePa)
  {
-@@ -403,8 +620,14 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+@@ -399,40 +617,122 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+         return;
+     }
+ 
+-    while (!it->second.empty()) {
++    // A replay may re-enqueue the same logical request. Process only the
++    // waiters present at entry so fresh work cannot consume itself forever.
++    size_t replayBudget = it->second.size();
++    while (!it->second.empty() && replayBudget-- != 0) {
          PendingRequester pr = it->second.front();
          it->second.pop_front();
++        bool stop = false;
++        bool restore = false;
          if (pr.reqType == UBCC_OuterReqType::GlobalWriteback) {
 -            if (!processWriteback(linePa, pr.node, pr.epoch, pr.writeIntent)) {
 -                it->second.push_front(pr);
+-                break;
 +            if (!processWriteback(linePa, pr.node, pr.epoch, pr.writeIntent,
 +                                  pr.hasData ? pr.data.data() : nullptr)) {
 +                // processWriteback may have re-enqueued this waiter while it
 +                // started a fill/writeback.  Do not restore the old copy or
 +                // the same dirty payload would commit twice on replay.
 +                if (!_directory.fillPending(linePa) && !_directory.wbPending(linePa)) {
-+                    it->second.push_front(pr);
++                    restore = true;
 +                }
-                 break;
++                stop = true;
              }
          } else if (pr.reqType == UBCC_OuterReqType::GlobalEvict) {
-@@ -414,13 +637,25 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+             if (!processEvict(linePa, pr.node, pr.epoch)) {
+-                it->second.push_front(pr);
+-                break;
++                restore = !_directory.fillPending(linePa) &&
++                    !_directory.wbPending(linePa);
++                stop = true;
              }
          } else {
              auto g = processOuterRequest(linePa, pr.reqType, pr.writeIntent,
 -                                         pr.node, pr.socket, pr.epoch, pr.reqId,
 -                                         nullptr, nullptr, nullptr, nullptr,
 -                                         nullptr, nullptr);
+-            if (static_cast<int>(g) == -1) {
+-                it->second.push_front(pr);
+-                break;
 +                                          pr.node, pr.socket, pr.epoch, pr.reqId,
 +                                          nullptr, nullptr, nullptr, nullptr,
 +                                          nullptr, nullptr);
-             if (static_cast<int>(g) == -1) {
-                 it->second.push_front(pr);
-                 break;
-             }
 +            OutstandingRequest *ost = findOutstanding(linePa);
-+            if (ost && ost->opType == OpType::GRANT_HANDSHAKE &&
++            const bool grantCreated = ost &&
++                ost->opType == OpType::GRANT_HANDSHAKE &&
 +                ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
-+                ost->stage == OpStage::WAITING_CLEAR && _outbound) {
++                ost->stage == OpStage::WAITING_CLEAR;
++            DirEntry resolved;
++            const bool residentResolved =
++                _directory.lookup(linePa, resolved) &&
++                !_directory.fillPending(linePa) &&
++                !_directory.wbPending(linePa) && !findOutstanding(linePa);
++            const bool replaySucceeded = grantCreated || residentResolved;
++            if (static_cast<int>(g) == -1 && grantCreated) {
++                // Nested capacity replay owns the grant push and may erase the
++                // queue entry. Do not touch the stale outer iterator.
++                return;
++            }
++            if (static_cast<int>(g) == -1 && !replaySucceeded) {
++                // A capacity miss already retained/re-enqueued this request.
++                // Restoring the popped copy would duplicate and pin it.
++                restore = pr.waitReason != ResidentWaitReason::Capacity &&
++                    !_directory.fillPending(linePa) &&
++                    !_directory.wbPending(linePa);
++                stop = true;
++            } else if (grantCreated && _outbound) {
 +                CoherenceMessage push;
 +                buildGrantResponse(*ost, push);
 +                _outbound->sendGrantPush(push);
-+                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] home=%d pa=0x%lx "
-+                        "requester=%d reqId=%lu\n",
-+                        _nodeId, linePa, pr.node, pr.reqId);
++// debug-io removed ([RESIDENT-REPLAY-PUSH])
++
 +                fflush(stderr);
 +            }
++        }
++
++        // Recursive replay or a synchronous Clear can erase this queue.
++        it = _residentWaiters.find(linePa);
++        if (restore) {
++            if (it == _residentWaiters.end()) {
++                it = _residentWaiters.emplace(
++                    linePa, std::deque<PendingRequester>{}).first;
+             }
++            it->second.push_front(pr);
++        }
++        if (stop) {
++            refreshPinnedBit(linePa);
++            return;
          }
          if (_directory.fillPending(linePa) || _directory.wbPending(linePa)) {
-             break;
-@@ -433,6 +668,24 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
+-            break;
++            refreshPinnedBit(linePa);
++            return;
+         }
+     }
+ 
++    it = _residentWaiters.find(linePa);
++    if (it == _residentWaiters.end()) {
++        refreshPinnedBit(linePa);
++        return;
++    }
+     if (it->second.empty()) {
+         _residentWaiters.erase(it);
+     }
      refreshPinnedBit(linePa);
  }
  
 +void
 +UBCCController::replayResidentWaitersForCapacity()
 +{
++    if (_capacityReplayActive) {
++        return;
++    }
++    _capacityReplayActive = true;
 +    std::vector<uint64_t> keys;
 +    keys.reserve(_residentWaiters.size());
 +    for (const auto &kv : _residentWaiters) {
@@ -482,12 +594,13 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
 +        fflush(stderr);
 +        replayResidentWaiters(pa);
 +    }
++    _capacityReplayActive = false;
 +}
 +
  const char*
  UBCCController::mesiStateName(MESIState s) const
  {
-@@ -740,6 +993,7 @@ UBCCController::processOuterRequest(
+@@ -740,6 +1040,7 @@ UBCCController::processOuterRequest(
                  uint64_t otherSharers = entry.sharersMask;
                  if (requesterNode >= 0)
                      otherSharers &= ~(1ULL << requesterNode);
@@ -495,7 +608,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  
                  // F6: If requester is an existing sharer, this is a local
                  // upgrade. Defer to the UPGRADE_PENDING path (§4.1.3 G_S row).
-@@ -1149,7 +1403,13 @@ UBCCController::inspectUbccDirForTest(uint64_t line_pa)
+@@ -1149,7 +1450,13 @@ UBCCController::inspectUbccDirForTest(uint64_t line_pa)
          << "\"ownerMismatchRejectedCount\":" << _ownerMismatchRejectedCount << ","
          << "\"invalidationCount\":" << _invalidationCount << ","
          << "\"invalidationAckCount\":" << _invalidationAckCount << ","
@@ -510,7 +623,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      oss << "}";
      return oss.str();
  }
-@@ -1316,6 +1576,37 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
+@@ -1316,6 +1623,37 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
  
      removeOutstanding(line_pa);
  
@@ -548,7 +661,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      OutstandingRequest *grantOst = createOutstanding(
          line_pa, OpType::GRANT_HANDSHAKE, requesterNode, -1,
          recallDone.requesterSocket);
-@@ -1747,7 +2038,8 @@ UBCCController::getOutstandingBaseEpoch(uint64_t line_pa) const
+@@ -1747,7 +2085,8 @@ UBCCController::getOutstandingBaseEpoch(uint64_t line_pa) const
  
  bool
  UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
@@ -558,7 +671,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  {
      epochVal = normalizeEpoch(epochVal);
  
-@@ -1761,7 +2053,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
+@@ -1761,7 +2100,7 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
      DirEntry entry;
      ResidentAccessResult rr = ensureResidentForAccess(
          line_pa, UBCC_OuterReqType::GlobalWriteback, keepAsClean,
@@ -567,7 +680,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      if (rr != ResidentAccessResult::Ready) {
          return false;
      }
-@@ -1824,16 +2116,39 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
+@@ -1824,16 +2163,39 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
               _nodeId, line_pa, mesiStateName(entry.state),
               DirEntry::ownerFromSharers(entry), DirEntry::protoDirty(entry));
  
@@ -608,7 +721,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----
  
  void
-@@ -2053,6 +2368,7 @@ UBCCController::processOuterUpgradeReq(
+@@ -2053,6 +2415,7 @@ UBCCController::processOuterUpgradeReq(
      // upgrade_invalidate_fix D3: freeze targetMask at acceptance time
      uint64_t reqBit = (1ULL << requesterNode);
      uint64_t targetMask = entry.sharersMask & ~reqBit;
@@ -616,7 +729,150 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  
      // Create UPGRADE_PENDING outstanding
      OutstandingRequest *oreq = createOutstanding(
-@@ -2711,6 +3027,10 @@ void
+@@ -2281,18 +2644,16 @@ UBCCController::processClear(
+                 "UBCC node_id=%d: tombstone replay PA=0x%lx "
+                 "epoch=%lu reqId=%lu accepted=%d\n",
+                 _nodeId, line_pa, epoch, reqId, tsAccepted);
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] tombstone-replay home=%d pa=0x%lx epoch=%lu reqId=%lu accepted=%d\n",
+-                     _nodeId, line_pa, epoch, reqId, tsAccepted ? 1 : 0);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         return tsAccepted;
+     }
+ 
+     DirEntry entry;
+     if (!_directory.lookup(line_pa, entry)) {
+         // Stale Clear for unknown line — log and drop (§3.5)
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=unknown_line epoch=%lu reqId=%lu\n",
+-                     _nodeId, line_pa, epoch, reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         warn("UBCC node_id=%d: stale Clear for unknown PA=0x%lx — dropped\n",
+              _nodeId, line_pa);
+         return false;
+@@ -2300,26 +2661,22 @@ UBCCController::processClear(
+ 
+     // Verify GRANT_HANDSHAKE outstanding
+     OutstandingRequest *ost = findOutstanding(line_pa);
+-    printf("[TC5-CLEAR-TRACE] processClearEnter home=%d pa=0x%lx src=%d "
+-           "epoch=%lu reqId=%lu hasOutstanding=%d",
+-           _nodeId, line_pa, srcNode, epoch, reqId, ost ? 1 : 0);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+     if (ost) {
+-        printf(" opType=%d stage=%d ostRequester=%d ostBase=%lu ostReserved=%lu ostReqId=%lu",
+-               static_cast<int>(ost->opType), static_cast<int>(ost->stage),
+-               ost->requesterNode, ost->baseEpoch, ost->reservedEpoch,
+-               ost->reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+     }
+-    printf("\n");
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+ 
+     if (!ost || ost->opType != OpType::GRANT_HANDSHAKE) {
+         // No active GRANT_HANDSHAKE — check for already-completed
+         // (might be tombstone already cleaned up)
+-        printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
+-               "reason=no_grant_handshake\n",
+-               _nodeId, line_pa, srcNode);
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=no_grant_handshake epoch=%lu reqId=%lu\n",
+-                     _nodeId, line_pa, epoch, reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         warn("UBCC node_id=%d: processClear PA=0x%lx "
+              "no GRANT_HANDSHAKE outstanding — dropped\n",
+              _nodeId, line_pa);
+@@ -2330,13 +2687,10 @@ UBCCController::processClear(
+     // requester; the GRANT_HANDSHAKE's reservedEpoch = baseEpoch + 1.
+     // Compare against baseEpoch (not reservedEpoch) for matching.
+     if (normalizeEpoch(ost->baseEpoch) != epoch) {
+-        printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
+-               "reason=epoch_mismatch ostBase=%lu clear=%lu\n",
+-               _nodeId, line_pa, srcNode,
+-               normalizeEpoch(ost->baseEpoch), epoch);
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=epoch_mismatch ostBase=%lu clear=%lu reqId=%lu\n",
+-                     _nodeId, line_pa, normalizeEpoch(ost->baseEpoch), epoch, reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         warn("UBCC node_id=%d: processClear PA=0x%lx "
+               "epoch mismatch: ost_base=%lu clear=%lu — dropping, "
+               "retiring stale GRANT_HANDSHAKE\n",
+@@ -2350,12 +2704,10 @@ UBCCController::processClear(
+ 
+     // Verify reqId match
+     if (ost->reqId != reqId) {
+-        printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
+-               "reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
+-               _nodeId, line_pa, srcNode, ost->reqId, reqId);
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=reqid_mismatch ostReqId=%lu clearReqId=%lu\n",
+-                     _nodeId, line_pa, ost->reqId, reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         warn("UBCC node_id=%d: processClear PA=0x%lx "
+              "reqId mismatch: ost=%lu clear=%lu — dropped\n",
+              _nodeId, line_pa, ost->reqId, reqId);
+@@ -2364,12 +2716,10 @@ UBCCController::processClear(
+ 
+     // F2: Strong validation — requesterNode must match srcNode
+     if (ost->requesterNode >= 0 && ost->requesterNode != srcNode) {
+-        printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
+-               "reason=requester_mismatch ostRequester=%d\n",
+-               _nodeId, line_pa, srcNode, ost->requesterNode);
+-        std::fprintf(stderr,
+-                     "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=requester_mismatch ostRequester=%d srcNode=%d reqId=%lu\n",
+-                     _nodeId, line_pa, ost->requesterNode, srcNode, reqId);
++// debug-io removed ([TC5-CLEAR-TRACE])
++
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         warn("UBCC node_id=%d: processClear PA=0x%lx "
+               "requesterNode mismatch: ost=%d clear=%d — dropped\n",
+               _nodeId, line_pa, ost->requesterNode, srcNode);
+@@ -2379,9 +2729,8 @@ UBCCController::processClear(
+     // F2: Stage must be WAITING_CLEAR — only accept Clear for an active
+     // GRANT_HANDSHAKE that is actually expecting a Clear commit.
+     if (ost->stage != OpStage::WAITING_CLEAR) {
+-        printf("[TC5-CLEAR-TRACE] processClearDrop home=%d pa=0x%lx src=%d "
+-               "reason=stage_mismatch stage=%d\n",
+-               _nodeId, line_pa, srcNode, static_cast<int>(ost->stage));
++// debug-io removed ([TC5-CLEAR-TRACE])
++
+         std::fprintf(stderr,
+                      "[UBCC-CLEAR] drop home=%d pa=0x%lx reason=stage_mismatch stage=%d reqId=%lu\n",
+                      _nodeId, line_pa, static_cast<int>(ost->stage), reqId);
+@@ -2422,14 +2771,10 @@ UBCCController::processClear(
+     replayResidentWaiters(line_pa);
+ 
+     // Order log audit (§3.6)
+-    printf("[TC5-CLEAR-TRACE] processClearAccept home=%d pa=0x%lx src=%d "
+-           "epoch=%lu reqId=%lu newState=%s\n",
+-           _nodeId, line_pa, srcNode, epoch, reqId,
+-           mesiStateName(entry.state));
+-    printf("[UBCC-ORDER] pa=0x%lx epoch=%lu reqId=%lu op=ClearGrantHandshake "
+-           "requester=%d state=%s\n",
+-           line_pa, epoch, reqId, srcNode,
+-           mesiStateName(entry.state));
++// debug-io removed ([TC5-CLEAR-TRACE])
++
++// debug-io removed ([UBCC-ORDER])
++
+     std::fprintf(stderr,
+                  "[UBCC-CLEAR] accept home=%d pa=0x%lx srcNode=%d epoch=%lu reqId=%lu newState=%s\n",
+                  _nodeId, line_pa, srcNode, epoch, reqId,
+@@ -2711,6 +3056,10 @@ void
  UBCCController::onBackstoreFillComplete(
      uint64_t linePa, bool found, const BackstoreEntry &entry)
  {
@@ -627,7 +883,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      DirEntry e;
      if (!_directory.lookup(linePa, e)) {
          e.lineAddr = linePa;
-@@ -2749,6 +3069,11 @@ UBCCController::onBackstoreFillComplete(
+@@ -2749,6 +3098,11 @@ UBCCController::onBackstoreFillComplete(
  void
  UBCCController::onBackstoreWriteAck(uint64_t linePa)
  {
@@ -639,7 +895,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      // Check if this was an async writeback (not an eviction writeback)
      if (_asyncWbSnapshots.count(linePa) > 0) {
          onAsyncWritebackAck(linePa);
-@@ -2771,6 +3096,9 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
+@@ -2771,6 +3125,9 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
      }
      refreshPinnedBit(linePa);
      replayResidentWaiters(linePa);
@@ -649,7 +905,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  }
  
  void
-@@ -2792,6 +3120,7 @@ UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
+@@ -2792,6 +3149,7 @@ UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
      _evictionPendingRemoval.erase(linePa);
      refreshPinnedBit(linePa);
      replayResidentWaiters(linePa);
@@ -657,7 +913,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
      (void)existed;
  }
  
-@@ -3182,8 +3511,13 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
+@@ -3182,8 +3540,13 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
      push.h.homeLinePa = grantOst.linePa;
      push.h.epoch = grantOst.baseEpoch;
      push.h.reqId = grantOst.reqId;
@@ -673,7 +929,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  
      // Grant type from intended MESI state (reuses existing helper)
      push.b.readResp.grantType =
-@@ -3203,9 +3537,17 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
+@@ -3203,9 +3566,17 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
      push.b.readResp.committedEpoch = 0;
      push.b.readResp.pendingInvMask = 0;
  
@@ -693,7 +949,7 @@ index 1f0e316cef81cf77a2e1d7adad6a04e371328695..7dd2b45a5734542037405f37c7ea8fde
  
      push.h.seqNum = 0;
 diff --git a/modules/ubiomodule/UBCCController.hh b/modules/ubiomodule/UBCCController.hh
-index c19cd262d553182f85c2c9855b468dc0aca5a6de..d443cc8091010694dccce801b77886291934362f 100644
+index c19cd262d553182f85c2c9855b468dc0aca5a6de..06d43dc45f05616db8376603ddf4ed0da8154394 100644
 --- a/modules/ubiomodule/UBCCController.hh
 +++ b/modules/ubiomodule/UBCCController.hh
 @@ -75,6 +75,11 @@ enum class UBCC_OuterGrantType {
@@ -772,7 +1028,14 @@ index c19cd262d553182f85c2c9855b468dc0aca5a6de..d443cc8091010694dccce801b7788629
  
      UBCCHostIf *_host = nullptr;
      UBCCOutboundIf *_outbound = nullptr;
-@@ -694,8 +721,17 @@ class UBCCController
+@@ -688,14 +715,24 @@ class UBCCController
+     // the same PA are queued here.  Replayed on Clear commit.
+     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
+     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
++    bool _capacityReplayActive = false;
+     std::set<uint64_t> _evictionPendingRemoval;
+ 
+     // C3 batch RS grant env switch
      bool _batchRsEnabled;
      bool _batchRsOverridden = false;
  
@@ -790,7 +1053,7 @@ index c19cd262d553182f85c2c9855b468dc0aca5a6de..d443cc8091010694dccce801b7788629
  
      // Phase 1: Bloom reconstruction
      uint64_t _bloomReconstructInterval = 10000;
-@@ -761,11 +797,13 @@ public:
+@@ -761,11 +798,13 @@ public:
      ResidentAccessResult ensureResidentForAccess(
          uint64_t line_pa, UBCC_OuterReqType reqType, bool writeIntent,
          int requesterNode, int requesterSocket,
@@ -806,7 +1069,7 @@ index c19cd262d553182f85c2c9855b468dc0aca5a6de..d443cc8091010694dccce801b7788629
      void enqueueResidentWaiter(uint64_t linePa, const PendingRequester &pr);
      void replayResidentWaiters(uint64_t linePa);
      void refreshPinnedBit(uint64_t linePa);
-@@ -890,6 +928,8 @@ public:
+@@ -890,6 +929,8 @@ public:
                                   int requesterNode,
                                   UBCC_OuterReqType reqType, bool writeIntent,
                                   uint64_t *outEffectiveMask = nullptr);
@@ -816,7 +1079,7 @@ index c19cd262d553182f85c2c9855b468dc0aca5a6de..d443cc8091010694dccce801b7788629
                                uint64_t committedEpoch, uint64_t reqId,
                                int requesterNode);
 diff --git a/modules/ubiomodule/ubio_main.cc b/modules/ubiomodule/ubio_main.cc
-index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a35b7adc8 100644
+index 289c2e6fac740399109f95159b6041632b61839a..5a14433f067658786c02968735ec0c263e92c96e 100644
 --- a/modules/ubiomodule/ubio_main.cc
 +++ b/modules/ubiomodule/ubio_main.cc
 @@ -12,6 +12,7 @@
@@ -835,7 +1098,93 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
  static inline uint32_t gidOf(int node, int socket) {
      return static_cast<uint32_t>(node * g_numSockets + socket);
  }
-@@ -333,6 +335,13 @@ matchesNetEndpoint(const std::string &ep, int nid)
+@@ -250,39 +252,25 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
+         (msg.h.type == CoherenceMessageType::ReadResp);
+     if (msg.h.type == CoherenceMessageType::ClearReq ||
+         msg.h.type == CoherenceMessageType::ClearResp) {
+-        std::fprintf(stderr,
+-                     "[UBIO-CLEAR] send type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d routeModule=%u routePort=%u tick=%lu\n",
+-                     coherenceMsgTypeName(msg.h.type),
+-                     msg.h.reqId, msg.h.homeLinePa,
+-                     msg.h.srcNode, msg.h.dstNode,
+-                     dstModule,  tick);
++// debug-io removed ([UBIO-CLEAR])
++
+     }
+     if (!port) {
+         if (traceReadPath) {
+-            std::fprintf(stderr,
+-                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=no_port reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+-                         coherenceMsgTypeName(msg.h.type),
+-                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+-                         dstModule,  tick);
++// debug-io removed ([UBIO-RR-SEND])
++
+         }
+         return false;
+     }
+     framework::MemMessage *buf = port->allocateSendBuffer(tick);
+     if (traceReadPath) {
+-        std::fprintf(stderr,
+-                     "[UBIO-RR-SEND] type=%s alloc ptr=%p reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+-                     coherenceMsgTypeName(msg.h.type),
+-                     static_cast<void*>(buf),
+-                     msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+-                     dstModule,  tick);
++// debug-io removed ([UBIO-RR-SEND])
++
+     }
+     if (!buf) {
+         if (traceReadPath) {
+-            std::fprintf(stderr,
+-                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=sendAllocateBuffer_null reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+-                         coherenceMsgTypeName(msg.h.type),
+-                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+-                         dstModule,  tick);
++// debug-io removed ([UBIO-RR-SEND])
++
+         }
+         return false;
+     }
+@@ -291,11 +279,8 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
+     buf->hdr.req_id = msg.h.reqId;
+     if (!buf->setPayload(msg)) {
+         if (traceReadPath) {
+-            std::fprintf(stderr,
+-                         "[UBIO-RR-SEND] type=%s sendCoh ret=false reason=setPayload_fail reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+-                         coherenceMsgTypeName(msg.h.type),
+-                         msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+-                         dstModule,  tick);
++// debug-io removed ([TRACE-PERF])
++
+         }
+         delete buf;
+         return false;
+@@ -303,19 +288,12 @@ sendCoh(Port *port, uint64_t tick, uint32_t dstModule,
+     uint64_t sendTs = buf->hdr.timestamp;
+     bool ok = port->send(buf);
+     if (ok) {
+-        std::fprintf(stderr, "[TRACE-PERF] %lu|%u|ubio|%lu|0x%lx|%s|%s\n",
+-                     sendTs, dstModule, msg.h.reqId, msg.h.homeLinePa,
+-                     toNetwork ? "SEND_NET" : "SEND_GEM5",
+-                     coherenceMsgTypeName(msg.h.type));
++// debug-io removed ([TRACE-PERF])
++
+     }
+     if (traceReadPath) {
+-        std::fprintf(stderr,
+-                     "[UBIO-RR-SEND] type=%s sendCoh ret=%s reason=%s reqId=%lu srcNode=%d dstNode=%d dstModule=%u tick=%lu\n",
+-                     coherenceMsgTypeName(msg.h.type),
+-                     ok ? "true" : "false",
+-                     ok ? "ok" : "port_send_fail",
+-                     msg.h.reqId, msg.h.srcNode, msg.h.dstNode,
+-                     dstModule,  tick);
++// debug-io removed ([UBIO-RR-SEND])
++
+     }
+     return ok;
+ }
+@@ -333,6 +311,13 @@ matchesNetEndpoint(const std::string &ep, int nid)
          UBCCController::BackstoreEntry entry;
      };
  
@@ -849,7 +1198,68 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
  struct DsmDataStore {
      std::map<uint64_t, std::array<uint8_t, 64>> data;
      struct PendingDataOp { uint64_t fireTick; uint64_t pa; bool isWrite;
-@@ -436,6 +445,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -355,6 +340,7 @@ struct DsmDataStore {
+ 
+ // Phase 3: MetaRNFClient — async metadata page read/write via gem5 MetaRNFController
+ struct MetaRNFClient {
++    static constexpr size_t MaxDeferred = 64;
+     Port *_gem5Port = nullptr;
+     uint64_t &_tickRef;
+     int _nodeId = 0;
+@@ -366,6 +352,7 @@ struct MetaRNFClient {
+         std::function<void(const uint8_t* data256)> callback;
+     };
+     std::map<uint64_t, PendingRead> _pendingReads;
++    std::deque<CoherenceMessage> _deferredSends;
+ 
+     MetaRNFClient(uint64_t &tick) : _tickRef(tick) {}
+ 
+@@ -388,7 +375,13 @@ struct MetaRNFClient {
+         req.h.reqId = rid;
+         req.b.metaRNF.pagePa = pagePa;
+         _pendingReads[rid] = {rid, callback};
+-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
++        if (_deferredSends.size() >= MaxDeferred) {
++            std::fprintf(stderr,
++                "FATAL: MetaRNF deferred queue full node=%d socket=%d\n",
++                _nodeId, _socketId);
++            std::abort();
++        }
++        _deferredSends.push_back(req);
+     }
+ 
+     // Send MetaRNFWriteReq to gem5 (fire-and-forget)
+@@ -403,7 +396,28 @@ struct MetaRNFClient {
+         req.h.reqId = _nextReqId++;
+         req.b.metaRNF.pagePa = pagePa;
+         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
+-        sendCoh(_gem5Port, _tickRef, _nodeId, req);
++        if (_deferredSends.size() >= MaxDeferred) {
++            std::fprintf(stderr,
++                "FATAL: MetaRNF deferred queue full node=%d socket=%d\n",
++                _nodeId, _socketId);
++            std::abort();
++        }
++        _deferredSends.push_back(req);
++    }
++
++    bool hasDeferred() const { return !_deferredSends.empty(); }
++
++    void drainDeferred() {
++        // Called only from the outer ubio loop, never from Port receive
++        // dispatch. This avoids reentrant sends on the gem5 Port.
++        size_t budget = _deferredSends.size();
++        while (!_deferredSends.empty() && budget-- != 0) {
++            const CoherenceMessage req = _deferredSends.front();
++            if (!sendCoh(_gem5Port, _tickRef, _nodeId, req)) {
++                break;
++            }
++            _deferredSends.pop_front();
++        }
+     }
+ 
+     // Handle MetaRNFReadResp from gem5
+@@ -436,6 +450,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
  
      uint64_t _ubioDramDelayPs = 0;
      std::vector<PendingBackstoreFill> _pendingFills;
@@ -857,7 +1267,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
      DsmDataStore dsmData;
      MetaRNFClient _metaRNF;
  
-@@ -453,9 +463,23 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -453,9 +468,23 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
      }
  
      bool routeControlToTarget(const CoherenceMessage &msg) {
@@ -884,25 +1294,48 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
      }
      bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
      bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
-@@ -467,6 +491,9 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -467,11 +496,23 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
          bool found = false;
          int g = _schema.groupForPa(pa);
          std::vector<uint64_t> pages = _schema.candidatePagesForLookup(pa, _groupIdx[g]);
+-
+-        // Try local cache first (L1 cache role — keep _pages as write-through cache)
+-        for (auto pagePa : pages) {
 +        std::fprintf(stderr, "[BACKSTORE-READ] pa=0x%lx group=%d candidates=%zu head=0x%lx tail=0x%lx\n",
 +                     pa, g, pages.size(), _groupIdx[g].page_directory[0],
 +                     _groupIdx[g].page_directory[1]);
- 
-         // Try local cache first (L1 cache role — keep _pages as write-through cache)
-         for (auto pagePa : pages) {
-@@ -483,11 +510,13 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
++
++        // Schema A returns the chain head. Walk every locally cached page via
++        // next_page_ptr; request only the first missing page. A complete local
++        // chain miss is authoritative because _pages is non-evicting and
++        // write-through.
++        uint64_t missingPagePa = 0;
++        uint64_t pagePa = pages.empty() ? 0 : pages[0];
++        size_t chainBudget = 1024;
++        while (pagePa != 0 && chainBudget-- != 0) {
+             cc::glob::BackstorePage* p = _getPage(pagePa);
+-            if (!p) continue;
++            if (!p) {
++                missingPagePa = pagePa;
++                break;
++            }
+             cc::glob::BackstoreEntry schemaEntry;
+             if (_schema.lookupInPage(pa, *p, schemaEntry) && !schemaEntry.deleted) {
+                 e.state = static_cast<MESIState>(schemaEntry.state);
+@@ -480,44 +521,45 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+                 found = true;
+                 break;
+             }
++            pagePa = p->hdr.next_page_ptr;
          }
  
-         if (found || pages.empty()) {
+-        if (found || pages.empty()) {
 -            // Local cache hit or no candidates — complete immediately
 -            if (_ubioDramDelayPs > 0)
 -                _pendingFills.push_back({tickRef + _ubioDramDelayPs, pa, found, e});
 -            else
 -                ubcc.onBackstoreFillComplete(pa, found, e);
++        if (found || pages.empty() || missingPagePa == 0) {
 +            // Always defer completion at least one tick.  A synchronous fill
 +            // can replay a waiter before its caller has finished enqueueing
 +            // its writeback payload.
@@ -913,16 +1346,38 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
              return;
          }
  
-@@ -510,6 +539,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
-                     found2 = true;
-                 }
+         // Local miss — issue MetaRNF read for the first candidate page
+-        uint64_t targetPagePa = pages[0];
++        uint64_t targetPagePa = missingPagePa;
+         _metaRNF.readPage(targetPagePa, [this, pa, targetPagePa](const uint8_t* data256) {
+-            UBCCController::BackstoreEntry e2{};
+-            bool found2 = false;
+             if (data256) {
+                 // Cache the page locally
+                 cc::glob::BackstorePage pg;
+                 memcpy(&pg, data256, std::min(sizeof(pg), (size_t)256));
+                 _pages[targetPagePa] = pg;
+-                // Now do the lookup
+-                cc::glob::BackstoreEntry schemaEntry;
+-                if (_schema.lookupInPage(pa, pg, schemaEntry) && !schemaEntry.deleted) {
+-                    e2.state = static_cast<MESIState>(schemaEntry.state);
+-                    e2.sharersMask = schemaEntry.sharersMask;
+-                    e2.epoch = schemaEntry.epoch;
+-                    found2 = true;
+-                }
++                // Rewalk the chain: this page may point to another missing
++                // page, or may complete an authoritative local lookup.
++                hostIssueBackstoreRead(pa);
++                return;
              }
+-            ubcc.onBackstoreFillComplete(pa, found2, e2);
 +            std::fprintf(stderr, "[BACKSTORE-READ-DONE] pa=0x%lx found=%d local=0 page=0x%lx\n",
-+                         pa, found2 ? 1 : 0, targetPagePa);
-             ubcc.onBackstoreFillComplete(pa, found2, e2);
++                         pa, 0, targetPagePa);
++            UBCCController::BackstoreEntry empty{};
++            ubcc.onBackstoreFillComplete(pa, false, empty);
          });
      }
-@@ -517,7 +548,8 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+ 
      void hostIssueBackstoreWrite(uint64_t pa) override {
          UBCCController::BackstoreEntry e{};
          if (!ubcc.snapshotResidentForBackstore(pa, e)) {
@@ -932,7 +1387,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
              return;
          }
          ubcc.directory().bloomInsert(pa);
-@@ -530,21 +562,36 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -530,21 +572,36 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
          schemaEntry.deleted = false;
  
          auto plan = _schema.planUpsert(pa, schemaEntry, _groupIdx[g]);
@@ -972,7 +1427,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
      }
  
      void hostIssueBackstoreDelete(uint64_t pa) override {
-@@ -557,7 +604,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -557,7 +614,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
          if (existed && p) {
              _metaRNF.writePage(plan.target_page_pa, *p);
          }
@@ -981,7 +1436,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
      }
  
      void readDsmData(uint64_t pa, std::function<void(const uint8_t*)> cb) override { dsmData.readData(pa, tickRef, cb); }
-@@ -579,6 +626,21 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
+@@ -579,6 +636,21 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
          }
      }
  
@@ -1003,7 +1458,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
  };
  
  bool
-@@ -630,6 +692,23 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+@@ -630,6 +702,23 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
              ubcc.copyOutstandingGrantData(msg.h.homeLinePa, grantData) ||
              ubcc.copyImmediateGrantData(msg.h.homeLinePa, grantData) ||
              ubcc.copyLineDataCache(msg.h.homeLinePa, grantData);
@@ -1027,7 +1482,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
  
          response.h.type = CoherenceMessageType::ReadResp;
          response.h.srcNode = nid;
-@@ -661,13 +740,12 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+@@ -661,13 +750,12 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
        case CoherenceMessageType::WritebackReq: {
          bool keepAsClean =
              (msg.h.flags & static_cast<uint32_t>(CFLAG_KEEP_AS_CLEAN)) != 0;
@@ -1047,7 +1502,33 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
          response.h.type = CoherenceMessageType::WritebackResp;
          response.h.srcNode = nid;
          response.h.dstNode = msg.h.srcNode;
-@@ -885,6 +963,14 @@ main(int argc, char **argv)
+@@ -739,10 +827,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+       }
+ 
+       case CoherenceMessageType::ClearReq: {
+-        std::fprintf(stderr,
+-                     "[UBIO-CLEAR] ubcc-enter nid=%d type=ClearReq reqId=%lu pa=0x%lx srcNode=%d dstNode=%d epoch=%lu\n",
+-                     nid, msg.h.reqId, msg.h.homeLinePa,
+-                     msg.h.srcNode, msg.h.dstNode, msg.h.epoch);
++// debug-io removed ([UBIO-CLEAR])
++
+         bool accepted = ubcc.processClear(
+             msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
+         response.h.type = CoherenceMessageType::ClearResp;
+@@ -753,10 +839,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid,
+         response.h.epoch = msg.h.epoch;
+         response.h.reqId = msg.h.reqId;
+         response.b.clearResp.accepted = accepted;
+-        std::fprintf(stderr,
+-                     "[UBIO-CLEAR] ubcc-exit nid=%d type=ClearResp reqId=%lu pa=0x%lx accepted=%d dstNode=%d\n",
+-                     nid, msg.h.reqId, msg.h.homeLinePa,
+-                     accepted ? 1 : 0, response.h.dstNode);
++// debug-io removed ([UBIO-CLEAR])
++
+         hasResponse = true;
+         return true;
+       }
+@@ -885,6 +969,14 @@ main(int argc, char **argv)
              g_dramDelayPs = std::strtoull(argv[i] + 16, nullptr, 10);
          if (!std::strncmp(argv[i], "--batch-rs=", 11))
              g_batchRs = (std::atoi(argv[i] + 11) != 0);
@@ -1062,7 +1543,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
      }
  
      if (nid < 0 || nid > 31) {
-@@ -926,12 +1012,54 @@ main(int argc, char **argv)
+@@ -926,12 +1018,54 @@ main(int argc, char **argv)
                                : ResidentDir::DefaultBloomBytes,
                            0, g_numSockets, g_numNodes, &g_rdcfg);
      ubcc.setBatchRsEnabled(g_batchRs);
@@ -1117,7 +1598,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
  
      auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
          if (!port) return;
-@@ -943,10 +1071,21 @@ main(int argc, char **argv)
+@@ -943,10 +1077,21 @@ main(int argc, char **argv)
              if (m->hdr.type == static_cast<uint32_t>(MemMessageType::TERMINATE)) {
                  std::fprintf(stderr, "[ubio:%d] recv TERMINATE ts=%lu from_net=%d\n",
                               nid, m->hdr.timestamp, fromNetwork);
@@ -1139,7 +1620,7 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
                      *doneFlag = true;
                      if (netPort) {
                          framework::MemMessage* fwd = netPort->allocateSendBuffer(tick);
-@@ -1017,65 +1156,34 @@ main(int argc, char **argv)
+@@ -1017,79 +1162,44 @@ main(int argc, char **argv)
                  if (coh->h.type == CoherenceMessageType::BarrierReached) {
                      uint32_t mask = coh->b.barrier.mask;
                      uint32_t seq  = coh->b.barrier.seq;
@@ -1232,7 +1713,156 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
                          }
                      }
                  m = port->recv(tick, &st);
-@@ -1275,6 +1383,42 @@ main(int argc, char **argv)
+                 continue;
+             }
+ 
+-            std::fprintf(stderr, "[ubio:%d] %s recv %s reqId=%lu src=%u dst=%u\n",
+-                         nid, fromNetwork ? "net" : "gem5",
+-                         coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+-                         m->hdr.sourceId, m->hdr.targetId);
+-            std::fprintf(stderr, "[TRACE-PERF] %lu|%d|ubio|%lu|0x%lx|%s|%s\n",
+-                         m->hdr.timestamp, nid, coh->h.reqId, coh->h.homeLinePa,
+-                         fromNetwork ? "RECV_NET" : "RECV_GEM5",
+-                         coherenceMsgTypeName(coh->h.type));
++// debug-io removed ([TRACE-PERF])
++
++// debug-io removed ([TRACE-PERF])
++
+ 
+             // Debug fault injection: evaluate rules against this message.
+             // copies: 0 = drop (skip processing+forwarding), 1 = normal,
+@@ -1108,41 +1218,27 @@ main(int argc, char **argv)
+ 
+             if (coh->h.type == CoherenceMessageType::ClearReq ||
+                 coh->h.type == CoherenceMessageType::ClearResp) {
+-                std::fprintf(stderr,
+-                             "[UBIO-CLEAR] recv nid=%d from=%s type=%s reqId=%lu pa=0x%lx srcNode=%d dstNode=%d requester=%d epoch=%lu\n",
+-                             nid, fromNetwork ? "net" : "gem5",
+-                             coherenceMsgTypeName(coh->h.type),
+-                             coh->h.reqId, coh->h.homeLinePa,
+-                             coh->h.srcNode, coh->h.dstNode,
+-                             coh->h.requesterNode, coh->h.epoch);
++// debug-io removed ([UBIO-CLEAR])
++
+             }
+ 
+             if (coh->h.type == CoherenceMessageType::RecallReq ||
+                 coh->h.type == CoherenceMessageType::RecallResp) {
+-                std::fprintf(stderr, "[RECALL-TRACE-C] ubio:%d %s %s reqId=%lu cohDst=%d\n",
+-                             nid, fromNetwork ? "net" : "gem5",
+-                             coherenceMsgTypeName(coh->h.type), coh->h.reqId, coh->h.dstNode);
++// debug-io removed ([UBIO-RR-PATH])
++
+             }
+ 
+             if (coh->h.type == CoherenceMessageType::ReadReq) {
+-                std::fprintf(stderr,
+-                             "[UBIO-RR-PATH] reqId=%lu from=%s srcNode=%d dstNode=%d nid=%d enter_dstNode_check=%s homeLinePa=0x%lx\n",
+-                             coh->h.reqId, fromNetwork ? "net" : "gem5",
+-                             coh->h.srcNode, coh->h.dstNode, nid,
+-                             (coh->h.dstNode != nid) ? "true" : "false",
+-                             coh->h.homeLinePa);
++// debug-io removed ([UBIO-RR-PATH])
++
+             }
+ 
+             if (coh->h.dstNode != nid || coh->h.dstSocket != sid) {
+                 // If this PA belongs to our local DSM plane, force local processing
+                 bool isDsm = ubcc.isDsmAddr(coh->h.homeLinePa);
+                 if (coh->h.type == CoherenceMessageType::ReadReq) {
+-                    std::fprintf(stderr,
+-                                 "[UBIO-RR-PATH] reqId=%lu dstNode!=nid true, isDsmAddr=%s -> pass_non_dsm_check=%s homeLinePa=0x%lx\n",
+-                                 coh->h.reqId,
+-                                 isDsm ? "true" : "false",
+-                                 (!isDsm) ? "true" : "false",
+-                                 coh->h.homeLinePa);
++// debug-io removed ([UBIO-RR-PATH])
++
+                 }
+                 if (!isDsm || !isUbccIngress(coh->h.type)) {
+                     // Forward cross-node. The isDsm "force local" only applies to
+@@ -1155,23 +1251,20 @@ main(int argc, char **argv)
+                     // sharer was dropped as "unsupported local type" and the
+                     // upgrade's invalidation acks never came back → deadlock.)
+                     if (netPort) {
+-                        std::fprintf(stderr, "[TRACE-2] n%d FWD %s dst=%d:%d via net\n",
+-                                     nid, coherenceMsgTypeName(coh->h.type),
+-                                     coh->h.dstNode, coh->h.dstSocket);
++// debug-io removed ([TRACE-2])
++
+                         bool sent = sendCoh(netPort, tick,
+                                             gidOf(coh->h.dstNode, coh->h.dstSocket), *coh, true);
+                         if (coh->h.type == CoherenceMessageType::ReadReq) {
+-                            std::fprintf(stderr,
+-                                         "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=true sendCoh_ret=%s dstNode=%d\n",
+-                                         coh->h.reqId, sent ? "true" : "false", coh->h.dstNode);
++// debug-io removed ([UBIO-RR-PATH])
++
+                         }
+                     } else {
+-                        std::fprintf(stderr, "[ubio:%d] DROP cross-node %s (no net)\n",
+-                                     nid, coherenceMsgTypeName(coh->h.type));
++// debug-io removed ([UBIO-RR-PATH])
++
+                         if (coh->h.type == CoherenceMessageType::ReadReq) {
+-                            std::fprintf(stderr,
+-                                         "[UBIO-RR-PATH] reqId=%lu forward_sendCoh_called=false reason=no_netPort\n",
+-                                         coh->h.reqId);
++// debug-io removed ([UBIO-RR-PATH])
++
+                         }
+                     }
+                     m = port->recv(tick, &st);
+@@ -1194,15 +1287,12 @@ main(int argc, char **argv)
+                         // the 20k-cycle fallback timer.
+                         bool sentToGem5 = sendCoh(gem5Port, tick,
+                             gidOf(nid, sid), *coh);
+-                        std::fprintf(stderr,
+-                                     "[TRACE-4-RECALL] n%d net->gem5 recall-done sendCoh_ret=%s reqId=%lu dstSocket=%d\n",
+-                                     nid, sentToGem5 ? "true" : "false",
+-                                     coh->h.reqId, sid);
++// debug-io removed ([TRACE-3])
++
+                     }
+                     if (handled && hasResponse) {
+-                        std::fprintf(stderr, "[TRACE-3] n%d net->UBCC grant, sending %s back to %d:%d\n",
+-                                     nid, coherenceMsgTypeName(response.h.type),
+-                                     coh->h.srcNode, coh->h.srcSocket);
++// debug-io removed ([TRACE-3])
++
+                         // Response returns to the requester's (node, socket) plane.
+                         sendCoh(netPort, tick,
+                                 gidOf(coh->h.srcNode, coh->h.srcSocket), response, true);
+@@ -1245,22 +1335,16 @@ main(int argc, char **argv)
+                                     resp, true);
+                         } else if (gem5Done) {
+                             // gem5 已退出，其他 gem5Ingress 消息无法处理，记录告警
+-                            std::fprintf(stderr,
+-                                "[WARN-GEM5DONE] n%d gem5Done=true, dropping %s "
+-                                "reqId=%lu PA=0x%lx\n",
+-                                nid, coherenceMsgTypeName(coh->h.type),
+-                                coh->h.reqId, coh->h.homeLinePa);
++// debug-io removed ([TRACE-4-SEND])
++
+                         } else {
+                             // 正常路径：转发给 gem5
+-                            std::fprintf(stderr, "[TRACE-4] n%d net->gem5 fwd %s reqId=%lu\n",
+-                                         nid, coherenceMsgTypeName(coh->h.type), coh->h.reqId);
++// debug-io removed ([TRACE-4-SEND])
++
+                             bool sentToGem5 = sendCoh(gem5Port, tick,
+                                 gidOf(coh->h.srcNode, coh->h.srcSocket), *coh);
+-                            std::fprintf(stderr,
+-                                         "[TRACE-4-SEND] n%d net->gem5 sendCoh_ret=%s type=%s reqId=%lu dstModule=%d dstPort=%d srcSocket=%d\n",
+-                                         nid, sentToGem5 ? "true" : "false",
+-                                         coherenceMsgTypeName(coh->h.type), coh->h.reqId,
+-                                         coh->h.srcNode, coh->h.srcSocket, coh->h.srcSocket);
++// debug-io removed ([TRACE-4-SEND])
++
+                         }
+                     }
+                 }
+@@ -1275,6 +1359,42 @@ main(int argc, char **argv)
                  continue;
              }
  
@@ -1275,10 +1905,17 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
              if (!isUbccIngress(coh->h.type)) {
                  std::fprintf(stderr, "[ubio:%d] drop unsupported local type=%s\n",
                               nid, coherenceMsgTypeName(coh->h.type));
-@@ -1313,8 +1457,18 @@ main(int argc, char **argv)
-         // 2. Drain all ready messages from each port
+@@ -1314,7 +1434,24 @@ main(int argc, char **argv)
          if (!gem5Done) pollAndProcess(gem5Port, gem5Port, false, &gem5Done);
          if (netPort && !netDone) pollAndProcess(netPort, netPort, true, &netDone);
+ 
+-        // Always advance via safeTs (even before first message aligned)
++        // Metadata reads/writes may be requested by callbacks reached from the
++        // Port receive stack. Publish them only after both receive drains have
++        // returned, so the framework never observes a reentrant send.
++        if (host._metaRNF.hasDeferred()) {
++            host._metaRNF.drainDeferred();
++        }
 +        // A release send can temporarily backpressure after all arrivals have
 +        // been observed. Retry only those already-satisfied generations.
 +        std::vector<BarrierKey> readyBarriers;
@@ -1289,13 +1926,12 @@ index 289c2e6fac740399109f95159b6041632b61839a..faee4b1946aca85157cdef19686f2b1a
 +        }
 +        for (const BarrierKey &bk : readyBarriers)
 +            releaseBarrier(bk);
- 
--        // Always advance via safeTs (even before first message aligned)
++
 +        // 3. Advance tick via safeTs
          uint64_t minTs = UINT64_MAX;
          if (!gem5Done) minTs = gem5Port->safeTs(tick);
          if (netPort && !netDone) {
-@@ -1336,11 +1490,13 @@ main(int argc, char **argv)
+@@ -1336,11 +1473,13 @@ main(int argc, char **argv)
          // Fire any expired backstore fills (T_ubio_dram).  Tick-gated deferred
          // callbacks simulate real DRAM read latency.
          host.drainPendingFills(tick);

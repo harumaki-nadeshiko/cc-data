@@ -17,15 +17,19 @@ the gem5/Pem5 tree.
 
 ### `0001-gem5-0717-pem5-companion.patch`
 
-Two small gem5 changes:
+Five focused gem5 changes:
 
 1. `src/sim/sync_wait.cc`: bit 31 is accepted as the portable-startup barrier
    tag and excluded from the physical-plane validity check.
 2. `src/arch/arm/system.cc`: SE mode no longer queries a kernel workload entry
    point from `SEWorkload`; reset/architecture inference remains full-system
    only.
+3. `MetaRNFController.hh`: expose the configured metadata DRAM range.
+4. `UBAdapter.cc/.hh`: map compact backstore page IDs into metadata DRAM PAs;
+   build a correctly routed 256-byte MetaRNF response and publish it from the
+   adapter wakeup context rather than re-entering the Port send path.
 
-Patch size: 2 files, +18/-8.
+Patch size: 5 files, +64/-12.
 
 ### `0002-cc-data-0717-m1-m2.patch`
 
@@ -36,6 +40,12 @@ cc-data-only M1/M2 support:
 - 2N1S topology and run launcher support.
 - 0719 spill/naive directory behavior and writeback serialization.
 - Cross-node portable-startup BarrierReached/BarrierRelease lifecycle.
+- Resident spill liveness: durable async writeback releases stale pins;
+  capacity replay is bounded, non-recursive, and does not duplicate a waiter
+  that re-enqueued itself.
+- MetaRNF page I/O is queued outside ubio Port receive dispatch.
+- Schema A walks its complete local write-through page chain; a complete local
+  miss is authoritative and only a genuinely missing page is fetched.
 - Pure TimingSimpleCPU path. `--cpu-model` is accepted for launcher
   compatibility but v5-freeze does not add O3 or hybrid construction.
 
@@ -90,12 +100,15 @@ All three should use `EP_CPU_MODEL=timing`.
 - Docker builds passed for the patched 0717 gem5 and cc-data native modules.
 - TC1 2N1S passed end-to-end on the frozen timing stack.
 - Remote TC142/TC143/TC147 timing runs entered the workload and emitted
-  `E2E_META`, `GUEST-TIMER`, and initial performance markers. They were still
-  running when the patches were exported; no fatal/assert/deadlock was seen.
+  `E2E_META` and `GUEST-TIMER` with no fatal/assert/deadlock.
+- Before the spill-liveness patch, TC143/TC147 stopped permanently at
+  `RESIDENT-FILL-ISSUED`. With the patch, all three completed seed and warm in
+  about six minutes. TC143/TC147 each completed more than 8,000 backstore reads,
+  proving business-state progress rather than clock-only progress.
 
 ## SHA-256
 
 ```text
-f5ae6afeb5e9f14b702b32045d5782a4a7238208d7607489d7e53b49f14a8f5f  0001-gem5-0717-pem5-companion.patch
-f750f17c3a862039f702423ebfd648cdf7a28e51a5e25547bb1345d0af2af156  0002-cc-data-0717-m1-m2.patch
+baa51fde032a5d384932522b2dea9ff4332f11f2b5b782ddb0049ac4fa3db1ed  0001-gem5-0717-pem5-companion.patch
+7cfeb6fe437b55590b2cdd279da5e14301dd25303e2e5fdea13f7324c40355e3  0002-cc-data-0717-m1-m2.patch
 ```
