@@ -2213,6 +2213,8 @@ def gem5_config_main():
     _parser.add_argument("--ep-wait-cap", type=int, default=-1)
     _parser.add_argument("--ubcc-bloom-bytes", type=int, default=-1)
     _parser.add_argument("--ubcc-batch-rs", type=int, default=-1)
+    # Accept but ignore: v5-freeze runs the 0717 pure-TimingSimpleCPU path
+    # so the frozen 0717 gem5 ArmSystem SE/workload quirk is never hit.
     _parser.add_argument("--cpu-model", choices=("timing", "o3"),
                          default="timing")
     _args, _ = _parser.parse_known_args()
@@ -2279,9 +2281,8 @@ def gem5_config_main():
     # ── Build gem5 system ──────────────────────────────────────────
     import m5
     from m5.objects import (
-        System, ArmSystem, SrcClockDomain, VoltageDomain, RubySystem,
-        ArmTimingSimpleCPU, ArmO3CPU, Process, SEWorkload, Root, AddrRange,
-        ArmEmuLinux,
+        System, SrcClockDomain, VoltageDomain, RubySystem,
+        TimingSimpleCPU, Process, SEWorkload, Root, AddrRange, ArmEmuLinux,
     )
 
     gem5_root = os.path.dirname(os.path.dirname(os.path.dirname(GEM5_BIN)))
@@ -2309,14 +2310,7 @@ def gem5_config_main():
 
     # v25.1: Create Root first so System has parent for proxy resolution.
     root = Root(full_system=False)
-    local_external_ranges = []
-    for node_id in BUILD_NODES:
-        node_cfg = NodeConfig(node_id, NODES, DEFAULT_SEG_SIZE,
-                              _cfg_num_sockets)
-        local_external_ranges.extend(node_cfg.all_local_private_ranges())
-    system = ArmSystem(
-        mem_mode="timing", cache_line_size=64,
-        external_memory_ranges=local_external_ranges)
+    system = System(mem_mode="timing", cache_line_size=64)
     root.system = system
     system.clk_domain = SrcClockDomain(clock="2GHz")
     system.clk_domain.voltage_domain = VoltageDomain()
@@ -2326,8 +2320,7 @@ def gem5_config_main():
 
     cpus = []
     for i in range(TOTAL_CPUS):
-        cpu_class = ArmO3CPU if _args.cpu_model == "o3" else ArmTimingSimpleCPU
-        cpu = cpu_class(cpu_id=i)
+        cpu = TimingSimpleCPU(cpu_id=i)
         cpu.clk_domain = SrcClockDomain(
             clock="2GHz",
             voltage_domain=system.clk_domain.voltage_domain)
@@ -2415,8 +2408,7 @@ def gem5_config_main():
     options.access_backing_store = True
     options.enable_dram_powerdown = False
     options.protocol = "CHI"
-    options.cpu_type = "ArmO3CPU" if _args.cpu_model == "o3" \
-        else "ArmTimingSimpleCPU"
+    options.cpu_type = "TimingSimpleCPU"
     options.simple_physical_channels = []
     options.vcs_per_vnet = 1
     options.mesh_rows = 1
