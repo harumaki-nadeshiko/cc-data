@@ -772,7 +772,6 @@ class UBCCController
     std::set<uint64_t> _evictionPendingRemoval;
     // Replay can synchronously execute another protocol path. Suppress nested
     // capacity sweeps; the outer pass owns the current finite snapshot.
-    bool _capacityReplayActive = false;
 
     // Phase 3: _backstoreMetadataPAs REMOVED (was forbidden exact-PA shadow set).
     // Resident miss now uses Bloom advisory negative shortcut + H64 lookup;
