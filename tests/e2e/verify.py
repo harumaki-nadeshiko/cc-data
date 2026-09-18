@@ -38,11 +38,31 @@ def main():
 
     raw_lines = []
     found = 0
+    deduped_raw_lines = []
+    seen_lines = set()
     for path in args.simout:
         if os.path.exists(path):
             found += 1
             with open(path) as f:
-                raw_lines.extend(line.rstrip("\n") for line in f)
+                for line in f:
+                    stripped = line.rstrip("\n")
+                    if stripped in seen_lines:
+                        continue
+                    seen_lines.add(stripped)
+                    deduped_raw_lines.append(stripped)
+    raw_lines = deduped_raw_lines
+    # Per-CPU simout may repeat the same markers (each Process ran its own
+    # workload copy and only the primary CPU reaches emit_read_val, but every
+    # CPU emitted its own E2E_META/phase/idle glimmer from the pre-primary
+    # emit). Dedupe identical lines so the verifier sees each marker once.
+    seen = set()
+    deduped = []
+    for line in raw_lines:
+        if line in seen:
+            continue
+        seen.add(line)
+        deduped.append(line)
+    raw_lines = deduped
     expected = len(args.simout)
 
     for path in args.fault_log:

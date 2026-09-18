@@ -2866,11 +2866,19 @@ def verify_split_main():
 
     raw_lines = []
     found = 0
+    deduped_raw_lines = []
+    seen_lines = set()
     for path in args.simout:
         if os.path.exists(path):
             found += 1
             with open(path) as f:
-                raw_lines.extend(line.rstrip("\n") for line in f)
+                for line in f:
+                    stripped = line.rstrip("\n")
+                    if stripped in seen_lines:
+                        continue
+                    seen_lines.add(stripped)
+                    deduped_raw_lines.append(stripped)
+    raw_lines = deduped_raw_lines
     expected = len(args.simout)
 
     # Pull fault-injection evidence ([UBFAULT]) from the ubio logs so the
