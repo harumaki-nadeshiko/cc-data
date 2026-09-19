@@ -46,6 +46,10 @@ isUbccIngress(CoherenceMessageType t)
       case CoherenceMessageType::InvalidateAck:
       case CoherenceMessageType::QueryLineMetaReq:
       case CoherenceMessageType::HomeWritebackNotify:
+      // Cross-node barrier control arrives via the local adapter (0726+ in-band
+      // payload). Without this, gem5's local BarrierReached was dropped before
+      // the barrier aggregate could see it and the metadata phase never wound.
+      case CoherenceMessageType::BarrierReached:
         return true;
       default:
         return false;
@@ -244,7 +248,7 @@ static ResidentDirConfig g_rdcfg;    // may be overridden by argv
 static uint64_t g_dramDelayPs = 0;   // argv --dram-delay-ps= override
 static bool g_batchRs = true;        // argv --batch-rs= override
 static ResidentOverflowPolicy g_overflowPolicy = ResidentOverflowPolicy::Spill;
-static bool g_debugUbioPerf = false;  // [DEBUG-UBIO-*] gate, set via UBIO_DEBUG_PERF=1
+static bool g_debugUbioPerf [[maybe_unused]] = false;  // [DEBUG-UBIO-*] always-disabled gate
 static inline uint32_t gidOf(int node, int socket) {
     return static_cast<uint32_t>(node * g_numSockets + socket);
 }
@@ -2102,6 +2106,7 @@ main(int argc, char **argv)
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
                     int src = static_cast<int>(m->hdr.sourceId);
+                    std::fprintf(stderr, "[UBIO-BARRIER-REACHED] n=%d s=%d fromNet=%d mask=0x%x seq=%lu src=%d\n", nid, sid, (int)fromNetwork, mask, (unsigned long)seq, src);
                     // Arrival generations are local to isolated gem5
                     // processes. Aggregate one in-flight generation per mask
                     // and retain each plane's generation for its release.
