@@ -324,17 +324,9 @@ run_tc() {
     # 7. Verify via independent verify.py
     local simouts=()
     for nid in $(seq 0 $((NUM_NODES-1))); do
-        for _simout_file in "$m5outdir"/node${nid}/simout_n${nid}_c*; do
-            [ -f "$_simout_file" ] || continue
-            simouts+=("$_simout_file")
-            cp "$_simout_file" "$LOG_BASE/simout_tc${tc}_node${nid}_c$(basename $_simout_file | sed "s/.*_c//").log" 2>/dev/null || true
-        done
-        # fall back to legacy single-simout if no per-CPU files exist.
-        if [ ${#simouts[@]} -le $nid ]; then
-            local simout="$m5outdir/node${nid}/simout_n${nid}"
-            simouts+=("$simout")
-            cp "$simout" "$LOG_BASE/simout_tc${tc}_node${nid}.log" 2>/dev/null || true
-        fi
+        local simout="$m5outdir/node${nid}/simout_n${nid}"
+        simouts+=("$simout")
+        cp "$simout" "$LOG_BASE/simout_tc${tc}_node${nid}.log" 2>/dev/null || true
     done
     local faultlogs=()
     for nid in $(seq 0 $((NUM_NODES-1))); do

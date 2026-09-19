@@ -2354,7 +2354,7 @@ def gem5_config_main():
         # Q2 FIX: Redirect workload stdout/stderr to files in outdir
         # so the harness can parse [READ_VAL] markers.
         # Default "cout"/"cerr" map to simulator terminal (not files).
-        proc.output = f"simout_n{node_id}_c{global_cpu_index}"
+        proc.output = f"append:simout_n{node_id}"
         proc.errout = f"simerr_n{node_id}_c{global_cpu_index}"
         cpu.workload = [proc]
 
@@ -2684,13 +2684,11 @@ def gem5_config_main():
     #    (run_multi.sh) after all per-node gem5 processes finish. Here we
     #    just flush our own simout and exit cleanly. ───────────────────
     if _local_node >= 0:
-        # Aggregated simout across the per-CPU outputs of this node.
-        simout_glob = os.path.join(m5.options.outdir, f"simout_n{_local_node}_c*")
-        my_simout = sorted(glob.glob(simout_glob))
+        my_simout = os.path.join(m5.options.outdir, f"simout_n{_local_node}")
         nlines = 0
-        for _path in my_simout:
-            with open(_path) as _f:
-                nlines += sum(1 for _ in _f)
+        if os.path.exists(my_simout):
+            with open(my_simout) as _f:
+                nlines = sum(1 for _ in _f)
         print(f">>> NODE{_local_node} SIM DONE (cause={cause}, "
               f"simout_lines={nlines}) <<<", flush=True)
         # Multi-process split: explicitly run gem5 exit callbacks BEFORE exiting
@@ -2713,14 +2711,15 @@ def gem5_config_main():
 
     # ── Collect output ─────────────────────────────────────────────
     raw_lines = []
-    # Q2: Per-node-per-CPU output files avoid interleaving from concurrent CPUs
+    # Q2: Per-node output files (Process O_APPEND handles concurrent writers)
     for nid in range(NODES):
-        for _simout_path in sorted(glob.glob(os.path.join(m5.options.outdir, f"simout_n{nid}_c*"))):
-            with open(_simout_path, "r") as f:
+        simout_path = os.path.join(m5.options.outdir, f"simout_n{nid}")
+        if os.path.exists(simout_path):
+            with open(simout_path, "r") as f:
                 raw_lines.extend(line.rstrip("\n") for line in f)
 
-    for simerr_path in sorted(glob.glob(os.path.join(m5.options.outdir, "simerr_n*"))):
-        with open(simerr_path, "r") as f:
+    simerr_path = os.path.join(m5.options.outdir, "simerr")
+    with open(simerr_path, "r") as f:
             raw_lines.extend(line.rstrip("\n") for line in f)
 
     if _fault_cfg_line:
