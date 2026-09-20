@@ -357,34 +357,50 @@ UBCCController::handleResidentMiss(
     // ResidentDir/H64 slice is valid. Invalid and rebuilding slices retain the
     // conservative metadata lookup path.
     const bool mayContain = _directory.bloomMayContain(line_pa);
-    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx req=%d requester=%d "
-           "mayContain=%d count=%zu capacity=%zu freeForPa=%d policy=%d\n",
-           _nodeId, line_pa, static_cast<int>(reqType), requesterNode,
-           mayContain ? 1 : 0, _directory.count(), _directory.capacity(),
-           _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
-           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
+    const bool h64NegativeAuthoritative = _h64BloomAllMisses &&
+        _directory.bloomNegativeAuthoritative(line_pa);
+    const bool shouldFill =
+        _overflowPolicy == ResidentOverflowPolicy::Spill &&
+        (mayContain || (_h64BloomAllMisses && !h64NegativeAuthoritative));
+
+    fprintf(stderr, "[RESIDENT-MISS] home=%d pa=0x%lx opKind=%d req=%d requester=%d "
+            "mayContain=%d h64BloomAll=%d count=%zu capacity=%zu freeForPa=%d policy=%d reqId=%lu\n",
+            _nodeId, line_pa, static_cast<int>(pr.opKind),
+            static_cast<int>(pr.reqType), pr.node,
+            mayContain ? 1 : 0,
+            _h64BloomAllMisses ? 1 : 0,
+            _directory.count(), _directory.capacity(),
+            _directory.hasFreeSlotForPa(line_pa) ? 1 : 0,
+            _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0,
+            pr.reqId);
     fflush(stderr);
     if (!_directory.hasFreeSlotForPa(line_pa)) {
-        PendingRequester pr;
-        pr.node = requesterNode;
-        pr.socket = requesterSocket;
-        pr.reqType = reqType;
-        pr.writeIntent = writeIntent;
-        pr.epoch = baseEpoch;
-        pr.reqId = reqId;
-        enqueueResidentWaiter(line_pa, pr);
-        bool evictProgress = evictOneVictim(line_pa);
-        if (evictProgress) {
-            replayResidentWaiters(line_pa);
+        PendingRequester pr2 = pr;  // copy caller's envelope
+        pr2.waitReason = ResidentWaitReason::Capacity;
+        bool enqueued = enqueueResidentWaiterIfNew(line_pa, pr2);
+        bool evictProgress = false;
+        // Only attempt eviction if we actually have a new waiter;
+        // a dedup means the same operation is already waiting.
+        if (enqueued) {
+            evictProgress = evictOneVictim(line_pa);
+            // Skip the immediate replay when this miss itself runs inside an
+            // outer replay call: the outer loop will see the fresh waiter and
+            // push the grant exactly once.  A nested replay would pop the
+            // same (re-enqueued) waiter twice and deliver a duplicate push.
+            if (evictProgress && !_capacityReplayActive) {
+                replayResidentWaiters(line_pa);
+            }
         }
         auto wit = _residentWaiters.find(line_pa);
         size_t waiterDepth = (wit == _residentWaiters.end()) ? 0 : wit->second.size();
-        fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
-               "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu\n",
-               _nodeId, line_pa, evictProgress ? 1 : 0,
-               _directory.count(), _directory.capacity(), waiterDepth);
-        fflush(stderr);
-
+        if (_verboseLog) {
+            fprintf(stderr, "[RESIDENT-MISS-BUSY] home=%d pa=0x%lx reason=capacity_wait "
+                    "evictProgress=%d count=%zu capacity=%zu waiterDepth=%zu opKind=%d enqueued=%d\n",
+                    _nodeId, line_pa, evictProgress ? 1 : 0,
+                    _directory.count(), _directory.capacity(), waiterDepth,
+                    static_cast<int>(pr.opKind), enqueued ? 1 : 0);
+            fflush(stderr);
+        }
         return ResidentAccessResult::Busy;
     }
 
@@ -404,10 +420,14 @@ UBCCController::handleResidentMiss(
 
     if (!shouldFill) {
         entry = placeholder;
-        fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=bloom_negative\n",
-               _nodeId, line_pa);
-        fflush(stderr);
-
+        if (_verboseLog) {
+            fprintf(stderr, "[RESIDENT-MISS-READY] home=%d pa=0x%lx reason=%s opKind=%d\n",
+                   _nodeId, line_pa,
+                   h64NegativeAuthoritative ? "bloom_negative_h64_authoritative" :
+                                              "bloom_negative",
+                   static_cast<int>(pr.opKind));
+            fflush(stderr);
+        }
         refreshPinnedBit(line_pa);
         return ResidentAccessResult::Ready;
     }
@@ -424,9 +444,10 @@ UBCCController::handleResidentMiss(
     if (_host) {
         _host->hostIssueBackstoreRead(line_pa);
     }
-    fprintf(stderr, "[RESIDENT-FILL-ISSUED] home=%d pa=0x%lx waiterDepth=%zu\n",
-           _nodeId, line_pa, _residentWaiters[line_pa].size());
-
+    fprintf(stderr, "[RESIDENT-FILL-ISSUED] tick=%lu home=%d pa=0x%lx waiterDepth=%zu opKind=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, line_pa, _residentWaiters[line_pa].size(),
+            static_cast<int>(pr.opKind));
     fflush(stderr);
     return ResidentAccessResult::Queued;
 }
@@ -529,32 +550,36 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     uint64_t victimPa = 0;
     DirEntry victim;
     if (!_directory.pickVictim(avoidPa, victimPa, victim)) {
-        fprintf(stderr, "[RESIDENT-EVICT-PICK-FAIL] home=%d avoid=0x%lx count=%zu capacity=%zu\n",
-               _nodeId, avoidPa, _directory.count(), _directory.capacity());
-
+        if (_verboseLog) {
+            fprintf(stderr, "[RESIDENT-EVICT-PICK-FAIL] home=%d avoid=0x%lx count=%zu capacity=%zu\n",
+                    _nodeId, avoidPa, _directory.count(), _directory.capacity());
+        }
         fflush(stderr);
         return false;
     }
 
-    fprintf(stderr, "[RESIDENT-EVICT-PICK] home=%d avoid=0x%lx victim=0x%lx "
-           "state=%s sharers=0x%lx dirty=%d residentDirty=%d policy=%d\n",
-           _nodeId, avoidPa, victimPa, mesiStateName(victim.state),
-           victim.sharersMask, DirEntry::protoDirty(victim) ? 1 : 0,
-           victim.residentDirty ? 1 : 0,
-           _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
-    fflush(stderr);
-
+    if (_verboseLog) {
+        fprintf(stderr, "[RESIDENT-EVICT-PICK] home=%d avoid=0x%lx victim=0x%lx "
+               "state=%s sharers=0x%lx dirty=%d residentDirty=%d policy=%d\n",
+               _nodeId, avoidPa, victimPa, mesiStateName(victim.state),
+               victim.sharersMask, DirEntry::protoDirty(victim) ? 1 : 0,
+               victim.residentDirty ? 1 : 0,
+               _overflowPolicy == ResidentOverflowPolicy::NaiveEvict ? 1 : 0);
+        fflush(stderr);
+    }
 
     if (_overflowPolicy == ResidentOverflowPolicy::NaiveEvict) {
         return evictOneVictimNaive(victimPa, victim);
     }
 
-    if (!victim.residentDirty) {
-
+    // Phase A4: residentDirty means resident metadata dirtiness (needs
+    // backstore flush), NOT home dirty-data authority.  A non-G_I entry
+    // must never be force-removed solely because residentDirty is false;
+    // its backstore durability must be confirmed first.
+    if (victim.state == MESIState::G_I && !victim.residentDirty) {
         _directory.forceRemove(victimPa);
         _residentWaiters.erase(victimPa);
         _pendingRequesters.erase(victimPa);
-        replayResidentWaitersForCapacity();
         return true;
     }
 
@@ -587,9 +612,9 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     _directory.setWbPending(victimPa, true);
     _directory.setPinned(victimPa, true);
     _evictionPendingRemoval.insert(victimPa);
-    fprintf(stderr, "[RESIDENT-SPILL-START] home=%d victim=0x%lx state=%s residentDirty=%d\n",
-           _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
-
+    fprintf(stderr, "[RESIDENT-SPILL-START] tick=%lu home=%d victim=0x%lx state=%s residentDirty=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, victimPa, mesiStateName(victim.state), victim.residentDirty ? 1 : 0);
     fflush(stderr);
     if (victim.state == MESIState::G_I) {
         scheduleBackstoreDelete(victimPa);
@@ -618,6 +643,13 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         targetMask |= (1ULL << owner);
     }
 
+    // A clean sharer vanished only after networksim observed TERM from every
+    // plane of that peer node. It cannot retain a cache line, so do not wait
+    // for an invalidate ack that can never arrive. A dirty owner still takes
+    // the recall path below and is never elided by this cleanup.
+    if (!DirEntry::protoDirty(victim)) {
+        targetMask &= ~_exitedPeerNodesMask;
+    }
 
     _naiveDirEvictions++;
     _naiveForcedInvalidations += __builtin_popcountll(targetMask);
@@ -650,24 +682,60 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
             removeOutstanding(victimPa);
             return false;
         }
+        std::fprintf(stderr,
+                     "[UBCC-NAIVE-DIRTY-RECALL-HOLD] home=%d pa=0x%lx owner=%d "
+                     "state=%s epoch=%lu\n",
+                     _nodeId, victimPa, owner, mesiStateName(victim.state),
+                     victim.epoch);
+        std::fflush(stderr);
         return false;
     }
 
-    if (targetMask != 0 && _outbound) {
-        uint64_t effectiveMask = targetMask;
-        fanoutInvalidateTargets(victimPa, targetMask, victim.epoch,
-                                victim.epoch,
-                                -1, UBCC_OuterReqType::GlobalInvalidate,
-                                DirEntry::protoDirty(victim), &effectiveMask);
+    if (targetMask == 0) {
+        _directory.forceRemove(victimPa);
+        _residentWaiters.erase(victimPa);
+        _pendingRequesters.erase(victimPa);
+        _evictionPendingRemoval.erase(victimPa);
+        return true;
     }
 
-    _directory.forceRemove(victimPa);
-    _residentWaiters.erase(victimPa);
-    _pendingRequesters.erase(victimPa);
-    _evictionPendingRemoval.erase(victimPa);
-    replayResidentWaitersForCapacity();
-    return true;
+    // Keep the victim resident until every invalidation acknowledges.  Removing
+    // it before the acks arrive makes processInvalidationAck reject them and
+    // exposes its set before the eviction has actually completed.
+    OutstandingRequest *evictOreq = createOutstanding(
+        victimPa, OpType::NAIVE_EVICT_INVALIDATE, -1, -1, _socketId);
+    if (!evictOreq) {
+        return false;
+    }
+    _directory.setPinned(victimPa, true);
 
+    uint64_t effectiveMask = targetMask;
+    if (!fanoutInvalidateTargets(victimPa, targetMask, victim.epoch,
+                                 victim.epoch,
+                                 -1, UBCC_OuterReqType::GlobalInvalidate,
+                                 DirEntry::protoDirty(victim), &effectiveMask)) {
+        removeOutstanding(victimPa);
+        refreshPinnedBit(victimPa);
+        return false;
+    }
+
+    if (effectiveMask == 0) {
+        removeOutstanding(victimPa);
+        _directory.forceRemove(victimPa);
+        _residentWaiters.erase(victimPa);
+        _pendingRequesters.erase(victimPa);
+        _evictionPendingRemoval.erase(victimPa);
+        return true;
+    }
+
+    evictOreq->baseEpoch = victim.epoch;
+    evictOreq->reqId = victim.epoch;
+    evictOreq->stage = OpStage::WAITING_ALL_ACKS;
+    evictOreq->targetMask = effectiveMask;
+    evictOreq->totalMask = effectiveMask;
+    evictOreq->pendingAckCount = __builtin_popcountll(effectiveMask);
+    evictOreq->ackMask = 0;
+    return false;
 }
 
 void
@@ -753,12 +821,13 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
         entry.residentDirty = false;
         _directory.update(linePa, entry);
         _asyncWbCount++;
-        // G_I metadata is pinned only while its resident state is dirty. Once
-        // the async snapshot is durable, release that derived pin and wake
-        // capacity waiters which may now evict this clean entry.
+        // A spill-policy G_I tombstone is pinned solely while its metadata is
+        // dirty.  Once the async persistence snapshot is durable, recalculate
+        // the derived pin and wake capacity waiters in this set.  Without this
+        // transition, an entire set can remain permanently non-evictable even
+        // though every tombstone is now safe to reclaim.
         refreshPinnedBit(linePa);
-        replayResidentWaitersForCapacity();
-
+        replayResidentWaitersForCapacity(linePa);
         printf("[UBCC-ASYNC-WB] home=%d pa=0x%lx epoch=%lu — dirty cleared (snapshot matched)\n",
                _nodeId, linePa, snapshotEpoch);
     } else {
@@ -782,8 +851,9 @@ UBCCController::dumpStatsJson() const
         << "\"asyncWbCount\":" << _asyncWbCount << ","
         << "\"writebackCount\":" << _writebackCount << ","
         << "\"evictCount\":" << _evictCount << ","
-        << "\"invalidationCount\":" << _invalidationCount
-
+        << "\"invalidationCount\":" << _invalidationCount << ","
+        << "\"residentCount\":" << _directory.count() << ","
+        << "\"residentCapacity\":" << _directory.capacity()
         << "}";
     return oss.str();
 }
@@ -799,32 +869,45 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
         return;
     }
 
-    // A replay may re-enqueue the same logical request. Process only the
-    // waiters present at entry so fresh work cannot consume itself forever.
-
+    // A replay may cause a capacity miss to re-enqueue the same request.  Only
+    // process waiters that existed when this pass began so a failed retry
+    // cannot consume its own freshly queued copy forever at one simulation tick.
     size_t replayBudget = it->second.size();
     while (!it->second.empty() && replayBudget-- != 0) {
         PendingRequester pr = it->second.front();
         it->second.pop_front();
-        bool stop = false;
-        bool restore = false;
-        if (pr.reqType == UBCC_OuterReqType::GlobalWriteback) {
-            if (!processWriteback(linePa, pr.node, pr.epoch, pr.writeIntent,
-                                  pr.hasData ? pr.data.data() : nullptr)) {
-                // processWriteback may have re-enqueued this waiter while it
-                // started a fill/writeback.  Do not restore the old copy or
-                // the same dirty payload would commit twice on replay.
-                if (!_directory.fillPending(linePa) && !_directory.wbPending(linePa)) {
-                    restore = true;
-                }
-                stop = true;
-            }
-        } else if (pr.reqType == UBCC_OuterReqType::GlobalEvict) {
-            if (!processEvict(linePa, pr.node, pr.epoch)) {
-                restore = !_directory.fillPending(linePa) &&
-                    !_directory.wbPending(linePa);
-                stop = true;
 
+        fprintf(stderr, "[RESIDENT-WAITER-REPLAY] tick=%lu home=%d pa=0x%lx opKind=%d "
+                "node=%d socket=%d reqId=%lu epoch=%lu\n",
+                _host ? _host->hostCurrentTick() : 0,
+                _nodeId, linePa, static_cast<int>(pr.opKind), pr.node,
+                pr.socket, pr.reqId, pr.epoch);
+        fflush(stderr);
+
+        bool stop = false;
+        bool restore = false;  // whether to push the waiter back
+
+        switch (pr.opKind) {
+        case ResidentOpKind::Writeback: {
+            bool ok = processWriteback(linePa, pr.node, pr.epoch,
+                                       pr.wbKeepAsClean,
+                                       pr.hasData ? pr.data.data() : nullptr);
+            if (!ok) {
+                // If fill/wb is now pending, the operation re-enqueued itself
+                // behind a resident fill/writeback.  Do NOT restore the old
+                // popped copy — it would duplicate the waiter and corrupt the
+                // queue on later replay.
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
+            }
+            stop = !ok;
+            break;
+        }
+        case ResidentOpKind::Evict: {
+            bool ok = processEvict(linePa, pr.node, pr.epoch);
+            if (!ok) {
+                restore = (!_directory.fillPending(linePa) &&
+                           !_directory.wbPending(linePa));
             }
             stop = !ok;
             break;
@@ -872,64 +955,63 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
                 ost->opType == OpType::GRANT_HANDSHAKE &&
                 ost->requesterNode == pr.node && ost->reqId == pr.reqId &&
                 ost->stage == OpStage::WAITING_CLEAR;
-            DirEntry resolved;
+            // A local requester can receive ReadResp and synchronously Clear it
+            // before processOuterRequest returns.  The API still returns its
+            // legacy busy sentinel, but a resident entry with no in-flight state
+            // proves this capacity waiter was fully processed.
+            DirEntry resolvedEntry;
             const bool residentResolved =
-                _directory.lookup(linePa, resolved) &&
+                _directory.lookup(linePa, resolvedEntry) &&
                 !_directory.fillPending(linePa) &&
-                !_directory.wbPending(linePa) && !findOutstanding(linePa);
+                !_directory.wbPending(linePa) &&
+                !findOutstanding(linePa);
+            // A local Clear can synchronously retire the outstanding request
+            // before processOuterRequest returns. This is completion for every
+            // waiter reason, not only capacity: retaining a stale fill waiter
+            // pins its resident entry forever and can make a later full set
+            // unevictable.
             const bool replaySucceeded = grantCreated || residentResolved;
-            if (static_cast<int>(g) == -1 && grantCreated) {
-                // Nested capacity replay owns the grant push and may erase the
-                // queue entry. Do not touch the stale outer iterator.
-                return;
-            }
             if (static_cast<int>(g) == -1 && !replaySucceeded) {
-                // A capacity miss already retained/re-enqueued this request.
-                // Restoring the popped copy would duplicate and pin it.
+                // A capacity miss re-enqueues the waiter itself before it
+                // returns busy. Do not restore this popped copy, or a request
+                // that completed synchronously can remain pinned forever.
                 restore = pr.waitReason != ResidentWaitReason::Capacity &&
-                    !_directory.fillPending(linePa) &&
-                    !_directory.wbPending(linePa);
-                stop = true;
+                    (!_directory.fillPending(linePa) && !_directory.wbPending(linePa));
             } else if (grantCreated && _outbound) {
                 CoherenceMessage push;
                 buildGrantResponse(*ost, push);
                 _outbound->sendGrantPush(push);
-                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] home=%d pa=0x%lx "
+                fprintf(stderr, "[RESIDENT-REPLAY-PUSH] tick=%lu home=%d pa=0x%lx "
                         "requester=%d reqId=%lu\n",
+                        _host ? _host->hostCurrentTick() : 0,
                         _nodeId, linePa, pr.node, pr.reqId);
                 fflush(stderr);
             }
-
+            stop = (static_cast<int>(g) == -1 && !replaySucceeded);
+            break;
         }
+        } // switch
 
-        // Recursive replay or a synchronous Clear can erase this queue.
-        it = _residentWaiters.find(linePa);
         if (restore) {
-            if (it == _residentWaiters.end()) {
-                it = _residentWaiters.emplace(
-                    linePa, std::deque<PendingRequester>{}).first;
-            }
             it->second.push_front(pr);
         }
         if (stop) {
+            // Don't erase the queue — remaining waiters are still valid
             refreshPinnedBit(linePa);
             return;
         }
         if (_directory.fillPending(linePa) || _directory.wbPending(linePa)) {
-
+            // A fill/wb was started mid-replay; stop iterating.
             refreshPinnedBit(linePa);
             return;
         }
     }
 
-    it = _residentWaiters.find(linePa);
-    if (it == _residentWaiters.end()) {
+    // A replay may have queued fresh work after the bounded pass began.  Keep
+    // it for the next concrete capacity/state-change event.
+    if (!it->second.empty()) {
         refreshPinnedBit(linePa);
         return;
-    }
-    if (it->second.empty()) {
-        _residentWaiters.erase(it);
-
     }
 
     // Queue drained
@@ -938,28 +1020,51 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
 }
 
 void
-UBCCController::replayResidentWaitersForCapacity()
+UBCCController::replayResidentWaitersForCapacity(uint64_t triggerPa)
 {
     if (_capacityReplayActive) {
         return;
     }
+
     _capacityReplayActive = true;
-    std::vector<uint64_t> keys;
-    keys.reserve(_residentWaiters.size());
+    std::array<uint64_t, MAX_RESIDENT_WAITERS_TOTAL> keys{};
+    size_t keyCount = 0;
     for (const auto &kv : _residentWaiters) {
-        if (!_directory.fillPending(kv.first) && !_directory.wbPending(kv.first)) {
-            keys.push_back(kv.first);
+        if (keyCount == keys.size()) {
+            break;
+        }
+        if (!_directory.sameSet(kv.first, triggerPa) || kv.second.empty()) {
+            continue;
+        }
+        if (kv.second.front().waitReason == ResidentWaitReason::Capacity &&
+            !_directory.fillPending(kv.first) &&
+            !_directory.wbPending(kv.first)) {
+            keys[keyCount++] = kv.first;
         }
     }
-    for (uint64_t pa : keys) {
-
+    for (size_t i = 0; i < keyCount; ++i) {
+        const uint64_t pa = keys[i];
         fprintf(stderr, "[RESIDENT-CAPACITY-REPLAY] home=%d pa=0x%lx\n",
                 _nodeId, pa);
         fflush(stderr);
         replayResidentWaiters(pa);
     }
+    // Second pass: a capacity miss can re-enqueue its waiter while this
+    // replay is active (the same set's victim has just been freed). The
+    // nested-replay guard in handleResidentMiss leaves that fresh waiter to
+    // a later event; a second interrupted pass keeps the drain moving.
+    for (size_t i = 0; i < keyCount; ++i) {
+        const uint64_t pa = keys[i];
+        auto wit = _residentWaiters.find(pa);
+        if (wit == _residentWaiters.end()) continue;
+        if (wit->second.front().waitReason != ResidentWaitReason::Capacity)
+            continue;
+        fprintf(stderr, "[RESIDENT-CAPACITY-REPLAY-2] home=%d pa=0x%lx\n",
+                _nodeId, pa);
+        fflush(stderr);
+        replayResidentWaiters(pa);
+    }
     _capacityReplayActive = false;
-
 }
 
 const char*
@@ -1767,8 +1872,9 @@ UBCCController::inspectUbccDirForTest(uint64_t line_pa)
         << "\"naiveDirEvictions\":" << _naiveDirEvictions << ","
         << "\"naiveForcedInvalidations\":" << _naiveForcedInvalidations << ","
         << "\"naiveForcedWritebacks\":" << _naiveForcedWritebacks << ","
-        << "\"naiveDirtyVictims\":" << _naiveDirtyVictims;
-
+        << "\"naiveDirtyVictims\":" << _naiveDirtyVictims << ","
+        << "\"residentCount\":" << _directory.count() << ","
+        << "\"residentCapacity\":" << _directory.capacity();
     oss << "}";
     return oss.str();
 }
@@ -1894,7 +2000,11 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                 "STALE epoch — REJECTED\n",
                 _nodeId, line_pa);
         _staleRejectedCount++;
-        return false;
+        // A stale writeback belongs to an epoch Home has already superseded
+        // (ownership advanced before the writeback arrived). It can never
+        // make progress; absorb it here so the resident-waiter replay does
+        // not pin this line forever (TC135 liveness fix).
+        return true;
     }
 
     OutstandingRequest *ost = findOutstanding(line_pa);
@@ -1959,6 +2069,15 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         ost->dataValid = true;
     }
 
+    // Once a dirty owner returns data, Home becomes the authoritative source
+    // for later requests in the same serialized PA queue. The first requester
+    // receives the transaction-owned recall payload below; queued requesters
+    // are replayed after its Clear and use HomeMemory, so publish the same
+    // bytes before the recall outstanding can be retired.
+    if (ost->dataValid && _host) {
+        _host->writeDsmData(line_pa, ost->dataBuf);
+    }
+
     const OutstandingRequest recallDone = *ost;
     const int requesterNode = recallDone.requesterNode;
     const UBCC_OuterReqType reqType = recallDone.reqType;
@@ -1968,18 +2087,17 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 
     if (reqType == UBCC_OuterReqType::GlobalInvalidate) {
         if (recallDone.dataValid && _host) {
-            std::array<uint8_t, 64> cached{};
-            memcpy(cached.data(), recallDone.dataBuf, 64);
-            _lineDataCache[line_pa] = cached;
             _host->writeDsmData(line_pa, recallDone.dataBuf);
             std::fprintf(stderr,
-                         "[NAIVE-DATA-PERSIST] home=%d pa=0x%lx owner=%d data=1\n",
-                         _nodeId, line_pa, ownerNode);
+                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home=%d pa=0x%lx "
+                         "owner=%d epoch=%lu\n",
+                         _nodeId, line_pa, ownerNode,
+                         recallDone.reservedEpoch);
             std::fflush(stderr);
         } else {
             std::fprintf(stderr,
-                         "[NAIVE-DATA-PERSIST] home=%d pa=0x%lx owner=%d data=0\n",
-
+                         "[UBCC-NAIVE-DIRTY-RECALL-PAYLOAD] home=%d pa=0x%lx "
+                         "owner=%d data=0\n",
                          _nodeId, line_pa, ownerNode);
             std::fflush(stderr);
         }
@@ -1991,11 +2109,12 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         _residentWaiters.erase(line_pa);
         _pendingRequesters.erase(line_pa);
         _evictionPendingRemoval.erase(line_pa);
-        replayResidentWaitersForCapacity();
+        replayResidentWaitersForCapacity(line_pa);
         _recallResponseCount++;
-        printf("[UBCC-NAIVE-EVICT-DONE] home=%d pa=0x%lx owner=%d data=%d\n",
-               _nodeId, line_pa, ownerNode, recallDone.dataValid ? 1 : 0);
-
+        std::fprintf(stderr,
+                     "[UBCC-NAIVE-EVICT-DONE] home=%d pa=0x%lx owner=%d data=%d\n",
+                     _nodeId, line_pa, ownerNode, recallDone.dataValid ? 1 : 0);
+        std::fflush(stderr);
         return true;
     }
 
@@ -2494,7 +2613,11 @@ UBCCController::processWriteback(uint64_t line_pa, int requesterNode,
                 "STALE epoch: msg=%lu directory=%lu — REJECTED\n",
                 _nodeId, line_pa, epochVal, entry.epoch);
         _staleRejectedCount++;
-        return false;
+        // A stale writeback belongs to an epoch Home has already superseded
+        // (ownership advanced before the writeback arrived). It can never
+        // make progress; absorb it here so the resident-waiter replay does
+        // not pin this line forever (TC135 liveness fix).
+        return true;
     }
 
     // ---- M7: Owner match check ----
@@ -2581,41 +2704,7 @@ UBCCController::processWritebackWithData(uint64_t line_pa, int requesterNode,
                                          uint64_t epochVal, bool keepAsClean,
                                          const uint8_t *data)
 {
-    bool success = processWriteback(line_pa, requesterNode, epochVal, keepAsClean);
-    if (success) {
-        if (data && _host) {
-            _host->writeDsmData(line_pa, data);
-            updateLineDataCache(line_pa, data);
-            std::fprintf(stderr,
-                         "[WB-DATA-PERSIST] home=%d pa=0x%lx node=%d source=resident\n",
-                         _nodeId, line_pa, requesterNode);
-            std::fflush(stderr);
-        }
-        return true;
-    }
-
-    if (!data) {
-        return false;
-    }
-
-    auto it = _residentWaiters.find(line_pa);
-    if (it == _residentWaiters.end()) {
-        return false;
-    }
-    for (auto &pr : it->second) {
-        if (pr.reqType == UBCC_OuterReqType::GlobalWriteback &&
-            pr.node == requesterNode && pr.epoch == normalizeEpoch(epochVal)) {
-            std::memcpy(pr.data.data(), data, 64);
-            pr.hasData = true;
-            std::fprintf(stderr,
-                         "[WB-DATA-QUEUED] home=%d pa=0x%lx node=%d waiters=%zu\n",
-                         _nodeId, line_pa, requesterNode, it->second.size());
-            std::fflush(stderr);
-            break;
-        }
-    }
-    return false;
-
+    return processWriteback(line_pa, requesterNode, epochVal, keepAsClean, data);
 }
 
 // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----
@@ -3247,6 +3336,10 @@ UBCCController::processClear(
     // newly committed state (just committed by this Clear).
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
+    // Clearing the grant removes the outstanding-request pin. A different
+    // line mapping to this set may already be waiting for capacity, so retry
+    // those bounded waiters now that this entry is a legal eviction victim.
+    replayResidentWaitersForCapacity(line_pa);
 
     // Order log audit (§3.6)
     if (_debugClearTrace) {
@@ -3657,9 +3750,9 @@ void
 UBCCController::onBackstoreFillComplete(
     uint64_t linePa, bool found, const BackstoreEntry &entry)
 {
-    fprintf(stderr, "[RESIDENT-FILL-DONE] home=%d pa=0x%lx found=%d waiters=%zu\n",
-           _nodeId, linePa, found ? 1 : 0,
-
+    fprintf(stderr, "[RESIDENT-FILL-DONE] tick=%lu home=%d pa=0x%lx found=%d waiters=%zu\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, linePa, found ? 1 : 0,
            _residentWaiters.count(linePa) ? _residentWaiters[linePa].size() : 0);
     fflush(stderr);
     DirEntry e;
@@ -3730,11 +3823,15 @@ UBCCController::onBackstoreFillComplete(
 void
 UBCCController::onBackstoreWriteAck(uint64_t linePa)
 {
-    fprintf(stderr, "[RESIDENT-WB-ACK] home=%d pa=0x%lx evictionPending=%d async=%d\n",
-           _nodeId, linePa,
-           _evictionPendingRemoval.count(linePa) ? 1 : 0,
+    fprintf(stderr, "[RESIDENT-SPILL-DONE] tick=%lu home=%d pa=0x%lx evictionPending=%d async=%d\n",
+            _host ? _host->hostCurrentTick() : 0,
+            _nodeId, linePa,
+            _evictionPendingRemoval.count(linePa) ? 1 : 0,
            _asyncWbSnapshots.count(linePa) ? 1 : 0);
     fflush(stderr);
+
+    // Phase 3: successful backstore write — Bloom already inserted by caller.
+    // No exact-PA shadow set.
 
     // Check if this was an async writeback (not an eviction writeback)
     if (_asyncWbSnapshots.count(linePa) > 0) {
@@ -3755,7 +3852,6 @@ UBCCController::onBackstoreWriteAck(uint64_t linePa)
 
     if (_evictionPendingRemoval.erase(linePa) != 0) {
         _directory.forceRemove(linePa);
-        replayResidentWaitersForCapacity();
     }
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
@@ -3783,8 +3879,7 @@ UBCCController::onBackstoreDeleteAck(uint64_t linePa, bool existed)
     _evictionPendingRemoval.erase(linePa);
     refreshPinnedBit(linePa);
     replayResidentWaiters(linePa);
-    replayResidentWaitersForCapacity();
-
+    replayResidentWaitersForCapacity(linePa);
     (void)existed;
 }
 
@@ -4265,12 +4360,7 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.h.homeLinePa = grantOst.linePa;
     push.h.epoch = grantOst.baseEpoch;
     push.h.reqId = grantOst.reqId;
-    auto cachedData = _lineDataCache.end();
-    if (!grantOst.dataValid) {
-        cachedData = _lineDataCache.find(grantOst.linePa);
-    }
-    const bool hasGrantData = grantOst.dataValid || cachedData != _lineDataCache.end();
-
+    const bool hasGrantData = grantOst.dataValid;
 
     push.h.flags = hasGrantData ? static_cast<uint32_t>(CFLAG_HAS_DATA) : 0;
 
@@ -4292,18 +4382,10 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.committedEpoch = 0;
     push.b.readResp.pendingInvMask = 0;
 
-    // Grant data: copy from grantOst dataBuf if dataValid, otherwise use the
-    // home-side recall/writeback cache populated by naive dirty eviction.
-
+    // Push grants only carry transaction-owned data. The router supplies
+    // authoritative home data for grants that do not own a payload.
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
-    } else if (cachedData != _lineDataCache.end()) {
-        std::memcpy(push.b.readResp.grantData, cachedData->second.data(), 64);
-        push.b.readResp.dataSource = static_cast<int8_t>(GrantDataSource::RecallBuffer);
-        std::fprintf(stderr,
-                     "[DATA-CACHE-PUSH] home=%d pa=0x%lx requester=%d hit=1\n",
-                     _nodeId, grantOst.linePa, grantOst.requesterNode);
-        std::fflush(stderr);
     }
     // ── Phase C4 trace point 6: push grant payload word ──
     {

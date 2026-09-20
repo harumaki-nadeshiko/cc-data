@@ -39,8 +39,8 @@ case "${1:-}" in
     --1s-tinydir)  TOPO_KIND="1s_tinydir"; shift ;;
     --2s)          TOPO_KIND="2s"; shift ;;
     --2n1s)        TOPO_KIND="2n1s"; shift ;;
-    --3n1s)        TOPO_KIND="3n1s"; shift ;;
-    --3n2s)        TOPO_KIND="3n2s"; shift ;;
+    --3n1s)        TOPO_KIND="1s"; shift ;;
+    --3n2s)        TOPO_KIND="2s"; shift ;;
     --8n1s)        TOPO_KIND="8n1s"; shift ;;
     --8n2s)        TOPO_KIND="8n2s"; shift ;;
 esac
@@ -111,7 +111,7 @@ ubio_extra_args_for_tc() {
             fi
             echo "--bloom-bytes=128 --sram-bytes=4352 --ways=1 --set-bits=0 --dir-overflow-policy=${UBCC_POLICY:-spill} --batch-rs=0 ${UBCC_OPTS:-}"
             ;;
-        *)   echo "" ;;
+        *)   echo "${UBCC_OPTS:-}" ;;
     esac
 }
 
@@ -148,7 +148,7 @@ PY
 }
 
 # ─── per-TC run ─────────────────────────────────────────────────────
-LOG_BASE="$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}"
+LOG_BASE="${LOG_BASE:-$ROOT_DIR/logs/$(date +%Y%m%d_%H%M%S)_${TOPO_KIND}}"
 mkdir -p "$LOG_BASE" "$ROOT_DIR/build/run"
 
 # Kill any leftover infra from a previous TC / abort.
@@ -216,11 +216,15 @@ run_tc() {
         cmd="$(expand_cmd gem5_${nid} '' '' "$node_od")"
         if [ "$tc" = "120" ] || [ "$tc" = "121" ] || [ "$tc" = "122" ] || [ "$tc" = "123" ] || [ "$tc" = "124" ]; then
             case "${EP_PERF_PROFILE:-optimized}" in
-                baseline)
+                naive|naive-noopt|baseline|spill-noopt)
                     cmd="$cmd --silent-upgrade=0 --direct-fwd=0 --ubcc-batch-rs=0"
                     ;;
-                optimized|*)
+                optimized)
                     cmd="$cmd --silent-upgrade=1 --direct-fwd=1 --ubcc-batch-rs=1"
+                    ;;
+                *)
+                    echo "FATAL: unknown EP_PERF_PROFILE=${EP_PERF_PROFILE}" >&2
+                    exit 2
                     ;;
             esac
         fi
@@ -332,6 +336,7 @@ run_tc() {
     for nid in $(seq 0 $((NUM_NODES-1))); do
         for sid in $(seq 0 $((NUM_SOCKETS-1))); do
             faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stderr.log")
+            faultlogs+=("$LOG_BASE/ubio_n${nid}_s${sid}/stdout.log")
         done
     done
     local vlog="$LOG_BASE/verify_tc${tc}.log"

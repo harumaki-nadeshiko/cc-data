@@ -19,6 +19,9 @@ STATS_RE = re.compile(r"\[UBCC-STATS\] \{.*\"residentCapacity\":(\d+).*")
 H64_EXACT_RE = re.compile(
     r"\[UBCC-STATS\] \{\"h64ExactLiveKnown\":(\d+),\"h64ExactLiveCount\":(\d+)\}")
 PERF_RE = re.compile(r"\[EP-PERF\] kind=(\w+) node=\d+ pa=0x[0-9a-f]+.*latency_ps=(\d+)")
+PERF_KEY_RE = re.compile(
+    r"\[EP-PERF\] kind=(\w+) node=(\d+) pa=(0x[0-9a-f]+) "
+    r"reqId=(\d+).*latency_ps=(\d+)")
 
 
 def coverage(log_dir):
@@ -52,6 +55,7 @@ def coverage(log_dir):
 
 def mean_protocol_latency(log_dir, kind="outer"):
     values = []
+    keys = []
     for root, _, files in os.walk(log_dir):
         for name in files:
             if name != "stderr.log":
@@ -61,11 +65,18 @@ def mean_protocol_latency(log_dir, kind="outer"):
                     match = PERF_RE.search(line)
                     if match and match.group(1) == kind:
                         values.append(int(match.group(2)))
+                    key_match = PERF_KEY_RE.search(line)
+                    if key_match and key_match.group(1) == kind:
+                        keys.append((int(key_match.group(2)), key_match.group(3)))
     if not values:
         raise ValueError(f"no completed {kind} protocol samples in {log_dir}")
+    sorted_values = sorted(values)
+    p95_index = max(0, (95 * len(sorted_values) + 99) // 100 - 1)
     return {"samples": len(values), "mean_ps": statistics.mean(values),
             "mean_ns": statistics.mean(values) / 1000.0,
-            "p50_ns": statistics.median(values) / 1000.0}
+            "p50_ns": statistics.median(values) / 1000.0,
+            "p95_ns": sorted_values[p95_index] / 1000.0,
+            "sample_mix": sorted(keys)}
 
 
 def main():
@@ -88,6 +99,12 @@ def main():
         raise ValueError("spill/no-opt log is not a spill-policy run")
     if optimized["policy"] != "spill":
         raise ValueError("optimized log is not a spill-policy run")
+    sample_counts = {base_lat["samples"], spill_lat["samples"], opt_lat["samples"]}
+    if len(sample_counts) != 1:
+        raise ValueError("profile EP-PERF sample counts differ")
+    if not (base_lat["sample_mix"] == spill_lat["sample_mix"] ==
+            opt_lat["sample_mix"]):
+        raise ValueError("profile EP-PERF node/PA sample mix differs")
     capacity_pass = spill["effective_unique_lower_bound"] >= required
     capacity_latency_delta_ns = spill_lat["mean_ns"] - base_lat["mean_ns"]
     capacity_latency_pass = capacity_latency_delta_ns <= 25.0
@@ -104,6 +121,8 @@ def main():
               "capacity_latency_pass": capacity_latency_pass,
               "latency_reduction_pct": latency_reduction_pct,
               "latency_pass": latency_pass}
+    for latency in (base_lat, spill_lat, opt_lat):
+        latency.pop("sample_mix", None)
     print(json.dumps(report, indent=2))
     return 0 if capacity_pass and capacity_latency_pass and latency_pass else 1
 

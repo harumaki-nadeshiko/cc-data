@@ -109,6 +109,23 @@ TESTCASES = {
     122: "e2e_tc122_perf_hot_reuse",
     123: "e2e_tc123_perf_shared_upgrade",
     124: "e2e_tc124_perf_direct_fwd",
+    125: "e2e_tc125_read_offload_onload",
+    126: "e2e_tc126_resident_upgrade_replay",
+    127: "e2e_tc127_writeback_offload_onload",
+    128: "e2e_tc128_clean_evict_offload_onload",
+    129: "e2e_tc129_long_mixed_integration",
+    130: "e2e_tc130_directory_overflow_benchmark",
+    131: "e2e_tc131_catalog_fullscan",
+    132: "e2e_tc132_dirty_checkpoint_stream",
+    133: "e2e_tc133_8n1s_shared_frontier",
+    134: "e2e_tc134_8n2s_sliding_window",
+    135: "e2e_tc135_preserved_sharer_revisit",
+    136: "e2e_tc136_preserved_owner_store",
+    137: "e2e_tc137_new_requester_load",
+    138: "e2e_tc138_dirty_handoff_store",
+    139: "e2e_tc139_mixed_batch_throughput",
+    140: "e2e_tc140_cross_l2_owner_store",
+    141: "e2e_tc141_spill_shared_writer_recovery",
     142: "e2e_tc142_db_oltp_buffer_pool",
     143: "e2e_tc143_db_btree_traversal",
     144: "e2e_tc144_db_wal_checkpoint",
@@ -123,6 +140,25 @@ _RE_READ_VAL = re.compile(
     r"expected=(\w+)\s+actual=(\w+)\s+(MATCH|MISMATCH)"
 )
 _RE_E2E_META = re.compile(r"\[E2E_META\]\s+node=(\d+)\s+test=(\S+)")
+_RE_TOPOLOGY = re.compile(r"\[TOPOLOGY\]\s+node=(\d+)\s+planes=(\d+)")
+_RE_PORTABLE_PRESSURE = re.compile(
+    r"\[PORTABLE-PRESSURE\]\s+node=(\d+)\s+planes=(\d+)\s+"
+    r"hot_lines=(\d+)\s+pressure_lines=(\d+)\s+"
+    r"total_unique_lines=(\d+)\s+naive_capacity_lines=(\d+)\s+"
+    r"target_footprint_lines=(\d+)\s+pressure_level_pct=(\d+)\s+"
+    r"batches=(\d+)"
+)
+_RE_GUEST_TIMER = re.compile(
+    r"\[GUEST-TIMER\]\s+node=(\d+)\s+phase=(\S+)\s+"
+    r"operations=(\d+)\s+counter_ticks=(\d+)\s+"
+    r"counter_frequency_hz=(\d+)\s+source=(\S+)\s+unit=(\S+)"
+)
+_RE_PERF_LATENCY = re.compile(
+    r"\[PERF-LATENCY\]\s+node=(\d+)\s+phase=(\S+)\s+samples=(\d+)\s+"
+    r"min=(\d+)\s+p50=(\d+)\s+p95=(\d+)\s+p99=(\d+)\s+"
+    r"max=(\d+)\s+mean=(\d+)\s+counter_frequency_hz=(\d+)\s+"
+    r"source=(\S+)\s+unit=(\S+)"
+)
 # Q2: Interleaved-output fallback — when concurrent writes from
 # multiple CPUs corrupt the READ_VAL line, the tail often survives
 # as "1223344 MATCH".  We extract the actual value prefix and verdict.
@@ -1525,6 +1561,65 @@ def verify_tc124(reads, lines):
     return verify_perf_workload(124, reads, lines)
 
 
+def verify_spill_correctness(tc_id, reads, lines, phases, expected_reads,
+                             required_markers=()):
+    if len(reads) != expected_reads:
+        return False, (f"TC{tc_id} FAILED: expected {expected_reads} READ_VAL, "
+                       f"got {len(reads)}"), reads
+    mismatches = [read for read in reads if read["verdict"] != "MATCH"]
+    if mismatches:
+        return False, f"TC{tc_id} FAILED: {len(mismatches)} mismatches", mismatches
+    missing_phases = [phase for phase in phases if not any(
+        "[PHASE]" in line and f"phase={phase}" in line for line in lines)]
+    if missing_phases:
+        return False, f"TC{tc_id} FAILED: missing phases {missing_phases}", []
+    missing_markers = [marker for marker in required_markers if not any(
+        marker in line for line in lines)]
+    if missing_markers:
+        return False, (f"TC{tc_id} FAILED: missing protocol evidence "
+                       f"{missing_markers}"), []
+    return True, f"TC{tc_id} PASSED: spill/fill correctness completed", []
+
+
+def verify_tc125(reads, lines):
+    return verify_spill_correctness(
+        125, reads, lines,
+        ("init_target", "shared_read", "cold_aliasing", "read_onload",
+         "write_unique", "verify_final"), 5,
+        ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE"))
+
+
+def verify_tc126(reads, lines):
+    return verify_spill_correctness(
+        126, reads, lines,
+        ("init_target", "shared_read", "cold_aliasing", "upgrade_store",
+         "verify_upgrade"), 4,
+        ("RESIDENT-WAITER-ENQ", "UBCC-UPGRADE-COMMIT"))
+
+
+def verify_tc127(reads, lines):
+    return verify_spill_correctness(
+        127, reads, lines,
+        ("init_dirty", "cold_spill", "flush_wb", "remote_read"), 2,
+        ("RESIDENT-SPILL-DONE",))
+
+
+def verify_tc128(reads, lines):
+    return verify_spill_correctness(
+        128, reads, lines,
+        ("init_target", "shared_read", "cold_spill", "clean_evict",
+         "verify_read"), 4,
+        ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE"))
+
+
+def verify_tc129(reads, lines):
+    return verify_spill_correctness(
+        129, reads, lines,
+        ("init_v0", "spill_1", "read_v0_onload", "upgrade_v1",
+         "spill_2", "read_v1_onload", "verify_final"), 3,
+        ("RESIDENT-SPILL-DONE", "RESIDENT-FILL-DONE"))
+
+
 def verify_tc130(reads, lines):
     """TC130: high-footprint naive-vs-spill directory benchmark."""
     if len(reads) < 24:
@@ -1548,7 +1643,7 @@ def verify_guest_timer(lines):
     samples = [sample for sample in samples if sample]
     selftests = [sample for sample in samples if sample.group(2) == "timer_selftest"]
     if not selftests:
-        return "missing arm_cntvct_el0 timer_selftest"
+        return "missing guest timer_selftest"
     if any(int(sample.group(4)) == 0 or int(sample.group(5)) == 0
            for sample in selftests):
         return "zero timer_selftest counter_ticks or counter_frequency_hz"
@@ -2041,6 +2136,23 @@ VERIFIERS = {
     122: verify_tc122,
     123: verify_tc123,
     124: verify_tc124,
+    125: verify_tc125,
+    126: verify_tc126,
+    127: verify_tc127,
+    128: verify_tc128,
+    129: verify_tc129,
+    130: verify_tc130,
+    131: verify_tc131,
+    132: verify_tc132,
+    133: verify_tc133,
+    134: verify_tc134,
+    135: verify_tc135,
+    136: verify_tc136,
+    137: verify_tc137,
+    138: verify_tc138,
+    139: verify_tc139,
+    140: verify_tc140,
+    141: verify_tc141,
     142: verify_tc142,
     143: verify_tc143,
     144: verify_tc144,

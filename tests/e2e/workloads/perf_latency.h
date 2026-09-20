@@ -7,9 +7,8 @@
 
 static inline uint64_t read_counter_serialized(void)
 {
-    uint64_t value;
-    __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(value) : : "memory");
-    return value;
+    __asm__ volatile("dmb sy" ::: "memory");
+    return read_cntvct_el0();
 }
 
 static inline void perf_store_complete(int home_node, uint32_t offset,
@@ -93,7 +92,7 @@ static inline void emit_latency_summary(int node_id, const char *phase,
     p = perf_fmt_u64(buf, p, sum / count);
     s = " counter_frequency_hz="; while (*s) buf[p++] = *s++;
     p = perf_fmt_u64(buf, p, read_cntfrq_el0());
-    s = " source=arm_cntvct_el0 unit=counter_ticks\n";
+    s = " source=gem5_clock_gettime unit=nanoseconds\n";
     while (*s) buf[p++] = *s++;
     _raw_write(buf, p);
 }

@@ -17,6 +17,7 @@ static int e2e_workload_node;
 
 /* ── ARM64 syscall numbers ─────────────────────────────────────────── */
 #define SYS_WRITE      64
+#define SYS_CLOCK_GETTIME 113
 #define SYS_SYNC_WAIT  436
 #define SYS_SWITCH_CPU 437
 #define SYS_EXIT       93
@@ -177,18 +178,21 @@ static inline void _raw_write(const char *buf, int len)
 
 /* ── Architected system-counter helpers ────────────────────────────── */
 
+struct e2e_timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
 static inline uint64_t read_cntvct_el0(void)
 {
-    uint64_t value;
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
-    return value;
+    struct e2e_timespec ts = {0, 0};
+    _syscall3(SYS_CLOCK_GETTIME, 1, (long)&ts, 0);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
 static inline uint64_t read_cntfrq_el0(void)
 {
-    uint64_t value;
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
-    return value;
+    return 1000000000ULL;
 }
 
 static inline void emit_guest_timer(int node_id, const char *phase,
@@ -212,7 +216,7 @@ static inline void emit_guest_timer(int node_id, const char *phase,
     if (!frequency) digits[n++] = '0';
     while (frequency) { digits[n++] = (char)('0' + frequency % 10); frequency /= 10; }
     while (n) buf[p++] = digits[--n];
-    s = (char *)" source=arm_cntvct_el0 unit=counter_ticks\n";
+    s = (char *)" source=gem5_clock_gettime unit=nanoseconds\n";
     while (*s) buf[p++] = *s++;
     _raw_write(buf, p);
 }

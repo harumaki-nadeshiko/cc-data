@@ -12,11 +12,13 @@
 #define UPGRADE_SEM_BASE 0x710000u
 #define UPGRADE_SAMPLES 256
 #define VALUE 0x13100000u
+#define PARTICIPANT_NODES ((NUM_NODES) < 3 ? (NUM_NODES) : 3)
+#define PARTICIPANT_MASK ((1u << PARTICIPANT_NODES) - 1u)
 static inline uint32_t hot_off(int i) { return CATALOG_BASE + (uint32_t)i * 64u; }
 static inline uint32_t scan_off(int i) { return SCAN_BASE + (uint32_t)i * 64u; }
 static inline uint32_t upgrade_off(int i) { return UPGRADE_BASE + (uint32_t)i * 64u; }
 static inline uint32_t upgrade_sem_off(int i) { return UPGRADE_SEM_BASE + (uint32_t)i * 64u; }
-static inline uint64_t read_cntvct(void) { uint64_t v; __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v)); return v; }
+static inline uint64_t read_cntvct(void) { return read_cntvct_el0(); }
 static int fmt_u64_dec(char *buf, int p, uint64_t value) {
  if (!value) { buf[p++] = '0'; return p; }
  char digits[24]; int n = 0;
@@ -43,16 +45,17 @@ int main(int argc, char **argv) {
   _exit_program(0); return 0;
  }
  if (c % 4 == 0) emit_e2e_meta(n, "TC131");
+ if (c % 4 == 0) emit_timer_selftest(n);
  if (n == 0) {
   for (int i = 0; i < HOT; i++) dsm_store(0, hot_off(i), VALUE | (uint32_t)i);
   emit_phase_done(0, "catalog_seed");
  }
- if (c % 4 == 0) sync_wait(7);
+  if (c % 4 == 0) sync_wait(PARTICIPANT_MASK);
  if ((n == 1 || n == 2) && c % 4 == 0) {
   for (int i = 0; i < HOT; i++) (void)dsm_load(0, hot_off(i));
   emit_phase_done(n, "catalog_share");
  }
- if (c % 4 == 0) sync_wait(7);
+  if (c % 4 == 0) sync_wait(PARTICIPANT_MASK);
  if (n == 0) {
   for (int i = 0; i < PRESSURE; i++) {
    dsm_store(0, scan_off(i), 0x13180000u | (uint32_t)i);
@@ -60,7 +63,7 @@ int main(int argc, char **argv) {
   }
   emit_phase_done(0, "full_scan");
  }
- if (c % 4 == 0) sync_wait(7);
+  if (c % 4 == 0) sync_wait(PARTICIPANT_MASK);
  if ((n == 1 || n == 2) && c % 4 == 0) {
   for (int pass = 0; pass < 2; pass++) for (int i = 0; i < HOT; i++) {
    uint64_t t0 = 0;
@@ -72,7 +75,7 @@ int main(int argc, char **argv) {
   }
   emit_phase_done(n, "catalog_reuse");
  }
- if (c % 4 == 0) sync_wait(7);
+  if (c % 4 == 0) sync_wait(PARTICIPANT_MASK);
  /* CPU0 first obtains R_M. CPU2 is in a different L2 cluster, so its store
   * enters EP-RNF with the node-level R_M record.  Silent upgrade completes
   * locally; baseline issues OuterUpgradeReq. */
@@ -97,7 +100,7 @@ int main(int argc, char **argv) {
    }
   }
   }
- if (c % 4 == 0) sync_wait(7);
+  if (c % 4 == 0) sync_wait(PARTICIPANT_MASK);
  _exit_program(0);
  return 0;
 }

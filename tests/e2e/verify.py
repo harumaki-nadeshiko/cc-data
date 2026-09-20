@@ -38,31 +38,12 @@ def main():
 
     raw_lines = []
     found = 0
-    deduped_raw_lines = []
-    seen_lines = set()
     for path in args.simout:
         if os.path.exists(path):
             found += 1
             with open(path) as f:
                 for line in f:
-                    stripped = line.rstrip("\n")
-                    if stripped in seen_lines:
-                        continue
-                    seen_lines.add(stripped)
-                    deduped_raw_lines.append(stripped)
-    raw_lines = deduped_raw_lines
-    # Per-CPU simout may repeat the same markers (each Process ran its own
-    # workload copy and only the primary CPU reaches emit_read_val, but every
-    # CPU emitted its own E2E_META/phase/idle glimmer from the pre-primary
-    # emit). Dedupe identical lines so the verifier sees each marker once.
-    seen = set()
-    deduped = []
-    for line in raw_lines:
-        if line in seen:
-            continue
-        seen.add(line)
-        deduped.append(line)
-    raw_lines = deduped
+                    raw_lines.append(line.rstrip("\n"))
     expected = len(args.simout)
 
     for path in args.fault_log:
@@ -74,6 +55,10 @@ def main():
                         "[UBCC-STATS]" in line or
                         "[UBCC-NAIVE-EVICT]" in line or
                         "[UBCC-NAIVE-EVICT-DONE]" in line or
+                        "[RESIDENT-SPILL-" in line or
+                        "[RESIDENT-FILL-" in line or
+                        "[RESIDENT-WAITER-" in line or
+                        "[UBCC-UPGRADE-COMMIT]" in line or
                         "BATCH-RS" in line or
                         "SILENT" in line or
                         "C4" in line or

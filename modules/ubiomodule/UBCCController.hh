@@ -297,13 +297,23 @@ class UBCCController
         bool writeIntent;          // True for RU with write intent (opKind==Read)
         uint64_t epoch;            // Observed epoch at enqueue time
         uint64_t reqId;            // Requester-allocated ID, reused on replay
+        ResidentWaitReason waitReason;
         bool hasData;              // Writeback payload captured while waiting for resident metadata
         std::array<uint8_t, 64> data;
+        // Upgrade-specific replay fields (valid for opKind==Upgrade)
+        int         upgradeDesiredPerm;   // 0=Shared, 1=Unique
+        UBCC_UpgradeCause upgradeCause;   // Cause enumeration
+        // Writeback-specific replay field (valid for opKind==Writeback)
+        bool        wbKeepAsClean;        // keepAsClean flag
 
         PendingRequester()
-            : node(-1), socket(-1), reqType(UBCC_OuterReqType::GlobalReadShared),
-              writeIntent(false), epoch(0), reqId(0), hasData(false), data{} {}
-
+            : node(-1), socket(-1), opKind(ResidentOpKind::Read),
+              reqType(UBCC_OuterReqType::GlobalReadShared),
+              writeIntent(false), epoch(0), reqId(0),
+              waitReason(ResidentWaitReason::Capacity), hasData(false), data{},
+              upgradeDesiredPerm(0),
+              upgradeCause(UBCC_UpgradeCause::LocalCleanUnique),
+              wbKeepAsClean(false) {}
     };
 
     // Maximum pending requesters per PA (configurable queue depth)
@@ -518,8 +528,8 @@ class UBCCController
      * @return               True if writeback accepted (epoch matched)
      */
     bool processWriteback(uint64_t line_pa, int requesterNode,
-                          uint64_t epochVal, bool keepAsClean);
-
+                          uint64_t epochVal, bool keepAsClean,
+                          const uint8_t *data = nullptr);
     bool processWritebackWithData(uint64_t line_pa, int requesterNode,
                                   uint64_t epochVal, bool keepAsClean,
                                   const uint8_t *data);
@@ -768,10 +778,10 @@ class UBCCController
     // the same PA are queued here.  Replayed on Clear commit.
     std::map<uint64_t, std::deque<PendingRequester>> _pendingRequesters;
     std::map<uint64_t, std::deque<PendingRequester>> _residentWaiters;
-    bool _capacityReplayActive = false;
     std::set<uint64_t> _evictionPendingRemoval;
     // Replay can synchronously execute another protocol path. Suppress nested
     // capacity sweeps; the outer pass owns the current finite snapshot.
+    bool _capacityReplayActive = false;
 
     // Phase 3: _backstoreMetadataPAs REMOVED (was forbidden exact-PA shadow set).
     // Resident miss now uses Bloom advisory negative shortcut + H64 lookup;
@@ -791,9 +801,36 @@ class UBCCController
 public:
     void setBatchRsEnabled(bool v) { _batchRsEnabled = v; _batchRsOverridden = true; }
     void setResidentOverflowPolicy(ResidentOverflowPolicy p) { _overflowPolicy = p; }
+    void setDebugClearTrace(bool v) { _debugClearTrace = v; }
     ResidentOverflowPolicy residentOverflowPolicy() const { return _overflowPolicy; }
     std::string dumpStatsJson() const;
 
+    // Phase 3: H64 mode forces all ResidentDir misses to issue H64 lookup
+    // regardless of Bloom result.  Set by ubio_main when H64 schema is active.
+    void setH64BloomAllMisses(bool v) { _h64BloomAllMisses = v; }
+    bool h64BloomAllMisses() const { return _h64BloomAllMisses; }
+    bool allH64BloomSlicesValid() const { return _directory.allBloomSlicesValid(); }
+    void publishBloomLive(uint64_t linePa);
+
+    // H64 async DSM persistence: called by host when writeDsmDataAsync completes.
+    void onDsmPersistComplete(uint64_t linePa);
+    void onDsmPersistFailed(uint64_t linePa);
+
+    // Phase 3: H64 bloom bypass flag (private)
+    bool _h64BloomAllMisses = false;
+
+    // H64 async DSM persistence gate: bounded set of PAs with in-flight writes.
+    // HARD caps: explicit limits prevent unbounded growth.
+    static constexpr int kMaxH64DsmPending = 32;  // max concurrent DSM writes
+    static constexpr int kMaxH64PersistenceWaitersPerPA = 8;
+    static constexpr int kMaxH64PersistenceWaitersTotal = 64;
+    std::set<uint64_t> _h64DsmPending;
+    // Pending requesters waiting for DSM persistence to complete (per PA).
+    std::map<uint64_t, std::deque<PendingRequester>> _h64PersistenceWaiters;
+    int _h64PersistenceWaitersTotal = 0;  // explicit total counter
+    bool _debugLog = false;       // [DEBUG-H64-*] gate
+    bool _debugClearTrace = false; // [DEBUG-TC5-CLEAR-TRACE], [DEBUG-UBCC-CLEAR] gate
+    bool _verboseLog = false;      // Phase 4: general debug/diagnostic gate (§I14)
 
     // Phase 1: Bloom reconstruction
     uint64_t _bloomReconstructInterval = 10000;
@@ -987,8 +1024,7 @@ public:
                                  UBCC_OuterReqType reqType, bool writeIntent,
                                  uint64_t *outEffectiveMask = nullptr);
     bool evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim);
-    void replayResidentWaitersForCapacity();
-
+    void replayResidentWaitersForCapacity(uint64_t triggerPa);
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,
                               int requesterNode);

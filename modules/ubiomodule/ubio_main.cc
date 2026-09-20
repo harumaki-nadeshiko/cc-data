@@ -1964,8 +1964,16 @@ main(int argc, char **argv)
     using BarrierKey = std::pair<uint32_t, uint32_t>;
     using BarrierArrivals = std::map<int, uint32_t>;
     std::map<BarrierKey, BarrierArrivals> barrierArrivals;
+    auto barrierPlaneMask = [](uint32_t mask) {
+        // Bit 31 namespaces the portable startup barrier; the remaining bits
+        // are already global (node,socket) plane IDs.
+        return mask & ~0x80000000u;
+    };
+    auto barrierExpectedPlanes = [&](uint32_t mask) {
+        return static_cast<uint32_t>(__builtin_popcount(barrierPlaneMask(mask)));
+    };
     auto releaseBarrier = [&](const BarrierKey &bk) {
-        const uint32_t expected = __builtin_popcount(bk.first) * g_numSockets;
+        const uint32_t expected = barrierExpectedPlanes(bk.first);
         auto it = barrierArrivals.find(bk);
         if (it == barrierArrivals.end() || it->second.size() < expected)
             return;
@@ -2106,16 +2114,17 @@ main(int argc, char **argv)
                     uint32_t mask = coh->b.barrier.mask;
                     uint32_t seq  = coh->b.barrier.seq;
                     int src = static_cast<int>(m->hdr.sourceId);
-                    std::fprintf(stderr, "[UBIO-BARRIER-REACHED] n=%d s=%d fromNet=%d mask=0x%x seq=%lu src=%d\n", nid, sid, (int)fromNetwork, mask, (unsigned long)seq, src);
                     // Arrival generations are local to isolated gem5
                     // processes. Aggregate one in-flight generation per mask
                     // and retain each plane's generation for its release.
                     BarrierKey bk{mask, 0};
-                    const int leaderNode = __builtin_ctz(mask);
-                    if (nid == leaderNode && sid == 0) {
-                        const int sourceNode = src / g_numSockets;
-                        if (sourceNode < 0 || sourceNode >= 32 ||
-                            (mask & (1U << sourceNode)) == 0) {
+                    const uint32_t planeMask = barrierPlaneMask(mask);
+                    const int leaderPlane = __builtin_ctz(planeMask);
+                    const int leaderNode = leaderPlane / g_numSockets;
+                    const int leaderSocket = leaderPlane % g_numSockets;
+                    if (nid == leaderNode && sid == leaderSocket) {
+                        if (src < 0 || src >= 32 ||
+                            (planeMask & (1U << src)) == 0) {
                             std::fprintf(stderr,
                                          "[UBIO-BARRIER-WARN] n%d ignored source=%d mask=0x%x\n",
                                          nid, src, mask);
@@ -2132,7 +2141,7 @@ main(int argc, char **argv)
                         if (fwd) {
                             *fwd = *m;
                             fwd->hdr.timestamp = tick;
-                            fwd->hdr.targetId = gidOf(leaderNode, 0);
+                            fwd->hdr.targetId = leaderPlane;
                             netPort->send(fwd);
                         }
                     }
@@ -2438,7 +2447,7 @@ main(int argc, char **argv)
         std::vector<BarrierKey> readyBarriers;
         for (const auto &kv : barrierArrivals) {
             if (kv.second.size() >= static_cast<size_t>(
-                    __builtin_popcount(kv.first.first) * g_numSockets))
+                    barrierExpectedPlanes(kv.first.first)))
                 readyBarriers.push_back(kv.first);
         }
         for (const BarrierKey &bk : readyBarriers)
