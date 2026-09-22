@@ -11,7 +11,6 @@
 #include "framework/iface/Log.hh"
 #include "protocol/TracePerfPolicy.hh"
 #include "protocol/NodeAddressMap.hh"
-#include "protocol/ControlCredits.hh"
 #include "modules/ubiomodule/UBCCController.hh"
 #include "modules/ubiomodule/BackstoreSchemaA.hh"
 #include "modules/ubiomodule/BackstoreSchemaC.hh"
@@ -123,7 +122,6 @@ isGem5Ingress(CoherenceMessageType t)
       case CoherenceMessageType::EvictResp:
       case CoherenceMessageType::UpgradeResp:
       case CoherenceMessageType::UpgradeDoneResp:
-      case CoherenceMessageType::RetainedAuthorityCommit:
       case CoherenceMessageType::ClearResp:
       case CoherenceMessageType::UpgradeAckNotify:
       case CoherenceMessageType::QueryLineMetaResp:
@@ -669,10 +667,6 @@ sendCoh(Port *port, uint64_t tick, uint32_t srcModule, uint32_t dstModule,
     }
     SetMessagePayload(buf, &msg, sizeof(msg));
     uint64_t sendTs = GetMessageTimestamp(buf);
-    // Framework exposes only the blocking send; exit senders keep the
-    // wall-clock retry obligation in the exit coordinator loop, and peers
-    // keep pumping receives while quiescing, so the blocking send only
-    // waits for a live quiescing peer.
     bool ok = SendMessage(port, buf);
     if (msg.h.type == CoherenceMessageType::UpgradeReq ||
         msg.h.type == CoherenceMessageType::UpgradeResp) {
@@ -894,44 +888,6 @@ struct DsmDataStore {
 // Phase 3: MetaRNFClient — async metadata page read/write via gem5 MetaRNFController
 // Implements MetaRNFClientIF for BackstoreHostH64 integration.
 struct MetaRNFClient : public MetaRNFClientIF {
-    struct PageFlight {
-        CoherenceMessage message;
-        bool live = false, sent = false;
-    };
-    std::array<PageFlight, 64> pageFlights{};
-    unsigned pageFree() const {
-        unsigned n = 0;
-        for (const auto &slot : pageFlights) n += !slot.live;
-        return n;
-    }
-    bool admitPage(const CoherenceMessage &message) {
-        for (auto &slot : pageFlights) {
-            if (slot.live) continue;
-            slot.message = message; slot.live = true;
-            return true;
-        }
-        return false;
-    }
-    void pumpPages() {
-        for (auto &slot : pageFlights) {
-            if (!slot.live || slot.sent) continue;
-            Message *wire = AllocateSendMessage(_gem5Port, _tickRef);
-            if (!wire) return;
-            const auto gid = gidOf(_nodeId, _socketId);
-            SetMessageSourceId(wire, gid); SetMessageTargetId(wire, gid);
-            SetMessageRequestId(wire, slot.message.h.reqId);
-            SetMessagePayload(wire, &slot.message, sizeof(slot.message));
-            // Only the blocking send exists in the framework now; the 64-slot
-            // pageFlights bound is the backpressure guard, and an unsent slot
-            // keeps its exact retry obligation for the next pump.
-            SendMessage(_gem5Port, wire);
-            slot.sent = true;
-        }
-    }
-    void retirePage(uint64_t id) {
-        for (auto &slot : pageFlights)
-            if (slot.live && slot.message.h.reqId == id) { slot = {}; return; }
-    }
     Port *_gem5Port = nullptr;
     uint64_t &_tickRef;
     int _nodeId = 0;
@@ -953,7 +909,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
     }
 
     // Send MetaRNFReadReq to gem5; callback invoked when MetaRNFReadResp arrives
-    bool readPage(uint64_t pagePa, std::function<void(const uint8_t* data256)> callback) {
+    void readPage(uint64_t pagePa, std::function<void(const uint8_t* data256)> callback) {
         uint64_t rid = _nextReqId++;
         CoherenceMessage req;
         req.h.type = CoherenceMessageType::MetaRNFReadReq;
@@ -964,13 +920,13 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.homeLinePa = pagePa;
         req.h.reqId = rid;
         req.b.metaRNF.pagePa = pagePa;
-        if (!admitPage(req)) return false;
         _pendingReads[rid] = {rid, callback};
-        return true;
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Send MetaRNFWriteReq to gem5 (fire-and-forget)
-    bool writePage(uint64_t pagePa, const cc::glob::BackstorePage &page) {
+    void writePage(uint64_t pagePa, const cc::glob::BackstorePage &page) {
         CoherenceMessage req;
         req.h.type = CoherenceMessageType::MetaRNFWriteReq;
         req.h.srcNode = _nodeId;
@@ -981,7 +937,8 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.h.reqId = _nextReqId++;
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
-        return admitPage(req);
+        const uint32_t gid = gidOf(_nodeId, _socketId);
+        sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Phase D1: writePage variant that returns send success
@@ -997,7 +954,7 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
         const uint32_t gid = gidOf(_nodeId, _socketId);
-        return admitPage(req);
+        return sendCoh(_gem5Port, _tickRef, gid, gid, req);
     }
 
     // Phase D2: per-page write contexts for durable callback
@@ -1023,9 +980,11 @@ struct MetaRNFClient : public MetaRNFClientIF {
         req.b.metaRNF.pagePa = pagePa;
         memcpy(req.b.metaRNF.data, &page, std::min(sizeof(page), (size_t)256));
         const uint32_t gid = gidOf(_nodeId, _socketId);
-        bool sent = admitPage(req);
+        bool sent = sendCoh(_gem5Port, _tickRef, gid, gid, req);
         if (sent) {
             _pendingWrites[rid] = {rid, pagePa, cb};
+        } else if (cb) {
+            cb(false);
         }
         return sent;
     }
@@ -1307,7 +1266,6 @@ struct MetaRNFClient : public MetaRNFClientIF {
     // Handle MetaRNFWriteResp from gem5 (Phase D2)
     void handleWriteResp(const CoherenceMessage &msg) {
         uint64_t rid = msg.h.reqId;
-        retirePage(rid);
         auto it = _pendingWrites.find(rid);
         if (it != _pendingWrites.end()) {
             bool durable = (msg.h.flags & 1) != 0;
@@ -1320,7 +1278,6 @@ struct MetaRNFClient : public MetaRNFClientIF {
     // Handle MetaRNFReadResp from gem5
     void handleResp(const CoherenceMessage &msg) {
         uint64_t rid = msg.h.reqId;
-        retirePage(rid);
         auto it = _pendingReads.find(rid);
         if (it != _pendingReads.end()) {
             if (it->second.callback) {
@@ -1334,39 +1291,6 @@ struct MetaRNFClient : public MetaRNFClientIF {
 };
 
 struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
-    struct DeferredPageRoot { uint64_t pa = 0; unsigned kind = 0; bool live = false; };
-    // Existing directory outstanding roots retain identity while page wire
-    // credits are exhausted; descriptors have no duplicate page payload.
-    std::array<DeferredPageRoot, 4096> pageRootRetries{};
-    void deferPageRoot(uint64_t pa, unsigned kind) {
-        for (const auto &r : pageRootRetries)
-            if (r.live && r.pa == pa && r.kind == kind) return;
-        for (auto &r : pageRootRetries) if (!r.live) { r = {pa, kind, true}; return; }
-        panic_if(true, "directory roots exceeded bounded page retry descriptors");
-    }
-    void pumpPageRoots() {
-        _metaRNF.pumpPages();
-        for (auto &r : pageRootRetries) {
-            if (!r.live || _metaRNF.pageFree() < 2) continue;
-            const auto copy = r; r = {};
-            if (copy.kind == 0) hostIssueBackstoreRead(copy.pa);
-            else if (copy.kind == 1) hostIssueBackstoreWrite(copy.pa);
-            else hostIssueBackstoreDelete(copy.pa);
-        }
-    }
-    cc::glob::ControlCredits<CoherenceMessageHeader> controlCredits{
-        static_cast<unsigned>(g_numNodes * g_numSockets)};
-    void returnControlCredit(const CoherenceMessage &reply) {
-        CoherenceMessageType request;
-        switch (reply.h.type) {
-          case CoherenceMessageType::RecallResp: request = CoherenceMessageType::RecallReq; break;
-          case CoherenceMessageType::InvalidateAck: request = CoherenceMessageType::InvalidateReq; break;
-          case CoherenceMessageType::HAPresenceProbeResp: request = CoherenceMessageType::HAPresenceProbeReq; break;
-          default: return;
-        }
-        controlCredits.release(gidOf(reply.h.srcNode, reply.h.srcSocket),
-            reply.h, static_cast<unsigned>(request));
-    }
     UBCCController &ubcc;
     Port *gem5Port;
     Port *netPort;
@@ -1582,14 +1506,13 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             [this, request, keepAsClean, ownerWriteback,
              disposition, persistenceRequester](DsmDataStatus status) {
             bool success = status == DsmDataStatus::Ok;
-            uint64_t mergedRecallReqId = 0;
             if (request.h.homeLinePa == 0x14030000)
                 framework::LogDebug("UBIO", "[WB-DIAG] stage=HOME_DATA_CALLBACK tick={} req={} status={} ownerWriteback={} keepClean={} recallMergeEligible={}", tickRef, request.h.reqId, static_cast<int>(status), ownerWriteback, keepAsClean, success && ownerWriteback && !keepAsClean);
             if (success && ownerWriteback && !keepAsClean &&
                 ubcc.completeReservedOwnerWritebackRecall(
                     request.h.homeLinePa, persistenceRequester,
                     request.h.epoch, request.h.srcSocket, request.h.reqId,
-                    request.b.writebackReq.data, &mergedRecallReqId)) {
+                    request.b.writebackReq.data)) {
                 // Matching recall and owner writeback share this one completed
                 // persistence operation.
                 if (request.h.homeLinePa == 0x14030000)
@@ -1628,7 +1551,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             response.h.epoch = waiter.h.epoch;
             response.h.reqId = waiter.h.reqId;
             response.b.writebackResp.success = success;
-            response.b.writebackResp.mergedRecallReqId = mergedRecallReqId;
             if (request.h.homeLinePa == 0x14030000)
                 framework::LogDebug("UBIO", "[WB-DIAG] stage=HOME_WRITE_RESP tick={} req={} success={} flags={}", tickRef, request.h.reqId, success, response.h.flags);
             completeDataResponse(dataTxnKey(waiter), waiter, response);
@@ -1722,14 +1644,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         return (it != _pages.end()) ? &it->second : nullptr;
     }
 
-    bool routeControlToTarget(const CoherenceMessage &original) {
-        CoherenceMessage msg = original;
-        if (msg.h.type == CoherenceMessageType::RecallReq ||
-            msg.h.type == CoherenceMessageType::InvalidateReq ||
-            msg.h.type == CoherenceMessageType::HAPresenceProbeReq) {
-            if (!controlCredits.acquire(gidOf(msg.h.dstNode, msg.h.dstSocket), msg.h))
-                return false;
-        }
+    bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId) {
             // Use gidOf to compute the correct global module id for the target
             // adapter. Previously only nodeId (bare node number) was passed as
@@ -1761,9 +1676,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         return ok;
     }
     bool sendRecallReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
-    bool controlCreditAvailable(const CoherenceMessage &msg) const override {
-        return controlCredits.available(gidOf(msg.h.dstNode, msg.h.dstSocket), msg.h);
-    }
     bool sendInvalidateReq(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeAckNotify(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
     bool sendUpgradeResp(const CoherenceMessage &msg) override { return routeControlToTarget(msg); }
@@ -1819,8 +1731,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             }
         }
         if (push.h.type != CoherenceMessageType::ReadResp ||
-            (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA)) ||
-            (push.h.flags & static_cast<uint32_t>(CFLAG_DIRECT_GRANT))) {
+            (push.h.flags & static_cast<uint32_t>(CFLAG_HAS_DATA))) {
             if (routeControlToTarget(push))
                 return true;
             return reserveGrantSlot(push, true);
@@ -1935,7 +1846,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
         }
 
         // Legacy Schema A path below (unchanged)
-        if (!_metaRNF.pageFree()) { deferPageRoot(pa, 0); return; }
         UBCCController::BackstoreEntry e{};
         bool found = false;
         int g = _schema.groupForPa(pa);
@@ -2199,10 +2109,7 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
             LogInfo("UBIO", "[BACKSTORE-CHAIN-READ] pa=0x{:x} group={} page=0x{:x} idx={}/{}",
                          pa, g, nextPage, ctx->idx, pages.size());
             ctx->idx++;
-            if (!_metaRNF.readPage(nextPage, [this, pa](const uint8_t* d) { chainReadCallback(pa, d); })) {
-                _chainCtx.erase(pa); _chainPages.erase(pa); _chainGroup.erase(pa);
-                deferPageRoot(pa, 0);
-            }
+            _metaRNF.readPage(nextPage, [this, pa](const uint8_t* d) { chainReadCallback(pa, d); });
         } else {
             LogInfo("UBIO", "[BACKSTORE-CHAIN-MISS] pa=0x{:x} group={} candidates={}", pa, g, pages.size());
             _chainCtx.erase(pa); _chainPages.erase(pa); _chainGroup.erase(pa);
@@ -2231,7 +2138,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         // Legacy Schema A path below
         ubcc.publishBloomLive(pa);
-        if (_metaRNF.pageFree() < 2) { deferPageRoot(pa, 1); return; }
         int g = _schema.groupForPa(pa);
         cc::glob::BackstoreEntry schemaEntry;
         schemaEntry.pa = pa;
@@ -2331,7 +2237,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 
         // Legacy Schema A path below
         int g = _schema.groupForPa(pa);
-        if (!_metaRNF.pageFree()) { deferPageRoot(pa, 2); return; }
         auto plan = _schema.planDelete(pa, _groupIdx[g]);
         cc::glob::BackstorePage* p = _getPage(plan.target_page_pa);
         bool existed = p && _schema.applyDelete(*p, pa, plan);
@@ -2415,19 +2320,6 @@ struct UbioBackstoreHost : public UBCCHostIf, public UBCCOutboundIf {
 // knows neither CoherenceMessage nor Port; this class owns those translations
 // and the DsmDataStore persistence completions.
 struct HomeVIHost {
-    cc::glob::ControlCredits<CoherenceMessageHeader> controlCredits{
-        static_cast<unsigned>(g_numNodes * g_numSockets)};
-    void returnControlCredit(const CoherenceMessage &reply) {
-        CoherenceMessageType request;
-        switch (reply.h.type) {
-          case CoherenceMessageType::RecallResp: request = CoherenceMessageType::RecallReq; break;
-          case CoherenceMessageType::InvalidateAck: request = CoherenceMessageType::InvalidateReq; break;
-          case CoherenceMessageType::HAPresenceProbeResp: request = CoherenceMessageType::HAPresenceProbeReq; break;
-          default: return;
-        }
-        controlCredits.release(gidOf(reply.h.srcNode, reply.h.srcSocket),
-            reply.h, static_cast<unsigned>(request));
-    }
     Port *gem5Port;
     Port *netPort;
     int nodeId;
@@ -2439,14 +2331,7 @@ struct HomeVIHost {
         : gem5Port(gem5), netPort(net), nodeId(nid), socketId(sid), tickRef(tick)
     {}
 
-    bool routeControlToTarget(const CoherenceMessage &original) {
-        CoherenceMessage msg = original;
-        if (msg.h.type == CoherenceMessageType::RecallReq ||
-            msg.h.type == CoherenceMessageType::InvalidateReq ||
-            msg.h.type == CoherenceMessageType::HAPresenceProbeReq) {
-            if (!controlCredits.acquire(gidOf(msg.h.dstNode, msg.h.dstSocket), msg.h))
-                return false;
-        }
+    bool routeControlToTarget(const CoherenceMessage &msg) {
         if (msg.h.dstNode == nodeId && msg.h.dstSocket == socketId)
             return sendCoh(gem5Port, tickRef,
                            gidOf(nodeId, socketId),
@@ -2476,7 +2361,6 @@ struct HomeVIAdapter {
         uint64_t byteMask = 0;
         std::array<uint8_t, 64> data{};
         bool hasData = false;
-        bool holderCommitted = false;
     };
     struct WireRequestKey {
         uint16_t node = 0;
@@ -2545,12 +2429,7 @@ struct HomeVIAdapter {
         : ha(controller), host(backing), nodeId(nid), socketId(sid),
           tickRef(tick), maxActive(activeLimit),
           addressMap(g_numNodes, g_numSockets)
-    {
-        LogInfo("UBIO", "[HA-HOLDER-BUDGET] home={}:{} nodes={} per_node=4096 "
-                "entry_bytes=16 receipt_bytes={} bitmap_bytes={} separate_budget=1",
-                nid, sid, g_numNodes, ha.holderReceiptBytes(),
-                ha.directory().payloadBytes());
-    }
+    {}
 
     uint32_t participant(uint32_t node, uint32_t socket) const {
         (void)socket; // Endpoint routing context is not a directory holder.
@@ -2567,8 +2446,6 @@ struct HomeVIAdapter {
     }
 
     uint64_t allocInternalReqId() {
-        panic_if(nextInternalReqId == 0 || nextInternalReqId == UINT64_MAX,
-                 "HA Home install identity exhausted; drain required");
         while (!nextInternalReqId || requests.count(nextInternalReqId) ||
                writebacks.count(nextInternalReqId))
             ++nextInternalReqId;
@@ -2677,8 +2554,6 @@ struct HomeVIAdapter {
     void eraseRequest(uint64_t internalId) {
         auto it = requests.find(internalId);
         if (it == requests.end()) return;
-        if (!it->second.holderCommitted)
-            ha.abandonHolder(it->second.address, it->second.requesterNode);
         wireRequests.erase({it->second.requesterNode, it->second.requesterSocket,
                             it->second.address, it->second.wireReqId,
                             it->second.operation, it->second.epoch});
@@ -2772,11 +2647,6 @@ struct HomeVIAdapter {
                 std::memcpy(context.data.data(), msg.b.haPermissionReq.data, 64);
                 context.hasData = true;
             }
-            // Reserve receipt storage before any grant or destructive action.
-            if (!ha.reserveHolder(context.address, sourceParticipant)) {
-                sendPermissionStatus(msg, HAStatus::RetryableBusy);
-                return true;
-            }
             requests[internalId] = context;
             wireRequests[wireKey] = internalId;
             if (TracePerfPolicy::get().shouldEmit("ubio-ha-phase"))
@@ -2824,9 +2694,6 @@ struct HomeVIAdapter {
                     msg.h.homeLinePa);
             ha.accept({EventKind::InstallAck, msg.h.homeLinePa, sourceParticipant,
                        internalId, {}, false, false});
-            panic_if(!ha.commitHolder(msg.h.homeLinePa, sourceParticipant, internalId),
-                     "HA install lost its reserved holder receipt");
-            request->second.holderCommitted = true;
             drainActions();
             return true;
           }
@@ -3021,37 +2888,19 @@ struct HomeVIAdapter {
             return true;
           }
           case CoherenceMessageType::EvictReq: {
-            if (msg.b.evictReq.receiptAck) {
-                ha.acknowledgeRelease(msg.h.homeLinePa, sourceParticipant,
-                    msg.h.epoch, msg.h.reqId, msg.h.srcSocket);
-                return true;
-            }
             if (TracePerfPolicy::get().shouldEmit("ubio-ha-data"))
                 LogInfo("UBIO", "[HA-DATA] phase=evict_receive pa=0x{:x} "
                     "source={}:{} sharers_before=0x{:x}", msg.h.homeLinePa,
                     msg.h.srcNode, msg.h.srcSocket,
                     ha.directory().sharers(msg.h.homeLinePa));
-            const auto released = ha.releaseHolder(msg.h.homeLinePa,
-                sourceParticipant, msg.h.epoch, msg.h.reqId, msg.h.srcSocket);
+            ha.accept({EventKind::Evict, msg.h.homeLinePa, sourceParticipant,
+                       msg.h.reqId, {}, false, false});
             CoherenceMessage response;
             response.h.type = CoherenceMessageType::EvictResp;
             response.h.srcNode = nodeId; response.h.srcSocket = socketId;
             response.h.dstNode = msg.h.srcNode; response.h.dstSocket = msg.h.srcSocket;
             response.h.homeLinePa = msg.h.homeLinePa; response.h.reqId = msg.h.reqId;
-            response.h.epoch = msg.h.epoch;
-            using Release = cc::ha::HolderLeases::Result;
-            switch (released) {
-              case Release::Applied: response.b.evictResp.result = UBReleaseResult::Applied; break;
-              case Release::Duplicate: response.b.evictResp.result = UBReleaseResult::Duplicate; break;
-              case Release::Busy: response.b.evictResp.result = UBReleaseResult::Busy; break;
-              case Release::Stale: response.b.evictResp.result = UBReleaseResult::Stale; break;
-              case Release::Invalid: response.b.evictResp.result = UBReleaseResult::Invalid; break;
-              case Release::AlreadyRetiredMatch:
-                response.b.evictResp.result = UBReleaseResult::AlreadyRetiredMatch; break;
-            }
-            response.b.evictResp.success =
-                released == cc::ha::HolderLeases::Result::Applied ||
-                released == cc::ha::HolderLeases::Result::Duplicate;
+            response.b.evictResp.success = true;
             panic_if(!sendReliable(response), "HA evict response retry queue full");
             return true;
           }
@@ -3281,14 +3130,14 @@ struct HomeVIAdapter {
             if (action.kind == ActionKind::FetchOwner) {
                 out.h.type = CoherenceMessageType::RecallReq;
                 out.h.flags |= static_cast<uint32_t>(CFLAG_HAS_DATA);
-                if (context.operation == HAOperation::Read ||
-                    recipientNode == context.requesterNode)
+                // Only a read owner-fetch may downgrade the holder to shared.
+                // A write acquire must recall uniquely so a dirty holder returns
+                // its data; marking it read-recall would downgrade without data
+                // and silently lose the last write (singleton latest).
+                if (context.operation == HAOperation::Read)
                     out.h.flags |= static_cast<uint32_t>(CFLAG_IS_READ_RECALL);
             } else if (action.kind == ActionKind::Invalidate) {
                 out.h.type = CoherenceMessageType::InvalidateReq;
-                // HA epoch on this control is the exact retiring holder lease,
-                // not the writer's permission epoch or its transaction cookie.
-                out.h.epoch = ha.holderLease(action.address, recipient);
             } else if (action.kind == ActionKind::Probe) {
                 out.h.type = CoherenceMessageType::HAPresenceProbeReq;
                 out.b.haPresenceProbeReq.action = HAProbeAction::Query;
@@ -3302,16 +3151,22 @@ struct HomeVIAdapter {
                     ? (action.permanentReject ? HAStatus::Denied : HAStatus::RetryableBusy)
                     : HAStatus::Ok;
                 out.b.haPermissionResp.permissionEpoch = context.epoch;
-                out.b.haPermissionResp.leaseId = action.kind == ActionKind::Reject
-                    ? 0 : action.requestId;
-                if (context.hasData) {
-                    out.b.haPermissionResp.hasData = 1;
-                    std::memcpy(out.b.haPermissionResp.data, context.data.data(), 64);
-                }
-                if (action.data.valid) {
-                    out.b.haPermissionResp.hasData = 1;
-                    std::memcpy(out.b.haPermissionResp.data,
-                                action.data.bytes.data(), 64);
+                // UseLocal: the requester is the singleton holder and already
+                // owns the latest line; the grant is permission-only and must
+                // not carry the (partial) request payload as if it were final.
+                const bool useLocal =
+                    action.grantMode == cc::ha::HAController::GrantMode::UseLocal;
+                out.b.haPermissionResp.reserved[0] = useLocal ? 1 : 0;
+                if (!useLocal) {
+                    if (action.data.valid) {
+                        out.b.haPermissionResp.hasData = 1;
+                        std::memcpy(out.b.haPermissionResp.data,
+                                    action.data.bytes.data(), 64);
+                    } else if (context.hasData) {
+                        out.b.haPermissionResp.hasData = 1;
+                        std::memcpy(out.b.haPermissionResp.data,
+                                    context.data.data(), 64);
+                    }
                 }
                 if (action.kind == ActionKind::GrantRead &&
                     TracePerfPolicy::get().shouldEmit("ubio-ha-data")) {
@@ -3323,11 +3178,11 @@ struct HomeVIAdapter {
                         context.requesterSocket,
                         ha.directory().sharers(action.address), w0);
                 }
-                panic_if(action.kind == ActionKind::GrantRead &&
+                panic_if(!useLocal && action.kind == ActionKind::GrantRead &&
                          !out.b.haPermissionResp.hasData,
                          "HA GrantRead missing 64-byte data pa=0x%lx requester=%u reqId=%lu",
                           action.address, context.requesterNode, context.wireReqId);
-                panic_if(action.kind == ActionKind::GrantWrite &&
+                panic_if(!useLocal && action.kind == ActionKind::GrantWrite &&
                           !out.b.haPermissionResp.hasData,
                           "HA GrantWrite missing final data pa=0x%lx requester=%u reqId=%lu",
                           action.address, context.requesterNode, context.wireReqId);
@@ -3401,19 +3256,6 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
                   CoherenceMessage &response, bool &hasResponse)
 {
     hasResponse = false;
-    if (msg.h.flags & static_cast<uint32_t>(CFLAG_HOME_CONTROL_RELAY)) {
-        // The original Home root, not an EP-created duplicate controller,
-        // remains responsible for retries and the four-per-peer lease.
-        auto *root = ubcc.findOutstanding(msg.h.homeLinePa);
-        if (!root || root->reqId != msg.h.reqId ||
-            root->requesterNode != msg.h.srcNode || msg.h.homeNode != nid ||
-            msg.h.homeSocket != sid) return true;
-        if (msg.h.type == CoherenceMessageType::RecallReq)
-            root->recallUnsent = true;
-        else if (msg.h.type == CoherenceMessageType::InvalidateReq && msg.h.targetNode < 64)
-            root->controlUnsentMask |= uint64_t(1) << msg.h.targetNode;
-        return true;
-    }
 
     switch (msg.h.type) {
       case CoherenceMessageType::ReadReq: {
@@ -3637,8 +3479,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
 
       case CoherenceMessageType::EvictReq: {
         bool success = ubcc.processEvict(
-            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch,
-            msg.h.reqId, msg.h.srcSocket);
+            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch);
         response.h.type = CoherenceMessageType::EvictResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3711,10 +3552,8 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
       }
 
       case CoherenceMessageType::UpgradeDoneReq: {
-        uint64_t committedEpoch = 0;
         bool accepted = ubcc.processOuterUpgradeDone(
-            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId,
-            &committedEpoch);
+            msg.h.homeLinePa, msg.h.requesterNode, msg.h.epoch, msg.h.reqId);
         response.h.type = CoherenceMessageType::UpgradeDoneResp;
         response.h.srcNode = nid;
         response.h.srcSocket = sid;
@@ -3724,10 +3563,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         response.h.epoch = msg.h.epoch;
         response.h.reqId = msg.h.reqId;
         response.b.upgradeDoneResp.accepted = accepted;
-        response.b.upgradeDoneResp.committedEpoch = committedEpoch;
-        // An early Done is retained by Home until invalidations finish. Keep
-        // the requester's response reservation for the later committed reply.
-        hasResponse = !accepted || committedEpoch != 0;
+        hasResponse = true;
         return true;
       }
 
@@ -3800,7 +3636,7 @@ handleUbccMessage(UBCCController &ubcc, UbioBackstoreHost &host, int nid, int si
         ubcc.processRecallResponse(msg.h.homeLinePa, msg.h.srcNode,
                                     dataReturned, msg.h.epoch, msg.h.reqId,
                                     (hasData && dataReturned) ? &db : nullptr,
-                                    ackReceived, (msg.h.flags & static_cast<uint32_t>(CFLAG_DATA_FORWARDED)) != 0);
+                                    ackReceived);
         return true;
       }
 
@@ -3852,10 +3688,6 @@ static void drainDelayedQueue(Port *gem5Port, Port *netPort, int nid, int sid,
         DelayedMsg dm = g_delayedQueue.front();
         g_delayedQueue.pop_front();
         const CoherenceMessage &coh = dm.coh;
-        if (coh.h.dstNode == nid && coh.h.dstSocket == sid) {
-            if (host) host->returnControlCredit(coh);
-            if (haAdapter) haAdapter->host.returnControlCredit(coh);
-        }
         LogWarn("UBIO", "[UBFAULT-DELIVER] node={} rule='{}' action={} "
                        "type={} src={} dst={} pa=0x{:x} reqId={} "
                        "fireTick={} currentTick={}",
@@ -4768,24 +4600,14 @@ main(int argc, char **argv)
         }
     };
 
-    // ReceiveMessage is destructive. Preserve the already-popped 201st frame
-    // when yielding to another port; otherwise pressure silently loses payload
-    // or the one-shot TERMINATE and can strand exit forever.
-    const Message *heldIngress[2] = {nullptr, nullptr};
     auto pollAndProcess = [&](Port *port, Port *replyPort, bool fromNetwork, bool *doneFlag) {
         (void)replyPort;
         if (!port) return;
         ReceiveStatus st;
-        const unsigned ingress = fromNetwork ? 1 : 0;
-        const Message *m = heldIngress[ingress];
-        if (m) { st = ReceiveStatus::Message; heldIngress[ingress] = nullptr; }
-        else m = ReceiveMessage(port, tick, &st);
+        const Message *m = ReceiveMessage(port, tick, &st);
         int drain_cnt = 0;
         while (m && st == ReceiveStatus::Message) {
-            if (++drain_cnt > 200) {
-                heldIngress[ingress] = m;
-                break;
-            }
+            if (++drain_cnt > 200) break;  // prevent starvation of other ports
             if (GetMessageType(m) == MessageType::Terminate) {
                 LogInfo("UBIO", "[ubio:{}] recv TERMINATE ts={} from_net={}",
                              nid, GetMessageTimestamp(m), fromNetwork);
@@ -4952,13 +4774,6 @@ main(int argc, char **argv)
                     m = ReceiveMessage(port, tick, &st);
                     continue;
                 }
-            }
-
-            // Credit is returned at actual protocol delivery, not while a
-            // response is dropped or held in the fault-delay transport stage.
-            if (coh->h.dstNode == nid && coh->h.dstSocket == sid) {
-                if (host) host->returnControlCredit(*coh);
-                if (haHost) haHost->returnControlCredit(*coh);
             }
 
             // PeerExit is deliberately processed only after fault injection so
@@ -5417,7 +5232,7 @@ main(int argc, char **argv)
         if (loop_count <= 5) { LogDebug("UBIO", "[UBIO-PRE-EMIT] tick={}", tick); }
         if (!gem5Done) EmitSync(gem5Port, tick);
         if (loop_count <= 5) { LogDebug("UBIO", "[UBIO-POST-EMIT] tick={}", tick); }
-        if (netPort && !netDone && !gem5Done) EmitSync(netPort, tick);
+        if (netPort && !netDone) EmitSync(netPort, tick);
         if (netPort && !netDone) drainReliableResponses();
 
         // 2. Drain all ready messages from each port
@@ -5443,11 +5258,6 @@ main(int argc, char **argv)
             }
         }
 
-        // Exit payloads must get first chance at the one available transmit
-        // cell. Sending Sync first on every turn starves nonblocking exit
-        // retries at HWM=1. Timestamp/interval remain unchanged.
-        if (netPort && !netDone && gem5Done) EmitSync(netPort, tick);
-
         // 2.5 Drain deferred H64 MetaRNF operations.  These were enqueued
         // during port message dispatch (reentrantDepth > 0) and must be sent
         // OUTSIDE the port receive/message-dispatch stack to avoid PDES
@@ -5458,7 +5268,6 @@ main(int argc, char **argv)
         const bool dataPlaneActive = !gem5Done;
         if (dataPlaneActive && host && host->_h64Host)
             host->_h64Host->pumpRetries();
-        if (dataPlaneActive && host) host->pumpPageRoots();
         if (dataPlaneActive && host && host->_metaRNF.hasDeferred()) {
             static int dd_cnt = 0;
             if (host->_metaRNF._debugH64Pdes && (++dd_cnt <= 5 || dd_cnt % 1000 == 0))

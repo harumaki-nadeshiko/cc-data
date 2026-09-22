@@ -29,8 +29,7 @@ HAController::Payload HAController::Payload::fromU64(std::uint64_t value)
 }
 
 HAController::HAController(const Config &config)
-    : directory_(config.directory), holderLeases_(config.directory.nodeCount),
-      queueDepth_(config.perAddressQueueDepth),
+    : directory_(config.directory), queueDepth_(config.perAddressQueueDepth),
       unavailable_(static_cast<std::size_t>(directory_.lineCount()), 0)
 {
     if (!queueDepth_)
@@ -173,25 +172,73 @@ void HAController::startKnown(LineWork &work, Transaction &txn)
     } else {
         txn.partialWrite = txn.request.byteMask != ~std::uint64_t{0};
         txn.data = txn.request.data;
+        // Invalidate every holder except the requester. A partial write that
+        // must recall the sole owner already proves that holder is invalidated
+        // by the recall itself, so it is not added again.
         txn.pendingInvalidates = txn.oldSharers & ~requesterBit;
-        if (txn.partialWrite && popcount(txn.oldSharers) == 1)
-            txn.pendingInvalidates &= ~txn.oldSharers;
-        for (std::uint32_t node = 0; node < directory_.config().nodeCount; ++node)
-            if (txn.pendingInvalidates & (std::uint64_t{1} << node))
-                emit(ActionKind::Invalidate, txn, txn.request.requester, node);
-        if (txn.partialWrite) {
+
+        if (popcount(txn.oldSharers) == 1 &&
+            firstSet(txn.oldSharers) == txn.request.requester) {
+            // Requester is the potential-latest singleton: it already owns the
+            // newest line locally. Grant permission only (UseLocal) and never
+            // self-recall (the requester is blocked on this grant). The request
+            // carries the full merged line so Home can persist it and stay
+            // authoritative for later readers.
+            txn.grantMode = GrantMode::UseLocal;
+            txn.pendingInvalidates = 0;
+            // Persist the full merged line carried by the request so Home stays
+            // authoritative for later readers. (The requester uploaded the full
+            // line, so this is never a partial overwrite.)
+            txn.persistBeforeGrant = true;
+        } else if (txn.partialWrite) {
             txn.dataPending = true;
             if (popcount(txn.oldSharers) == 1) {
+                // Sole other holder is the potential-latest owner: recall its
+                // data to form the partial-write base. The recall invalidates
+                // that holder, so it is removed from pendingInvalidates.
                 txn.dataSource = firstSet(txn.oldSharers);
+                txn.pendingInvalidates &= ~txn.oldSharers;
+                txn.persistBeforeGrant = true;
                 emit(ActionKind::FetchOwner, txn, txn.dataSource,
                      txn.request.requester);
-            } else {
+            } else if (txn.oldSharers == 0) {
+                // No holder: Home memory is the base.
                 txn.dataSource = txn.request.requester;
                 txn.fetchingMemory = true;
+                txn.persistBeforeGrant = true;
+                emit(ActionKind::FetchMemory, txn, txn.request.requester,
+                     txn.request.requester);
+            } else {
+                // Multi-holder: Home memory is already authoritative for the
+                // un-written bytes; the other holders are invalidated above.
+                // Persist the merged result so Home is authoritative for later
+                // readers once the holder set is no longer a singleton.
+                txn.dataSource = txn.request.requester;
+                txn.fetchingMemory = true;
+                txn.persistBeforeGrant = true;
                 emit(ActionKind::FetchMemory, txn, txn.request.requester,
                      txn.request.requester);
             }
+        } else {
+            // Full-line write: the new payload overwrites the whole line, so no
+            // owner/memory base is needed. A sole other holder must still be
+            // recalled (for invalidation) before Home hands exclusivity to the
+            // writer, and the new line must be persisted so later readers see it.
+            if (popcount(txn.oldSharers) == 1) {
+                txn.dataSource = firstSet(txn.oldSharers);
+                txn.pendingInvalidates |= txn.oldSharers;
+                txn.dataPending = true;
+                txn.persistBeforeGrant = true;
+                emit(ActionKind::FetchOwner, txn, txn.dataSource,
+                     txn.request.requester);
+            } else {
+                txn.persistBeforeGrant = true;
+            }
         }
+
+        for (std::uint32_t node = 0; node < directory_.config().nodeCount; ++node)
+            if (txn.pendingInvalidates & (std::uint64_t{1} << node))
+                emit(ActionKind::Invalidate, txn, txn.request.requester, node);
     }
     maybeGrant(work);
 }
@@ -206,8 +253,14 @@ void HAController::maybeGrant(LineWork &work)
         txn.phase = Phase::NeedPersistence;
         return;
     }
+    // UseLocal carries no authoritative payload: the requester already holds
+    // the latest line and must apply its own bytes locally. GrantData carries
+    // the authoritative final line from Home.
+    const bool carriesData = txn.grantMode == GrantMode::GrantData;
     emit(txn.request.kind == RequestKind::Read ? ActionKind::GrantRead : ActionKind::GrantWrite,
-         txn, txn.request.requester, txn.request.requester, txn.data);
+         txn, txn.request.requester, txn.request.requester,
+         carriesData ? txn.data : Payload{});
+    actions_.back().grantMode = txn.grantMode;
     txn.phase = Phase::NeedInstall;
 }
 
@@ -379,14 +432,15 @@ void HAController::accept(const Event &event)
         if (txn.oldSharers & nodeBit) txn.destructiveAccepted = true;
         txn.dataPending = false;
         if (txn.partialWrite) {
+            // Merge the recalled owner line with this request's written bytes.
             txn.data = event.data;
             for (unsigned i = 0; i < 64; ++i)
                 if (txn.request.byteMask & (std::uint64_t{1} << i))
                     txn.data.bytes[i] = txn.request.data.bytes[i];
             txn.data.valid = true;
-        } else {
-            txn.data = event.data;
         }
+        // Full-line write: the recalled owner data is only used to complete the
+        // holder's invalidation; it must NOT replace this request's new payload.
         maybeGrant(work);
     } else if (event.kind == EventKind::OwnerNoData && txn.dataPending &&
                event.node == txn.dataSource && !txn.fetchingMemory) {
@@ -395,14 +449,15 @@ void HAController::accept(const Event &event)
         // Do not issue the recall again if the asynchronous memory access is
         // subsequently busy.
         txn.destructiveAccepted = true;
-        txn.persistBeforeGrant = false;
-        // The adapter proved node absence coherently. Retire its old lease
-        // within this serialized transaction, not via an unversioned L1 Evict.
-        txn.oldSharers &= ~nodeBit;
-        if (!txn.overflow)
-            directory_.set(event.address, event.node, false);
+        // The recalled holder had no data, so Home memory holds the base. For a
+        // write, merging and persisting makes Home authoritative for later
+        // readers; a read needs no persist. Keep the holder bit so a later
+        // write still invalidates that node (a no-data recall does not prove the
+        // copy was dropped).
+        const bool isWrite = txn.request.kind == RequestKind::Write;
         txn.dataSource = txn.request.requester;
         txn.fetchingMemory = true;
+        txn.persistBeforeGrant = isWrite;
         emit(ActionKind::FetchMemory, txn, txn.request.requester,
              txn.request.requester);
     } else if (event.kind == EventKind::InvalidateAck && (txn.pendingInvalidates & nodeBit)) {
@@ -444,46 +499,6 @@ bool HAController::busy(std::uint64_t address) const
 {
     auto found = work_.find(address);
     return found != work_.end() && found->second.active.has_value();
-}
-
-bool HAController::reserveHolder(uint64_t address, unsigned node)
-{
-    if (!directory_.contains(address) || address % directory_.config().lineBytes)
-        return false;
-    return holderLeases_.reserve(directory_.lineIndex(address), node);
-}
-
-void HAController::abandonHolder(uint64_t address, unsigned node)
-{
-    if (directory_.contains(address))
-        holderLeases_.abandon(directory_.lineIndex(address), node);
-}
-
-bool HAController::commitHolder(uint64_t address, unsigned node, uint64_t lease)
-{
-    return directory_.contains(address) && holderLeases_.commit(
-        directory_.lineIndex(address), node, lease, directory_.sharers(address));
-}
-
-HolderLeases::Result HAController::releaseHolder(uint64_t address, unsigned node,
-    uint64_t lease, uint64_t request, unsigned socket)
-{
-    if (!directory_.contains(address) || address % directory_.config().lineBytes)
-        return HolderLeases::Result::Invalid;
-    const auto result = holderLeases_.release(directory_.lineIndex(address), node,
-        lease, request, socket, busy(address) || writebacks_.count(address));
-    // Busy includes NeedInstall and queued successors. Thus no active oldSharers
-    // snapshot can subsequently resurrect a bit after this ACK.
-    if (result == HolderLeases::Result::Applied)
-        directory_.set(address, node, false);
-    return result;
-}
-
-bool HAController::acknowledgeRelease(uint64_t address, unsigned node,
-    uint64_t lease, uint64_t request, unsigned socket)
-{
-    return directory_.contains(address) && ! (address % directory_.config().lineBytes) &&
-        holderLeases_.acknowledge(directory_.lineIndex(address), node, lease, request, socket);
 }
 
 bool HAController::retryTransient(std::uint64_t address, std::uint64_t requestId)

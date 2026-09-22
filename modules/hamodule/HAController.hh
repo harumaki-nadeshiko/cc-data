@@ -2,7 +2,6 @@
 #define CC_EP_HAMODULE_HA_CONTROLLER_HH
 
 #include "modules/hamodule/FlatBitmapDirectory.hh"
-#include "modules/hamodule/HolderLeases.hh"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +25,13 @@ class HAController {
         FetchOwner, FetchMemory, Invalidate, GrantRead, GrantWrite, Probe,
         PersistMemory, Commit, Release, Reject
     };
+
+    // How a grant should be consumed by the requester.
+    //   GrantData: the payload carries the authoritative final line.
+    //   UseLocal : the requester is the singleton holder; it already owns the
+    //              latest line locally, so the grant is permission-only and
+    //              must not carry fabricated/partial bytes.
+    enum class GrantMode : std::uint8_t { GrantData = 0, UseLocal = 1 };
 
     // This is deliberately the same shape for transactions, events, and
     // actions so an adapter can copy it directly to/from a 64-byte wire beat.
@@ -85,6 +91,8 @@ class HAController {
         std::uint64_t requestId;
         Payload data{};
         bool permanentReject = false;
+        // Only meaningful for GrantRead/GrantWrite.
+        GrantMode grantMode = GrantMode::GrantData;
     };
     struct Config {
         FlatBitmapDirectory::Config directory;
@@ -102,18 +110,6 @@ class HAController {
     std::size_t queued(std::uint64_t address) const;
     bool busy(std::uint64_t address) const;
     bool retryTransient(std::uint64_t address, std::uint64_t requestId);
-    bool reserveHolder(std::uint64_t address, unsigned node);
-    void abandonHolder(std::uint64_t address, unsigned node);
-    bool commitHolder(std::uint64_t address, unsigned node, std::uint64_t lease);
-    HolderLeases::Result releaseHolder(std::uint64_t address, unsigned node,
-        std::uint64_t lease, std::uint64_t request, unsigned socket);
-    std::size_t holderReceiptBytes() const { return holderLeases_.bytes(); }
-    std::uint64_t holderLease(std::uint64_t address, unsigned node) const {
-        return directory_.contains(address) ?
-            holderLeases_.current(directory_.lineIndex(address), node) : 0;
-    }
-    bool acknowledgeRelease(std::uint64_t address, unsigned node,
-        std::uint64_t lease, std::uint64_t request, unsigned socket);
 
     // Used after bounded tracking overflow or uncertain peer state.  Probe
     // responses reconstruct the line's exact bitmap entirely in transient
@@ -139,6 +135,7 @@ class HAController {
         bool partialWrite = false;
         bool destructiveAccepted = false;
         bool fetchingMemory = false;
+        GrantMode grantMode = GrantMode::GrantData;
     };
     struct LineWork {
         std::optional<Transaction> active;
@@ -165,7 +162,6 @@ class HAController {
     bool unavailable(std::uint64_t address) const noexcept;
 
     FlatBitmapDirectory directory_;
-    HolderLeases holderLeases_;
     std::size_t queueDepth_;
     std::unordered_map<std::uint64_t, LineWork> work_;
     std::unordered_map<std::uint64_t, PendingWriteback> writebacks_;
