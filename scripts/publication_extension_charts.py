@@ -113,12 +113,48 @@ def render(api, data):
 
 
 def render_stage2(api, data):
-    """Fixed-weight panels; all summaries remain in the accompanying tables."""
+    """Fixed-weight panels; Metric1 is merged per TC with a trailing Mean bar."""
     rows = coordinates(data)
     palette = [api.BLUE, api.TEAL, '#9986A8', '#A58B65', '#718573']
-    specs = [('ubcc-metric1-extension-matrix', ('capacity_ratio', 'outer_delta_cycles_2ghz')),
-             ('ubcc-tc142-147-applications', ('reduction_pct',))]
-    for stem, fields in specs:
+
+    # ---- Metric 1 extension: merge per TC (over topologies and pressures) + Mean bar ----
+    def m1_per_tc(field):
+        per = {}
+        for tc in range(142, 148):
+            sel = [r for r in rows if r['tc'] == tc and r['topology'] in TOPOLOGIES]
+            vals = [r[field] for r in sel]
+            if not vals:
+                raise ValueError(f'no observations for TC{tc} {field}')
+            per[tc] = geomean(vals) if field == 'capacity_ratio' else statistics.mean(vals)
+        total = geomean(per.values()) if field == 'capacity_ratio' else statistics.mean(per.values())
+        return per, total
+
+    fig, axes = api.plt.subplots(1, 2, figsize=(11.0, 4.0))
+    for ax, field, ylabel in ((axes[0], 'capacity_ratio', 'Capacity ratio'),
+                              (axes[1], 'outer_delta_cycles_2ghz', 'Outer delta (ns)')):
+        per, total = m1_per_tc(field)
+        labels = [f'TC{tc}' for tc in range(142, 148)] + ['Mean']
+        vals = [per[tc] for tc in range(142, 148)] + [total]
+        if field == 'outer_delta_cycles_2ghz':
+            vals = [v / 2 for v in vals]
+        colors = [api.BLUE] * 6 + [api.ORANGE]
+        bars = ax.bar(range(7), vals, color=colors, width=.68)
+        for ref in ([1.5] if field == 'capacity_ratio' else [0.0, 25.0]):
+            ax.axhline(ref, color=api.ORANGE, ls='--', lw=.9)
+        ax.set_xticks(range(7), labels, fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.grid(axis='y', alpha=.18); ax.set_axisbelow(True)
+        fmt = '{:.2f}' if field == 'capacity_ratio' else '{:.1f}'
+        lo, hi = ax.get_ylim(); ax.set_ylim(lo, hi + (hi - lo) * .16)
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, v, fmt.format(v),
+                    ha='center', va='bottom', fontsize=9)
+    fig.suptitle('Metric 1 extension: per-TC merge (last bar = Mean)', fontsize=12, color=api.NAVY)
+    fig.tight_layout()
+    api.save_chart(fig, 'ubcc-metric1-extension-matrix')
+
+    # ---- TC142-147 applications (unchanged: per-pressure panels) ----
+    for stem, fields in [('ubcc-tc142-147-applications', ('reduction_pct',))]:
         fig, axes = api.plt.subplots(2, len(fields), figsize=(7, 5.1), squeeze=False)
         for fi, field in enumerate(fields):
             topologies = APPLICATION_TOPOLOGIES if field == 'reduction_pct' else TOPOLOGIES
@@ -137,18 +173,11 @@ def render_stage2(api, data):
                                label='10% reduction' if field == 'reduction_pct' and ref == 10 else '_nolegend_')
                 ylabel = {'capacity_ratio': 'Capacity ratio', 'outer_delta_cycles_2ghz': 'Outer delta (ns)',
                           'reduction_pct': 'E2E reduction (%)'}[field]
-                if field == 'outer_delta_cycles_2ghz':
-                    # Transform both observations and reference lines to ns, not counter ticks.
-                    for patch in ax.patches:
-                        patch.set_height(patch.get_height()/2)
-                    for line in ax.lines:
-                        line.set_ydata([v/2 for v in line.get_ydata()])
-                    ax.relim(); ax.autoscale_view()
                 ax.set_ylabel(ylabel, fontsize=11)
                 ax.set_title(f'P{pressure}', fontsize=12)
                 ax.tick_params(axis='y', labelsize=11)
                 ax.grid(axis='y', alpha=.18); ax.set_axisbelow(True)
-                ax.legend(loc='upper left', bbox_to_anchor=(0, 1.02), ncol=2 if len(fields) == 2 else 3, fontsize=10, frameon=False)
+                ax.legend(loc='upper left', bbox_to_anchor=(0, 1.02), ncol=3, fontsize=10, frameon=False)
                 lo, hi = ax.get_ylim(); ax.set_ylim(lo, hi + (hi-lo)*.24)
         fig.tight_layout(h_pad=1.5)
         api.save_chart(fig, stem)

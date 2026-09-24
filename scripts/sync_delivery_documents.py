@@ -18,7 +18,7 @@ EMU_PER_INCH = 914_400
 EMU_PER_POINT = 12_700
 EMU_PER_PIXEL = 9_525
 DEFAULT_IMAGE_MAX_WIDTH = int(15.5 * EMU_PER_CM)
-DEFAULT_IMAGE_MAX_HEIGHT = int(11.5 * EMU_PER_CM)
+DEFAULT_IMAGE_MAX_HEIGHT = int(19 * EMU_PER_CM)
 # U+2060 is the Unicode word-joiner intended to prohibit a line break without
 # changing the visible identifier.  LibreOffice treats U+FEFF as a removable
 # byte-order mark in DOCX text, so it does not reliably protect table content.
@@ -66,8 +66,7 @@ def inline_source(text):
 
 def prevent_ascii_identifier_breaks(text):
     """Keep English/ASCII identifiers together without changing their appearance."""
-    return ASCII_IDENTIFIER.sub(
-        lambda match: WORD_JOINER.join(match.group(1)), text)
+    return text
 
 
 def prevent_short_line_tail(text, protected_characters=6):
@@ -88,8 +87,8 @@ def run(text, bold=False, mono=False, heading=False, size=None,
     east_asia = MATH_FONT if math else "Microsoft YaHei" if mono or not heading else "SimHei"
     if nonbreaking_identifiers and not math:
         text = prevent_ascii_identifier_breaks(text)
-    if protect_tail and not math:
-        text = prevent_short_line_tail(text)
+    # Let Writer's widow control and Chinese line-breaking rules do their job;
+    # inserting invisible joiners into every identifier corrupts text extraction.
     effective_size = size if size is not None else (28 if subscript else None)
     props = (f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" '
              f'w:eastAsia="{east_asia}" w:cs="{font}"/>'
@@ -122,16 +121,82 @@ def math_runs(text, **run_options):
     return "".join(output) if output else run(clean(text), math=True, **run_options)
 
 
+def omml_text(value):
+    return f'<m:r><m:t xml:space="preserve">{escape(value)}</m:t></m:r>'
+
+
+_MATH_FUNCTIONS = {"sum", "mean", "union", "max", "min", "exp", "log", "avg", "abs"}
+
+
+def omml_run(word):
+    if word in _MATH_FUNCTIONS or "-" in word or "." in word:
+        return ('<m:r><m:rPr><m:nor/></m:rPr><m:t xml:space="preserve">'
+                + escape(word) + '</m:t></m:r>')
+    return omml_text(word)
+
+
+_MATH_SUBSCRIPT = re.compile(
+    r"_\{\\mathrm\{([^{}]*)\}\}|_\{([^{}]*)\}|_([A-Za-z0-9][A-Za-z0-9\-.]*)")
+
+
+def omml(tex):
+    """Render a delivery formula as a native Word equation (OMML)."""
+    text = re.sub(r"\\mathrm\{([^{}]*)\}", r"\1", tex)
+    for source, target in ((r"\_", "_"), (r"\,", " "), (r"\approx", "≈"),
+                           (r"\times", "×"), (r"\tau", "τ"), (r"\max", "max"),
+                           (r"\cdot", "·"), (r"\le", "≤"), (r"\ge", "≥")):
+        text = text.replace(source, target)
+    identifier = re.compile(r"[A-Za-z0-9\u0370-\u03ff\u1f00-\u1fff][A-Za-z0-9\-.\u0370-\u03ff\u1f00-\u1fff]*")
+    parts = []
+    position = 0
+    while position < len(text):
+        match = _MATH_SUBSCRIPT.match(text, position)
+        if match:
+            subscript = next(group for group in match.groups() if group is not None)
+            if parts and parts[-1][0] == "atom":
+                base = parts.pop()[1]
+                parts.append(("math", '<m:sSub><m:e>' + base + '</m:e><m:sub>'
+                              + omml_run(subscript) + '</m:sub></m:sSub>'))
+            else:
+                parts.append(("plain", subscript))
+            position = match.end()
+            continue
+        match = identifier.match(text, position)
+        if match:
+            parts.append(("atom", omml_run(match.group(0))))
+            position = match.end()
+            continue
+        parts.append(("plain", text[position]))
+        position += 1
+    merged = []
+    for kind, value in parts:
+        if kind == "plain" and merged and merged[-1][0] == "plain":
+            merged[-1] = ("plain", merged[-1][1] + value)
+        else:
+            merged.append((kind, value))
+    body = "".join(value if kind != "plain" else omml_text(value)
+                   for kind, value in merged)
+    return "<m:oMath>" + body + "</m:oMath>"
+
+
+def equation_paragraph(tex):
+    return ('<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="80" '
+            'w:after="80" w:line="360" w:lineRule="auto"/></w:pPr>'
+            '<m:oMathPara>' + omml(tex) + '</m:oMathPara></w:p>')
+
+
 def inline_runs(text, **run_options):
     """Render restrained bold and explicit math spans as native Word runs."""
     text = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text).replace("`", "")
     output = []
     position = 0
-    for match in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__|\$(.+?)\$", text):
+    for match in re.finditer(r"\*\*(.+?)\*\*|__(.+?)__|\$(.+?)\$|\[\^(\d+)\]", text):
         if match.start() > position:
             output.append(run(text[position:match.start()], **run_options))
-        if match.group(3) is not None:
+        if match.group(4) is not None:
+            output.append(f'<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{match.group(4)}"/></w:r>')
+        elif match.group(3) is not None:
             output.append(math_runs(match.group(3), **run_options))
         else:
             output.append(run(match.group(1) or match.group(2), bold=True,
@@ -195,6 +260,18 @@ def automatic_table_widths(rows, total_width=9600):
 
 
 def table(rows, compact=False, visual_widths=None):
+    # Scenario catalogs contain six independent semantic fields.  Two linked
+    # three-column tables preserve every field without narrow prose columns.
+    if rows and rows[0] == ['TC', '拓扑/角色', '阶段与操作序列', '压力/工作集', '主测量/完成边界', '展示能力']:
+        identity = [['TC', '参与者与工作集', '操作序列']]
+        completion = [['TC', '完成边界', '验证能力']]
+        for row in rows[1:]:
+            identity.append([row[0], row[1]+'；'+row[3], row[2]])
+            completion.append([row[0], row[4], row[5]])
+        return (paragraph('参与者、工作集与操作序列', 'TableCaption', keep_next=True)
+                + table(identity, visual_widths='12,43,45')
+                + paragraph('完成边界与验证能力（按 TC 对应）', 'TableCaption', keep_next=True)
+                + table(completion, visual_widths='12,48,40'))
     cell_top_bottom = 70 if compact else 60
     cell_left_right = 45 if compact else 90
     line_height = 310 if compact else 320
@@ -233,6 +310,7 @@ def table(rows, compact=False, visual_widths=None):
                 f'<w:tc><w:tcPr>{cell_width}{shading}</w:tcPr><w:p><w:pPr>'
                 f'<w:pStyle w:val="{paragraph_style}"/><w:jc w:val="left"/>'
                 '<w:wordWrap w:val="0"/>'
+                + ('<w:keepNext/>' if row_index == 0 or len(rows) <= 9 and row_index < len(rows)-1 else '') +
                 f'<w:spacing w:before="0" w:after="0" w:line="{line_height}" w:lineRule="exact"/>'
                 '</w:pPr>' + (run(cell_text, row_index == 0,
                                   heading=row_index == 0, size=cell_font_size,
@@ -334,7 +412,7 @@ def image_paragraph(rel_id, name, width_px, height_px, drawing_id,
     cx, cy = image_extent(width_px, height_px, hinted_width, hinted_height)
     drawing = f'''<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="{drawing_id}" name="{escape(name)}" descr="{escape(name)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="{drawing_id}" name="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'''
     return (f'<w:p><w:pPr><w:jc w:val="center"/>'
-            f'<w:spacing w:before="100" w:after="40" w:line="240" '
+            f'<w:keepNext/><w:spacing w:before="100" w:after="40" w:line="240" '
             f'w:lineRule="auto"/></w:pPr>{drawing}</w:p>')
 
 
@@ -348,6 +426,7 @@ def convert_markdown(text, md_path):
     images = []
     index = 0
     code = None
+    code_lang = None
     first_heading = True
     cover_open = False
     current_heading = ""
@@ -473,13 +552,25 @@ def convert_markdown(text, md_path):
                 cover_open = False
             output.append(paragraph(line.lstrip("> "), "Quote", indent=360))
             last_body_paragraph = None
-        elif re.match(r"^\s*图\s*\d+(?:[-－]\d+)?", line):
+        elif re.match(r"^\s*图\s*\d+(?:[-－]\d+)?[　 ]", line):
             output.append(paragraph(plain(line), "FigureCaption", center=True))
         elif line.strip() and not re.fullmatch(r"\s*[-*_]{3,}\s*", line):
             if cover_open:
                 output.append(page_break())
                 cover_open = False
             value = line.strip()
+            # Markdown soft source wraps are not paragraph boundaries.  Preserve
+            # structural blocks and numbered lists, and join prose until blank.
+            while index + 1 < len(lines):
+                following = lines[index + 1].strip()
+                if (not following or re.match(r'^(?:[#|!>]|```|<!--|[-*+]\s|\d+[.]\s|图\s*\d)', following)
+                        or re.fullmatch(r'[-*_]{3,}', following)
+                        or re.match(r'^\d+[.]\s', value)
+                        or re.match(r'^附录\s+[A-Z]', following)):
+                    break
+                separator = '' if re.search(r'[\u3400-\u9fff]$', value) and re.match(r'[\u3400-\u9fff]', following) else ' '
+                value += separator + following
+                index += 1
             options = {"first_line": 420, "protect_tail": True}
             output.append(paragraph(value, **options))
             last_body_paragraph = (len(output) - 1, value, options)
@@ -511,11 +602,14 @@ def styles():
 def build_docx(md_path, docx_path):
     source_hash = sha256(md_path)
     source = md_path.read_text(encoding="utf-8")
+    footnotes = re.findall(r'^\[\^(\d+)\]:\s*(.+)$', source, re.MULTILINE)
+    source = re.sub(r'^\[\^\d+\]:\s*.+$', '', source, flags=re.MULTILINE)
     title = plain(source.splitlines()[0].lstrip("# "))
     body, images = convert_markdown(source, md_path)
     document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
                 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+                'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
                 'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
                 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
                 'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>'
@@ -548,6 +642,14 @@ def build_docx(md_path, docx_path):
         "docProps/core.xml": core,
         "docProps/app.xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>CC-EP Markdown DOCX Sync</Application></Properties>',
     }
+    if footnotes:
+        files['[Content_Types].xml'] = files['[Content_Types].xml'].replace('</Types>', '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>')
+        files['word/_rels/document.xml.rels'] = files['word/_rels/document.xml.rels'].replace('</Relationships>', '<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>')
+        files['word/footnotes.xml'] = ('<?xml version="1.0" encoding="UTF-8"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>'
+            '<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>'
+            + ''.join(f'<w:footnote w:id="{number}"><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:footnoteRef/></w:r>'+run(' '+value, size=18)+'</w:p></w:footnote>' for number,value in footnotes)
+            + '</w:footnotes>')
     with zipfile.ZipFile(docx_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, value in files.items():
             archive.writestr(name, value.encode("utf-8"))

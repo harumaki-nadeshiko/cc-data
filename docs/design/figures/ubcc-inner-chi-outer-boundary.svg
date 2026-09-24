@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="439.2pt" height="279pt" viewBox="0 0 439.2 279" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-09-13T21:06:10.248387</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.7.5, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 279 
+L 439.2 279 
+L 439.2 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 12 20 
+L 142 20 
+L 142 68 
+L 12 68 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #f0f5f8; stroke: #284e76; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 155 20 
+L 285 20 
+L 285 68 
+L 155 68 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #f8f4e9; stroke: #284e76; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 298 20 
+L 428 20 
+L 428 68 
+L 298 68 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #f0f5f8; stroke: #284e76; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 144.002686 44 
+Q 148.501221 44 152.105329 44 
+" clip-path="url(#p67b2f55407)" style="fill: none; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+    <path d="M 148.505329 42.2 
+L 152.105329 44 
+L 148.505329 45.8 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #606970; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 287.002686 44 
+Q 291.501221 44 295.105329 44 
+" clip-path="url(#p67b2f55407)" style="fill: none; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+    <path d="M 291.505329 42.2 
+L 295.105329 44 
+L 291.505329 45.8 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #606970; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 12 108 
+L 208 108 
+L 208 168 
+L 12 168 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #f0f5f8; stroke: #284e76; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 230 108 
+L 428 108 
+L 428 168 
+L 230 168 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #f0f5f8; stroke: #284e76; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 220 70.000977 
+Q 220 80.000166 220 89.104929 
+" clip-path="url(#p67b2f55407)" style="fill: none; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+    <path d="M 221.8 85.504929 
+L 220 89.104929 
+L 218.2 85.504929 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #606970; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 221.979218 92.290527 
+Q 274.501639 100.000241 326.139117 107.580054 
+" clip-path="url(#p67b2f55407)" style="fill: none; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+    <path d="M 322.838705 105.276301 
+L 326.139117 107.580054 
+L 322.315867 108.838132 
+z
+" clip-path="url(#p67b2f55407)" style="fill: #606970; stroke: #606970; stroke-width: 0.8; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(58.379844 40.264297)">Inner CHI</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(51.709297 52.328516)">缓存与 HN-F</text>
+   </g>
+   <g id="text_2">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(204.970703 40.264297)">EP 边界</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(188.5 52.328516)">身份与完成关联</text>
+   </g>
+   <g id="text_3">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(338.323828 40.264297)">Outer Home</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(340.5 52.328516)">目录与提交</text>
+   </g>
+   <g id="text_4">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(92 127.510078)">数据责任</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(60.960547 140.970703)">原生 TBE／PendingWrite</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(60.5 153.082734)">不建第二份缓存数据镜像</text>
+   </g>
+   <g id="text_5">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(306.5 128.232188)">交接描述符</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(290.708516 140.296406)">64 项 × 72 B／节点</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(302.841641 152.360625)">8 项控制预留</text>
+   </g>
+   <g id="text_6">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(130.955391 200.991836)">首次 owner／epoch 快照 → 原生回收或写回</text>
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'" transform="translate(123.781406 214.492539)">发布确认 → 各路径完成 → generation 校验退役</text>
+   </g>
+   <g id="text_7">
+    <text style="fill: #284e76; font: 9px 'Microsoft YaHei'; text-anchor: middle" x="219" y="260.296406" transform="rotate(-0 219 260.296406)">4.5 KiB 仅为协调表，非完整 EP 资源预算</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p67b2f55407">
+   <rect x="0" y="0" width="439.2" height="279"/>
+  </clipPath>
+ </defs>
+</svg>

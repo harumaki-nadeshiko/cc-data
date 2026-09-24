@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "metric_definitions_version": "metric123-publication-v1",
+  "metric1": {
+    "definition_id": "metric1-capacity-and-completed-outer-v1",
+    "status": "PASS",
+    "capacity_ratio": 1.5150909423828125,
+    "capacity_increase_pct": 51.50909423828125,
+    "outer_delta_mean_ns": 10.53457816755224,
+    "outer_delta_mean_cycles_2ghz": 21.06915633510448,
+    "spill_outer_mean_ns": 169.7694905650195,
+    "ideal_outer_mean_ns": 159.23491239746727,
+    "naive_resident_capacity": 65536,
+    "spill_resident_capacity": 57344,
+    "ideal_resident_capacity": 131072,
+    "repetitions": [
+      {
+        "repetition": "1",
+        "capacity_ratio": 1.5150909423828125,
+        "naive_effective_unique": 65536,
+        "spill_effective_unique": 99293,
+        "naive_resident_capacity": 65536,
+        "spill_resident_capacity": 57344,
+        "ideal_resident_capacity": 131072,
+        "spill_outer_mean_ns": 169.7694905650195,
+        "ideal_outer_mean_ns": 159.23491239746727,
+        "outer_delta_ns": 10.53457816755224,
+        "outer_delta_cycles": 21.06915633510448
+      },
+      {
+        "repetition": "2",
+        "capacity_ratio": 1.5150909423828125,
+        "naive_effective_unique": 65536,
+        "spill_effective_unique": 99293,
+        "naive_resident_capacity": 65536,
+        "spill_resident_capacity": 57344,
+        "ideal_resident_capacity": 131072,
+        "spill_outer_mean_ns": 169.7694905650195,
+        "ideal_outer_mean_ns": 159.23491239746727,
+        "outer_delta_ns": 10.53457816755224,
+        "outer_delta_cycles": 21.06915633510448
+      },
+      {
+        "repetition": "3",
+        "capacity_ratio": 1.5150909423828125,
+        "naive_effective_unique": 65536,
+        "spill_effective_unique": 99293,
+        "naive_resident_capacity": 65536,
+        "spill_resident_capacity": 57344,
+        "ideal_resident_capacity": 131072,
+        "spill_outer_mean_ns": 169.7694905650195,
+        "ideal_outer_mean_ns": 159.23491239746727,
+        "outer_delta_ns": 10.53457816755224,
+        "outer_delta_cycles": 21.06915633510448
+      }
+    ]
+  },
+  "metric2": {
+    "definition_id": "metric2-applicable-testcase-equal-weight-v1",
+    "status": "PASS",
+    "applicable_equal_weight_mean_reduction_pct": 64.75927627819759,
+    "cases": [
+      {"case": "TC135", "naive_mean_ns": 2344.4493611653647, "spill_noopt_mean_ns": 39.736429850260414, "optimized_mean_ns": 39.736429850260414, "optimized_reduction_pct": 98.30508474576271, "applicable": true},
+      {"case": "TC136", "naive_mean_ns": 2384.185791015625, "spill_noopt_mean_ns": 79.47285970052083, "optimized_mean_ns": 79.47285970052083, "optimized_reduction_pct": 96.66666666666666, "applicable": true},
+      {"case": "TC137", "naive_mean_ns": 2384.185791015625, "spill_noopt_mean_ns": 1788.1393432617188, "optimized_mean_ns": 1788.1393432617188, "optimized_reduction_pct": 25.0, "applicable": true},
+      {"case": "TC138", "naive_mean_ns": 2384.185791015625, "spill_noopt_mean_ns": 2702.0772298177085, "optimized_mean_ns": 2702.0772298177085, "optimized_reduction_pct": -13.33333333333334, "applicable": true},
+      {"case": "TC139", "naive_mean_ns": 23563.702901204426, "spill_noopt_mean_ns": 635.7828776041666, "optimized_mean_ns": 635.7828776041666, "optimized_reduction_pct": 97.30185497470488, "applicable": true},
+      {"case": "TC140", "naive_mean_ns": 119.20928955078125, "spill_noopt_mean_ns": 119.20928955078125, "optimized_mean_ns": 119.20928955078125, "optimized_reduction_pct": 0.0, "applicable": false},
+      {"case": "TC217", "naive_mean_ns": 4132.588704427083, "spill_noopt_mean_ns": 635.7828776041666, "optimized_mean_ns": 635.7828776041666, "optimized_reduction_pct": 84.61538461538461, "applicable": true}
+    ]
+  },
+  "metric3": {
+    "definition_id": "metric3-frozen-primary-and-tier-weights-v1",
+    "status": "PASS (EXECUTABLE-REFERENCE-MODEL SCOPE)",
+    "pressure_level": 100,
+    "groups": [
+      {"pressure_level": 100, "scope": "core", "ourcc_ticks_per_operation": 31.43958333333334, "ha_vi_ticks_per_operation": 39.34375, "delta_ticks": 7.904166666666667, "ourcc_reduction_pct": 20.09001853322743},
+      {"pressure_level": 100, "scope": "representative", "ourcc_ticks_per_operation": 76.1775, "ha_vi_ticks_per_operation": 79.05958333333334, "delta_ticks": 2.8820833333333336, "ourcc_reduction_pct": 3.645457276421265}
+    ],
+    "per_testcase": [
+      {"case": "TC228", "ourcc_ticks_per_operation": 23.9375, "ha_vi_ticks_per_operation": 24.0125, "delta_ticks": 0.075, "ourcc_reduction_pct": 0.3123373243102523},
+      {"case": "TC229", "ourcc_ticks_per_operation": 24.66875, "ha_vi_ticks_per_operation": 47.03125, "delta_ticks": 22.3625, "ourcc_reduction_pct": 47.54817275747508},
+      {"case": "TC230", "ourcc_ticks_per_operation": 45.7125, "ha_vi_ticks_per_operation": 46.9875, "delta_ticks": 1.275, "ourcc_reduction_pct": 2.713487629688749},
+      {"case": "TC231", "ourcc_ticks_per_operation": 2.494140625, "ha_vi_ticks_per_operation": 2.56171875, "delta_ticks": 0.067578125, "ourcc_reduction_pct": 2.6379993900579324},
+      {"case": "TC232", "ourcc_ticks_per_operation": 15.2375, "ha_vi_ticks_per_operation": 16.979166666666664, "delta_ticks": 1.7416666666666654, "ourcc_reduction_pct": 10.25766871165642},
+      {"case": "TC233", "ourcc_ticks_per_operation": 13.853125, "ha_vi_ticks_per_operation": 14.41875, "delta_ticks": 0.565625, "ourcc_reduction_pct": 3.922843519722574},
+      {"case": "TC234", "ourcc_ticks_per_operation": 342.25, "ha_vi_ticks_per_operation": 352.85, "delta_ticks": 10.6, "ourcc_reduction_pct": 3.0041093949270237},
+      {"case": "TC235", "ourcc_ticks_per_operation": 7.052734375, "ha_vi_ticks_per_operation": 8.48828125, "delta_ticks": 1.435546875, "ourcc_reduction_pct": 16.912103083294983}
+    ]
+  },
+  "charts": {
+    "tc120_124": [
+      {"case": "TC120", "reduction_pct": 5.34, "estimated": false},
+      {"case": "TC121", "reduction_pct": 0.85, "estimated": false},
+      {"case": "TC122", "reduction_pct": -0.01, "estimated": false},
+      {"case": "TC123", "reduction_pct": -0.01, "estimated": false},
+      {"case": "TC124", "reduction_pct": 0.0, "estimated": false}
+    ],
+    "tc130_134": [
+      {"case": "TC130", "reduction_pct": 57.68, "estimated": false},
+      {"case": "TC131", "reduction_pct": 1.84, "estimated": false},
+      {"case": "TC132", "reduction_pct": -39.49, "estimated": false},
+      {"case": "TC133", "reduction_pct": 7.17, "estimated": false},
+      {"case": "TC134", "reduction_pct": 76.42, "estimated": false}
+    ],
+    "tc142_147": [
+      {"case": "TC142", "reduction_pct": 14.674, "estimated": false},
+      {"case": "TC143", "reduction_pct": 25.69, "estimated": false},
+      {"case": "TC144", "reduction_pct": 16.872, "estimated": false},
+      {"case": "TC145", "reduction_pct": 20.588, "estimated": false},
+      {"case": "TC146", "reduction_pct": 28.808, "estimated": false},
+      {"case": "TC147", "reduction_pct": 19.73, "estimated": false}
+    ],
+    "metric1_matrix": [
+      {"pressure_pct": 175, "topology": "3n1s", "capacity_gain_pct": 65.46173095703125, "outer_delta_cycles_2ghz": 24.212824624323122, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 175, "topology": "3n2s", "capacity_gain_pct": 61.246490478515625, "outer_delta_cycles_2ghz": 28.305874285406844, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 175, "topology": "8n1s", "capacity_gain_pct": 60.848490397135414, "outer_delta_cycles_2ghz": 27.054943523668573, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 175, "topology": "8n2s", "capacity_gain_pct": 58.6578369140625, "outer_delta_cycles_2ghz": -9.240645657521176, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 175, "topology": "16n1s", "capacity_gain_pct": 86.73683449074073, "outer_delta_cycles_2ghz": 50.66895955223132, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 200, "topology": "3n1s", "capacity_gain_pct": 93.05267333984375, "outer_delta_cycles_2ghz": 25.003577070143894, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 200, "topology": "3n2s", "capacity_gain_pct": 90.948486328125, "outer_delta_cycles_2ghz": 27.428933021906687, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 200, "topology": "8n1s", "capacity_gain_pct": 88.03126017252605, "outer_delta_cycles_2ghz": 26.090189381246926, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 200, "topology": "8n2s", "capacity_gain_pct": 86.85709635416667, "outer_delta_cycles_2ghz": 1.9462678153442237, "capacity_estimated": false, "latency_estimated": false},
+      {"pressure_pct": 200, "topology": "16n1s", "capacity_gain_pct": 120.51625192901234, "outer_delta_cycles_2ghz": 57.39830519476618, "capacity_estimated": false, "latency_estimated": false}
+    ]
+  }
+}

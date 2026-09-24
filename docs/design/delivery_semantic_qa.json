@@ -1,0 +1,25 @@
+{
+  "pass_all": true,
+  "timing_observations": 59,
+  "m3_runs": 240,
+  "m3_pairs": 120,
+  "negative_pairs": 7,
+  "pdf_scalar_checks": 149,
+  "documents": [
+    {
+      "document": "docs/design/cc_ep_protocol_overview.md",
+      "markdown_sha256": "4f49992912f169deeb82488b39460c9572f106998b22c08ea0cd0039824085e0",
+      "pdf_sha256": "1af5de8c4f2a3b0e98784906a23cf6d0594fb7cf4f12b54f13989110791bf4de"
+    },
+    {
+      "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.md",
+      "markdown_sha256": "bdf2a630b7fbb2463e48f3c9bd59e520bf1571a98927ac49025f7b86a8246172",
+      "pdf_sha256": "6f175a41e7d44ae742a8b49ffa54629fc3c45116be25fd0bf0f44133e95c0562"
+    },
+    {
+      "document": "docs/design/cc_ep_deliverable3_performance_api.md",
+      "markdown_sha256": "5a9c7d3ab405fc0a58d2d2f0343985dcfb8416502079f6d4209346fd5747b16f",
+      "pdf_sha256": "d48c10eae4c9b9a5de4224140d7bc5a5608543d9471eab01860aeaf1a4446013"
+    }
+  ]
+}

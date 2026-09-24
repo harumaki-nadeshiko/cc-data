@@ -1,0 +1,131 @@
+{
+  "placements": [
+    {
+      "document": "cc_ep_deliverable3_performance_api.md",
+      "caption": "图 3-3 指标 1 多压力与多拓扑扩展观测",
+      "name": "ubcc-metric1-extension-matrix",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "8c2245f05ebd33aed9831879186150b3977222d9ec4fb0398f2c0a28c4cd6ea4"
+    },
+    {
+      "document": "cc_ep_deliverable3_performance_api.md",
+      "caption": "图 4-1 指标 2 适用场景端到端时延",
+      "name": "ubcc-metric2-reductions",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "eaad2eff029d7f361d27acf48af96f5aa6e0c1bb86489a934db93af035b84462"
+    },
+    {
+      "document": "cc_ep_deliverable3_performance_api.md",
+      "caption": "图 4-3 TC142-TC147 应用 E2E 降幅",
+      "name": "ubcc-tc142-147-applications",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "5857042b014f91c5237d4180b5c0256e9655badc64d862df25a68959a4011cbb"
+    },
+    {
+      "document": "cc_ep_deliverable3_performance_api.md",
+      "caption": "图 5-1 核心场景逐坐标降幅",
+      "name": "ubcc-ha-vi-comparison",
+      "source": "performance_boundary_v4_m3.json",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "7cc11342a01984353859072dcdc12c0c661c5720b079d7a175ad5dc7f3f8c861"
+    },
+    {
+      "document": "cc_ep_deliverable3_performance_api.md",
+      "caption": "图 5-2 代表场景逐坐标降幅",
+      "name": "ubcc-metric3-per-tc-reductions",
+      "source": "performance_boundary_v4_m3.json",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "9db76d19b5207a6733ef52590d0f84f4e6a84b47ed6de549793b16626dfd918c"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 2-1 UBCC 跨节点缓存一致性总体架构",
+      "name": "ubcc-system-architecture",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "95e8281c7bf7ce6cc4cd21eb4ee60acde42f691d05321643b08c7a578e9a9483"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 3-1 gem5 EP 架构与控制器关系",
+      "name": "gem5-ruby-controller-relationships",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "c0d7792eda882b826cc7183e6bf2c4d021cad7d32e44324b2e612e2d36601617"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 5-1 UBCC 三类核心协议路径",
+      "name": "ubcc-protocol-paths",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "ccc000e24a845065140ec387d7ba44f55f48e05467ba37134f5a997bea7f4b65"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 7-1 状态、事务承载与全局权威的职责分离",
+      "name": "ubcc-protocol-authority-comparison",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "a26768b2f3ce4e564af97e695855636be4651d560a62a8139a214a266d97c238"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 7-2 跨节点数据路径：Home 中转与直接转发",
+      "name": "ubcc-path-central-vs-direct",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "e950de74ac2558c092a9789f48bfb3df7bec68aa8e7c4180edc403c584f34ab3"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 7-3 目录元数据与失效扇出",
+      "name": "ubcc-metadata-fanout-scaling",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "a275d21140a80e6c5b831635e7ad91b08fb474559b76defd65af67832de47e9a"
+    },
+    {
+      "document": "cc_ep_protocol_overview.md",
+      "caption": "图 7-4 本地 CHI 与 Outer 交接边界",
+      "name": "ubcc-inner-chi-outer-boundary",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "f96a19fc98e55717e2043c7cb56346ad8f13545c9922c5c22b0b7c9f02789321"
+    },
+    {
+      "document": "cc_ep_deliverable2_verification_reliability_ha.md",
+      "caption": "图 1-1 UBCC 分层验证体系",
+      "name": "ubcc-verification-stack",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "c73ce168232346900f991affa4f316dbe4aa43e62714dac883aea2a71c1b59e4"
+    },
+    {
+      "document": "cc_ep_deliverable2_verification_reliability_ha.md",
+      "caption": "图 4-1 UBCC 两阶段目录提交",
+      "name": "ubcc-two-phase-commit",
+      "source": "review_delivery_diagrams.py",
+      "physical_width_cm": 15.5,
+      "minimum_designed_font_pt": 9,
+      "png_sha256": "da644ae440290c1ec082356444b0ddfe526869bd1d014c79fece34c55a4159ca"
+    }
+  ],
+  "review_scope": "Designed sizes; inspect Writer PDF for final placement."
+}

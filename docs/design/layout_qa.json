@@ -1,0 +1,844 @@
+{
+  "schema_version": 1,
+  "review_method": "automated_pdf_structure",
+  "human_visual_review": "NOT_RUN",
+  "limitations": [
+    "No subjective typography, brand, color, or reading-experience review was performed."
+  ],
+  "thresholds": {
+    "white_pixel_cutoff": 250,
+    "minimum_non_white_ratio": 0.025,
+    "minimum_text_characters": 80,
+    "orphan_heading_top_fraction": 0.8,
+    "heading_body_size_multiplier": 1.2,
+    "maximum_single_figure_page_fraction": 0.62,
+    "maximum_all_figures_page_fraction": 0.72,
+    "maximum_stretched_cjk_width_em": 1.45,
+    "minimum_stretched_cjk_characters": 4,
+    "geometry_tolerance": 2.0,
+    "page_size_relative_tolerance": 0.002,
+    "minimum_text_size_points": 7.5,
+    "minimum_tiny_text_characters": 4
+  },
+  "documents": [
+    {
+      "document": "docs/design/cc_ep_protocol_overview.pdf",
+      "page_count": 23,
+      "pages": [
+        {
+          "page": 1,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.006086,
+          "text_characters": 18,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 18.02,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 2,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.024307,
+          "text_characters": 236,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 3,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.113964,
+          "text_characters": 806,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 4,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.156415,
+          "text_characters": 770,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1164
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 5,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.142159,
+          "text_characters": 1025,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 6,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.173518,
+          "text_characters": 1370,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 7,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.163152,
+          "text_characters": 908,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1622
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 8,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.066737,
+          "text_characters": 659,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 9,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.096684,
+          "text_characters": 671,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0933
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 10,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.104397,
+          "text_characters": 1106,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 11,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.091184,
+          "text_characters": 892,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 12,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.137084,
+          "text_characters": 871,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.115
+          ],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 13,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.139589,
+          "text_characters": 1216,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 14,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.159047,
+          "text_characters": 1204,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 15,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.158314,
+          "text_characters": 1296,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 16,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.143879,
+          "text_characters": 1371,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 17,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.164039,
+          "text_characters": 1055,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1022
+          ],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 18,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.182541,
+          "text_characters": 1162,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 19,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.138329,
+          "text_characters": 1038,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0958
+          ],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 20,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.159826,
+          "text_characters": 1020,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1086
+          ],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 21,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.166934,
+          "text_characters": 1081,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 22,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.162297,
+          "text_characters": 682,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 23,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.128954,
+          "text_characters": 846,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        }
+      ],
+      "inconsistent_page_sizes": [],
+      "failed_page_count": 0,
+      "status": "PASS"
+    },
+    {
+      "document": "docs/design/cc_ep_deliverable2_verification_reliability_ha.pdf",
+      "page_count": 13,
+      "pages": [
+        {
+          "page": 1,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.005799,
+          "text_characters": 17,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 18.02,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 2,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.014792,
+          "text_characters": 121,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 3,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.097096,
+          "text_characters": 312,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [
+            0.238
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 4,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.152697,
+          "text_characters": 845,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 5,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.112083,
+          "text_characters": 753,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 6,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.0954,
+          "text_characters": 849,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 7,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.119662,
+          "text_characters": 721,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0808
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 8,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.129842,
+          "text_characters": 848,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 9,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.154488,
+          "text_characters": 731,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 10,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.163074,
+          "text_characters": 870,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 11,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.092172,
+          "text_characters": 701,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 12,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.153856,
+          "text_characters": 798,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 13,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.068975,
+          "text_characters": 422,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        }
+      ],
+      "inconsistent_page_sizes": [],
+      "failed_page_count": 0,
+      "status": "PASS"
+    },
+    {
+      "document": "docs/design/cc_ep_deliverable3_performance_api.pdf",
+      "page_count": 27,
+      "pages": [
+        {
+          "page": 1,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.005197,
+          "text_characters": 15,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 18.02,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 2,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.01957,
+          "text_characters": 186,
+          "front_matter_density_exempt": true,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 10.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 3,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.149767,
+          "text_characters": 730,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 4,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.136103,
+          "text_characters": 1040,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 5,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.168572,
+          "text_characters": 1199,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 6,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.153595,
+          "text_characters": 934,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 7,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.09936,
+          "text_characters": 897,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 8,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.151806,
+          "text_characters": 968,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0657
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 9,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.156016,
+          "text_characters": 1275,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 10,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.154077,
+          "text_characters": 1208,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0804
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 11,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.143889,
+          "text_characters": 685,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.2775
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 12,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.130707,
+          "text_characters": 626,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.1996
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 13,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.120829,
+          "text_characters": 1083,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0789
+          ],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 14,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.121381,
+          "text_characters": 676,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.2775
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 15,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.146242,
+          "text_characters": 1036,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 16,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.157154,
+          "text_characters": 1018,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 17,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.147426,
+          "text_characters": 812,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.0931
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 18,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.124237,
+          "text_characters": 757,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [
+            0.116
+          ],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 19,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.121246,
+          "text_characters": 722,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 20,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.107088,
+          "text_characters": 583,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 21,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.114373,
+          "text_characters": 649,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 22,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.131112,
+          "text_characters": 1284,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 23,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.125137,
+          "text_characters": 1538,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 24,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.119241,
+          "text_characters": 1397,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 25,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.130749,
+          "text_characters": 1515,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 26,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.16112,
+          "text_characters": 1322,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.01,
+          "issues": [],
+          "status": "PASS"
+        },
+        {
+          "page": 27,
+          "width_points": 595.304,
+          "height_points": 842.235,
+          "non_white_ratio": 0.037455,
+          "text_characters": 169,
+          "front_matter_density_exempt": false,
+          "image_page_fractions": [],
+          "minimum_text_size_points": 8.68,
+          "issues": [],
+          "status": "PASS"
+        }
+      ],
+      "inconsistent_page_sizes": [],
+      "failed_page_count": 0,
+      "status": "PASS"
+    }
+  ],
+  "errors": [],
+  "overall_status": "PASS"
+}

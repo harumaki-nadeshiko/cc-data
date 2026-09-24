@@ -1,0 +1,552 @@
+{
+  "source": "performance_preview_data.json",
+  "source_sha256": "c81711d52ca72e5af33e853b3fc6130840fcb656375de60cc5c3b19eca2d8de8",
+  "method": "CNTVCT retained numeric precision; ns = counter value * 1e9 / 25165824. Scenario totals not divided by phase operation counts. No rerun or added precision implied.",
+  "observations": [
+    {
+      "tc": 121,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 29147.33,
+      "frequency_hz": 25165824,
+      "ns": 1158210.8338673909,
+      "display": "1,158,210.834",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 121,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 28897.67,
+      "frequency_hz": 25165824,
+      "ns": 1148290.2367909749,
+      "display": "1,148,290.237",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 121,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 28898.67,
+      "frequency_hz": 25165824,
+      "ns": 1148329.9732208252,
+      "display": "1,148,329.973",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 122,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 25265.33,
+      "frequency_hz": 25165824,
+      "ns": 1003954.01318868,
+      "display": "1,003,954.013",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 122,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 25270.33,
+      "frequency_hz": 25165824,
+      "ns": 1004152.6953379313,
+      "display": "1,004,152.695",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 122,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 25266.67,
+      "frequency_hz": 25165824,
+      "ns": 1004007.2600046793,
+      "display": "1,004,007.260",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 123,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 29124.33,
+      "frequency_hz": 25165824,
+      "ns": 1157296.895980835,
+      "display": "1,157,296.896",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 123,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 29125.0,
+      "frequency_hz": 25165824,
+      "ns": 1157323.5193888347,
+      "display": "1,157,323.519",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 123,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 29126.67,
+      "frequency_hz": 25165824,
+      "ns": 1157389.8792266846,
+      "display": "1,157,389.879",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 124,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 15031.67,
+      "frequency_hz": 25165824,
+      "ns": 597304.900487264,
+      "display": "597,304.900",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 124,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 15038.33,
+      "frequency_hz": 25165824,
+      "ns": 597569.5451100668,
+      "display": "597,569.545",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 124,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 15032.33,
+      "frequency_hz": 25165824,
+      "ns": 597331.1265309652,
+      "display": "597,331.127",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 130,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 38616.67,
+      "frequency_hz": 25165824,
+      "ns": 1534488.598505656,
+      "display": "1,534,488.599",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 130,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 32331.67,
+      "frequency_hz": 25165824,
+      "ns": 1284745.1368967693,
+      "display": "1,284,745.137",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 130,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 32329.67,
+      "frequency_hz": 25165824,
+      "ns": 1284665.6640370686,
+      "display": "1,284,665.664",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 131,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 2401101.0,
+      "frequency_hz": 25165824,
+      "ns": 95411181.44989014,
+      "display": "95,411,181.450",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 131,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 2419188.67,
+      "frequency_hz": 25165824,
+      "ns": 96129920.8799998,
+      "display": "96,129,920.880",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 131,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 2419319.0,
+      "frequency_hz": 25165824,
+      "ns": 96135099.72890218,
+      "display": "96,135,099.729",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 132,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 1393393.67,
+      "frequency_hz": 25165824,
+      "ns": 55368489.821751915,
+      "display": "55,368,489.822",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 132,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 1430794.33,
+      "frequency_hz": 25165824,
+      "ns": 56854658.52419535,
+      "display": "56,854,658.524",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 132,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 1430796.0,
+      "frequency_hz": 25165824,
+      "ns": 56854724.8840332,
+      "display": "56,854,724.884",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 133,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 725467.38,
+      "frequency_hz": 25165824,
+      "ns": 28827483.654022217,
+      "display": "28,827,483.654",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 133,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 736140.75,
+      "frequency_hz": 25165824,
+      "ns": 29251605.27229309,
+      "display": "29,251,605.272",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 133,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 736044.0,
+      "frequency_hz": 25165824,
+      "ns": 29247760.772705078,
+      "display": "29,247,760.773",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 134,
+      "key": "naive_total_ticks",
+      "retained_counter_value": 932512.13,
+      "frequency_hz": 25165824,
+      "ns": 37054702.838261925,
+      "display": "37,054,702.838",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 134,
+      "key": "spill_noopt_total_ticks",
+      "retained_counter_value": 742830.69,
+      "frequency_hz": 25165824,
+      "ns": 29517439.603805542,
+      "display": "29,517,439.604",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 134,
+      "key": "optimized_total_ticks",
+      "retained_counter_value": 742591.44,
+      "frequency_hz": 25165824,
+      "ns": 29507932.662963867,
+      "display": "29,507,932.663",
+      "unit": "ns/scenario"
+    },
+    {
+      "tc": 130,
+      "key": "naive_post_pressure_hot_reuse",
+      "retained_counter_value": 110.64,
+      "frequency_hz": 25165824,
+      "ns": 4396.4385986328125,
+      "display": "4,396.439",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 130,
+      "key": "spill_noopt_post_pressure_hot_reuse",
+      "retained_counter_value": 46.82,
+      "frequency_hz": 25165824,
+      "ns": 1860.4596455891926,
+      "display": "1,860.460",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 130,
+      "key": "optimized_post_pressure_hot_reuse",
+      "retained_counter_value": 46.82,
+      "frequency_hz": 25165824,
+      "ns": 1860.4596455891926,
+      "display": "1,860.460",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "naive_catalog_reuse",
+      "retained_counter_value": 6.54,
+      "frequency_hz": 25165824,
+      "ns": 259.8762512207031,
+      "display": "259.876",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "spill_noopt_catalog_reuse",
+      "retained_counter_value": 6.4,
+      "frequency_hz": 25165824,
+      "ns": 254.31315104166666,
+      "display": "254.313",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "optimized_catalog_reuse",
+      "retained_counter_value": 6.42,
+      "frequency_hz": 25165824,
+      "ns": 255.10787963867188,
+      "display": "255.108",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "naive_exclusive_upgrade",
+      "retained_counter_value": 9358.8,
+      "frequency_hz": 25165824,
+      "ns": 371885.2996826172,
+      "display": "371,885.300",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "spill_noopt_exclusive_upgrade",
+      "retained_counter_value": 9429.41,
+      "frequency_hz": 25165824,
+      "ns": 374691.08899434406,
+      "display": "374,691.089",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 131,
+      "key": "optimized_exclusive_upgrade",
+      "retained_counter_value": 9429.93,
+      "frequency_hz": 25165824,
+      "ns": 374711.7519378662,
+      "display": "374,711.752",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 132,
+      "key": "naive_checkpoint_recover",
+      "retained_counter_value": 48.73,
+      "frequency_hz": 25165824,
+      "ns": 1936.3562266031902,
+      "display": "1,936.356",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 132,
+      "key": "spill_noopt_checkpoint_recover",
+      "retained_counter_value": 67.97,
+      "frequency_hz": 25165824,
+      "ns": 2700.8851369222007,
+      "display": "2,700.885",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 132,
+      "key": "optimized_checkpoint_recover",
+      "retained_counter_value": 67.98,
+      "frequency_hz": 25165824,
+      "ns": 2701.2825012207036,
+      "display": "2,701.283",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 133,
+      "key": "naive_frontier_reuse",
+      "retained_counter_value": 7.09,
+      "frequency_hz": 25165824,
+      "ns": 281.7312876383464,
+      "display": "281.731",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 133,
+      "key": "spill_noopt_frontier_reuse",
+      "retained_counter_value": 6.6,
+      "frequency_hz": 25165824,
+      "ns": 262.26043701171875,
+      "display": "262.260",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 133,
+      "key": "optimized_frontier_reuse",
+      "retained_counter_value": 6.58,
+      "frequency_hz": 25165824,
+      "ns": 261.46570841471356,
+      "display": "261.466",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 134,
+      "key": "naive_window_reuse",
+      "retained_counter_value": 41.67,
+      "frequency_hz": 25165824,
+      "ns": 1655.8170318603516,
+      "display": "1,655.817",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 134,
+      "key": "spill_noopt_window_reuse",
+      "retained_counter_value": 9.78,
+      "frequency_hz": 25165824,
+      "ns": 388.6222839355469,
+      "display": "388.622",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 134,
+      "key": "optimized_window_reuse",
+      "retained_counter_value": 9.83,
+      "frequency_hz": 25165824,
+      "ns": 390.6091054280599,
+      "display": "390.609",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 120,
+      "key": "retained_path",
+      "retained_counter_value": 34.958333,
+      "frequency_hz": 25165824,
+      "ns": 1389.1193469365437,
+      "display": "1,389.119",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 121,
+      "key": "retained_path",
+      "retained_counter_value": 348.625,
+      "frequency_hz": 25165824,
+      "ns": 13853.112856547037,
+      "display": "13,853.113",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 122,
+      "key": "retained_path",
+      "retained_counter_value": 73.125,
+      "frequency_hz": 25165824,
+      "ns": 2905.726432800293,
+      "display": "2,905.726",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 122,
+      "key": "retained_hot_share",
+      "retained_counter_value": 74.583333,
+      "frequency_hz": 25165824,
+      "ns": 2963.675379753113,
+      "display": "2,963.675",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 123,
+      "key": "retained_node1",
+      "retained_counter_value": 75.8125,
+      "frequency_hz": 25165824,
+      "ns": 3012.5180880228677,
+      "display": "3,012.518",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 123,
+      "key": "retained_node2",
+      "retained_counter_value": 77.125,
+      "frequency_hz": 25165824,
+      "ns": 3064.6721522013345,
+      "display": "3,064.672",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 123,
+      "key": "retained_mean",
+      "retained_counter_value": 76.46875,
+      "frequency_hz": 25165824,
+      "ns": 3038.595120112101,
+      "display": "3,038.595",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 124,
+      "key": "retained_path",
+      "retained_counter_value": 95.15625,
+      "frequency_hz": 25165824,
+      "ns": 3781.169652938843,
+      "display": "3,781.170",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 125,
+      "key": "retained_spill_path",
+      "retained_counter_value": 8.0,
+      "frequency_hz": 25165824,
+      "ns": 317.8914388020833,
+      "display": "317.891",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 126,
+      "key": "retained_spill_path",
+      "retained_counter_value": 51.0,
+      "frequency_hz": 25165824,
+      "ns": 2026.5579223632812,
+      "display": "2,026.558",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 128,
+      "key": "retained_spill_path",
+      "retained_counter_value": 64.0,
+      "frequency_hz": 25165824,
+      "ns": 2543.1315104166665,
+      "display": "2,543.132",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 129,
+      "key": "retained_read_v0",
+      "retained_counter_value": 61.0,
+      "frequency_hz": 25165824,
+      "ns": 2423.9222208658853,
+      "display": "2,423.922",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 129,
+      "key": "retained_read_v1",
+      "retained_counter_value": 79.0,
+      "frequency_hz": 25165824,
+      "ns": 3139.1779581705728,
+      "display": "3,139.178",
+      "unit": "ns/op"
+    },
+    {
+      "tc": 127,
+      "key": "retained_flush_ticks",
+      "retained_counter_value": 61996.0,
+      "frequency_hz": 25165824,
+      "ns": 2463499.7049967446,
+      "display": "2,463,499.705",
+      "unit": "ns/flush"
+    }
+  ],
+  "extension_ns": [
+    [
+      "175%",
+      "30 / 90",
+      "1.660×",
+      "12.100"
+    ],
+    [
+      "200%",
+      "30 / 90",
+      "1.954×",
+      "13.787"
+    ]
+  ]
+}

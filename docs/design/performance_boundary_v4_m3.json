@@ -1,0 +1,4492 @@
+{
+  "schema": "boundary-v4-publication-1",
+  "runs": [
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1054.412374893824,
+      "metrics": {
+        "remote_read": 1054.412374893824
+      },
+      "source": "results/m3/16n1s/tc228/p0/ha-vi/result.json",
+      "sha256": "0c26e0b931f820b4097f0e778e382875d5a91c1f518bcdda319f9bd89c3de35e",
+      "workload_sha256": "93d2b03f2112c16cf1348b410b47fefaafcb5625f15e330dcdd11c94c498c447"
+    },
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 989.6854559580487,
+      "metrics": {
+        "remote_read": 989.6854559580487
+      },
+      "source": "results/m3/16n1s/tc228/p0/ubcc/result.json",
+      "sha256": "511564d63f119bfd1dbe52c987f065afe48c5ad2e424c8ed61e9095e107df143",
+      "workload_sha256": "93d2b03f2112c16cf1348b410b47fefaafcb5625f15e330dcdd11c94c498c447"
+    },
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1030.0427675247195,
+      "metrics": {
+        "remote_read": 1030.0427675247195
+      },
+      "source": "results/m3/16n1s/tc228/p100/ha-vi/result.json",
+      "sha256": "1ea0608c0effe07b2adfd491ff5ed02f141ca2dbd497ae273f2eaed545fa4d8d",
+      "workload_sha256": "bde077d82fcdd13afb8b84e4eabc7827d592a58103a9225671e36bf51f91d944"
+    },
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1028.4905632336934,
+      "metrics": {
+        "remote_read": 1028.4905632336934
+      },
+      "source": "results/m3/16n1s/tc228/p100/ubcc/result.json",
+      "sha256": "17b9dc2d3f239ad831c69c6bc5e6698ce564b815f9689012544160b59f86e583",
+      "workload_sha256": "bde077d82fcdd13afb8b84e4eabc7827d592a58103a9225671e36bf51f91d944"
+    },
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1034.8546008268993,
+      "metrics": {
+        "remote_read": 1034.8546008268993
+      },
+      "source": "results/m3/16n1s/tc228/p50/ha-vi/result.json",
+      "sha256": "ba4e8f1aa6448cef07160cb2afbc61443f927dc2df51cf9f0913f2256b8e977f",
+      "workload_sha256": "50ea80aade5d020f0224e1dd7d320f6ff45a72e9a773f0c8fd255701c0b05f76"
+    },
+    {
+      "tc": 228,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1016.2281493345895,
+      "metrics": {
+        "remote_read": 1016.2281493345895
+      },
+      "source": "results/m3/16n1s/tc228/p50/ubcc/result.json",
+      "sha256": "141106badc755c6ba198f95c9d249bc14168a19943aa328adbe772e56edc9968",
+      "workload_sha256": "50ea80aade5d020f0224e1dd7d320f6ff45a72e9a773f0c8fd255701c0b05f76"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2053.7214974562326,
+      "metrics": {
+        "ownership_handoff": 2053.7214974562326
+      },
+      "source": "results/m3/16n1s/tc229/p0/ha-vi/result.json",
+      "sha256": "7e2a53bde638322a8efa533c7c7362b29ed84f6831220953eadaaed4bf050a60",
+      "workload_sha256": "21cbfd77701c963fb1c9f4b54387cbcd2e4ad58602e15b7acc0df25a2cc95667"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 997.4464774131777,
+      "metrics": {
+        "ownership_handoff": 997.4464774131777
+      },
+      "source": "results/m3/16n1s/tc229/p0/ubcc/result.json",
+      "sha256": "620a0dbc17f1879cbd436e11015a6846c0e9cf540a56027ff0e1d1dce22254a9",
+      "workload_sha256": "21cbfd77701c963fb1c9f4b54387cbcd2e4ad58602e15b7acc0df25a2cc95667"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2834.7906967004146,
+      "metrics": {
+        "ownership_handoff": 2834.7906967004146
+      },
+      "source": "results/m3/16n1s/tc229/p100/ha-vi/result.json",
+      "sha256": "ced7dbd3439cf0497761646f224296279a1df45e0cd5c3d366b039233a3f0ce1",
+      "workload_sha256": "aa84a2f0c7aefc18610339b01fcc10204a024131c4eac9ca7dc5afbc157f25aa"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1048.3587781588237,
+      "metrics": {
+        "ownership_handoff": 1048.3587781588237
+      },
+      "source": "results/m3/16n1s/tc229/p100/ubcc/result.json",
+      "sha256": "fb780809806643a711633b02ea079afacf5c7854b4dffc5663b290806ca49964",
+      "workload_sha256": "aa84a2f0c7aefc18610339b01fcc10204a024131c4eac9ca7dc5afbc157f25aa"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2525.4363814989724,
+      "metrics": {
+        "ownership_handoff": 2525.4363814989724
+      },
+      "source": "results/m3/16n1s/tc229/p50/ha-vi/result.json",
+      "sha256": "0dad08981506cc817c55d9f48215381406a88b60bdbe1bd4d904d82e0ef545d7",
+      "workload_sha256": "99f632f32da8b0b9a3d910fd4b39811af6bf47a220f34f22b392127a14f8f87b"
+    },
+    {
+      "tc": 229,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1030.508428812027,
+      "metrics": {
+        "ownership_handoff": 1030.508428812027
+      },
+      "source": "results/m3/16n1s/tc229/p50/ubcc/result.json",
+      "sha256": "02c9a708c1ad3e13ecbd777dac9c9fafb50b9ff34f92471f25a1a05923691218",
+      "workload_sha256": "99f632f32da8b0b9a3d910fd4b39811af6bf47a220f34f22b392127a14f8f87b"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1825.392246246338,
+      "metrics": {
+        "shared_to_writer": 1825.392246246338
+      },
+      "source": "results/m3/16n1s/tc230/p0/ha-vi/result.json",
+      "sha256": "27d91fcc08f3f42cb0ec8aa040aa4713b984c0873cf39adeef30827cc7eabb25",
+      "workload_sha256": "cde508f6ff730a6cd5dc0cf7f78d10b0ffd19a8969d8445c96ff5b6dec38d5e9"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1825.392246246338,
+      "metrics": {
+        "shared_to_writer": 1825.392246246338
+      },
+      "source": "results/m3/16n1s/tc230/p0/ubcc/result.json",
+      "sha256": "885bf121d32168391dd42a56735c12f93ffcf0d6d2b698be2fc8bad43185c8b4",
+      "workload_sha256": "cde508f6ff730a6cd5dc0cf7f78d10b0ffd19a8969d8445c96ff5b6dec38d5e9"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2749.2642402648926,
+      "metrics": {
+        "shared_to_writer": 2749.2642402648926
+      },
+      "source": "results/m3/16n1s/tc230/p100/ha-vi/result.json",
+      "sha256": "de67f27b18bb8e940818c1a752603988ca029b7e84a7476f624ff605b1c74b7d",
+      "workload_sha256": "7bd4691b132c86437a904c4388d449aa220a8bb30462de66bca0dea83f53d58e"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2746.7807133992515,
+      "metrics": {
+        "shared_to_writer": 2746.7807133992515
+      },
+      "source": "results/m3/16n1s/tc230/p100/ubcc/result.json",
+      "sha256": "c7b4fee7344dc41ad87d655326d297fd080cf5384f8564f05d755df73011cb61",
+      "workload_sha256": "7bd4691b132c86437a904c4388d449aa220a8bb30462de66bca0dea83f53d58e"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2751.7477671305337,
+      "metrics": {
+        "shared_to_writer": 2751.7477671305337
+      },
+      "source": "results/m3/16n1s/tc230/p50/ha-vi/result.json",
+      "sha256": "97595e208ec01f45edc1d5d1fa35aeda7bd006c906202ef4261fc77320702c86",
+      "workload_sha256": "2f795424b39d306129a270e75430e4861458506d59820ba379aca2b2ee9319a7"
+    },
+    {
+      "tc": 230,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2756.7148208618164,
+      "metrics": {
+        "shared_to_writer": 2756.7148208618164
+      },
+      "source": "results/m3/16n1s/tc230/p50/ubcc/result.json",
+      "sha256": "a5c9d12cf2d8642ce72fe706ba6b3e845cdd0f75957534a43739d88e14cba7bd",
+      "workload_sha256": "2f795424b39d306129a270e75430e4861458506d59820ba379aca2b2ee9319a7"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 45.2564563602209,
+      "metrics": {
+        "clean_shared_control": 45.2564563602209
+      },
+      "source": "results/m3/16n1s/tc231/p0/ha-vi/result.json",
+      "sha256": "422f48c6917be84fa4f931fee78a6d0b30f216cca1aa283e333779160d3a80f1",
+      "workload_sha256": "a5763e0e4f109a2801639c8a6de47d47eca7928a3d55abcff013747efd03955e"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 45.12063848475615,
+      "metrics": {
+        "clean_shared_control": 45.12063848475615
+      },
+      "source": "results/m3/16n1s/tc231/p0/ubcc/result.json",
+      "sha256": "a191fd52638f01528664d86f4fc202e819ad1c37884f4f20f1a12a53c13885a3",
+      "workload_sha256": "a5763e0e4f109a2801639c8a6de47d47eca7928a3d55abcff013747efd03955e"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 181.97655056913692,
+      "metrics": {
+        "clean_shared_control": 181.97655056913692
+      },
+      "source": "results/m3/16n1s/tc231/p100/ha-vi/result.json",
+      "sha256": "01591326a2afb79f34a1fa496492d1d2e5d98c03b019d8bd849b9fa6d2b55298",
+      "workload_sha256": "8b911c3b6ff54327aa24c45d19cc280dba90f4fe6378d6d1ff93f0ea5b8dd2b2"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 179.71615307033062,
+      "metrics": {
+        "clean_shared_control": 179.71615307033062
+      },
+      "source": "results/m3/16n1s/tc231/p100/ubcc/result.json",
+      "sha256": "25eed9f339a8929cfc753b88641830d6c22e6acf9752738f5c584facba7b4870",
+      "workload_sha256": "8b911c3b6ff54327aa24c45d19cc280dba90f4fe6378d6d1ff93f0ea5b8dd2b2"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 171.51857415835062,
+      "metrics": {
+        "clean_shared_control": 171.51857415835062
+      },
+      "source": "results/m3/16n1s/tc231/p50/ha-vi/result.json",
+      "sha256": "0531a0e562b6c6b573eb789daee424342075cdc00e5fb7abaa2593ec9a0df76a",
+      "workload_sha256": "d3d969c36d4e2cd0a20957a69b4f626768d9143f35d630a21c4e025414858104"
+    },
+    {
+      "tc": 231,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 169.52981241047382,
+      "metrics": {
+        "clean_shared_control": 169.52981241047382
+      },
+      "source": "results/m3/16n1s/tc231/p50/ubcc/result.json",
+      "sha256": "357118511f9d8081fc984be68e71769b42099c3e3e106c87180ef88a3e0851dd",
+      "workload_sha256": "d3d969c36d4e2cd0a20957a69b4f626768d9143f35d630a21c4e025414858104"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 5609.562827481164,
+      "metrics": {
+        "hot_key_read": 7299.240678548813,
+        "hot_key_write": 2230.2071253458657
+      },
+      "source": "results/m3/16n1s/tc232/p0/ha-vi/result.json",
+      "sha256": "91644af5efe45683407bdb362493c2c8135d6876edc33e4c67863b33177195dc",
+      "workload_sha256": "712bb7b536333398a36c2e4f4951d3c20ef7486717aa5a25654c58660ccce1e8"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1344.1054357422724,
+      "metrics": {
+        "hot_key_read": 1134.5061163107555,
+        "hot_key_write": 1763.304074605306
+      },
+      "source": "results/m3/16n1s/tc232/p0/ubcc/result.json",
+      "sha256": "1a2e3c478fd6671b9bf6eb302f415e4071ed69751d13c335413cdccf0b1d09a4",
+      "workload_sha256": "712bb7b536333398a36c2e4f4951d3c20ef7486717aa5a25654c58660ccce1e8"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 5764.9902171558815,
+      "metrics": {
+        "hot_key_read": 7301.41376455625,
+        "hot_key_write": 2692.1431223551435
+      },
+      "source": "results/m3/16n1s/tc232/p100/ha-vi/result.json",
+      "sha256": "7afe166691b256d2ce902a9450181f756af85e63b6d17be0937d89d6453e2a24",
+      "workload_sha256": "be6891576b0b5d0dba7e1208e600bb48ccc428a9da350d2f070493d090219bd5"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 4914.485745959811,
+      "metrics": {
+        "hot_key_read": 6413.087248802184,
+        "hot_key_write": 1917.282740275065
+      },
+      "source": "results/m3/16n1s/tc232/p100/ubcc/result.json",
+      "sha256": "54cdaf7c808fe9369450c08ce33f8cfbbb6805236585d93154540d15f5edee7d",
+      "workload_sha256": "be6891576b0b5d0dba7e1208e600bb48ccc428a9da350d2f070493d090219bd5"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 5732.186966472203,
+      "metrics": {
+        "hot_key_read": 7296.912372112275,
+        "hot_key_write": 2602.736155192057
+      },
+      "source": "results/m3/16n1s/tc232/p50/ha-vi/result.json",
+      "sha256": "ceae16cfead02c427492b95583606a237cb523e330c378ca770ce4f282defede",
+      "workload_sha256": "1465abdfd150edecc5077fba046baa140ee01b9ed8ab90d951ab50481eeabf85"
+    },
+    {
+      "tc": 232,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 4910.967416233486,
+      "metrics": {
+        "hot_key_read": 6412.776807943979,
+        "hot_key_write": 1907.3486328124998
+      },
+      "source": "results/m3/16n1s/tc232/p50/ubcc/result.json",
+      "sha256": "59feddfc36afb12e73525e655f552c1ca238821bbbf0dcc88ac3ba147eac5b02",
+      "workload_sha256": "1465abdfd150edecc5077fba046baa140ee01b9ed8ab90d951ab50481eeabf85"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 667.3702349265418,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 667.3702349265418
+      },
+      "source": "results/m3/16n1s/tc233/p0/ha-vi/result.json",
+      "sha256": "6012b71a585fc5658d1ed7827ef54c2d585d5c9044497b26902a527919285003",
+      "workload_sha256": "9bfb7076a1d6778e66120576e6260c24eafe819545acf1b7f056cf2bb57c2790"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 580.9124559164047,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 580.9124559164047
+      },
+      "source": "results/m3/16n1s/tc233/p0/ubcc/result.json",
+      "sha256": "c703e5bfb946823b7ac78a68fd046a1f7ee6c05ffa085254db39aebf214bf08a",
+      "workload_sha256": "9bfb7076a1d6778e66120576e6260c24eafe819545acf1b7f056cf2bb57c2790"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 675.0536461671193,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 675.0536461671193
+      },
+      "source": "results/m3/16n1s/tc233/p100/ha-vi/result.json",
+      "sha256": "be42268b1e36704b887813e63533de1a6f9b4435cee7cca3c39d5fa9367142bc",
+      "workload_sha256": "11c25059f9707244014181675ec4abb1b6acedc48a707b06891986931f86d470"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 585.7242892185847,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 585.7242892185847
+      },
+      "source": "results/m3/16n1s/tc233/p100/ubcc/result.json",
+      "sha256": "f28b5ff3ab462aaca08924bcfa2b4dfb2f48ad5842ff2f15ed30e6dc6f7deaf1",
+      "workload_sha256": "11c25059f9707244014181675ec4abb1b6acedc48a707b06891986931f86d470"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 673.8118827342987,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 673.8118827342987
+      },
+      "source": "results/m3/16n1s/tc233/p50/ha-vi/result.json",
+      "sha256": "88d18ac640b77f2b7cb0f39ce921758bb48c915904242c4cf4509ca0c261699c",
+      "workload_sha256": "c00c5755a4a9cd6d005cb42f8659a4428bc98ff0e1f105398795cb0e9238cdd1"
+    },
+    {
+      "tc": 233,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 584.9481870730717,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 584.9481870730717
+      },
+      "source": "results/m3/16n1s/tc233/p50/ubcc/result.json",
+      "sha256": "1c13d05024b27a6d15db04ab404f9707ece4d8c1130ab4a52497617874429462",
+      "workload_sha256": "c00c5755a4a9cd6d005cb42f8659a4428bc98ff0e1f105398795cb0e9238cdd1"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 18112.050990263622,
+      "metrics": {
+        "queued_token_end_to_end": 18112.050990263622,
+        "queued_token_store": 20561.118920644123
+      },
+      "source": "results/m3/16n1s/tc234/p0/ha-vi/result.json",
+      "sha256": "42a3fab582dbfd0bc76f8d6f8bd0b2bcd0dedf2e5d0ad48d0e6773f860e83c38",
+      "workload_sha256": "abb6f19265df86babba4e7bd5494ebb0897df9e164172e3da064fc97050facb6"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 16378.859678904215,
+      "metrics": {
+        "queued_token_end_to_end": 16378.859678904215,
+        "queued_token_store": 20571.05302810669
+      },
+      "source": "results/m3/16n1s/tc234/p0/ubcc/result.json",
+      "sha256": "5f5ffa9c29b7c2f9e3b460848e6ca96c9b305263ea48eedc0117af50836bf477",
+      "workload_sha256": "abb6f19265df86babba4e7bd5494ebb0897df9e164172e3da064fc97050facb6"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 18167.30946302414,
+      "metrics": {
+        "queued_token_end_to_end": 18167.30946302414,
+        "queued_token_store": 20677.84468332926
+      },
+      "source": "results/m3/16n1s/tc234/p100/ha-vi/result.json",
+      "sha256": "b395f4f10d9e96f8a7cee305a4a656a01979c7992cb2776baec3ca8c22e12009",
+      "workload_sha256": "9b5427c4c7e537de97730fce35ebb9e7dbb38ac32f98e3b39ad6c8f7bbea363d"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 16432.565947373707,
+      "metrics": {
+        "queued_token_end_to_end": 16432.565947373707,
+        "queued_token_store": 20526.349544525146
+      },
+      "source": "results/m3/16n1s/tc234/p100/ubcc/result.json",
+      "sha256": "2ced2a3d96dc373e81b1543558d8b33ec7c558061baae0a0ac17e0e3c99362cd",
+      "workload_sha256": "9b5427c4c7e537de97730fce35ebb9e7dbb38ac32f98e3b39ad6c8f7bbea363d"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 18153.96050612132,
+      "metrics": {
+        "queued_token_end_to_end": 18153.96050612132,
+        "queued_token_store": 20638.108253479004
+      },
+      "source": "results/m3/16n1s/tc234/p50/ha-vi/result.json",
+      "sha256": "63f203670bcc4aad2e7e48a704ece5b1c455835f8ba69f5c3d6eedb99c08d8b6",
+      "workload_sha256": "54586ffc9b2530c773b492adcb49d27a6879b949f0dc54446f93d8aa42c57279"
+    },
+    {
+      "tc": 234,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 16442.810495694477,
+      "metrics": {
+        "queued_token_end_to_end": 16442.810495694477,
+        "queued_token_store": 20620.723565419514
+      },
+      "source": "results/m3/16n1s/tc234/p50/ubcc/result.json",
+      "sha256": "50eae0a6b0d3976d7fbbffc60f11bd91d211159ea5a6e16c6eeafa3e2bcef59c",
+      "workload_sha256": "54586ffc9b2530c773b492adcb49d27a6879b949f0dc54446f93d8aa42c57279"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 327.24346965551376,
+      "metrics": {
+        "catalog_kv_end_to_end": 327.24346965551376,
+        "catalog_kv_service": 133.04573561375338
+      },
+      "source": "results/m3/16n1s/tc235/p0/ha-vi/result.json",
+      "sha256": "7f2c6e3d968a80e980ca8368dfb5fc2e5218d8dade2360648d003b290a67a006",
+      "workload_sha256": "9d5c3c13790a17cfb130fe596aa66446bf29eed4e00723c969b7a8d903bfaa11"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 219.28766121466955,
+      "metrics": {
+        "catalog_kv_end_to_end": 219.28766121466955,
+        "catalog_kv_service": 31.592207960784442
+      },
+      "source": "results/m3/16n1s/tc235/p0/ubcc/result.json",
+      "sha256": "3f5233f1197c2d96facca4864fe08a8a13ee74c04c37a39233688f4725b46711",
+      "workload_sha256": "9d5c3c13790a17cfb130fe596aa66446bf29eed4e00723c969b7a8d903bfaa11"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 593.0972596009573,
+      "metrics": {
+        "catalog_kv_end_to_end": 593.0972596009573,
+        "catalog_kv_service": 286.9783202186227
+      },
+      "source": "results/m3/16n1s/tc235/p100/ha-vi/result.json",
+      "sha256": "d9e3cfe413ee0b7a85fec086aac35811107305cac19372acb5a57bf758da5254",
+      "workload_sha256": "043042f44a4fb6be3685a14c4b2cbb9d5d945ae5bc76c3cc42327cb49c7fd54b"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 459.6853007872899,
+      "metrics": {
+        "catalog_kv_end_to_end": 459.6853007872899,
+        "catalog_kv_service": 174.0287795352439
+      },
+      "source": "results/m3/16n1s/tc235/p100/ubcc/result.json",
+      "sha256": "e50e774b18c8ba9675708767bca303d70b2b073e7e820ab550386a6e5391dad3",
+      "workload_sha256": "043042f44a4fb6be3685a14c4b2cbb9d5d945ae5bc76c3cc42327cb49c7fd54b"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 590.497317413489,
+      "metrics": {
+        "catalog_kv_end_to_end": 590.497317413489,
+        "catalog_kv_service": 284.50691994900507
+      },
+      "source": "results/m3/16n1s/tc235/p50/ha-vi/result.json",
+      "sha256": "3e336ec09d4f333927d3c446149bf801f08d6a1a78ea278fcbe3eb7d6d75c9cf",
+      "workload_sha256": "eb223be21075789c4d472468acefda6c453ace71017fd6d0758499fb287e027f"
+    },
+    {
+      "tc": 235,
+      "topology": "16n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 458.4435373544693,
+      "metrics": {
+        "catalog_kv_end_to_end": 458.4435373544693,
+        "catalog_kv_service": 173.16779121756556
+      },
+      "source": "results/m3/16n1s/tc235/p50/ubcc/result.json",
+      "sha256": "c545f6f5d8ef751af73dff04ee7a864d9b3e3534b84473df366a10c34bdb2999",
+      "workload_sha256": "eb223be21075789c4d472468acefda6c453ace71017fd6d0758499fb287e027f"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1060.465971628825,
+      "metrics": {
+        "remote_read": 1060.465971628825
+      },
+      "source": "results/m3/3n1s/tc228/p0/ha-vi/result.json",
+      "sha256": "55df5cae6724da3359244a2569ace2b4274942eed88c8457120e06d09c1346fe",
+      "workload_sha256": "2aa1a54ee82131f6d4d102857511068b47d2cd8c22f74a5174847b2a5d3c51ab"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 991.7550616794161,
+      "metrics": {
+        "remote_read": 991.7550616794161
+      },
+      "source": "results/m3/3n1s/tc228/p0/ubcc/result.json",
+      "sha256": "67f59610b6cdcc5a97c1cb78b9c949b0c32bc50924736d6e7d425bc06465ddf0",
+      "workload_sha256": "2aa1a54ee82131f6d4d102857511068b47d2cd8c22f74a5174847b2a5d3c51ab"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1024.8687532212998,
+      "metrics": {
+        "remote_read": 1024.8687532212998
+      },
+      "source": "results/m3/3n1s/tc228/p100/ha-vi/result.json",
+      "sha256": "338a32d9102d6ffa48d4ebc16619ded3ed2ebe83bbf84ff587485bf07c4aa223",
+      "workload_sha256": "4b37d986d8d0b4cccfc20c28b81122c1216a886af01ce0134b056907eeb7b6ff"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1019.0738572014703,
+      "metrics": {
+        "remote_read": 1019.0738572014703
+      },
+      "source": "results/m3/3n1s/tc228/p100/ubcc/result.json",
+      "sha256": "1f3e07c105d8944c174eef7fe0d0e008679ed2e382f950b274aefddb28641f4e",
+      "workload_sha256": "4b37d986d8d0b4cccfc20c28b81122c1216a886af01ce0134b056907eeb7b6ff"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1033.1471761067708,
+      "metrics": {
+        "remote_read": 1033.1471761067708
+      },
+      "source": "results/m3/3n1s/tc228/p50/ha-vi/result.json",
+      "sha256": "788978abd1a5b4acdf62b024ffbbbe0dc4c0eb09ed055ff3c8c6f0a66a44a935",
+      "workload_sha256": "3d21e73095181debccfdffb82a3887403f803048bcb439a579cdfad505b2a76f"
+    },
+    {
+      "tc": 228,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1006.6562228732638,
+      "metrics": {
+        "remote_read": 1006.6562228732638
+      },
+      "source": "results/m3/3n1s/tc228/p50/ubcc/result.json",
+      "sha256": "ba52a3337d8af7f1096dd981e892d3b4ae88548f363865e4dd911a9289b0136e",
+      "workload_sha256": "3d21e73095181debccfdffb82a3887403f803048bcb439a579cdfad505b2a76f"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2056.3602447509766,
+      "metrics": {
+        "ownership_handoff": 2056.3602447509766
+      },
+      "source": "results/m3/3n1s/tc229/p0/ha-vi/result.json",
+      "sha256": "f3ea12fca01b0bd03304612ac8facf34506ca23dcd56bc5c8c54a004fe9c1ee2",
+      "workload_sha256": "42b96bcea24e157d0ae6c9fa67fd78efada774dc8eca764c581be20c68781016"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1014.9346457587349,
+      "metrics": {
+        "ownership_handoff": 1014.9346457587349
+      },
+      "source": "results/m3/3n1s/tc229/p0/ubcc/result.json",
+      "sha256": "dd5a110d71390111add4594fd89d5f5a377256ca3d4a2a93c400872db85bef76",
+      "workload_sha256": "42b96bcea24e157d0ae6c9fa67fd78efada774dc8eca764c581be20c68781016"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2817.1473079257544,
+      "metrics": {
+        "ownership_handoff": 2817.1473079257544
+      },
+      "source": "results/m3/3n1s/tc229/p100/ha-vi/result.json",
+      "sha256": "afe78be52a46a8221b60d286103bd0d35cc56be37804f9e9dd192be9b5caba1d",
+      "workload_sha256": "fd381c065c6138e16097735aa54b3aebe8039d0b93f98abdd3c591614e9f8937"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1044.73696814643,
+      "metrics": {
+        "ownership_handoff": 1044.73696814643
+      },
+      "source": "results/m3/3n1s/tc229/p100/ubcc/result.json",
+      "sha256": "fb786fb4362de07049ddf4c7a8e2cbe97b1e054a815d8b679b4e3f4a5a55380e",
+      "workload_sha256": "fd381c065c6138e16097735aa54b3aebe8039d0b93f98abdd3c591614e9f8937"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2505.8786074320474,
+      "metrics": {
+        "ownership_handoff": 2505.8786074320474
+      },
+      "source": "results/m3/3n1s/tc229/p50/ha-vi/result.json",
+      "sha256": "77d5e816eb856e7f9b73e22c8c85877e039ddc38684a9f7a64e66ef761b6e6a4",
+      "workload_sha256": "39913b76b55afd0baca9d281ff04b6e9b7ed2c9a6db0fd47a048d34919f82bd8"
+    },
+    {
+      "tc": 229,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1021.5573840671115,
+      "metrics": {
+        "ownership_handoff": 1021.5573840671115
+      },
+      "source": "results/m3/3n1s/tc229/p50/ubcc/result.json",
+      "sha256": "14d8d29eeb52961bf9d804108743104ba80c0a6a71a700296b7a82bc7429f573",
+      "workload_sha256": "39913b76b55afd0baca9d281ff04b6e9b7ed2c9a6db0fd47a048d34919f82bd8"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1827.8757731119792,
+      "metrics": {
+        "shared_to_writer": 1827.8757731119792
+      },
+      "source": "results/m3/3n1s/tc230/p0/ha-vi/result.json",
+      "sha256": "7a9f5187ce2fa4ab2b387db76ad29f958a710cb5e108aea136e7abb57502eb59",
+      "workload_sha256": "4166a3aeae8251b0c76ade08972985c0437fbda8b79f1d469b89b73fda598d3a"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1827.8757731119792,
+      "metrics": {
+        "shared_to_writer": 1827.8757731119792
+      },
+      "source": "results/m3/3n1s/tc230/p0/ubcc/result.json",
+      "sha256": "8a33225c691b0c085c1a8fd88b590e9121241bcaa8546385c1de7e70c3e0fe5f",
+      "workload_sha256": "4166a3aeae8251b0c76ade08972985c0437fbda8b79f1d469b89b73fda598d3a"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2749.2642402648926,
+      "metrics": {
+        "shared_to_writer": 2749.2642402648926
+      },
+      "source": "results/m3/3n1s/tc230/p100/ha-vi/result.json",
+      "sha256": "715da9af64911f3a8165a73824f845781608edfbd35d61eb653f8caaffd34320",
+      "workload_sha256": "5387e5c236123d533f6a7e904117d9dcf69cb0af90bd2de1911949261d9d3478"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2739.3301328023276,
+      "metrics": {
+        "shared_to_writer": 2739.3301328023276
+      },
+      "source": "results/m3/3n1s/tc230/p100/ubcc/result.json",
+      "sha256": "69ef9f32d3e95ef513906798cf4ba10412bad874937b1abdc9bbcc11839c42ea",
+      "workload_sha256": "5387e5c236123d533f6a7e904117d9dcf69cb0af90bd2de1911949261d9d3478"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2739.3301328023276,
+      "metrics": {
+        "shared_to_writer": 2739.3301328023276
+      },
+      "source": "results/m3/3n1s/tc230/p50/ha-vi/result.json",
+      "sha256": "26c1bc9006d386ca417b860c392882380bdc92d7fdeb3b8b9d79675accb17ad8",
+      "workload_sha256": "e4a0e0d550a217bd33fa72b4b2eda7ac7610892bbbcc78f1b1afeb20f618dbf3"
+    },
+    {
+      "tc": 230,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2736.846605936686,
+      "metrics": {
+        "shared_to_writer": 2736.846605936686
+      },
+      "source": "results/m3/3n1s/tc230/p50/ubcc/result.json",
+      "sha256": "e02795dac2085741ba665901c6b618bd23f23f479c72aee4b39de146e0020056",
+      "workload_sha256": "e4a0e0d550a217bd33fa72b4b2eda7ac7610892bbbcc78f1b1afeb20f618dbf3"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 42.892578575346214,
+      "metrics": {
+        "clean_shared_control": 42.892578575346214
+      },
+      "source": "results/m3/3n1s/tc231/p0/ha-vi/result.json",
+      "sha256": "b81d19e8b28f27c361d0e90a5f80b2d4f8e19b82a18cc8e505de517089e16ff8",
+      "workload_sha256": "8de5b0104eb33382cca6041f36f5ee8bedde419dbe7ec8d9a186a143b2cf9b56"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 42.478657431072655,
+      "metrics": {
+        "clean_shared_control": 42.478657431072655
+      },
+      "source": "results/m3/3n1s/tc231/p0/ubcc/result.json",
+      "sha256": "02edd61a05162cc4a7075eee5bfe912596f1594136dc660079d0ef583b9fb708",
+      "workload_sha256": "8de5b0104eb33382cca6041f36f5ee8bedde419dbe7ec8d9a186a143b2cf9b56"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 128.26381458176505,
+      "metrics": {
+        "clean_shared_control": 128.26381458176505
+      },
+      "source": "results/m3/3n1s/tc231/p100/ha-vi/result.json",
+      "sha256": "54df886f5b645c5b52d4ed49dfb91f2c4aff5b9bae093d971f37617126d5e924",
+      "workload_sha256": "b92d0ce8dbe734c648cb85f511f392431a074e6dc8f1794456033573e4c30036"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 128.62599558300442,
+      "metrics": {
+        "clean_shared_control": 128.62599558300442
+      },
+      "source": "results/m3/3n1s/tc231/p100/ubcc/result.json",
+      "sha256": "9d738a9d5c06f10cfd44ffb3ea8c1747303785b1a09a24ec151fe515207a6e38",
+      "workload_sha256": "b92d0ce8dbe734c648cb85f511f392431a074e6dc8f1794456033573e4c30036"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 120.70975369877284,
+      "metrics": {
+        "clean_shared_control": 120.70975369877284
+      },
+      "source": "results/m3/3n1s/tc231/p50/ha-vi/result.json",
+      "sha256": "9eb05faf3922063e03d5ac000fac62fe11c53a2bcde6206f0f6438ba4398d9b1",
+      "workload_sha256": "4d723a93dec67b79671c450de0f7adb8cf002e27957ec11de00208d8b64cbdc3"
+    },
+    {
+      "tc": 231,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 120.60627341270447,
+      "metrics": {
+        "clean_shared_control": 120.60627341270447
+      },
+      "source": "results/m3/3n1s/tc231/p50/ubcc/result.json",
+      "sha256": "91f52a2ba1a49f532436acd5700615c906e2a2f203c8e7bfd0b5ed677344cc4a",
+      "workload_sha256": "4d723a93dec67b79671c450de0f7adb8cf002e27957ec11de00208d8b64cbdc3"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1143.2502004835342,
+      "metrics": {
+        "hot_key_read": 859.3002955118815,
+        "hot_key_write": 1711.1500104268393
+      },
+      "source": "results/m3/3n1s/tc232/p0/ha-vi/result.json",
+      "sha256": "a7efbf686b8596d4c9a52e8d4ee43af46c5a40d0b4683d8dfbe8bb6718f68a0c",
+      "workload_sha256": "3bc0a2d1303d6ad47e66963e693a30d54746c6b1e66807dc57249c3e6dbbbb27"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1014.9346457587347,
+      "metrics": {
+        "hot_key_read": 839.4320805867513,
+        "hot_key_write": 1365.9397761027017
+      },
+      "source": "results/m3/3n1s/tc232/p0/ubcc/result.json",
+      "sha256": "44c7f7701f230af3fc6f04e58c0a8dd800f98898d2a0d4b1da9869099d6f8f69",
+      "workload_sha256": "3bc0a2d1303d6ad47e66963e693a30d54746c6b1e66807dc57249c3e6dbbbb27"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1248.6621185585307,
+      "metrics": {
+        "hot_key_read": 863.4395069546171,
+        "hot_key_write": 2019.1073417663574
+      },
+      "source": "results/m3/3n1s/tc232/p100/ha-vi/result.json",
+      "sha256": "b142e9cd87e680e6b97ae5bd56c3a74f17f92cb8c5b5c2f0cc4f98c4f5a75919",
+      "workload_sha256": "8d5494a0dfd74dc5f5644cdf474d2d5e7152cda575a79bfded0b735bf92db6c2"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1041.7015464217575,
+      "metrics": {
+        "hot_key_read": 841.0877651638453,
+        "hot_key_write": 1442.9291089375815
+      },
+      "source": "results/m3/3n1s/tc232/p100/ubcc/result.json",
+      "sha256": "7683c97791055ed5fc600ee710e8a4ca9be27aba98c395fbdee129d3b064bbc1",
+      "workload_sha256": "8d5494a0dfd74dc5f5644cdf474d2d5e7152cda575a79bfded0b735bf92db6c2"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1214.1686898690684,
+      "metrics": {
+        "hot_key_read": 862.6116646660699,
+        "hot_key_write": 1917.2827402750652
+      },
+      "source": "results/m3/3n1s/tc232/p50/ha-vi/result.json",
+      "sha256": "bac1f4e2802ff9f4fc3be23597f376753481a974019f24a95e57d49406c0a920",
+      "workload_sha256": "bd079028b7921acc1cfc3cd6fe4dcf4ef06e190a97b11d73b5b3e961dce08fd0"
+    },
+    {
+      "tc": 232,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1032.8712286772552,
+      "metrics": {
+        "hot_key_read": 835.2928691440158,
+        "hot_key_write": 1428.0279477437339
+      },
+      "source": "results/m3/3n1s/tc232/p50/ubcc/result.json",
+      "sha256": "375f896db6da7edbb91ea274fbcbef42d2562be1f07497a3eb181e37ca20f9f2",
+      "workload_sha256": "bd079028b7921acc1cfc3cd6fe4dcf4ef06e190a97b11d73b5b3e961dce08fd0"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 671.3800960116915,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 671.3800960116915
+      },
+      "source": "results/m3/3n1s/tc233/p0/ha-vi/result.json",
+      "sha256": "8ccb00ff592520ba2189c70e059ab42f37e9dda67ccf1569714ba26aa750b2a6",
+      "workload_sha256": "b5f0081f9f820f3e7d934c1ab88cb7ea7bc3f3bae6109345492719aad03820bd"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 595.6325266096327,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 595.6325266096327
+      },
+      "source": "results/m3/3n1s/tc233/p0/ubcc/result.json",
+      "sha256": "10b1f574517a44ecd4355b7bfda9d142c6b8b8991a10ecf2aca4fc61e63a5a48",
+      "workload_sha256": "b5f0081f9f820f3e7d934c1ab88cb7ea7bc3f3bae6109345492719aad03820bd"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 673.8636228773329,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 673.8636228773329
+      },
+      "source": "results/m3/3n1s/tc233/p100/ha-vi/result.json",
+      "sha256": "921d16d7046d909570b8e7a1c5e92b2aae5530c3e99715737c101ea4139ac213",
+      "workload_sha256": "9102193a3fe725c3391923502733085b1a59a6ad3f97fdbcd7f069a87e11ba69"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 586.1123402913412,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 586.1123402913412
+      },
+      "source": "results/m3/3n1s/tc233/p100/ubcc/result.json",
+      "sha256": "b11d1ebfd48f128b9752a3b52ad8c37e700dbd0aad9df817f165e7890b5bf100",
+      "workload_sha256": "9102193a3fe725c3391923502733085b1a59a6ad3f97fdbcd7f069a87e11ba69"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 670.1383325788711,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 670.1383325788711
+      },
+      "source": "results/m3/3n1s/tc233/p50/ha-vi/result.json",
+      "sha256": "9279888a0be2c5652869d505cbc9730707d40312a1674c771ef0a258a4925062",
+      "workload_sha256": "ffd3a76c762d2d6278f40bd219fd3355b3275f094d734213ecbc8be0c265f4b2"
+    },
+    {
+      "tc": 233,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 577.4199962615967,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 577.4199962615967
+      },
+      "source": "results/m3/3n1s/tc233/p50/ubcc/result.json",
+      "sha256": "4cda388e5b7be2fd2b8d168ee8592662f001cfaa25f9c1b4f34a7759f55ee274",
+      "workload_sha256": "ffd3a76c762d2d6278f40bd219fd3355b3275f094d734213ecbc8be0c265f4b2"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 16194.250848558215,
+      "metrics": {
+        "queued_token_end_to_end": 16194.250848558215,
+        "queued_token_store": 14702.479044596354
+      },
+      "source": "results/m3/3n1s/tc234/p0/ha-vi/result.json",
+      "sha256": "e201523411294fe34e80ea539e92dc4b7e026f1601a296c14d3530c80911758f",
+      "workload_sha256": "958c8da05ce7a745ab5a41d0d6754c7b718e4d63cb658bfb3b2920d717ef2454"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 14911.09530131022,
+      "metrics": {
+        "queued_token_end_to_end": 14911.09530131022,
+        "queued_token_store": 14623.006184895834
+      },
+      "source": "results/m3/3n1s/tc234/p0/ubcc/result.json",
+      "sha256": "837a4081426a61727fcce8ea4a9ae1af991197ae60181438c4fe509833c4336f",
+      "workload_sha256": "958c8da05ce7a745ab5a41d0d6754c7b718e4d63cb658bfb3b2920d717ef2454"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 16247.232755025228,
+      "metrics": {
+        "queued_token_end_to_end": 16247.232755025228,
+        "queued_token_store": 14861.424763997396
+      },
+      "source": "results/m3/3n1s/tc234/p100/ha-vi/result.json",
+      "sha256": "3a30fb89ec47cddfb303cbca08819c654f0e43920bec8325e28831cccab1e191",
+      "workload_sha256": "d955164ff66eb27fbfa4657e684793fbfb2e648da8faea3868e2ecbaedf45055"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 14974.011315239799,
+      "metrics": {
+        "queued_token_end_to_end": 14974.011315239799,
+        "queued_token_store": 14874.67024061415
+      },
+      "source": "results/m3/3n1s/tc234/p100/ubcc/result.json",
+      "sha256": "99768bf27ab2474e4bb44ff73b2eee442b097b222e9c89d1727aaa9a452293db",
+      "workload_sha256": "d955164ff66eb27fbfa4657e684793fbfb2e648da8faea3868e2ecbaedf45055"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 16248.888439602322,
+      "metrics": {
+        "queued_token_end_to_end": 16248.888439602322,
+        "queued_token_store": 14940.897623697916
+      },
+      "source": "results/m3/3n1s/tc234/p50/ha-vi/result.json",
+      "sha256": "dbfa754d51cba2d18d68333b930f1e85586f78fec7a3ad67066639073147b256",
+      "workload_sha256": "99bca7aec4b8df3fac869d8c9a4b3c124eb732737cb85e67960fbdf90e6cef8c"
+    },
+    {
+      "tc": 234,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 14967.388576931424,
+      "metrics": {
+        "queued_token_end_to_end": 14967.388576931424,
+        "queued_token_store": 14795.197380913627
+      },
+      "source": "results/m3/3n1s/tc234/p50/ubcc/result.json",
+      "sha256": "314aaedbac29bdc32a86fd7e7200e7ca28d24e4e0e078fd1e42f358953b42118",
+      "workload_sha256": "99bca7aec4b8df3fac869d8c9a4b3c124eb732737cb85e67960fbdf90e6cef8c"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 329.06730969746906,
+      "metrics": {
+        "catalog_kv_end_to_end": 329.06730969746906,
+        "catalog_kv_service": 106.71404500802358
+      },
+      "source": "results/m3/3n1s/tc235/p0/ha-vi/result.json",
+      "sha256": "a66d1a4cd5ca8ea4375e284b58f9c15dd4f44b15ce860f6fa84b7189b04cdca7",
+      "workload_sha256": "9a5228987eeb24031e8fafea1c7603945359a6ef396b9b1168fe4c7cd1ac2f9d"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 221.38313700755438,
+      "metrics": {
+        "catalog_kv_end_to_end": 221.38313700755438,
+        "catalog_kv_service": 33.65696304374271
+      },
+      "source": "results/m3/3n1s/tc235/p0/ubcc/result.json",
+      "sha256": "9e51b38afac35b87da86123fa48bf43b1cb49cd7f45f6a3d1b2ad3f6a03b3733",
+      "workload_sha256": "9a5228987eeb24031e8fafea1c7603945359a6ef396b9b1168fe4c7cd1ac2f9d"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 405.5133710304896,
+      "metrics": {
+        "catalog_kv_end_to_end": 405.5133710304896,
+        "catalog_kv_service": 155.05227363771863
+      },
+      "source": "results/m3/3n1s/tc235/p100/ha-vi/result.json",
+      "sha256": "5eb511206b98f52470fb409099a3186db03b33e3328e35389152f0dadcb4cbaf",
+      "workload_sha256": "7665885f01c24544f56fa15e649a13b51e59ff65b0ea0650b8642789714d24c0"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 293.87107739845914,
+      "metrics": {
+        "catalog_kv_end_to_end": 293.87107739845914,
+        "catalog_kv_service": 79.31763927141826
+      },
+      "source": "results/m3/3n1s/tc235/p100/ubcc/result.json",
+      "sha256": "1c4b96e786d1646681a997124d4f08156e7c7eb7e67f1bd1db7eff7862e24f19",
+      "workload_sha256": "7665885f01c24544f56fa15e649a13b51e59ff65b0ea0650b8642789714d24c0"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 402.408962448438,
+      "metrics": {
+        "catalog_kv_end_to_end": 402.408962448438,
+        "catalog_kv_service": 153.1766934527291
+      },
+      "source": "results/m3/3n1s/tc235/p50/ha-vi/result.json",
+      "sha256": "686db622b85ab9d3f3c8d115423144548949a2b0fa582e576ab5a970f1a41983",
+      "workload_sha256": "0623fb299b6c0b4d4bb335a0675f53b22b5447e6c0cb974876400fa0b5e3158d"
+    },
+    {
+      "tc": 235,
+      "topology": "3n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 292.59050885836285,
+      "metrics": {
+        "catalog_kv_end_to_end": 292.59050885836285,
+        "catalog_kv_service": 78.54153712590535
+      },
+      "source": "results/m3/3n1s/tc235/p50/ubcc/result.json",
+      "sha256": "a597e99a58b13ec7adbc4f5c5c86a0a8b0819d371cb01602735518ca7ec4ce5e",
+      "workload_sha256": "0623fb299b6c0b4d4bb335a0675f53b22b5447e6c0cb974876400fa0b5e3158d"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1058.8102870517307,
+      "metrics": {
+        "remote_read": 1058.8102870517307
+      },
+      "source": "results/m3/3n2s/tc228/p0/ha-vi/result.json",
+      "sha256": "9ea73c73fa0088634783485eec1a67cba2b6ba0e2be9e095720eceaadc85dc74",
+      "workload_sha256": "ce3b4a78fdba95a0476a77ea632b997c5f5aa1e656435529b344b47bd5bfc4e1"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 992.9968251122368,
+      "metrics": {
+        "remote_read": 992.9968251122368
+      },
+      "source": "results/m3/3n2s/tc228/p0/ubcc/result.json",
+      "sha256": "4e36d810c53785ac75105261acf70ecd1157a490d8df9f58bee510cf51cb1abd",
+      "workload_sha256": "ce3b4a78fdba95a0476a77ea632b997c5f5aa1e656435529b344b47bd5bfc4e1"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1042.6673624250623,
+      "metrics": {
+        "remote_read": 1042.6673624250623
+      },
+      "source": "results/m3/3n2s/tc228/p100/ha-vi/result.json",
+      "sha256": "863a3dcbefa682b66cea8fb21f8e6c2250b026115007d3457445a2596b32d372",
+      "workload_sha256": "c3455ba98208b92f31bf8e429c8181dbbb13c4be0930f609bf9fcc45c3384c3f"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 976.439979341295,
+      "metrics": {
+        "remote_read": 976.439979341295
+      },
+      "source": "results/m3/3n2s/tc228/p100/ubcc/result.json",
+      "sha256": "e37e6eb3cecf279fc8d399c0dc9a4b38ebbd653997e57d30a39a35a2183adf02",
+      "workload_sha256": "c3455ba98208b92f31bf8e429c8181dbbb13c4be0930f609bf9fcc45c3384c3f"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1042.6673624250623,
+      "metrics": {
+        "remote_read": 1042.6673624250623
+      },
+      "source": "results/m3/3n2s/tc228/p50/ha-vi/result.json",
+      "sha256": "eec0904cb02b30217d879fbddd964298967fcac6da5870663b3805a910d18f08",
+      "workload_sha256": "0bd8bed708385be61831301d08269bf96325475e7380c8992b0be384ff9b2d79"
+    },
+    {
+      "tc": 228,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 977.2678216298422,
+      "metrics": {
+        "remote_read": 977.2678216298422
+      },
+      "source": "results/m3/3n2s/tc228/p50/ubcc/result.json",
+      "sha256": "0d02dbd56f1bb779a2ef7db12fa2b19c9d631eac8859123f903791873a8802bb",
+      "workload_sha256": "0bd8bed708385be61831301d08269bf96325475e7380c8992b0be384ff9b2d79"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2058.843771616618,
+      "metrics": {
+        "ownership_handoff": 2058.843771616618
+      },
+      "source": "results/m3/3n2s/tc229/p0/ha-vi/result.json",
+      "sha256": "0d4a83ac77c349e59a0f2aff34878e95fd79fa18aef231e561e829f3cecdc7e9",
+      "workload_sha256": "99b2ce5651da92f43509791bc3e7bee2e2455b0f094033e65b51e1542e769db0"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1002.5170114305284,
+      "metrics": {
+        "ownership_handoff": 1002.5170114305284
+      },
+      "source": "results/m3/3n2s/tc229/p0/ubcc/result.json",
+      "sha256": "12ba0151f996a616b0df3e5f7920453cccca569ca4595e0fec40d073dfe40301",
+      "workload_sha256": "99b2ce5651da92f43509791bc3e7bee2e2455b0f094033e65b51e1542e769db0"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2032.7667395273845,
+      "metrics": {
+        "ownership_handoff": 2032.7667395273845
+      },
+      "source": "results/m3/3n2s/tc229/p100/ha-vi/result.json",
+      "sha256": "090cdd509a97603daba93f12a6c47d24496ae0905cfe3041b11ed3103c78aa02",
+      "workload_sha256": "23e7cfab45ef2befc4850b8f08f93ebe1d287b46b5378859b3cf4f96bb51c1ad"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1001.6891691419814,
+      "metrics": {
+        "ownership_handoff": 1001.6891691419814
+      },
+      "source": "results/m3/3n2s/tc229/p100/ubcc/result.json",
+      "sha256": "ffb863444afd4ea43cb1789207bc3e457a3ef5d9a2cc78afd13db83eabe4da9f",
+      "workload_sha256": "23e7cfab45ef2befc4850b8f08f93ebe1d287b46b5378859b3cf4f96bb51c1ad"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2029.4553703731963,
+      "metrics": {
+        "ownership_handoff": 2029.4553703731963
+      },
+      "source": "results/m3/3n2s/tc229/p50/ha-vi/result.json",
+      "sha256": "1fd8862db11782e5474b4dc3d04aa3d172f37d2319a133e1d5e08262e7f74851",
+      "workload_sha256": "9457ed50cf3f25de2363b7c65deeaab7f124cf586d52d5661eabc057134c660d"
+    },
+    {
+      "tc": 229,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 997.1360365549723,
+      "metrics": {
+        "ownership_handoff": 997.1360365549723
+      },
+      "source": "results/m3/3n2s/tc229/p50/ubcc/result.json",
+      "sha256": "dafbea47ac9929dd55283b7d120c3bc4d060523aa800fa2fc7e0434211bab75d",
+      "workload_sha256": "9457ed50cf3f25de2363b7c65deeaab7f124cf586d52d5661eabc057134c660d"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2292.295296986898,
+      "metrics": {
+        "shared_to_writer": 2292.295296986898
+      },
+      "source": "results/m3/3n2s/tc230/p0/ha-vi/result.json",
+      "sha256": "be7fb77afe03490e511cd95ba17b636da8c2c921ffb1e4ffc1787eec079d2398",
+      "workload_sha256": "7705979cc1e2552a864ec191bb59c5f86167d17eeb2f03d7b7c46442c33df4cf"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 2264.9765014648438,
+      "metrics": {
+        "shared_to_writer": 2264.9765014648438
+      },
+      "source": "results/m3/3n2s/tc230/p0/ubcc/result.json",
+      "sha256": "df0a6554863d48ed59a4b597c11f06bd126783f33edbd22a9803f095ec8e91a2",
+      "workload_sha256": "7705979cc1e2552a864ec191bb59c5f86167d17eeb2f03d7b7c46442c33df4cf"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2314.6470387776694,
+      "metrics": {
+        "shared_to_writer": 2314.6470387776694
+      },
+      "source": "results/m3/3n2s/tc230/p100/ha-vi/result.json",
+      "sha256": "efa6f11fc9f5de30339424a34f8adad134e0b8a30fd7c82593c4b2087d857349",
+      "workload_sha256": "82f394500f3708c7af315cf70bf5c33105c966c3b6d1fc4a81b76a294f2ea238"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2284.844716389974,
+      "metrics": {
+        "shared_to_writer": 2284.844716389974
+      },
+      "source": "results/m3/3n2s/tc230/p100/ubcc/result.json",
+      "sha256": "a0c64b994e3e2dc99d8c6047f9e92cb49b17034cfa503b1da25cd57fff38d19d",
+      "workload_sha256": "82f394500f3708c7af315cf70bf5c33105c966c3b6d1fc4a81b76a294f2ea238"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2297.26235071818,
+      "metrics": {
+        "shared_to_writer": 2297.26235071818
+      },
+      "source": "results/m3/3n2s/tc230/p50/ha-vi/result.json",
+      "sha256": "7028315bf21b797dd22badb24aa42c93d19fa3b1c33bb8cde1296416bb982ddc",
+      "workload_sha256": "33046e832b33c1f9e8d9a80c7e03002a6cd5c2e6be3ac00b2315e9bf68a69189"
+    },
+    {
+      "tc": 230,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2277.3941357930503,
+      "metrics": {
+        "shared_to_writer": 2277.3941357930503
+      },
+      "source": "results/m3/3n2s/tc230/p50/ubcc/result.json",
+      "sha256": "59897d2db7f4120512193ed5593718ab23f4d8162f4480600f4e90bfdd44a5b3",
+      "workload_sha256": "33046e832b33c1f9e8d9a80c7e03002a6cd5c2e6be3ac00b2315e9bf68a69189"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 42.685618003209434,
+      "metrics": {
+        "clean_shared_control": 42.685618003209434
+      },
+      "source": "results/m3/3n2s/tc231/p0/ha-vi/result.json",
+      "sha256": "5c3ceb7f39f6df8648fc3b04baade80911f1b42926ae0ffd5c169267c6b2ecc9",
+      "workload_sha256": "f2b9f141e1fbf55f11b221a650f4bc48a1168fd442c7cf8e363bdc0228e91ae6"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 42.60800778865814,
+      "metrics": {
+        "clean_shared_control": 42.60800778865814
+      },
+      "source": "results/m3/3n2s/tc231/p0/ubcc/result.json",
+      "sha256": "e07a88ffbef9f44ec6ad310aa15ef1ec56f11c6c75b3260c5e3ee86c4887cc51",
+      "workload_sha256": "f2b9f141e1fbf55f11b221a650f4bc48a1168fd442c7cf8e363bdc0228e91ae6"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 45.14327479733361,
+      "metrics": {
+        "clean_shared_control": 45.14327479733361
+      },
+      "source": "results/m3/3n2s/tc231/p100/ha-vi/result.json",
+      "sha256": "54395bb4edbe9ef0f52c1b4a264452db700b47bdaf1e9919491aaed693dfd9ea",
+      "workload_sha256": "1784dee5277462fc8ebf99cc323c93128326771888666ca604a1889ed878a746"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 45.14327479733361,
+      "metrics": {
+        "clean_shared_control": 45.14327479733361
+      },
+      "source": "results/m3/3n2s/tc231/p100/ubcc/result.json",
+      "sha256": "cfa0159c21876cb0ee80a97eb15038486ac3efffc0b27c02e1c9f6ce31b81264",
+      "workload_sha256": "1784dee5277462fc8ebf99cc323c93128326771888666ca604a1889ed878a746"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 45.06566458278232,
+      "metrics": {
+        "clean_shared_control": 45.06566458278232
+      },
+      "source": "results/m3/3n2s/tc231/p50/ha-vi/result.json",
+      "sha256": "6967259f376e74d9930bc5363d30259a032e1022ef65fca4e8cec4dfe58b9452",
+      "workload_sha256": "abc54dd6242669a7712d7e416323eff15125c1e33eb19f51f85c2b1d4628dd6f"
+    },
+    {
+      "tc": 231,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 45.1950149403678,
+      "metrics": {
+        "clean_shared_control": 45.1950149403678
+      },
+      "source": "results/m3/3n2s/tc231/p50/ubcc/result.json",
+      "sha256": "c2894f0525c269c1db25ff3de59c247bc8b08398da6eff53d2315cee5a2dd0f0",
+      "workload_sha256": "abc54dd6242669a7712d7e416323eff15125c1e33eb19f51f85c2b1d4628dd6f"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 4109.133172918249,
+      "metrics": {
+        "hot_key_read": 4684.759510887994,
+        "hot_key_write": 2957.8804969787598
+      },
+      "source": "results/m3/3n2s/tc232/p0/ha-vi/result.json",
+      "sha256": "abfb35212aff50ae6654106c44073681e8def6e8d62a49f1494e5f611aefaf2c",
+      "workload_sha256": "18ea85676eeb3326262fc4a97116ae56200a2a697eee7d7766f11ed0dc65b235"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 3983.577092488607,
+      "metrics": {
+        "hot_key_read": 4693.865776062012,
+        "hot_key_write": 2562.999725341797
+      },
+      "source": "results/m3/3n2s/tc232/p0/ubcc/result.json",
+      "sha256": "106cf370c125bcd5a51a4040d1f6288f727d9e9531a5bcadd267fbe290684ad0",
+      "workload_sha256": "18ea85676eeb3326262fc4a97116ae56200a2a697eee7d7766f11ed0dc65b235"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 4329.615169101292,
+      "metrics": {
+        "hot_key_read": 4994.372526804606,
+        "hot_key_write": 3000.1004536946616
+      },
+      "source": "results/m3/3n2s/tc232/p100/ha-vi/result.json",
+      "sha256": "f1fde34da160d562f846fde8cc73164c6002c305dd25a456a859579452412dc8",
+      "workload_sha256": "dd16320bbcb888b92732158618ee321f0014291d02a31b642ff38b8979556596"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 4182.81113659894,
+      "metrics": {
+        "hot_key_read": 4976.573917600844,
+        "hot_key_write": 2595.2855745951338
+      },
+      "source": "results/m3/3n2s/tc232/p100/ubcc/result.json",
+      "sha256": "4a21a7eacc58ac013169790f7ebd4e66e418f139d292ec9e7d403da117440d04",
+      "workload_sha256": "dd16320bbcb888b92732158618ee321f0014291d02a31b642ff38b8979556596"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2746.5047659697357,
+      "metrics": {
+        "hot_key_read": 2620.9486855400933,
+        "hot_key_write": 2997.61692682902
+      },
+      "source": "results/m3/3n2s/tc232/p50/ha-vi/result.json",
+      "sha256": "ae260e83d5d7383ff4a6d3fe4b0b51fa73f3c6699c08f1b364041bf8e4c9941f",
+      "workload_sha256": "14feb066bda287db03f8f161807fa508a35800c6cbb154ccb8ded1216839edd9"
+    },
+    {
+      "tc": 232,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2601.3564180444787,
+      "metrics": {
+        "hot_key_read": 2603.1500763363306,
+        "hot_key_write": 2597.769101460775
+      },
+      "source": "results/m3/3n2s/tc232/p50/ubcc/result.json",
+      "sha256": "aacc7175022a0ec689edc2a84ba4b5ed9271118bbeedf82046fd0786c0b91248",
+      "workload_sha256": "14feb066bda287db03f8f161807fa508a35800c6cbb154ccb8ded1216839edd9"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 667.0339239968195,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 667.0339239968195
+      },
+      "source": "results/m3/3n2s/tc233/p0/ha-vi/result.json",
+      "sha256": "7146d409bedc0a940d307e789a99021e9604c4ce27645d84295bbb0b62a27742",
+      "workload_sha256": "931560ca0eb7a09c934af9627fcbb24434b00d4cf949ccf1e91bdb4081758026"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 581.5592077043322,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 581.5592077043322
+      },
+      "source": "results/m3/3n2s/tc233/p0/ubcc/result.json",
+      "sha256": "1c42be6f3af129b63e73d74ada72579a7743a3560d7e958404ac1826292640ee",
+      "workload_sha256": "931560ca0eb7a09c934af9627fcbb24434b00d4cf949ccf1e91bdb4081758026"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 671.1731354395548,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 671.1731354395548
+      },
+      "source": "results/m3/3n2s/tc233/p100/ha-vi/result.json",
+      "sha256": "ce0087012b87f324272e4b4d3e94fc7f0044636c4f5fa4e98a6f3cdbf0f472c3",
+      "workload_sha256": "56789cb3de863f1299d12e39c243c765e535c5d754931380963c9da5c6ddd03f"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 580.5244048436483,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 580.5244048436483
+      },
+      "source": "results/m3/3n2s/tc233/p100/ubcc/result.json",
+      "sha256": "0664071103816d83ad9d79fefe79ecb689fd03cc768c9bb54ab3367bb83142ad",
+      "workload_sha256": "56789cb3de863f1299d12e39c243c765e535c5d754931380963c9da5c6ddd03f"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 666.4130422804091,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 666.4130422804091
+      },
+      "source": "results/m3/3n2s/tc233/p50/ha-vi/result.json",
+      "sha256": "7930c3a94843f0bb20a2bc661e247ab06f6095218425f4b1156f8203fa7e6fbe",
+      "workload_sha256": "b18822fd45d975ef2536002ab906d7ca9cda17d84a0cacd8bc624d31661b3378"
+    },
+    {
+      "tc": 233,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 581.9731288486057,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 581.9731288486057
+      },
+      "source": "results/m3/3n2s/tc233/p50/ubcc/result.json",
+      "sha256": "0ad8db324fea6aed0e977cd6a37e54241208ee8d22b6915e77af74ef2d981baa",
+      "workload_sha256": "b18822fd45d975ef2536002ab906d7ca9cda17d84a0cacd8bc624d31661b3378"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 16604.86062367757,
+      "metrics": {
+        "queued_token_end_to_end": 16604.86062367757,
+        "queued_token_store": 14397.833082411025
+      },
+      "source": "results/m3/3n2s/tc234/p0/ha-vi/result.json",
+      "sha256": "0e2927bafdbc61244cc139ae8e0ba4e5021396c7102be0fbbfce940b1439d821",
+      "workload_sha256": "cdb871f1fb37b5a619f0e7c5af5f028baa4562fa69a90662ff3ec628a978edea"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 14406.111505296496,
+      "metrics": {
+        "queued_token_end_to_end": 14406.111505296496,
+        "queued_token_store": 7847.944895426433
+      },
+      "source": "results/m3/3n2s/tc234/p0/ubcc/result.json",
+      "sha256": "6afff87867b527433e7e51bd601d2d2dde1dcad03e4a70e0c0bdef12c23d75b6",
+      "workload_sha256": "cdb871f1fb37b5a619f0e7c5af5f028baa4562fa69a90662ff3ec628a978edea"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 16624.728838602703,
+      "metrics": {
+        "queued_token_end_to_end": 16624.728838602703,
+        "queued_token_store": 14583.269755045576
+      },
+      "source": "results/m3/3n2s/tc234/p100/ha-vi/result.json",
+      "sha256": "77540d0da07419ee43e6ee5011415429d01d30dfbff7821223d339852e5d0889",
+      "workload_sha256": "22cfd1aac63f184cd9ffc7e082b1a01c9aac08408830804af65c4646b8eb6a2c"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 14405.283663007947,
+      "metrics": {
+        "queued_token_end_to_end": 14405.283663007947,
+        "queued_token_store": 7887.681325276692
+      },
+      "source": "results/m3/3n2s/tc234/p100/ubcc/result.json",
+      "sha256": "a95fbfee20a60b1eac05d9efb73cf610cfca69d276bd72e61e21d379d6913efe",
+      "workload_sha256": "22cfd1aac63f184cd9ffc7e082b1a01c9aac08408830804af65c4646b8eb6a2c"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 16619.761784871418,
+      "metrics": {
+        "queued_token_end_to_end": 16619.761784871418,
+        "queued_token_store": 14563.401540120443
+      },
+      "source": "results/m3/3n2s/tc234/p50/ha-vi/result.json",
+      "sha256": "3b89ad88b173f0c582803018107ea0924f3826e3764d6fb8af83a59ecd1b9c40",
+      "workload_sha256": "00d2ed17ee95ff9866b2fe56e23df8f53fae31ce301423df77f0452c02d03126"
+    },
+    {
+      "tc": 234,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 14405.283663007947,
+      "metrics": {
+        "queued_token_end_to_end": 14405.283663007947,
+        "queued_token_store": 7867.8131103515625
+      },
+      "source": "results/m3/3n2s/tc234/p50/ubcc/result.json",
+      "sha256": "0806d6b870bbd2c90bdb8a5f57240015627a2aae802b609640327877745c54fd",
+      "workload_sha256": "00d2ed17ee95ff9866b2fe56e23df8f53fae31ce301423df77f0452c02d03126"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 358.7144116560618,
+      "metrics": {
+        "catalog_kv_end_to_end": 358.7144116560618,
+        "catalog_kv_service": 119.32570487260818
+      },
+      "source": "results/m3/3n2s/tc235/p0/ha-vi/result.json",
+      "sha256": "d88baa2786fb8bad581f63cf26f86b1b8dc6c28f59a3d081372f8bd495c9265e",
+      "workload_sha256": "0cce12b4c62507b80f0b0bbb5f457fc8ce3a97822366dbb2e28327c71647d7ab"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 223.3233923713366,
+      "metrics": {
+        "catalog_kv_end_to_end": 223.3233923713366,
+        "catalog_kv_service": 32.25351166394021
+      },
+      "source": "results/m3/3n2s/tc235/p0/ubcc/result.json",
+      "sha256": "b0b17a5916bda714eb2e530a84bc4be13928317e0eee09dabc35e8d3d77b6bee",
+      "workload_sha256": "0cce12b4c62507b80f0b0bbb5f457fc8ce3a97822366dbb2e28327c71647d7ab"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 368.6485191186269,
+      "metrics": {
+        "catalog_kv_end_to_end": 368.6485191186269,
+        "catalog_kv_service": 127.19020661380553
+      },
+      "source": "results/m3/3n2s/tc235/p100/ha-vi/result.json",
+      "sha256": "644cf7cd53f25c4857d614f674186db103a1ee7a0c9649504e79320bfb24fe41",
+      "workload_sha256": "d4c293362c05ee8403983402c481b42ca24574dac61f751bcb06344d02168b3e"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 231.74410065015158,
+      "metrics": {
+        "catalog_kv_end_to_end": 231.74410065015158,
+        "catalog_kv_service": 39.16728827688429
+      },
+      "source": "results/m3/3n2s/tc235/p100/ubcc/result.json",
+      "sha256": "4e36ccf42b893221a85b2c4845dfafc76e3ee862649e17eb1bafe7a567a13e01",
+      "workload_sha256": "d4c293362c05ee8403983402c481b42ca24574dac61f751bcb06344d02168b3e"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 364.37995731830597,
+      "metrics": {
+        "catalog_kv_end_to_end": 364.37995731830597,
+        "catalog_kv_service": 125.29522387517822
+      },
+      "source": "results/m3/3n2s/tc235/p50/ha-vi/result.json",
+      "sha256": "ab685ba187115c9f23ed99304ee989790773810a381ddaeb68187095688729b7",
+      "workload_sha256": "d530041e266238762b84639f1a1e36d7b62101ef80ecf85e600f08e8dd130a26"
+    },
+    {
+      "tc": 235,
+      "topology": "3n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 238.690214852492,
+      "metrics": {
+        "catalog_kv_end_to_end": 238.690214852492,
+        "catalog_kv_service": 39.92398786875937
+      },
+      "source": "results/m3/3n2s/tc235/p50/ubcc/result.json",
+      "sha256": "0699b6ca66c4bd60588ebcf15e550b4ea35aada7ff2c784e914b6239363ab218",
+      "workload_sha256": "d530041e266238762b84639f1a1e36d7b62101ef80ecf85e600f08e8dd130a26"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1057.6720039049783,
+      "metrics": {
+        "remote_read": 1057.6720039049783
+      },
+      "source": "results/m3/8n1s/tc228/p0/ha-vi/result.json",
+      "sha256": "761b9f1aa1d66ea81cf1a06c4f6efea42f64648edecea75b23944b9e4e4afb7b",
+      "workload_sha256": "b542b158a90f6758af237cd60d2f25df646b13e8413b1a6902ab4ab6607a276d"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 990.616778532664,
+      "metrics": {
+        "remote_read": 990.616778532664
+      },
+      "source": "results/m3/8n1s/tc228/p0/ubcc/result.json",
+      "sha256": "d7358af6d7ad541a2c04e6f809b2bdee582b6f3479da084f837e2a351ae9bc8f",
+      "workload_sha256": "b542b158a90f6758af237cd60d2f25df646b13e8413b1a6902ab4ab6607a276d"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1034.3889395395913,
+      "metrics": {
+        "remote_read": 1034.3889395395913
+      },
+      "source": "results/m3/8n1s/tc228/p100/ha-vi/result.json",
+      "sha256": "2161d4973c9203ec9b1c3969d4f096d212da8cd2a68d9ddbabda9506477f0227",
+      "workload_sha256": "f6efb458328a91447cb66ae24b8248ead923465004f4d2c3043b1df9215e8636"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1024.7652729352317,
+      "metrics": {
+        "remote_read": 1024.7652729352317
+      },
+      "source": "results/m3/8n1s/tc228/p100/ubcc/result.json",
+      "sha256": "52de3439740194c7556eede5c44638a97dff1b7385b85c981989cbd27dbfddc8",
+      "workload_sha256": "f6efb458328a91447cb66ae24b8248ead923465004f4d2c3043b1df9215e8636"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1036.5620255470276,
+      "metrics": {
+        "remote_read": 1036.5620255470276
+      },
+      "source": "results/m3/8n1s/tc228/p50/ha-vi/result.json",
+      "sha256": "89aee1fcdc5cf035c503dd72db89221d73bc90eeb3bafc300f395d40b1e4913e",
+      "workload_sha256": "d4eb3da5f06c0b5176a0e0804a3f940a33a1ba1e007b7872f435360c52e6a240"
+    },
+    {
+      "tc": 228,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1016.6938106218975,
+      "metrics": {
+        "remote_read": 1016.6938106218975
+      },
+      "source": "results/m3/8n1s/tc228/p50/ubcc/result.json",
+      "sha256": "2738bb7d5e480a9083d2c2ce22246744ec9e44630aea9ce82fa7794b05a92e34",
+      "workload_sha256": "d4eb3da5f06c0b5176a0e0804a3f940a33a1ba1e007b7872f435360c52e6a240"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2049.2201050122576,
+      "metrics": {
+        "ownership_handoff": 2049.2201050122576
+      },
+      "source": "results/m3/8n1s/tc229/p0/ha-vi/result.json",
+      "sha256": "982696e75e0e810612a9fd0a97fc479f08814a5d5b876e58fbe8a6a75416e742",
+      "workload_sha256": "195f30992e106caed176a126ea0582bbe989818cd7bebca1199af06053fa591a"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1007.3805848757427,
+      "metrics": {
+        "ownership_handoff": 1007.3805848757427
+      },
+      "source": "results/m3/8n1s/tc229/p0/ubcc/result.json",
+      "sha256": "857371e222a9bbaa09776d935f9e941b0cf6089c7cca270f8fd6be63a592c3fe",
+      "workload_sha256": "195f30992e106caed176a126ea0582bbe989818cd7bebca1199af06053fa591a"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2824.7013688087463,
+      "metrics": {
+        "ownership_handoff": 2824.7013688087463
+      },
+      "source": "results/m3/8n1s/tc229/p100/ha-vi/result.json",
+      "sha256": "6862d785e4c7559e5ebe66ea486eef814e0a57d5161d1a846b4734d100d8207f",
+      "workload_sha256": "ddfa4f3149c0ee563a639534339402327bff137b7bc592ad87e5082343c4bbd7"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1046.4961330095925,
+      "metrics": {
+        "ownership_handoff": 1046.4961330095925
+      },
+      "source": "results/m3/8n1s/tc229/p100/ubcc/result.json",
+      "sha256": "776a3f73ac24273e3274a2ec15851948fed52f478b5531fc9c62422fb138c344",
+      "workload_sha256": "ddfa4f3149c0ee563a639534339402327bff137b7bc592ad87e5082343c4bbd7"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2526.367704073588,
+      "metrics": {
+        "ownership_handoff": 2526.367704073588
+      },
+      "source": "results/m3/8n1s/tc229/p50/ha-vi/result.json",
+      "sha256": "27a0cfa874cb75148e3ea637ad7d05888f36e00df3140078c8798f1d0dbf02b2",
+      "workload_sha256": "a284144a845de2a21dd945411e1c608d070960c40b4bf0c56373e339a9f3e040"
+    },
+    {
+      "tc": 229,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 1030.6636492411296,
+      "metrics": {
+        "ownership_handoff": 1030.6636492411296
+      },
+      "source": "results/m3/8n1s/tc229/p50/ubcc/result.json",
+      "sha256": "4ee0512de5d5233765bdbe10a6f36f5f3f948cae823b5cb363964fe223b0f535",
+      "workload_sha256": "a284144a845de2a21dd945411e1c608d070960c40b4bf0c56373e339a9f3e040"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1822.9087193806965,
+      "metrics": {
+        "shared_to_writer": 1822.9087193806965
+      },
+      "source": "results/m3/8n1s/tc230/p0/ha-vi/result.json",
+      "sha256": "5866a9e3451c0fa2740606c5c40285570c9251044caf11b81b90db3aab428bf2",
+      "workload_sha256": "f8be57be1dd27f90b59474416b27b60a5f6c3ea59a6612d43316e09bb18f0e3a"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1825.392246246338,
+      "metrics": {
+        "shared_to_writer": 1825.392246246338
+      },
+      "source": "results/m3/8n1s/tc230/p0/ubcc/result.json",
+      "sha256": "a2c283e6e9e0a28f41b6dc470a41c622a77924bf2e52dad45fa2ce81af7849ab",
+      "workload_sha256": "f8be57be1dd27f90b59474416b27b60a5f6c3ea59a6612d43316e09bb18f0e3a"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2746.7807133992515,
+      "metrics": {
+        "shared_to_writer": 2746.7807133992515
+      },
+      "source": "results/m3/8n1s/tc230/p100/ha-vi/result.json",
+      "sha256": "7c7c7c70dc9e27e550d88ddd64e1bff418a680a4a56f1f5e077845ada27ec6e0",
+      "workload_sha256": "f22e8bd74c1b8abf14d61124ea2f3439ec2da0142047f6a503098210b1f2c4f4"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2744.29718653361,
+      "metrics": {
+        "shared_to_writer": 2744.29718653361
+      },
+      "source": "results/m3/8n1s/tc230/p100/ubcc/result.json",
+      "sha256": "dbcf265bbbe531ee161b29d37c6cd20d65198600af3d8b18fc6036fb0a45f7f7",
+      "workload_sha256": "f22e8bd74c1b8abf14d61124ea2f3439ec2da0142047f6a503098210b1f2c4f4"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2754.2312939961753,
+      "metrics": {
+        "shared_to_writer": 2754.2312939961753
+      },
+      "source": "results/m3/8n1s/tc230/p50/ha-vi/result.json",
+      "sha256": "fe72b62afabb4d3859b1fd18b4952cafa8e571ba3f5b4f871f121cc46bedba74",
+      "workload_sha256": "dffa611bfa3f4342055eae1a3b2a780e485bb8be4f4cf3fb050a4bafd0e2b1fb"
+    },
+    {
+      "tc": 230,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2764.1654014587402,
+      "metrics": {
+        "shared_to_writer": 2764.1654014587402
+      },
+      "source": "results/m3/8n1s/tc230/p50/ubcc/result.json",
+      "sha256": "675e76d61857a1ad5791b8156f4ae1ecf4249fce01e2165fdad3532459741656",
+      "workload_sha256": "dffa611bfa3f4342055eae1a3b2a780e485bb8be4f4cf3fb050a4bafd0e2b1fb"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 43.752758453289665,
+      "metrics": {
+        "clean_shared_control": 43.752758453289665
+      },
+      "source": "results/m3/8n1s/tc231/p0/ha-vi/result.json",
+      "sha256": "89d3f870e2aa8e7455cdcef9ae4ba3a4810284ba39c0bbbbb513855821fec23c",
+      "workload_sha256": "e96f3505908e8ebe1e1d79dcd7460d8c8579be5d1348d42d786822aba8793d86"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 45.227352529764175,
+      "metrics": {
+        "clean_shared_control": 45.227352529764175
+      },
+      "source": "results/m3/8n1s/tc231/p0/ubcc/result.json",
+      "sha256": "cb3ac4a3b376f103ef4b88466f433ab4f6c4e8ad2ab7d67830c06aa4b4ec9b6f",
+      "workload_sha256": "e96f3505908e8ebe1e1d79dcd7460d8c8579be5d1348d42d786822aba8793d86"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 158.79049897193906,
+      "metrics": {
+        "clean_shared_control": 158.79049897193906
+      },
+      "source": "results/m3/8n1s/tc231/p100/ha-vi/result.json",
+      "sha256": "39a882d9845fa6d10b043024d6065670f4663120615f386b5fd825f6278405ad",
+      "workload_sha256": "ac1b5580b00380abaa11ac29a6e71cdee4b9750346bc1b11356cf8a0d80ae192"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 158.7128887573878,
+      "metrics": {
+        "clean_shared_control": 158.7128887573878
+      },
+      "source": "results/m3/8n1s/tc231/p100/ubcc/result.json",
+      "sha256": "8e510109200a0d573a81a0352f24b1bda1c75144a379e28185537dc641475107",
+      "workload_sha256": "ac1b5580b00380abaa11ac29a6e71cdee4b9750346bc1b11356cf8a0d80ae192"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 150.21457026402155,
+      "metrics": {
+        "clean_shared_control": 150.21457026402155
+      },
+      "source": "results/m3/8n1s/tc231/p50/ha-vi/result.json",
+      "sha256": "fbe842f411f39c53373f7035aafa220db54443f89aa3349d582b97a9994357f4",
+      "workload_sha256": "3b2498b6fbdb70fbf2e25e16c81dcb2b69c09e9323ab985b7fb493aa9055c43a"
+    },
+    {
+      "tc": 231,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 149.0310144921144,
+      "metrics": {
+        "clean_shared_control": 149.0310144921144
+      },
+      "source": "results/m3/8n1s/tc231/p50/ubcc/result.json",
+      "sha256": "e13f48031ef6e0a874294d1b6f3a19fa09f10479eb3db19063a749a8431f4e07",
+      "workload_sha256": "3b2498b6fbdb70fbf2e25e16c81dcb2b69c09e9323ab985b7fb493aa9055c43a"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2474.4206004672583,
+      "metrics": {
+        "hot_key_read": 2827.4953365325932,
+        "hot_key_write": 1768.2711283365886
+      },
+      "source": "results/m3/8n1s/tc232/p0/ha-vi/result.json",
+      "sha256": "8abfb21aa4f3aa4b5c12dd90a6efdec35c2c1aa44234da455b2b79e72c461b77",
+      "workload_sha256": "b480038e9cd46f7c6581ecfea292224702336e925af33c8c4ca0d997e1925839"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1158.9792039659287,
+      "metrics": {
+        "hot_key_read": 1086.5430037180583,
+        "hot_key_write": 1303.8516044616697
+      },
+      "source": "results/m3/8n1s/tc232/p0/ubcc/result.json",
+      "sha256": "c99a279ce614857be9fa6983cad06b2ac358dca7eca3be40057209909bc23c61",
+      "workload_sha256": "b480038e9cd46f7c6581ecfea292224702336e925af33c8c4ca0d997e1925839"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2610.8076175053916,
+      "metrics": {
+        "hot_key_read": 2828.4266591072083,
+        "hot_key_write": 2175.569534301758
+      },
+      "source": "results/m3/8n1s/tc232/p100/ha-vi/result.json",
+      "sha256": "90983ea89c406adf37f05dc7726c8f2fc99adb74109442b681d8b62fc1472624",
+      "workload_sha256": "1523b58ed260f5f69222f60cb43a73b6e44ba86cf9e72afc7020b3212c08685e"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2361.4201280805796,
+      "metrics": {
+        "hot_key_read": 2846.7426697413125,
+        "hot_key_write": 1390.7750447591145
+      },
+      "source": "results/m3/8n1s/tc232/p100/ubcc/result.json",
+      "sha256": "92ab95703826b50a7b6a87502745beed480250eeffd0971713ad996e403b2539",
+      "workload_sha256": "1523b58ed260f5f69222f60cb43a73b6e44ba86cf9e72afc7020b3212c08685e"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2576.4521625306875,
+      "metrics": {
+        "hot_key_read": 2825.322250525157,
+        "hot_key_write": 2078.711986541748
+      },
+      "source": "results/m3/8n1s/tc232/p50/ha-vi/result.json",
+      "sha256": "352652fd2a580e0439e35ae825d7ddbef241275400c9dbd545618c672aad4808",
+      "workload_sha256": "1979cfeafd805e024a4fa492521eb5657d5593078e3c4ff26bb15243d06165ad"
+    },
+    {
+      "tc": 232,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2347.3468091752798,
+      "metrics": {
+        "hot_key_read": 2825.632691383362,
+        "hot_key_write": 1390.7750447591147
+      },
+      "source": "results/m3/8n1s/tc232/p50/ubcc/result.json",
+      "sha256": "3d6a84a3cf0e434ff51c6bd2a4d10ade6febf38bbdbd5b5086b54f6b9e9c4b0f",
+      "workload_sha256": "1979cfeafd805e024a4fa492521eb5657d5593078e3c4ff26bb15243d06165ad"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 666.8269634246826,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 666.8269634246826
+      },
+      "source": "results/m3/8n1s/tc233/p0/ha-vi/result.json",
+      "sha256": "e6ed716a0083d541c24150dda72ada11da5dcdadfca7d4ea66fcc92fbf2a3098",
+      "workload_sha256": "963b5b9778d8a688f67f356e8e6d08ec2f14cb5a4f820aa83bb047bea6df384d"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 580.3691844145458,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 580.3691844145458
+      },
+      "source": "results/m3/8n1s/tc233/p0/ubcc/result.json",
+      "sha256": "fa22ca587128a438eeaa4565c65ea22bb0ff9aa0455437db6ff7e70ea383eed1",
+      "workload_sha256": "963b5b9778d8a688f67f356e8e6d08ec2f14cb5a4f820aa83bb047bea6df384d"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 675.9849687417349,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 675.9849687417349
+      },
+      "source": "results/m3/8n1s/tc233/p100/ha-vi/result.json",
+      "sha256": "a3675a3fdd379ae72c9b4f9933ace8fbee04fc90b2112328bd577f05f24227cd",
+      "workload_sha256": "0e79e84acf2cf8ef0b233a583b6777d13993736c089c4606b4b8328291746fd4"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 586.1123402913411,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 586.1123402913411
+      },
+      "source": "results/m3/8n1s/tc233/p100/ubcc/result.json",
+      "sha256": "d58a1415ea92350040a85e11dcf1fbc53c9ecd7530ade9e6b2bcc7d2e30d6ecd",
+      "workload_sha256": "0e79e84acf2cf8ef0b233a583b6777d13993736c089c4606b4b8328291746fd4"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 671.9492375850677,
+      "metrics": {
+        "producer_consumer_load": 1033.1471761067708,
+        "producer_consumer_service": 671.9492375850677
+      },
+      "source": "results/m3/8n1s/tc233/p50/ha-vi/result.json",
+      "sha256": "a2621c07f3632ec115d434d03e1e79ce36751fedeab6bfd82ceaceb909f8d58f",
+      "workload_sha256": "c1b24ba6a3c4cb2d7d3c89861bcaa48964169ff91db198e9d60477b95a5fa1b4"
+    },
+    {
+      "tc": 233,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 582.6974908510844,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 582.6974908510844
+      },
+      "source": "results/m3/8n1s/tc233/p50/ubcc/result.json",
+      "sha256": "465dee7ec94470ea45b946c01113bd5355fca1cdf06ccc17a103b4af75db76e3",
+      "workload_sha256": "c1b24ba6a3c4cb2d7d3c89861bcaa48964169ff91db198e9d60477b95a5fa1b4"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 17676.502466201782,
+      "metrics": {
+        "queued_token_end_to_end": 17676.502466201782,
+        "queued_token_store": 19212.563832600914
+      },
+      "source": "results/m3/8n1s/tc234/p0/ha-vi/result.json",
+      "sha256": "1f8019054f4c1fffa981de99446badf64af8019a9b541f2d342dfb370c5de1cc",
+      "workload_sha256": "56c6b236f720cda0ea42ae93b567b5cb809e25897d92461097c4c7b3e6f2c2fe"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 16049.171487490335,
+      "metrics": {
+        "queued_token_end_to_end": 16049.171487490335,
+        "queued_token_store": 19197.662671407063
+      },
+      "source": "results/m3/8n1s/tc234/p0/ubcc/result.json",
+      "sha256": "188a6b88e6a2e23205fa76819b4eb4094ffec76ff41ded8c9f0bda34824f2799",
+      "workload_sha256": "56c6b236f720cda0ea42ae93b567b5cb809e25897d92461097c4c7b3e6f2c2fe"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 17728.65653038025,
+      "metrics": {
+        "queued_token_end_to_end": 17728.65653038025,
+        "queued_token_store": 19272.1684773763
+      },
+      "source": "results/m3/8n1s/tc234/p100/ha-vi/result.json",
+      "sha256": "8c3e3d9f5dca792c429f3ce3093bd1cc21954f0c75cce041f658e9d2b237afcf",
+      "workload_sha256": "808bc7eadd5e02268923c1be1cf6cb00b2938449421dfceb0ce47681a8e752d3"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 16097.60026137034,
+      "metrics": {
+        "queued_token_end_to_end": 16097.60026137034,
+        "queued_token_store": 19341.707229614258
+      },
+      "source": "results/m3/8n1s/tc234/p100/ubcc/result.json",
+      "sha256": "6625fdb8108489c422f13118701599404bf2a4c336d051642b6c24cd85560249",
+      "workload_sha256": "808bc7eadd5e02268923c1be1cf6cb00b2938449421dfceb0ce47681a8e752d3"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 17721.205949783325,
+      "metrics": {
+        "queued_token_end_to_end": 17721.205949783325,
+        "queued_token_store": 19257.267316182457
+      },
+      "source": "results/m3/8n1s/tc234/p50/ha-vi/result.json",
+      "sha256": "3b4064c4db71cabc743208423853eabf593900d52473f6c35eff52105f941c27",
+      "workload_sha256": "2df3fac2fcd0212e7cfc4d3334602298b4302c083c77a9130f986e587370abdc"
+    },
+    {
+      "tc": 234,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 16098.842024803162,
+      "metrics": {
+        "queued_token_end_to_end": 16098.842024803162,
+        "queued_token_store": 19351.64133707682
+      },
+      "source": "results/m3/8n1s/tc234/p50/ubcc/result.json",
+      "sha256": "aa076bc19f61e1c3167da431682a4daa27ad799fab4cc5748e6e675007db446d",
+      "workload_sha256": "2df3fac2fcd0212e7cfc4d3334602298b4302c083c77a9130f986e587370abdc"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 327.24346965551376,
+      "metrics": {
+        "catalog_kv_end_to_end": 327.24346965551376,
+        "catalog_kv_service": 126.57255865633488
+      },
+      "source": "results/m3/8n1s/tc235/p0/ha-vi/result.json",
+      "sha256": "32a090f0d6cfb47f83ed51990c958d7a9954dba89759b4e76b38c73273d0c1f8",
+      "workload_sha256": "9544ee222c167936e7ba54e8320ade1298a9cd3b10fac9a128d6fe154e17f007"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 219.28766121466955,
+      "metrics": {
+        "catalog_kv_end_to_end": 219.28766121466955,
+        "catalog_kv_service": 31.65526626010736
+      },
+      "source": "results/m3/8n1s/tc235/p0/ubcc/result.json",
+      "sha256": "1ef03932919f1fbd19a8d59436cf366fd27d8efbdff28f0bc71aa846b7ccbc9b",
+      "workload_sha256": "9544ee222c167936e7ba54e8320ade1298a9cd3b10fac9a128d6fe154e17f007"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 469.07613674799603,
+      "metrics": {
+        "catalog_kv_end_to_end": 469.07613674799603,
+        "catalog_kv_service": 218.49700715392825
+      },
+      "source": "results/m3/8n1s/tc235/p100/ha-vi/result.json",
+      "sha256": "f8b814e266b2db3dacb721a036c2dbadfa905c4c09d70b5106c51d9c1b7bae65",
+      "workload_sha256": "3c0aaa742bc845b52585ee8a092ab848c6c72cd5c69f88e64b52af6de4ac08da"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 358.0159197251002,
+      "metrics": {
+        "catalog_kv_end_to_end": 358.0159197251002,
+        "catalog_kv_service": 120.69843554248413
+      },
+      "source": "results/m3/8n1s/tc235/p100/ubcc/result.json",
+      "sha256": "36da76bb231f2061e74324692a2abed3e3910862417a112564a018485eb2ff2c",
+      "workload_sha256": "3c0aaa742bc845b52585ee8a092ab848c6c72cd5c69f88e64b52af6de4ac08da"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 466.43738945325214,
+      "metrics": {
+        "catalog_kv_end_to_end": 466.43738945325214,
+        "catalog_kv_service": 216.20750582466525
+      },
+      "source": "results/m3/8n1s/tc235/p50/ha-vi/result.json",
+      "sha256": "25c9287cd0650d3620f67aa400f9352f325536115dd1905500894e8f4c17df94",
+      "workload_sha256": "44d86f827ae53902aa259fbcd3937688a4b0ef18e919f5abbbb013a25104d134"
+    },
+    {
+      "tc": 235,
+      "topology": "8n1s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 357.0457920432091,
+      "metrics": {
+        "catalog_kv_end_to_end": 357.0457920432091,
+        "catalog_kv_service": 119.92233339697123
+      },
+      "source": "results/m3/8n1s/tc235/p50/ubcc/result.json",
+      "sha256": "db70d3dd34084053a681a06f56eded4b6df43db6fb28696146e5729a80930818",
+      "workload_sha256": "44d86f827ae53902aa259fbcd3937688a4b0ef18e919f5abbbb013a25104d134"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 1057.5167834758759,
+      "metrics": {
+        "remote_read": 1057.5167834758759
+      },
+      "source": "results/m3/8n2s/tc228/p0/ha-vi/result.json",
+      "sha256": "b19ca40fbdb5f1ef6dac968e154b175232165bdb505f288060a0e727e23e0613",
+      "workload_sha256": "798c2f6494b19a167b0ab68fc2239454bb29fae9d7c85304560375669933a3ec"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 991.0824398199717,
+      "metrics": {
+        "remote_read": 991.0824398199717
+      },
+      "source": "results/m3/8n2s/tc228/p0/ubcc/result.json",
+      "sha256": "88439581c22a47a7168fa7bea5d2e8508fd2aa4e1d4287c124e07f24702925ec",
+      "workload_sha256": "798c2f6494b19a167b0ab68fc2239454bb29fae9d7c85304560375669933a3ec"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 1048.0483373006184,
+      "metrics": {
+        "remote_read": 1048.0483373006184
+      },
+      "source": "results/m3/8n2s/tc228/p100/ha-vi/result.json",
+      "sha256": "15fef747a3c3d245ad77c67ddd82700aa4153d1fb7fe768e5c30317a0b88f034",
+      "workload_sha256": "a4c2d5770ae4e1c9b9cc5ee3873098b2c25bbba7b5839d8f4b8f27d9d2d80d68"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 980.9931119283043,
+      "metrics": {
+        "remote_read": 980.9931119283043
+      },
+      "source": "results/m3/8n2s/tc228/p100/ubcc/result.json",
+      "sha256": "32fbead2c0138177001e2ad5ec118361c97d075694264680f46a5df15e426e4f",
+      "workload_sha256": "a4c2d5770ae4e1c9b9cc5ee3873098b2c25bbba7b5839d8f4b8f27d9d2d80d68"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 1046.34091258049,
+      "metrics": {
+        "remote_read": 1046.34091258049
+      },
+      "source": "results/m3/8n2s/tc228/p50/ha-vi/result.json",
+      "sha256": "79132e29feb70d690d121016a19fd6623a6e48feb1babe8b80551b7d1d49285b",
+      "workload_sha256": "50a356d3ed1506374a2ae712c028e5844d44256b8cf5cfad948ef9a82f95b531"
+    },
+    {
+      "tc": 228,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 978.820025920868,
+      "metrics": {
+        "remote_read": 978.820025920868
+      },
+      "source": "results/m3/8n2s/tc228/p50/ubcc/result.json",
+      "sha256": "5c340e9fb7c9fc75b8d74a4d4f52f62c628afbf2b4e782d32c7141df26c4eee9",
+      "workload_sha256": "50a356d3ed1506374a2ae712c028e5844d44256b8cf5cfad948ef9a82f95b531"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2059.309432903926,
+      "metrics": {
+        "ownership_handoff": 2059.309432903926
+      },
+      "source": "results/m3/8n2s/tc229/p0/ha-vi/result.json",
+      "sha256": "778b3a006a15b6a9fb589b26f55f2a045914c56a38a660ae7c4a9730c6d0780c",
+      "workload_sha256": "d338ca9fdf9dbcad3c72f5392f4970c2371d837a9ee0f9a581da5739d85602ca"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 1008.7775687376658,
+      "metrics": {
+        "ownership_handoff": 1008.7775687376658
+      },
+      "source": "results/m3/8n2s/tc229/p0/ubcc/result.json",
+      "sha256": "243939700dd405ad831ad7b34a746c3c8e6aeab7c6af3857ea96a04c39f00760",
+      "workload_sha256": "d338ca9fdf9dbcad3c72f5392f4970c2371d837a9ee0f9a581da5739d85602ca"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2302.229404449463,
+      "metrics": {
+        "ownership_handoff": 2302.229404449463
+      },
+      "source": "results/m3/8n2s/tc229/p100/ha-vi/result.json",
+      "sha256": "a07bf7cea7c1538cd149204cf37bb7d17dafd510643cc32ec165e9a712248eaf",
+      "workload_sha256": "0636de9745006fde1f08ab19f78b36e6a9d4a9f29edd5318014b2d5c826d9734"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 1012.6580794652302,
+      "metrics": {
+        "ownership_handoff": 1012.6580794652302
+      },
+      "source": "results/m3/8n2s/tc229/p100/ubcc/result.json",
+      "sha256": "691fa6518e627d5f76ff4d86998fc1193d6b55dc223dfe259a752d850d8d23bf",
+      "workload_sha256": "0636de9745006fde1f08ab19f78b36e6a9d4a9f29edd5318014b2d5c826d9734"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2030.5936535199487,
+      "metrics": {
+        "ownership_handoff": 2030.5936535199487
+      },
+      "source": "results/m3/8n2s/tc229/p50/ha-vi/result.json",
+      "sha256": "9fd247b27169e97be7415ba1d505a201c2893d2fa2721df618934ad950a250a8",
+      "workload_sha256": "2af8eb0e535e101df43a59ab8eaee4f1743c4625af75a257a661f1d55ad557b2"
+    },
+    {
+      "tc": 229,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 999.6195634206139,
+      "metrics": {
+        "ownership_handoff": 999.6195634206139
+      },
+      "source": "results/m3/8n2s/tc229/p50/ubcc/result.json",
+      "sha256": "346857cdc07a8c68ce226af300e4279fb40168874c890fb12aba32682b6d2802",
+      "workload_sha256": "2af8eb0e535e101df43a59ab8eaee4f1743c4625af75a257a661f1d55ad557b2"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 2289.8117701212564,
+      "metrics": {
+        "shared_to_writer": 2289.8117701212564
+      },
+      "source": "results/m3/8n2s/tc230/p0/ha-vi/result.json",
+      "sha256": "f1d33fcd3974f468069f1ada4133065d9786372aca12b5163e7079868fa230f2",
+      "workload_sha256": "027b3df89be41dae239a62f9f7d9d914bd855bdc1ffa2a94f0dc4d2ae4e619b4"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 2260.009447733561,
+      "metrics": {
+        "shared_to_writer": 2260.009447733561
+      },
+      "source": "results/m3/8n2s/tc230/p0/ubcc/result.json",
+      "sha256": "1fd73465595424f88e77242c2b27a133b6999ef471d8d38f73b7aeb8b57d02f4",
+      "workload_sha256": "027b3df89be41dae239a62f9f7d9d914bd855bdc1ffa2a94f0dc4d2ae4e619b4"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 2297.26235071818,
+      "metrics": {
+        "shared_to_writer": 2297.26235071818
+      },
+      "source": "results/m3/8n2s/tc230/p100/ha-vi/result.json",
+      "sha256": "ab02d92a220825d28b86628ac2224a081f19afc35291784adb3253f1120b7d5c",
+      "workload_sha256": "9d00075fa7b80ff3e74ea1ab6990ea498e26d68ad0f45e69fb9ece22f00e4ef0"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 2282.3611895243325,
+      "metrics": {
+        "shared_to_writer": 2282.3611895243325
+      },
+      "source": "results/m3/8n2s/tc230/p100/ubcc/result.json",
+      "sha256": "aaec06ff6936c29199f68f707c4a48cf2cc65a6ee812a4796a0515b5d6f72355",
+      "workload_sha256": "9d00075fa7b80ff3e74ea1ab6990ea498e26d68ad0f45e69fb9ece22f00e4ef0"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 2299.7458775838218,
+      "metrics": {
+        "shared_to_writer": 2299.7458775838218
+      },
+      "source": "results/m3/8n2s/tc230/p50/ha-vi/result.json",
+      "sha256": "ea092f61dad7b343ef063fa65c21f2c93fabf860e2d4a968e3d1250b85177b75",
+      "workload_sha256": "7dbfde783be1dcd06e134995603bb0280f7990573a527f478131ec073e0acdeb"
+    },
+    {
+      "tc": 230,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 2277.3941357930503,
+      "metrics": {
+        "shared_to_writer": 2277.3941357930503
+      },
+      "source": "results/m3/8n2s/tc230/p50/ubcc/result.json",
+      "sha256": "7331227e2a0d8974a7d48c3807aa5f328b2b9caaffed747bb6e52e28e44172ae",
+      "workload_sha256": "7dbfde783be1dcd06e134995603bb0280f7990573a527f478131ec073e0acdeb"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 42.53039757410685,
+      "metrics": {
+        "clean_shared_control": 42.53039757410685
+      },
+      "source": "results/m3/8n2s/tc231/p0/ha-vi/result.json",
+      "sha256": "b1059159fba1a91c3a975981372d59b111de68c87d8891bd55702d44a3a8c61e",
+      "workload_sha256": "e3583699ae79269f9364400834586805c33848c93788ef494e280e72afc81d7d"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 42.43338480591775,
+      "metrics": {
+        "clean_shared_control": 42.43338480591775
+      },
+      "source": "results/m3/8n2s/tc231/p0/ubcc/result.json",
+      "sha256": "4de2dd9e9ba614170f029dd3395cd34479218d4beb4c425b3493b6a3fafc0d25",
+      "workload_sha256": "e3583699ae79269f9364400834586805c33848c93788ef494e280e72afc81d7d"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 45.984052121639245,
+      "metrics": {
+        "clean_shared_control": 45.984052121639245
+      },
+      "source": "results/m3/8n2s/tc231/p100/ha-vi/result.json",
+      "sha256": "dc8c968d97454de2dbeccb1a77457825a3e68940d4fdb0c3db656598f3d376e1",
+      "workload_sha256": "175865fa2fcd81d29a2b5cc51cd3ab6f048288d643451bc52f3bb6ab71b35da5"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 45.537793387969344,
+      "metrics": {
+        "clean_shared_control": 45.537793387969344
+      },
+      "source": "results/m3/8n2s/tc231/p100/ubcc/result.json",
+      "sha256": "10442feaca276d9107d93c3d7f449590273f029bbc97ac5d8f5d27e67ba9ac34",
+      "workload_sha256": "175865fa2fcd81d29a2b5cc51cd3ab6f048288d643451bc52f3bb6ab71b35da5"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 45.275858913858734,
+      "metrics": {
+        "clean_shared_control": 45.275858913858734
+      },
+      "source": "results/m3/8n2s/tc231/p50/ha-vi/result.json",
+      "sha256": "645a379bd5cbeab6b90a098a080a886760fff2c22a30be5b351f6b0ac9d0e3a0",
+      "workload_sha256": "2b94d787af2bf65d1e64ac8d1308e1fd51a17cf9732d0a311c499ef6b5cb9e26"
+    },
+    {
+      "tc": 231,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 45.32436529795329,
+      "metrics": {
+        "clean_shared_control": 45.32436529795329
+      },
+      "source": "results/m3/8n2s/tc231/p50/ubcc/result.json",
+      "sha256": "5b943a4b42b85078603811cb359f7405dbead25e480ade545424de9946f2ed15",
+      "workload_sha256": "2b94d787af2bf65d1e64ac8d1308e1fd51a17cf9732d0a311c499ef6b5cb9e26"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 7925.969031121996,
+      "metrics": {
+        "hot_key_read": 9898.40676387151,
+        "hot_key_write": 3981.0935656229653
+      },
+      "source": "results/m3/8n2s/tc232/p0/ha-vi/result.json",
+      "sha256": "0265f580b8d9e9c7cba56df01e6dc52611b53fef8bda0e7c15379b68d3a60c11",
+      "workload_sha256": "0dd1bcc6b4e453faace23aa94cd39d2ce29dbffded2871264428dc9e0cf4319c"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 6633.500258127849,
+      "metrics": {
+        "hot_key_read": 8216.748634974161,
+        "hot_key_write": 3467.0035044352217
+      },
+      "source": "results/m3/8n2s/tc232/p0/ubcc/result.json",
+      "sha256": "f493e8a3acd54028101c9590709f3216578510f65eefd29b23e64d49c8f72aed",
+      "workload_sha256": "0dd1bcc6b4e453faace23aa94cd39d2ce29dbffded2871264428dc9e0cf4319c"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 3241.3130005200705,
+      "metrics": {
+        "hot_key_read": 2818.0268903573356,
+        "hot_key_write": 4087.8852208455405
+      },
+      "source": "results/m3/8n2s/tc232/p100/ha-vi/result.json",
+      "sha256": "701b2b7fbc5061cd374609a1a7d591c344c34006b10bd525a6ff375087a8d535",
+      "workload_sha256": "f80226c611daf62128d2d4e840054a2aa5de13761e32d69188c886da85cf58d8"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 3068.7078833580017,
+      "metrics": {
+        "hot_key_read": 2816.1642452081046,
+        "hot_key_write": 3573.795159657797
+      },
+      "source": "results/m3/8n2s/tc232/p100/ubcc/result.json",
+      "sha256": "7cd76818dde7eb36e0b1000dc7713e2cea5380caceb4242e55eeb92a8811030d",
+      "workload_sha256": "f80226c611daf62128d2d4e840054a2aa5de13761e32d69188c886da85cf58d8"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 3262.0090577337473,
+      "metrics": {
+        "hot_key_read": 2845.3456858793893,
+        "hot_key_write": 4095.335801442464
+      },
+      "source": "results/m3/8n2s/tc232/p50/ha-vi/result.json",
+      "sha256": "6156c891867e792aba561f97d1f9408616a11ed12bdd8089ee7ab63cc9179502",
+      "workload_sha256": "252a271cc2c35144d62f56256a610263ef9e19c829c4a7b3278905f8f0916332"
+    },
+    {
+      "tc": 232,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 3093.2327111562095,
+      "metrics": {
+        "hot_key_read": 2844.2591428756714,
+        "hot_key_write": 3591.179847717285
+      },
+      "source": "results/m3/8n2s/tc232/p50/ubcc/result.json",
+      "sha256": "44bd42db4b8510acabab46c713704aacdeb5d21397c929cfb6f3584d4274c21b",
+      "workload_sha256": "252a271cc2c35144d62f56256a610263ef9e19c829c4a7b3278905f8f0916332"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 675.7521380980809,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 675.7521380980809
+      },
+      "source": "results/m3/8n2s/tc233/p0/ha-vi/result.json",
+      "sha256": "4f2b1eb64b846ede8c2664de5a938aec1057b5337a18dd3c8795910385c9db0c",
+      "workload_sha256": "7ac2627f090489484e8ce11545633399d3d3d5e5e26a89172d5d8456972e6cc3"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 572.2977221012115,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 572.2977221012115
+      },
+      "source": "results/m3/8n2s/tc233/p0/ubcc/result.json",
+      "sha256": "b0657210ab85b4fb418a4d599cdbe0b012ac1060cc69ea9c298c1645f4aefa0a",
+      "workload_sha256": "7ac2627f090489484e8ce11545633399d3d3d5e5e26a89172d5d8456972e6cc3"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 668.2239472866058,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 668.2239472866058
+      },
+      "source": "results/m3/8n2s/tc233/p100/ha-vi/result.json",
+      "sha256": "9360ebce4b2c7cb9889c45d4bb1a4bb27b22601561fb130026418c23236a6f97",
+      "workload_sha256": "4b1ec126202868e55e631dc2db4bbb2a1a614b92223c98e853e71361cd455afa"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 580.2915741999944,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 580.2915741999944
+      },
+      "source": "results/m3/8n2s/tc233/p100/ubcc/result.json",
+      "sha256": "cd86cd9be996a2f1f3b64134f00a603f9f2a90315976943b9e3d4340f23fed17",
+      "workload_sha256": "4b1ec126202868e55e631dc2db4bbb2a1a614b92223c98e853e71361cd455afa"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 665.7404204209646,
+      "metrics": {
+        "producer_consumer_load": 1033.147176106771,
+        "producer_consumer_service": 665.7404204209646
+      },
+      "source": "results/m3/8n2s/tc233/p50/ha-vi/result.json",
+      "sha256": "8da6ae1b9a878fdd866c444164c77b226570d7399a56c73fadb039dc7df82320",
+      "workload_sha256": "ac508f3dcc1e39712132d05e8be56577b24451b52a391c48402b228bdfd530dc"
+    },
+    {
+      "tc": 233,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 579.903523127238,
+      "metrics": {
+        "producer_consumer_load": 953.67431640625,
+        "producer_consumer_service": 579.903523127238
+      },
+      "source": "results/m3/8n2s/tc233/p50/ubcc/result.json",
+      "sha256": "9beccaa95b0c306cb43addc007c492b30b9cf609abc3b4c37559fc2e7d8f01e4",
+      "workload_sha256": "ac508f3dcc1e39712132d05e8be56577b24451b52a391c48402b228bdfd530dc"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 17772.428691387177,
+      "metrics": {
+        "queued_token_end_to_end": 17772.428691387177,
+        "queued_token_store": 18050.273259480797
+      },
+      "source": "results/m3/8n2s/tc234/p0/ha-vi/result.json",
+      "sha256": "72930da861c973be428987ddcfee98f4b2067e8287c55eea6316ec63cb308462",
+      "workload_sha256": "8c029ea26817fadb0ab81b488a3589a304fc492b1a498375dfdd57399581e58a"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 14988.395075003305,
+      "metrics": {
+        "queued_token_end_to_end": 14988.395075003305,
+        "queued_token_store": 10068.217913309732
+      },
+      "source": "results/m3/8n2s/tc234/p0/ubcc/result.json",
+      "sha256": "a22ee848d4cc910c9267fcbb49fd4285a278cbfe5d5704c2389a2136354879fd",
+      "workload_sha256": "8c029ea26817fadb0ab81b488a3589a304fc492b1a498375dfdd57399581e58a"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 17780.500153700512,
+      "metrics": {
+        "queued_token_end_to_end": 17780.500153700512,
+        "queued_token_store": 18132.229646046955
+      },
+      "source": "results/m3/8n2s/tc234/p100/ha-vi/result.json",
+      "sha256": "3cfe4f58aabcdb2ed27d9dbc8ba9faae90ef8ea505eb4d39f8e6f5329d3eb7ca",
+      "workload_sha256": "7dd5ca74927ec70499c688099b5d2aec6d6f6d4c4afe91e0976fcca2e80857fc"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 14993.983010450998,
+      "metrics": {
+        "queued_token_end_to_end": 14993.983010450998,
+        "queued_token_store": 10152.657826741537
+      },
+      "source": "results/m3/8n2s/tc234/p100/ubcc/result.json",
+      "sha256": "0f00a5336c5073bed93d9a0c9e0d5894be6149151b51c2007701494743c966c6",
+      "workload_sha256": "7dd5ca74927ec70499c688099b5d2aec6d6f6d4c4afe91e0976fcca2e80857fc"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 17778.947949409485,
+      "metrics": {
+        "queued_token_end_to_end": 17778.947949409485,
+        "queued_token_store": 18189.350763956703
+      },
+      "source": "results/m3/8n2s/tc234/p50/ha-vi/result.json",
+      "sha256": "d4fbd7be2bc9068fc21c4171c96209f49644172d9a64a22767bad1e7d5d9554e",
+      "workload_sha256": "12f17a2a05c2cac880768da8ebdc25e179776f2c8ac5babc131610de61d9ad87"
+    },
+    {
+      "tc": 234,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 14993.983010450998,
+      "metrics": {
+        "queued_token_end_to_end": 14993.983010450998,
+        "queued_token_store": 10160.108407338459
+      },
+      "source": "results/m3/8n2s/tc234/p50/ubcc/result.json",
+      "sha256": "d7a4567d5d4d01771f4807866a159d0413182445ead569bb6f3684fa1ad43a3b",
+      "workload_sha256": "12f17a2a05c2cac880768da8ebdc25e179776f2c8ac5babc131610de61d9ad87"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ha-vi",
+      "ns": 358.67560654878616,
+      "metrics": {
+        "catalog_kv_end_to_end": 358.67560654878616,
+        "catalog_kv_service": 140.8673900490006
+      },
+      "source": "results/m3/8n2s/tc235/p0/ha-vi/result.json",
+      "sha256": "601e809903690453725c64b173c82ec8fa5905462fcbf5682a2654e0ebae1f83",
+      "workload_sha256": "bd6efe708e2cf9b31e4ad3d288fce0d840f650cf115598d78b53162ffe5a3882"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 0,
+      "arm": "ubcc",
+      "ns": 223.3233923713366,
+      "metrics": {
+        "catalog_kv_end_to_end": 223.3233923713366,
+        "catalog_kv_service": 32.22521627321839
+      },
+      "source": "results/m3/8n2s/tc235/p0/ubcc/result.json",
+      "sha256": "9fb5f3c594df048f6202e225fc23e8a2f0350a8c2e49cf9032608b24f74d4546",
+      "workload_sha256": "bd6efe708e2cf9b31e4ad3d288fce0d840f650cf115598d78b53162ffe5a3882"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ha-vi",
+      "ns": 368.9201548695564,
+      "metrics": {
+        "catalog_kv_end_to_end": 368.9201548695564,
+        "catalog_kv_service": 149.3657085423668
+      },
+      "source": "results/m3/8n2s/tc235/p100/ha-vi/result.json",
+      "sha256": "3f90fc72df6a7bbbb7f9e7552e05624e39021823387ddf79b07588ddcc3b40ee",
+      "workload_sha256": "5b5fc56e28d9b0b21aceaf0f405bebf1e77e9569709fde2dcbe0630f8f8e78a8"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 100,
+      "arm": "ubcc",
+      "ns": 231.78290575742722,
+      "metrics": {
+        "catalog_kv_end_to_end": 231.78290575742722,
+        "catalog_kv_service": 39.23681409408648
+      },
+      "source": "results/m3/8n2s/tc235/p100/ubcc/result.json",
+      "sha256": "92e035a5560b836f30927ce079f41c0bc1d5bc9c9a8b88407cb75c7738780191",
+      "workload_sha256": "5b5fc56e28d9b0b21aceaf0f405bebf1e77e9569709fde2dcbe0630f8f8e78a8"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ha-vi",
+      "ns": 364.3411522110303,
+      "metrics": {
+        "catalog_kv_end_to_end": 364.3411522110303,
+        "catalog_kv_service": 146.85792848467827
+      },
+      "source": "results/m3/8n2s/tc235/p50/ha-vi/result.json",
+      "sha256": "649128468a0b887d7cc16012e7718b45e09ad97284209d28c5caf5622300d597",
+      "workload_sha256": "6ea38b7929ea905ab4a5f1bade0f82035d62babf6977187d7d447dcb7bb92100"
+    },
+    {
+      "tc": 235,
+      "topology": "8n2s",
+      "pressure": 50,
+      "arm": "ubcc",
+      "ns": 229.7650401790937,
+      "metrics": {
+        "catalog_kv_end_to_end": 229.7650401790937,
+        "catalog_kv_service": 38.334595349927746
+      },
+      "source": "results/m3/8n2s/tc235/p50/ubcc/result.json",
+      "sha256": "4cd71a1b0c5e888bf1e65d58872ceb0eab506e2b8050328e7878b9c723066604",
+      "workload_sha256": "6ea38b7929ea905ab4a5f1bade0f82035d62babf6977187d7d447dcb7bb92100"
+    }
+  ],
+  "pairs": [
+    {
+      "topology": "3n1s",
+      "tc": 228,
+      "pressure": 0,
+      "ubcc_ns": 991.7550616794161,
+      "ha_ns": 1060.465971628825,
+      "reduction_pct": 6.479313036690105
+    },
+    {
+      "topology": "3n1s",
+      "tc": 228,
+      "pressure": 50,
+      "ubcc_ns": 1006.6562228732638,
+      "ha_ns": 1033.1471761067708,
+      "reduction_pct": 2.564102564102566
+    },
+    {
+      "topology": "3n1s",
+      "tc": 228,
+      "pressure": 100,
+      "ubcc_ns": 1019.0738572014703,
+      "ha_ns": 1024.8687532212998,
+      "reduction_pct": 0.5654281098545932
+    },
+    {
+      "topology": "3n1s",
+      "tc": 229,
+      "pressure": 0,
+      "ubcc_ns": 1014.9346457587349,
+      "ha_ns": 2056.3602447509766,
+      "reduction_pct": 50.64412238325282
+    },
+    {
+      "topology": "3n1s",
+      "tc": 229,
+      "pressure": 50,
+      "ubcc_ns": 1021.5573840671115,
+      "ha_ns": 2505.8786074320474,
+      "reduction_pct": 59.23356458539808
+    },
+    {
+      "topology": "3n1s",
+      "tc": 229,
+      "pressure": 100,
+      "ubcc_ns": 1044.73696814643,
+      "ha_ns": 2817.1473079257544,
+      "reduction_pct": 62.915074933881876
+    },
+    {
+      "topology": "3n1s",
+      "tc": 230,
+      "pressure": 0,
+      "ubcc_ns": 1827.8757731119792,
+      "ha_ns": 1827.8757731119792,
+      "reduction_pct": 0.0
+    },
+    {
+      "topology": "3n1s",
+      "tc": 230,
+      "pressure": 50,
+      "ubcc_ns": 2736.846605936686,
+      "ha_ns": 2739.3301328023276,
+      "reduction_pct": 0.09066183136900996
+    },
+    {
+      "topology": "3n1s",
+      "tc": 230,
+      "pressure": 100,
+      "ubcc_ns": 2739.3301328023276,
+      "ha_ns": 2749.2642402648926,
+      "reduction_pct": 0.3613369467027949
+    },
+    {
+      "topology": "3n1s",
+      "tc": 231,
+      "pressure": 0,
+      "ubcc_ns": 42.478657431072655,
+      "ha_ns": 42.892578575346214,
+      "reduction_pct": 0.9650180940892983
+    },
+    {
+      "topology": "3n1s",
+      "tc": 231,
+      "pressure": 50,
+      "ubcc_ns": 120.60627341270447,
+      "ha_ns": 120.70975369877284,
+      "reduction_pct": 0.08572653236175176
+    },
+    {
+      "topology": "3n1s",
+      "tc": 231,
+      "pressure": 100,
+      "ubcc_ns": 128.62599558300442,
+      "ha_ns": 128.26381458176505,
+      "reduction_pct": -0.28237192416298296
+    },
+    {
+      "topology": "3n1s",
+      "tc": 232,
+      "pressure": 0,
+      "ubcc_ns": 1014.9346457587347,
+      "ha_ns": 1143.2502004835342,
+      "reduction_pct": 11.223750905141216
+    },
+    {
+      "topology": "3n1s",
+      "tc": 232,
+      "pressure": 50,
+      "ubcc_ns": 1032.8712286772552,
+      "ha_ns": 1214.1686898690684,
+      "reduction_pct": 14.93181818181819
+    },
+    {
+      "topology": "3n1s",
+      "tc": 232,
+      "pressure": 100,
+      "ubcc_ns": 1041.7015464217575,
+      "ha_ns": 1248.6621185585307,
+      "reduction_pct": 16.574585635359128
+    },
+    {
+      "topology": "3n1s",
+      "tc": 233,
+      "pressure": 0,
+      "ubcc_ns": 595.6325266096327,
+      "ha_ns": 671.3800960116915,
+      "reduction_pct": 11.282367447595554
+    },
+    {
+      "topology": "3n1s",
+      "tc": 233,
+      "pressure": 50,
+      "ubcc_ns": 577.4199962615967,
+      "ha_ns": 670.1383325788711,
+      "reduction_pct": 13.835701050030892
+    },
+    {
+      "topology": "3n1s",
+      "tc": 233,
+      "pressure": 100,
+      "ubcc_ns": 586.1123402913412,
+      "ha_ns": 673.8636228773329,
+      "reduction_pct": 13.022113022113013
+    },
+    {
+      "topology": "3n1s",
+      "tc": 234,
+      "pressure": 0,
+      "ubcc_ns": 14911.09530131022,
+      "ha_ns": 16194.250848558215,
+      "reduction_pct": 7.923525201922099
+    },
+    {
+      "topology": "3n1s",
+      "tc": 234,
+      "pressure": 50,
+      "ubcc_ns": 14967.388576931424,
+      "ha_ns": 16248.888439602322,
+      "reduction_pct": 7.886692480130431
+    },
+    {
+      "topology": "3n1s",
+      "tc": 234,
+      "pressure": 100,
+      "ubcc_ns": 14974.011315239799,
+      "ha_ns": 16247.232755025228,
+      "reduction_pct": 7.83654336084787
+    },
+    {
+      "topology": "3n1s",
+      "tc": 235,
+      "pressure": 0,
+      "ubcc_ns": 221.38313700755438,
+      "ha_ns": 329.06730969746906,
+      "reduction_pct": 32.724056603773576
+    },
+    {
+      "topology": "3n1s",
+      "tc": 235,
+      "pressure": 50,
+      "ubcc_ns": 292.59050885836285,
+      "ha_ns": 402.408962448438,
+      "reduction_pct": 27.290260366441654
+    },
+    {
+      "topology": "3n1s",
+      "tc": 235,
+      "pressure": 100,
+      "ubcc_ns": 293.87107739845914,
+      "ha_ns": 405.5133710304896,
+      "reduction_pct": 27.531100478468893
+    },
+    {
+      "topology": "3n2s",
+      "tc": 228,
+      "pressure": 0,
+      "ubcc_ns": 992.9968251122368,
+      "ha_ns": 1058.8102870517307,
+      "reduction_pct": 6.215793588741214
+    },
+    {
+      "topology": "3n2s",
+      "tc": 228,
+      "pressure": 50,
+      "ubcc_ns": 977.2678216298422,
+      "ha_ns": 1042.6673624250623,
+      "reduction_pct": 6.272330289797523
+    },
+    {
+      "topology": "3n2s",
+      "tc": 228,
+      "pressure": 100,
+      "ubcc_ns": 976.439979341295,
+      "ha_ns": 1042.6673624250623,
+      "reduction_pct": 6.351726875744335
+    },
+    {
+      "topology": "3n2s",
+      "tc": 229,
+      "pressure": 0,
+      "ubcc_ns": 1002.5170114305284,
+      "ha_ns": 2058.843771616618,
+      "reduction_pct": 51.30679533574589
+    },
+    {
+      "topology": "3n2s",
+      "tc": 229,
+      "pressure": 50,
+      "ubcc_ns": 997.1360365549723,
+      "ha_ns": 2029.4553703731963,
+      "reduction_pct": 50.86681623495819
+    },
+    {
+      "topology": "3n2s",
+      "tc": 229,
+      "pressure": 100,
+      "ubcc_ns": 1001.6891691419814,
+      "ha_ns": 2032.7667395273845,
+      "reduction_pct": 50.7228670331908
+    },
+    {
+      "topology": "3n2s",
+      "tc": 230,
+      "pressure": 0,
+      "ubcc_ns": 2264.9765014648438,
+      "ha_ns": 2292.295296986898,
+      "reduction_pct": 1.1917659804983827
+    },
+    {
+      "topology": "3n2s",
+      "tc": 230,
+      "pressure": 50,
+      "ubcc_ns": 2277.3941357930503,
+      "ha_ns": 2297.26235071818,
+      "reduction_pct": 0.864864864864856
+    },
+    {
+      "topology": "3n2s",
+      "tc": 230,
+      "pressure": 100,
+      "ubcc_ns": 2284.844716389974,
+      "ha_ns": 2314.6470387776694,
+      "reduction_pct": 1.2875536480686733
+    },
+    {
+      "topology": "3n2s",
+      "tc": 231,
+      "pressure": 0,
+      "ubcc_ns": 42.60800778865814,
+      "ha_ns": 42.685618003209434,
+      "reduction_pct": 0.181818181818183
+    },
+    {
+      "topology": "3n2s",
+      "tc": 231,
+      "pressure": 50,
+      "ubcc_ns": 45.1950149403678,
+      "ha_ns": 45.06566458278232,
+      "reduction_pct": -0.2870264064293915
+    },
+    {
+      "topology": "3n2s",
+      "tc": 231,
+      "pressure": 100,
+      "ubcc_ns": 45.14327479733361,
+      "ha_ns": 45.14327479733361,
+      "reduction_pct": 0.0
+    },
+    {
+      "topology": "3n2s",
+      "tc": 232,
+      "pressure": 0,
+      "ubcc_ns": 3983.577092488607,
+      "ha_ns": 4109.133172918249,
+      "reduction_pct": 3.055536901484124
+    },
+    {
+      "topology": "3n2s",
+      "tc": 232,
+      "pressure": 50,
+      "ubcc_ns": 2601.3564180444787,
+      "ha_ns": 2746.5047659697357,
+      "reduction_pct": 5.284838742087816
+    },
+    {
+      "topology": "3n2s",
+      "tc": 232,
+      "pressure": 100,
+      "ubcc_ns": 4182.81113659894,
+      "ha_ns": 4329.615169101292,
+      "reduction_pct": 3.3906947100064033
+    },
+    {
+      "topology": "3n2s",
+      "tc": 233,
+      "pressure": 0,
+      "ubcc_ns": 581.5592077043322,
+      "ha_ns": 667.0339239968195,
+      "reduction_pct": 12.81414830902886
+    },
+    {
+      "topology": "3n2s",
+      "tc": 233,
+      "pressure": 50,
+      "ubcc_ns": 581.9731288486057,
+      "ha_ns": 666.4130422804091,
+      "reduction_pct": 12.670807453416144
+    },
+    {
+      "topology": "3n2s",
+      "tc": 233,
+      "pressure": 100,
+      "ubcc_ns": 580.5244048436483,
+      "ha_ns": 671.1731354395548,
+      "reduction_pct": 13.506012950971314
+    },
+    {
+      "topology": "3n2s",
+      "tc": 234,
+      "pressure": 0,
+      "ubcc_ns": 14406.111505296496,
+      "ha_ns": 16604.86062367757,
+      "reduction_pct": 13.24159936185062
+    },
+    {
+      "topology": "3n2s",
+      "tc": 234,
+      "pressure": 50,
+      "ubcc_ns": 14405.283663007947,
+      "ha_ns": 16619.761784871418,
+      "reduction_pct": 13.324367403865311
+    },
+    {
+      "topology": "3n2s",
+      "tc": 234,
+      "pressure": 100,
+      "ubcc_ns": 14405.283663007947,
+      "ha_ns": 16624.728838602703,
+      "reduction_pct": 13.350263917936466
+    },
+    {
+      "topology": "3n2s",
+      "tc": 235,
+      "pressure": 0,
+      "ubcc_ns": 223.3233923713366,
+      "ha_ns": 358.7144116560618,
+      "reduction_pct": 37.7434011250541
+    },
+    {
+      "topology": "3n2s",
+      "tc": 235,
+      "pressure": 50,
+      "ubcc_ns": 238.690214852492,
+      "ha_ns": 364.37995731830597,
+      "reduction_pct": 34.49414270500532
+    },
+    {
+      "topology": "3n2s",
+      "tc": 235,
+      "pressure": 100,
+      "ubcc_ns": 231.74410065015158,
+      "ha_ns": 368.6485191186269,
+      "reduction_pct": 37.136842105263156
+    },
+    {
+      "topology": "8n1s",
+      "tc": 228,
+      "pressure": 0,
+      "ubcc_ns": 990.616778532664,
+      "ha_ns": 1057.6720039049783,
+      "reduction_pct": 6.3398884649251475
+    },
+    {
+      "topology": "8n1s",
+      "tc": 228,
+      "pressure": 50,
+      "ubcc_ns": 1016.6938106218975,
+      "ha_ns": 1036.5620255470276,
+      "reduction_pct": 1.9167415393830378
+    },
+    {
+      "topology": "8n1s",
+      "tc": 228,
+      "pressure": 100,
+      "ubcc_ns": 1024.7652729352317,
+      "ha_ns": 1034.3889395395913,
+      "reduction_pct": 0.9303721488595151
+    },
+    {
+      "topology": "8n1s",
+      "tc": 229,
+      "pressure": 0,
+      "ubcc_ns": 1007.3805848757427,
+      "ha_ns": 2049.2201050122576,
+      "reduction_pct": 50.84078169974246
+    },
+    {
+      "topology": "8n1s",
+      "tc": 229,
+      "pressure": 50,
+      "ubcc_ns": 1030.6636492411296,
+      "ha_ns": 2526.367704073588,
+      "reduction_pct": 59.20373556156303
+    },
+    {
+      "topology": "8n1s",
+      "tc": 229,
+      "pressure": 100,
+      "ubcc_ns": 1046.4961330095925,
+      "ha_ns": 2824.7013688087463,
+      "reduction_pct": 62.95197274425761
+    },
+    {
+      "topology": "8n1s",
+      "tc": 230,
+      "pressure": 0,
+      "ubcc_ns": 1825.392246246338,
+      "ha_ns": 1822.9087193806965,
+      "reduction_pct": -0.13623978201635634
+    },
+    {
+      "topology": "8n1s",
+      "tc": 230,
+      "pressure": 50,
+      "ubcc_ns": 2764.1654014587402,
+      "ha_ns": 2754.2312939961753,
+      "reduction_pct": -0.36068530207393756
+    },
+    {
+      "topology": "8n1s",
+      "tc": 230,
+      "pressure": 100,
+      "ubcc_ns": 2744.29718653361,
+      "ha_ns": 2746.7807133992515,
+      "reduction_pct": 0.0904159132007365
+    },
+    {
+      "topology": "8n1s",
+      "tc": 231,
+      "pressure": 0,
+      "ubcc_ns": 45.227352529764175,
+      "ha_ns": 43.752758453289665,
+      "reduction_pct": -3.370288248337028
+    },
+    {
+      "topology": "8n1s",
+      "tc": 231,
+      "pressure": 50,
+      "ubcc_ns": 149.0310144921144,
+      "ha_ns": 150.21457026402155,
+      "reduction_pct": 0.7879101007491451
+    },
+    {
+      "topology": "8n1s",
+      "tc": 231,
+      "pressure": 100,
+      "ubcc_ns": 158.7128887573878,
+      "ha_ns": 158.79049897193906,
+      "reduction_pct": 0.048875855327457085
+    },
+    {
+      "topology": "8n1s",
+      "tc": 232,
+      "pressure": 0,
+      "ubcc_ns": 1158.9792039659287,
+      "ha_ns": 2474.4206004672583,
+      "reduction_pct": 53.16159250585481
+    },
+    {
+      "topology": "8n1s",
+      "tc": 232,
+      "pressure": 50,
+      "ubcc_ns": 2347.3468091752798,
+      "ha_ns": 2576.4521625306875,
+      "reduction_pct": 8.892280504458183
+    },
+    {
+      "topology": "8n1s",
+      "tc": 232,
+      "pressure": 100,
+      "ubcc_ns": 2361.4201280805796,
+      "ha_ns": 2610.8076175053916,
+      "reduction_pct": 9.552120491478423
+    },
+    {
+      "topology": "8n1s",
+      "tc": 233,
+      "pressure": 0,
+      "ubcc_ns": 580.3691844145458,
+      "ha_ns": 666.8269634246826,
+      "reduction_pct": 12.965549348230898
+    },
+    {
+      "topology": "8n1s",
+      "tc": 233,
+      "pressure": 50,
+      "ubcc_ns": 582.6974908510844,
+      "ha_ns": 671.9492375850677,
+      "reduction_pct": 13.282513282513285
+    },
+    {
+      "topology": "8n1s",
+      "tc": 233,
+      "pressure": 100,
+      "ubcc_ns": 586.1123402913411,
+      "ha_ns": 675.9849687417349,
+      "reduction_pct": 13.295063145809427
+    },
+    {
+      "topology": "8n1s",
+      "tc": 234,
+      "pressure": 0,
+      "ubcc_ns": 16049.171487490335,
+      "ha_ns": 17676.502466201782,
+      "reduction_pct": 9.206181945907977
+    },
+    {
+      "topology": "8n1s",
+      "tc": 234,
+      "pressure": 50,
+      "ubcc_ns": 16098.842024803162,
+      "ha_ns": 17721.205949783325,
+      "reduction_pct": 9.154929577464788
+    },
+    {
+      "topology": "8n1s",
+      "tc": 234,
+      "pressure": 100,
+      "ubcc_ns": 16097.60026137034,
+      "ha_ns": 17728.65653038025,
+      "reduction_pct": 9.2001120683617
+    },
+    {
+      "topology": "8n1s",
+      "tc": 235,
+      "pressure": 0,
+      "ubcc_ns": 219.28766121466955,
+      "ha_ns": 327.24346965551376,
+      "reduction_pct": 32.98944622317087
+    },
+    {
+      "topology": "8n1s",
+      "tc": 235,
+      "pressure": 50,
+      "ubcc_ns": 357.0457920432091,
+      "ha_ns": 466.43738945325214,
+      "reduction_pct": 23.452579034941756
+    },
+    {
+      "topology": "8n1s",
+      "tc": 235,
+      "pressure": 100,
+      "ubcc_ns": 358.0159197251002,
+      "ha_ns": 469.07613674799603,
+      "reduction_pct": 23.6763732627399
+    },
+    {
+      "topology": "8n2s",
+      "tc": 228,
+      "pressure": 0,
+      "ubcc_ns": 991.0824398199717,
+      "ha_ns": 1057.5167834758759,
+      "reduction_pct": 6.282107735212095
+    },
+    {
+      "topology": "8n2s",
+      "tc": 228,
+      "pressure": 50,
+      "ubcc_ns": 978.820025920868,
+      "ha_ns": 1046.34091258049,
+      "reduction_pct": 6.45304850912326
+    },
+    {
+      "topology": "8n2s",
+      "tc": 228,
+      "pressure": 100,
+      "ubcc_ns": 980.9931119283043,
+      "ha_ns": 1048.0483373006184,
+      "reduction_pct": 6.398104265402815
+    },
+    {
+      "topology": "8n2s",
+      "tc": 229,
+      "pressure": 0,
+      "ubcc_ns": 1008.7775687376658,
+      "ha_ns": 2059.309432903926,
+      "reduction_pct": 51.0137936232758
+    },
+    {
+      "topology": "8n2s",
+      "tc": 229,
+      "pressure": 50,
+      "ubcc_ns": 999.6195634206139,
+      "ha_ns": 2030.5936535199487,
+      "reduction_pct": 50.77205320287417
+    },
+    {
+      "topology": "8n2s",
+      "tc": 229,
+      "pressure": 100,
+      "ubcc_ns": 1012.6580794652302,
+      "ha_ns": 2302.229404449463,
+      "reduction_pct": 56.01402373247033
+    },
+    {
+      "topology": "8n2s",
+      "tc": 230,
+      "pressure": 0,
+      "ubcc_ns": 2260.009447733561,
+      "ha_ns": 2289.8117701212564,
+      "reduction_pct": 1.3015184381778733
+    },
+    {
+      "topology": "8n2s",
+      "tc": 230,
+      "pressure": 50,
+      "ubcc_ns": 2277.3941357930503,
+      "ha_ns": 2299.7458775838218,
+      "reduction_pct": 0.9719222462203025
+    },
+    {
+      "topology": "8n2s",
+      "tc": 230,
+      "pressure": 100,
+      "ubcc_ns": 2282.3611895243325,
+      "ha_ns": 2297.26235071818,
+      "reduction_pct": 0.6486486486486531
+    },
+    {
+      "topology": "8n2s",
+      "tc": 231,
+      "pressure": 0,
+      "ubcc_ns": 42.43338480591775,
+      "ha_ns": 42.53039757410685,
+      "reduction_pct": 0.22810218978099872
+    },
+    {
+      "topology": "8n2s",
+      "tc": 231,
+      "pressure": 50,
+      "ubcc_ns": 45.32436529795329,
+      "ha_ns": 45.275858913858734,
+      "reduction_pct": -0.10713520462823922
+    },
+    {
+      "topology": "8n2s",
+      "tc": 231,
+      "pressure": 100,
+      "ubcc_ns": 45.537793387969344,
+      "ha_ns": 45.984052121639245,
+      "reduction_pct": 0.9704641350210652
+    },
+    {
+      "topology": "8n2s",
+      "tc": 232,
+      "pressure": 0,
+      "ubcc_ns": 6633.500258127849,
+      "ha_ns": 7925.969031121996,
+      "reduction_pct": 16.306760320651748
+    },
+    {
+      "topology": "8n2s",
+      "tc": 232,
+      "pressure": 50,
+      "ubcc_ns": 3093.2327111562095,
+      "ha_ns": 3262.0090577337473,
+      "reduction_pct": 5.173999936554252
+    },
+    {
+      "topology": "8n2s",
+      "tc": 232,
+      "pressure": 100,
+      "ubcc_ns": 3068.7078833580017,
+      "ha_ns": 3241.3130005200705,
+      "reduction_pct": 5.325160425246633
+    },
+    {
+      "topology": "8n2s",
+      "tc": 233,
+      "pressure": 0,
+      "ubcc_ns": 572.2977221012115,
+      "ha_ns": 675.7521380980809,
+      "reduction_pct": 15.309521074997123
+    },
+    {
+      "topology": "8n2s",
+      "tc": 233,
+      "pressure": 50,
+      "ubcc_ns": 579.903523127238,
+      "ha_ns": 665.7404204209646,
+      "reduction_pct": 12.893448356260196
+    },
+    {
+      "topology": "8n2s",
+      "tc": 233,
+      "pressure": 100,
+      "ubcc_ns": 580.2915741999944,
+      "ha_ns": 668.2239472866058,
+      "reduction_pct": 13.159117305458768
+    },
+    {
+      "topology": "8n2s",
+      "tc": 234,
+      "pressure": 0,
+      "ubcc_ns": 14988.395075003305,
+      "ha_ns": 17772.428691387177,
+      "reduction_pct": 15.664902443710815
+    },
+    {
+      "topology": "8n2s",
+      "tc": 234,
+      "pressure": 50,
+      "ubcc_ns": 14993.983010450998,
+      "ha_ns": 17778.947949409485,
+      "reduction_pct": 15.664396717303998
+    },
+    {
+      "topology": "8n2s",
+      "tc": 234,
+      "pressure": 100,
+      "ubcc_ns": 14993.983010450998,
+      "ha_ns": 17780.500153700512,
+      "reduction_pct": 15.671759057180278
+    },
+    {
+      "topology": "8n2s",
+      "tc": 235,
+      "pressure": 0,
+      "ubcc_ns": 223.3233923713366,
+      "ha_ns": 358.67560654878616,
+      "reduction_pct": 37.73666558476685
+    },
+    {
+      "topology": "8n2s",
+      "tc": 235,
+      "pressure": 50,
+      "ubcc_ns": 229.7650401790937,
+      "ha_ns": 364.3411522110303,
+      "reduction_pct": 36.936840984130356
+    },
+    {
+      "topology": "8n2s",
+      "tc": 235,
+      "pressure": 100,
+      "ubcc_ns": 231.78290575742722,
+      "ha_ns": 368.9201548695564,
+      "reduction_pct": 37.17260965604292
+    },
+    {
+      "topology": "16n1s",
+      "tc": 228,
+      "pressure": 0,
+      "ubcc_ns": 989.6854559580487,
+      "ha_ns": 1054.412374893824,
+      "reduction_pct": 6.1386721625202085
+    },
+    {
+      "topology": "16n1s",
+      "tc": 228,
+      "pressure": 50,
+      "ubcc_ns": 1016.2281493345895,
+      "ha_ns": 1034.8546008268993,
+      "reduction_pct": 1.799910004499794
+    },
+    {
+      "topology": "16n1s",
+      "tc": 228,
+      "pressure": 100,
+      "ubcc_ns": 1028.4905632336934,
+      "ha_ns": 1030.0427675247195,
+      "reduction_pct": 0.15069318866790526
+    },
+    {
+      "topology": "16n1s",
+      "tc": 229,
+      "pressure": 0,
+      "ubcc_ns": 997.4464774131777,
+      "ha_ns": 2053.7214974562326,
+      "reduction_pct": 51.43224246088729
+    },
+    {
+      "topology": "16n1s",
+      "tc": 229,
+      "pressure": 50,
+      "ubcc_ns": 1030.508428812027,
+      "ha_ns": 2525.4363814989724,
+      "reduction_pct": 59.19483712354025
+    },
+    {
+      "topology": "16n1s",
+      "tc": 229,
+      "pressure": 100,
+      "ubcc_ns": 1048.3587781588237,
+      "ha_ns": 2834.7906967004146,
+      "reduction_pct": 63.01812407600067
+    },
+    {
+      "topology": "16n1s",
+      "tc": 230,
+      "pressure": 0,
+      "ubcc_ns": 1825.392246246338,
+      "ha_ns": 1825.392246246338,
+      "reduction_pct": 0.0
+    },
+    {
+      "topology": "16n1s",
+      "tc": 230,
+      "pressure": 50,
+      "ubcc_ns": 2756.7148208618164,
+      "ha_ns": 2751.7477671305337,
+      "reduction_pct": -0.18050541516245744
+    },
+    {
+      "topology": "16n1s",
+      "tc": 230,
+      "pressure": 100,
+      "ubcc_ns": 2746.7807133992515,
+      "ha_ns": 2749.2642402648926,
+      "reduction_pct": 0.09033423667569318
+    },
+    {
+      "topology": "16n1s",
+      "tc": 231,
+      "pressure": 0,
+      "ubcc_ns": 45.12063848475615,
+      "ha_ns": 45.2564563602209,
+      "reduction_pct": 0.3001071811361111
+    },
+    {
+      "topology": "16n1s",
+      "tc": 231,
+      "pressure": 50,
+      "ubcc_ns": 169.52981241047382,
+      "ha_ns": 171.51857415835062,
+      "reduction_pct": 1.1595022624434348
+    },
+    {
+      "topology": "16n1s",
+      "tc": 231,
+      "pressure": 100,
+      "ubcc_ns": 179.71615307033062,
+      "ha_ns": 181.97655056913692,
+      "reduction_pct": 1.2421366883462959
+    },
+    {
+      "topology": "16n1s",
+      "tc": 232,
+      "pressure": 0,
+      "ubcc_ns": 1344.1054357422724,
+      "ha_ns": 5609.562827481164,
+      "reduction_pct": 76.03903410872734
+    },
+    {
+      "topology": "16n1s",
+      "tc": 232,
+      "pressure": 50,
+      "ubcc_ns": 4910.967416233486,
+      "ha_ns": 5732.186966472203,
+      "reduction_pct": 14.326461349604669
+    },
+    {
+      "topology": "16n1s",
+      "tc": 232,
+      "pressure": 100,
+      "ubcc_ns": 4914.485745959811,
+      "ha_ns": 5764.9902171558815,
+      "reduction_pct": 14.75292132612952
+    },
+    {
+      "topology": "16n1s",
+      "tc": 233,
+      "pressure": 0,
+      "ubcc_ns": 580.9124559164047,
+      "ha_ns": 667.3702349265418,
+      "reduction_pct": 12.954994766833373
+    },
+    {
+      "topology": "16n1s",
+      "tc": 233,
+      "pressure": 50,
+      "ubcc_ns": 584.9481870730717,
+      "ha_ns": 673.8118827342987,
+      "reduction_pct": 13.188205482607707
+    },
+    {
+      "topology": "16n1s",
+      "tc": 233,
+      "pressure": 100,
+      "ubcc_ns": 585.7242892185847,
+      "ha_ns": 675.0536461671193,
+      "reduction_pct": 13.232927109680382
+    },
+    {
+      "topology": "16n1s",
+      "tc": 234,
+      "pressure": 0,
+      "ubcc_ns": 16378.859678904215,
+      "ha_ns": 18112.050990263622,
+      "reduction_pct": 9.569271377885958
+    },
+    {
+      "topology": "16n1s",
+      "tc": 234,
+      "pressure": 50,
+      "ubcc_ns": 16442.810495694477,
+      "ha_ns": 18153.96050612132,
+      "reduction_pct": 9.42576695509424
+    },
+    {
+      "topology": "16n1s",
+      "tc": 234,
+      "pressure": 100,
+      "ubcc_ns": 16432.565947373707,
+      "ha_ns": 18167.30946302414,
+      "reduction_pct": 9.548709010440703
+    },
+    {
+      "topology": "16n1s",
+      "tc": 235,
+      "pressure": 0,
+      "ubcc_ns": 219.28766121466955,
+      "ha_ns": 327.24346965551376,
+      "reduction_pct": 32.98944622317087
+    },
+    {
+      "topology": "16n1s",
+      "tc": 235,
+      "pressure": 50,
+      "ubcc_ns": 458.4435373544693,
+      "ha_ns": 590.497317413489,
+      "reduction_pct": 22.363146480909503
+    },
+    {
+      "topology": "16n1s",
+      "tc": 235,
+      "pressure": 100,
+      "ubcc_ns": 459.6853007872899,
+      "ha_ns": 593.0972596009573,
+      "reduction_pct": 22.49411148913898
+    }
+  ],
+  "groups": [
+    {
+      "topology": "3n1s",
+      "pressure": 0,
+      "group": "core",
+      "ubcc_ns": 1278.18849351671,
+      "ha_ns": 1648.2339964972603,
+      "reduction_pct": 22.451029633350082,
+      "lower": true
+    },
+    {
+      "topology": "3n1s",
+      "pressure": 0,
+      "group": "representative",
+      "ubcc_ns": 3357.104853623443,
+      "ha_ns": 3676.168206665251,
+      "reduction_pct": 8.6792370507779,
+      "lower": true
+    },
+    {
+      "topology": "3n1s",
+      "pressure": 50,
+      "group": "core",
+      "ubcc_ns": 1588.3534042923538,
+      "ha_ns": 2092.785305447049,
+      "reduction_pct": 24.103375527426174,
+      "lower": true
+    },
+    {
+      "topology": "3n1s",
+      "pressure": 50,
+      "group": "representative",
+      "ubcc_ns": 3398.1753168282685,
+      "ha_ns": 3731.2628356394944,
+      "reduction_pct": 8.926937969357462,
+      "lower": true
+    },
+    {
+      "topology": "3n1s",
+      "pressure": 100,
+      "group": "core",
+      "ubcc_ns": 1601.046986050076,
+      "ha_ns": 2197.0934338039824,
+      "reduction_pct": 27.128862094951025,
+      "lower": true
+    },
+    {
+      "topology": "3n1s",
+      "pressure": 100,
+      "group": "representative",
+      "ubcc_ns": 3404.8644549868723,
+      "ha_ns": 3740.7071364146695,
+      "reduction_pct": 8.978053324690105,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 0,
+      "group": "core",
+      "ubcc_ns": 1420.1634460025364,
+      "ha_ns": 1803.3164518850822,
+      "reduction_pct": 21.247130833970928,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 0,
+      "group": "representative",
+      "ubcc_ns": 3847.435841129886,
+      "ha_ns": 4356.485550050382,
+      "reduction_pct": 11.684870822413473,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 50,
+      "group": "core",
+      "ubcc_ns": 1417.2659979926216,
+      "ha_ns": 1789.795027838813,
+      "reduction_pct": 20.814061054579092,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 50,
+      "group": "representative",
+      "ubcc_ns": 3574.499687938778,
+      "ha_ns": 4088.4250430045304,
+      "reduction_pct": 12.570252595069597,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 100,
+      "group": "core",
+      "ubcc_ns": 1420.9912882910835,
+      "ha_ns": 1796.6937135767055,
+      "reduction_pct": 20.91076639533098,
+      "lower": true
+    },
+    {
+      "topology": "3n2s",
+      "pressure": 100,
+      "group": "representative",
+      "ubcc_ns": 3889.1013159796044,
+      "ha_ns": 4407.861787411902,
+      "reduction_pct": 11.76898225152586,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 0,
+      "group": "core",
+      "ubcc_ns": 1274.463203218248,
+      "ha_ns": 1643.2669427659775,
+      "reduction_pct": 22.443324937027707,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 0,
+      "group": "representative",
+      "ubcc_ns": 3610.606977923049,
+      "ha_ns": 4237.7492516405055,
+      "reduction_pct": 14.798947188172573,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 50,
+      "group": "core",
+      "ubcc_ns": 1603.8409537739224,
+      "ha_ns": 2105.720341205597,
+      "reduction_pct": 23.834095041525384,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 50,
+      "group": "representative",
+      "ubcc_ns": 3906.99262627297,
+      "ha_ns": 4317.251861923271,
+      "reduction_pct": 9.502786697914267,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 100,
+      "group": "core",
+      "ubcc_ns": 1605.1861974928113,
+      "ha_ns": 2201.9570072491965,
+      "reduction_pct": 27.10183749236338,
+      "lower": true
+    },
+    {
+      "topology": "8n1s",
+      "pressure": 100,
+      "group": "representative",
+      "ubcc_ns": 3912.3723076449496,
+      "ha_ns": 4328.663150469462,
+      "reduction_pct": 9.617076412595516,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 0,
+      "group": "core",
+      "ubcc_ns": 1419.9564854303994,
+      "ha_ns": 1802.2126621670193,
+      "reduction_pct": 21.210381258612777,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 0,
+      "group": "representative",
+      "ubcc_ns": 4491.989966481924,
+      "ha_ns": 5355.071172946029,
+      "reduction_pct": 16.11708189471721,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 50,
+      "group": "core",
+      "ubcc_ns": 1418.6112417115107,
+      "ha_ns": 1792.2268145614203,
+      "reduction_pct": 20.846444758797887,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 50,
+      "group": "representative",
+      "ubcc_ns": 3788.441730042299,
+      "ha_ns": 4423.262887737817,
+      "reduction_pct": 14.351874935025267,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 100,
+      "group": "core",
+      "ubcc_ns": 1425.3374603059556,
+      "ha_ns": 1882.5133641560872,
+      "reduction_pct": 24.285400175901493,
+      "lower": true
+    },
+    {
+      "topology": "8n2s",
+      "pressure": 100,
+      "group": "representative",
+      "ubcc_ns": 3784.060633430878,
+      "ha_ns": 4420.9882616996765,
+      "reduction_pct": 14.406906116143537,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 0,
+      "group": "core",
+      "ubcc_ns": 1270.8413932058547,
+      "ha_ns": 1644.508706198798,
+      "reduction_pct": 22.722124339290197,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 0,
+      "group": "representative",
+      "ubcc_ns": 3713.6571740524637,
+      "ha_ns": 4952.296795737412,
+      "reduction_pct": 25.011417384173782,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 50,
+      "group": "core",
+      "ubcc_ns": 1601.1504663361443,
+      "ha_ns": 2104.0129164854684,
+      "reduction_pct": 23.900159842616496,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 50,
+      "group": "representative",
+      "ubcc_ns": 4513.339889753195,
+      "ha_ns": 5064.395049379932,
+      "reduction_pct": 10.880967109669026,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 100,
+      "group": "core",
+      "ubcc_ns": 1607.8766849305896,
+      "ha_ns": 2204.699234830009,
+      "reduction_pct": 27.0704747600385,
+      "lower": true
+    },
+    {
+      "topology": "16n1s",
+      "pressure": 100,
+      "group": "representative",
+      "ubcc_ns": 4514.435487281945,
+      "ha_ns": 5076.485427303447,
+      "reduction_pct": 11.071635052837225,
+      "lower": true
+    }
+  ],
+  "method": "240 runs = 5 topologies x 8 TC x 3 pressures x 2 arms; NOT three repetitions. TC232 fixed 2:1; service pooled operations; E2E maximum normalized plane duration.",
+  "overall": {
+    "core": {
+      "ratio_of_equal_weight_absolute_means_reduction_pct": 23.531832400281395,
+      "coordinate_reduction_am_pct": 23.33796454305214,
+      "passed_coordinates": 15
+    },
+    "representative": {
+      "ratio_of_equal_weight_absolute_means_reduction_pct": 12.798988515494724,
+      "coordinate_reduction_am_pct": 12.55780178700552,
+      "passed_coordinates": 15
+    }
+  }
+}

@@ -41,7 +41,7 @@ DOCX_ALLOWED = {"Calibri", "Consolas", "Microsoft YaHei", "SimHei", "STIX Two Ma
 MATH_FONT = ROOT / "docs/fonts/stix-math/STIXTwoMath-Regular.ttf"
 MATH_LICENSE = ROOT / "docs/fonts/stix-math/OFL.txt"
 MATH_FONT_SHA256 = "562551b15b836e6e01d1b7350909baf3c8c8d83260c1190fbf4544333e6936de"
-MATH_FIGURES = {"ubcc-path-central-vs-direct", "ubcc-metadata-fanout-scaling"}
+MATH_FIGURES = set()  # Redesigned diagrams use prose; equations remain STIX Word runs.
 
 
 def docx_fonts(path):
