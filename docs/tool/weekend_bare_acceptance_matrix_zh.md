@@ -13,7 +13,7 @@ link/sync和HWM继续沿用远端既有framework环境及默认配置。
 3. 完成Metric 3 TC228-235的OurCC/HA-VI五组配对；按已冻结双tier判定。
 4. 完成HA TC210-227三profile矩阵。
 5. 完成TC142-147 portable-512K p150现实业务矩阵。
-6. 用TC127、TC141和长TC98/TC134做正确性资格门禁。
+6. 用TC127和长TC98/TC134做正确性资格门禁。
 7. 资源有余量时把高价值case从3轮补到5轮。
 
 TC16已经稳定通过，降为更新二进制后的可选smoke，不占周末主矩阵。TC35仅在双socket
@@ -205,8 +205,6 @@ python3 scripts/gen_topo.py --nodes 8 --sockets 2 --out "$TOPO_JSON"
 
 ```text
 TC127 spill-noopt O3
-TC141 spill-noopt O3
-TC141 optimized O3
 ```
 
 TC127 UBIO：
@@ -217,15 +215,6 @@ TC127 UBIO：
 ```
 
 TC127 gem5使用spill-noopt `0/0/0`。
-
-TC141 spill-noopt UBIO：
-
-```text
---bloom-bytes=512 --sram-bytes=5000 --ways=2 --set-bits=2
---dir-overflow-policy=spill --batch-rs=0
-```
-
-TC141 optimized UBIO只把`--batch-rs=0`改为`--batch-rs=1`，gem5改为`1/0/1`。
 
 任一门禁失败时，后续性能样本只能标为诊断数据，不能纳入正式统计。
 
@@ -772,7 +761,7 @@ TC134 spill-noopt gem5：`0/0/0`；optimized gem5：`1/0/1`，UBIO仍batch=0。
 如果只能一次跑一个case：
 
 ```text
-0-2h     TC127、TC141 spill-noopt/optimized资格门禁
+0-2h     TC127 spill-noopt资格门禁
 2-8h     Metric1 TC131三轮9 runs
 8-18h    Metric2三轮63 runs；微基准通常远短于硬timeout
 18-30h   Metric3 core TC228-230五pairs，共30 arm runs

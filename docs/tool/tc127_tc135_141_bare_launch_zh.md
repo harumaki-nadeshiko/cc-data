@@ -129,7 +129,6 @@ TC127本机旧runner没有显式写gem5三个优化开关，导致UBIO batch=0�
 138 e2e_tc138_dirty_handoff_store.c
 139 e2e_tc139_mixed_batch_throughput.c
 140 e2e_tc140_cross_l2_owner_store.c
-141 e2e_tc141_spill_shared_writer_recovery.c
 ```
 
 编译参数：

@@ -275,8 +275,6 @@ UBCCController::finishH64BloomRebuild(bool ok)
 void
 UBCCController::wakeup()
 {
-    drainAuthorityCommits();
-    retryCreditBlockedControls();
     cleanupTombstones();
     cleanupExpiredRecalls();
     cleanupExpiredInvalidations();
@@ -405,11 +403,8 @@ UBCCController::retryPendingH64Lookups()
             // Release the orphan placeholder instead of leaving an unowned
             // fill pin behind forever.
             _directory.setFillPending(linePa, false);
-            refreshPinnedBit(linePa);
-            // This is an unfilled placeholder, not a negative H64 lookup.
-            // Removing the fill bit alone would expose fabricated G_I metadata
-            // as Ready on the next exact-owner writeback retry.
             _directory.remove(linePa);
+            refreshPinnedBit(linePa);
             continue;
         }
         retryPas[retryCount++] = linePa;
@@ -815,8 +810,6 @@ UBCCController::refreshPinnedBit(uint64_t linePa)
         return;
     }
     bool pin = false;
-    for (const auto &output : _authorityCommitOutputs)
-        pin = pin || (output.live && output.message.h.homeLinePa == linePa);
     pin = pin || (_outstandingReqs.find(linePa) != _outstandingReqs.end());
     auto pit = _pendingRequesters.find(linePa);
     pin = pin || (pit != _pendingRequesters.end() && !pit->second.empty());
@@ -927,6 +920,16 @@ UBCCController::evictOneVictim(uint64_t avoidPa)
     return ResidentEvictResult::Armed;
 }
 
+uint64_t
+UBCCController::allocateNaiveEvictReqId()
+{
+    uint64_t id = _nextNaiveEvictReqId++;
+    if (id == 0) {
+        id = _nextNaiveEvictReqId++;
+    }
+    return id;
+}
+
 UBCCController::ResidentEvictResult
 UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
 {
@@ -1017,9 +1020,17 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
     }
     _directory.setPinned(victimPa, true);
 
+    // Identity must be fixed BEFORE fanout: the wire reqId and the Home
+    // outstanding reqId are required to match. A unique Home-local reqId
+    // (not victim.epoch) keeps an aborted eviction's orphan InvalidateAck
+    // from ever aliasing a later eviction of the same PA.
+    evictOreq->baseEpoch = victim.epoch;
+    evictOreq->reqId = allocateNaiveEvictReqId();
+    evictOreq->stage = OpStage::WAITING_ALL_ACKS;
+
     uint64_t effectiveMask = targetMask;
     if (!fanoutInvalidateTargets(victimPa, targetMask, victim.epoch,
-                                 victim.epoch,
+                                 evictOreq->reqId,
                                  -1, UBCC_OuterReqType::GlobalInvalidate,
                                  DirEntry::protoDirty(victim), &effectiveMask)) {
         removeOutstanding(victimPa);
@@ -1036,9 +1047,6 @@ UBCCController::evictOneVictimNaive(uint64_t victimPa, const DirEntry &victim)
         return ResidentEvictResult::Removed;
     }
 
-    evictOreq->baseEpoch = victim.epoch;
-    evictOreq->reqId = victim.epoch;
-    evictOreq->stage = OpStage::WAITING_ALL_ACKS;
     evictOreq->targetMask = effectiveMask;
     evictOreq->totalMask = effectiveMask;
     evictOreq->pendingAckCount = __builtin_popcountll(effectiveMask);
@@ -1101,9 +1109,8 @@ UBCCController::doAsyncWriteback()
             if (_asyncWbSnapshots.count(pa) > 0)
                 continue;
 
-            DirEntry snapshot;
-            if (!_directory.lookup(pa, snapshot)) continue;
-            _asyncWbSnapshots[pa] = snapshot;
+            uint64_t epoch = _directory.getEpoch(set, way);
+            _asyncWbSnapshots[pa] = epoch;
             // The snapshot owns this entry until its ack. Materialize the
             // derived pin before issuing the asynchronous metadata write.
             refreshPinnedBit(pa);
@@ -1121,17 +1128,15 @@ UBCCController::onAsyncWritebackAck(uint64_t linePa)
     if (it == _asyncWbSnapshots.end())
         return;
 
-    const DirEntry snapshot = it->second;
-    uint64_t snapshotEpoch = snapshot.epoch;
+    uint64_t snapshotEpoch = it->second;
     _asyncWbSnapshots.erase(it);
 
     DirEntry entry;
     if (!_directory.lookup(linePa, entry))
         return;
 
-    // Same coherence epoch does not mean unchanged shared membership.
-    if (entry.epoch == snapshotEpoch && entry.state == snapshot.state &&
-        entry.sharersMask == snapshot.sharersMask) {
+    // Epoch check: if unchanged, entry was not modified → safe to clear dirty
+    if (entry.epoch == snapshotEpoch) {
         entry.residentDirty = false;
         _directory.update(linePa, entry);
         _asyncWbCount++;
@@ -1247,8 +1252,7 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
             break;
         }
         case ResidentOpKind::Evict: {
-            bool ok = processEvict(linePa, pr.node, pr.epoch, pr.reqId,
-                                   pr.socket < 0 ? 0 : pr.socket);
+            bool ok = processEvict(linePa, pr.node, pr.epoch);
             if (!ok) {
                 restore = (!_directory.fillPending(linePa) &&
                            !_directory.wbPending(linePa));
@@ -1426,6 +1430,38 @@ UBCCController::replayResidentWaiters(uint64_t linePa)
 }
 
 void
+UBCCController::preservePendingRequestersForCapacity(uint64_t linePa)
+{
+    auto pit = _pendingRequesters.find(linePa);
+    if (pit == _pendingRequesters.end() || pit->second.empty())
+        return;
+
+    size_t total = 0;
+    for (const auto &kv : _residentWaiters)
+        total += kv.second.size();
+
+    auto &dst = _residentWaiters[linePa];
+    size_t moved = 0;
+    for (auto &pr : pit->second) {
+        if (dst.size() >= MAX_PENDING_PER_PA)
+            break;
+        if (total >= MAX_RESIDENT_WAITERS_TOTAL)
+            break;
+        // Re-admission must go through normal resident admission, not a
+        // "directory already gone -> break" replay branch.
+        pr.waitReason = ResidentWaitReason::Capacity;
+        dst.push_back(pr);
+        ++total;
+        ++moved;
+    }
+    const size_t dropped = pit->second.size() - moved;
+    framework::LogWarn("UBCC",
+            "[UBCC-EVICT-PRESERVE-WAITERS] home={} pa=0x{:x} moved={} dropped={}",
+            _nodeId, linePa, moved, dropped);
+    _pendingRequesters.erase(pit);
+}
+
+void
 UBCCController::replayResidentWaitersForCapacity(uint64_t triggerPa)
 {
     if (_capacityReplayActive) {
@@ -1599,6 +1635,31 @@ UBCCController::processOuterRequest(
     // requester, try to enqueue (§4.2, recall_done_fix.md).
     // Same requester with live outstanding → BUSY (no self-queue).
     OutstandingRequest *existing = findOutstanding(line_pa);
+    // UBCC invalidate-first (bounded): a demand read arrived for a line that
+    // Home is clean-capacity-evicting. The line is demonstrably still
+    // referenced, so abort the eviction and serve the read. This breaks the
+    // deadlock where the target's in-flight demand blocks the invalidation's
+    // CleanUnique, which Home is itself waiting on. Dirty recall evictions are
+    // NOT aborted (data responsibility preserved).
+    if (existing && existing->opType == OpType::NAIVE_EVICT_INVALIDATE &&
+        (reqType == UBCC_OuterReqType::GlobalReadShared ||
+         reqType == UBCC_OuterReqType::GlobalReadUnique)) {
+        const uint64_t abortedReqId = existing->reqId;
+        const uint64_t abortedEpoch = existing->baseEpoch;
+        const uint64_t abortedTargets = existing->targetMask;
+        const uint64_t abortedAcks = existing->ackMask;
+        framework::LogWarn("UBCC",
+            "[UBCC-EVICT-ABORT-READ] home={} pa=0x{:x} requester={} "
+            "reqType={} writeIntent={} abortedReqId={} epoch={} "
+            "targetMask=0x{:x} ackMask=0x{:x}",
+            _nodeId, line_pa, requesterNode, static_cast<int>(reqType),
+            writeIntent, abortedReqId, abortedEpoch,
+            abortedTargets, abortedAcks);
+        removeOutstanding(line_pa);
+        refreshPinnedBit(line_pa);
+        _evictionPendingRemoval.erase(line_pa);
+        existing = nullptr;
+    }
     if (existing) {
         appendTmpLog(
             "ubcc_outer_req.log",
@@ -1828,7 +1889,7 @@ UBCCController::processOuterRequest(
     Tick sentinelVisibleTick = curTick();
 
     // v4: Allocate reserved epoch (committed epoch + 1, NOT committed yet)
-    uint64_t reservedEpoch = reserveReadEpoch(entry, reqType, writeIntent);
+    uint64_t reservedEpoch = allocateReservedEpoch(entry);
 
     UBCC_OuterGrantType grant = UBCC_OuterGrantType::GlobalGrantShared;
     MESIState prevState = entry.state;
@@ -2469,15 +2530,6 @@ UBCCController::initiateRecall(uint64_t line_pa, const DirEntry &entry,
     framework::LogInfo("UBCC","[RECALL-TRACE-A] UBCC n={} initiateRecall PA=0x{:x} owner={} requester={}",
            _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
 
-    if (!_outbound->controlCreditAvailable(msg)) {
-        if (auto *pending = findOutstanding(line_pa)) {
-            if (!pending->recallUnsent)
-                framework::LogInfo("UBCC", "[CONTROL-CREDIT-WAIT] home={} target={} reqId={} window=4",
-                    _nodeId, ownerNode, msg.h.reqId);
-            pending->recallUnsent = true;
-        }
-        return true; // owner retains the unsent descriptor; not a wire ACK
-    }
     if (!_outbound->sendRecallReq(msg)) {
         warn("UBCC node_id={}: sendRecallReq failed PA=0x{:x} owner={} requester={}",
              _nodeId, line_pa, ownerNode, recallOreq.requesterNode);
@@ -2491,8 +2543,7 @@ bool
 UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
                                        bool dataReceived, uint64_t responseEpoch,
                                        uint64_t reqId,
-                                        const DataBlock *dataBlk, bool ackReceived,
-                                        bool directDataSent)
+                                       const DataBlock *dataBlk, bool ackReceived)
 {
     if (!ackReceived)
         return false;
@@ -2651,7 +2702,7 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
         _directory.update(line_pa, entry);
         _directory.forceRemove(line_pa);
         _residentWaiters.erase(line_pa);
-        _pendingRequesters.erase(line_pa);
+        preservePendingRequestersForCapacity(line_pa);
         _evictionPendingRemoval.erase(line_pa);
         replayResidentWaitersForCapacity(line_pa);
         _recallResponseCount++;
@@ -2671,9 +2722,6 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
     }
 
     grantOst->reservedEpoch = recallDone.reservedEpoch;
-    grantOst->dataOwner = ownerNode;
-    grantOst->directDataSent = directDataSent && recallDone.dataValid;
-    grantOst->dataEpoch = responseEpoch;
     grantOst->reqId = recallDone.reqId;
     grantOst->baseEpoch = recallDone.baseEpoch;
     grantOst->reqType = recallDone.reqType;
@@ -2744,8 +2792,6 @@ UBCCController::processRecallResponse(uint64_t line_pa, int ownerNode,
 bool
 UBCCController::isLineBusy(uint64_t line_pa) const
 {
-    for (const auto &output : _authorityCommitOutputs)
-        if (output.live && output.message.h.homeLinePa == line_pa) return true;
     if (_writeReservations.count(line_pa))
         return true;
     // v4: Check outstanding requests for non-terminal stages
@@ -3036,23 +3082,10 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
                     return true;
                 }
                 _directory.update(line_pa, currentEntry);
-                CoherenceMessage committedReply;
-                committedReply.h.type = CoherenceMessageType::UpgradeDoneResp;
-                committedReply.h.srcNode = _nodeId;
-                committedReply.h.srcSocket = _socketId;
-                committedReply.h.dstNode = requesterNode;
-                committedReply.h.dstSocket = requesterSocket;
-                committedReply.h.homeLinePa = line_pa;
-                committedReply.h.epoch = baseEpoch;
-                committedReply.h.reqId = activeReqId;
-                committedReply.b.upgradeDoneResp.accepted = true;
-                committedReply.b.upgradeDoneResp.committedEpoch = currentEntry.epoch;
                 current->stage = OpStage::DONE;
                 current->respTick = curTick();
                 removeOutstanding(line_pa);
                 refreshPinnedBit(line_pa);
-                panic_if(!_outbound->sendUpgradeResp(committedReply),
-                         "cached UpgradeDone lost its committed response");
 
                 framework::LogInfo("UBCC","[UBCC-UPGRADE-COMMIT] pa=0x{:x} owner={} reservedEpoch={}",
                        line_pa, intendedOwner, reservedEp);
@@ -3067,7 +3100,7 @@ UBCCController::processInvalidationAck(uint64_t line_pa, int ackNode,
             removeOutstanding(line_pa);
             _directory.forceRemove(line_pa);
             _residentWaiters.erase(line_pa);
-            _pendingRequesters.erase(line_pa);
+            preservePendingRequestersForCapacity(line_pa);
             _evictionPendingRemoval.erase(line_pa);
             replayResidentWaitersForCapacity(line_pa);
         } else {
@@ -3628,10 +3661,8 @@ UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
                                                      uint64_t epochVal,
                                                      int sourceSocket,
                                                      uint64_t reqId,
-                                                     const uint8_t *data,
-                                                     uint64_t *mergedRecallReqId)
+                                                     const uint8_t *data)
 {
-    if (mergedRecallReqId) *mergedRecallReqId = 0;
     auto reservation = _writeReservations.find(line_pa);
     OutstandingRequest *active = findOutstanding(line_pa);
     if (line_pa == 0x14030000)
@@ -3656,10 +3687,8 @@ UBCCController::completeReservedOwnerWritebackRecall(uint64_t line_pa,
     refreshPinnedBit(line_pa);
     DataBlock payload(64);
     payload.setData(data, 0, 64);
-    const bool completed = processRecallResponse(line_pa, requesterNode, true,
-                                                 epochVal, recallReqId, &payload);
-    if (completed && mergedRecallReqId) *mergedRecallReqId = recallReqId;
-    return completed;
+    return processRecallResponse(line_pa, requesterNode, true, epochVal,
+                                 recallReqId, &payload);
 }
 
 // ---- v4: Home Writeback Completion (HN-F→EP-SNF→DRAM) ----
@@ -3707,17 +3736,9 @@ UBCCController::notifyHomeWritebackComplete(uint64_t homePa)
 
 bool
 UBCCController::processEvict(uint64_t line_pa, int evictingNode,
-                              uint64_t epochVal, uint64_t reqId, int sourceSocket)
+                              uint64_t epochVal)
 {
     epochVal = normalizeEpoch(epochVal);
-    if (evictingNode < 0 || evictingNode >= 64 || sourceSocket < 0 || sourceSocket >= 4)
-        return false;
-    auto &receipt = _evictReceipts[evictingNode * 4 + sourceSocket];
-    if (reqId && receipt.reqId) {
-        if (reqId == receipt.reqId)
-            return receipt.linePa == line_pa && receipt.epoch == epochVal;
-        if (reqId < receipt.reqId) return false;
-    }
 
     framework::LogInfo("UBCC",
             "UBCC node_id={}: processEvict PA=0x{:x} "
@@ -3728,11 +3749,11 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     PendingRequester prCtx;
     prCtx.opKind = ResidentOpKind::Evict;
     prCtx.node = evictingNode;
-    prCtx.socket = sourceSocket;
+    prCtx.socket = -1;
     prCtx.reqType = UBCC_OuterReqType::GlobalEvict;
     prCtx.writeIntent = false;
     prCtx.epoch = epochVal;
-    prCtx.reqId = reqId;
+    prCtx.reqId = 0;
     ResidentAccessResult rr = ensureResidentForAccess(
         line_pa, prCtx, entry);
     if (rr != ResidentAccessResult::Ready) {
@@ -3832,7 +3853,6 @@ UBCCController::processEvict(uint64_t line_pa, int evictingNode,
     _directory.update(line_pa, entry);
     _directory.touch(line_pa);
     refreshPinnedBit(line_pa);
-    if (reqId) receipt = {reqId, line_pa, epochVal};
     // UBInvariant: validate canonical form after evict
     validateSharersCanonical(line_pa);
     // v4-A3: Don't force-delete G_I — let ResidentDir eviction handle cleanup
@@ -4024,9 +4044,8 @@ UBCCController::processOuterUpgradeReq(
 bool
 UBCCController::processOuterUpgradeDone(
     uint64_t line_pa, int requesterNode,
-    uint64_t epoch, uint64_t reqId, uint64_t *committedEpoch)
+    uint64_t epoch, uint64_t reqId)
 {
-    if (committedEpoch) *committedEpoch = 0;
     epoch = normalizeEpoch(epoch);
 
     framework::LogInfo("UBCC",
@@ -4115,7 +4134,6 @@ UBCCController::processOuterUpgradeDone(
     validateSharersCanonical(line_pa);
 
     // Retire UPGRADE_PENDING
-    if (committedEpoch) *committedEpoch = entry.epoch;
     ost->stage = OpStage::DONE;
     ost->respTick = curTick();
     removeOutstanding(line_pa);
@@ -4375,14 +4393,6 @@ UBCCController::processClear(
     // GRANT_HANDSHAKE after all barriers (RECALL/INVALIDATE) have completed.
 
     // v4: §3.3, §3.5 — commit intended result to committed DirEntry
-    AuthorityCommitOutput *authorityOutput = nullptr;
-    if (ost->dataOwner >= 0 && ost->dataEpoch &&
-        ost->intendedState == MESIState::G_S &&
-        (ost->intendedSharersMask & (uint64_t{1} << ost->dataOwner))) {
-        for (auto &output : _authorityCommitOutputs)
-            if (!output.live) { authorityOutput = &output; break; }
-        if (!authorityOutput) return false; // preserve original handshake
-    }
     MESIState oldState = entry.state;
     if (!commitIntendedResult(entry, *ost, "Clear")) {
         retireToTombstone(*ost, false);
@@ -4396,22 +4406,6 @@ UBCCController::processClear(
     validateSharersCanonical(line_pa);
 
     // v4-latency: log COMMIT state change
-    if (ost->dataOwner >= 0 && ost->dataEpoch &&
-        entry.state == MESIState::G_S &&
-        (entry.sharersMask & (uint64_t{1} << ost->dataOwner))) {
-        CoherenceMessage update;
-        update.h.type = CoherenceMessageType::RetainedAuthorityCommit;
-        update.h.srcNode = _nodeId; update.h.srcSocket = _socketId;
-        update.h.dstNode = ost->dataOwner; update.h.dstSocket = _socketId;
-        update.h.homeNode = _nodeId; update.h.homeSocket = _socketId;
-        update.h.homeLinePa = line_pa;
-        update.h.epoch = ost->dataEpoch;
-        update.h.reqId = ost->reqId;
-        update.b.upgradeDoneResp.accepted = true;
-        update.b.upgradeDoneResp.committedEpoch = entry.epoch;
-        authorityOutput->message = update;
-        authorityOutput->live = true;
-    }
     if (_verboseLog) {
         framework::LogInfo("UBCC-latency",
                 "[UBST] tick={} home={},{} pa=0x{:x} old={} new={} epoch={} sharers=0x{:x} action=COMMIT",
@@ -4428,7 +4422,6 @@ UBCCController::processClear(
     refreshPinnedBit(line_pa);
 
     // recall_done_fix.md §5: Replay queued pending requesters using the
-    drainAuthorityCommits();
     // newly committed state (just committed by this Clear).
     replayPendingRequesters(line_pa);
     replayResidentWaiters(line_pa);
@@ -4527,34 +4520,6 @@ UBCCController::allocateReservedEpoch(DirEntry &entry)
     return normalizeEpoch(entry.epoch + 1);
 }
 
-void
-UBCCController::drainAuthorityCommits()
-{
-    if (!_outbound) return;
-    for (auto &output : _authorityCommitOutputs) {
-        if (!output.live) continue;
-        const auto message = output.message;
-        if (!_outbound->sendUpgradeResp(message)) continue;
-        output.live = false;
-        refreshPinnedBit(message.h.homeLinePa);
-        replayPendingRequesters(message.h.homeLinePa);
-        replayResidentWaiters(message.h.homeLinePa);
-    }
-}
-
-uint64_t
-UBCCController::reserveReadEpoch(DirEntry &entry, UBCC_OuterReqType type,
-                                 bool writeIntent)
-{
-    // A read-only membership addition preserves the shared data/permission
-    // generation. Transaction identity remains baseEpoch + reqId; metadata
-    // persistence compares the full logical snapshot independently.
-    if (entry.state == MESIState::G_S &&
-        type == UBCC_OuterReqType::GlobalReadShared && !writeIntent)
-        return normalizeEpoch(entry.epoch);
-    return allocateReservedEpoch(entry);
-}
-
 // ---- H64 async DSM persistence completion ----
 void
 UBCCController::onDsmPersistComplete(uint64_t linePa)
@@ -4629,12 +4594,7 @@ bool
 UBCCController::commitIntendedResult(
     DirEntry &entry, const OutstandingRequest &ost, const char *path)
 {
-    const bool sharedJoin = entry.state == MESIState::G_S &&
-        ost.intendedState == MESIState::G_S && !ost.writeIntent &&
-        ost.reqType == UBCC_OuterReqType::GlobalReadShared &&
-        (entry.sharersMask & ~ost.intendedSharersMask) == 0 && !ost.dataValid;
-    const uint64_t predecessor = sharedJoin ? normalizeEpoch(ost.reservedEpoch)
-        : normalizeEpoch(ost.reservedEpoch - 1);
+    const uint64_t predecessor = normalizeEpoch(ost.reservedEpoch - 1);
     if (normalizeEpoch(entry.epoch) != predecessor) {
         framework::LogError("UBCC",
                 "[UBCC-RESERVATION-SUPERSEDED] path={} home={}:{} "
@@ -4901,36 +4861,11 @@ UBCCController::cleanupExpiredRecallIfNeeded(uint64_t linePa,
 }
 
 void
-UBCCController::retryCreditBlockedControls()
-{
-    for (auto &item : _outstandingReqs) {
-        auto &ost = item.second;
-        if (!ost.recallUnsent && !ost.controlUnsentMask) continue;
-        DirEntry entry;
-        if (!_directory.lookup(item.first, entry)) continue;
-        if (ost.recallUnsent) {
-            ost.recallUnsent = false;
-            if (!initiateRecall(item.first, entry, ost)) ost.recallUnsent = true;
-        }
-        if (ost.controlUnsentMask) {
-            const auto mask = ost.controlUnsentMask;
-            ost.controlUnsentMask = 0;
-            if (!fanoutInvalidateTargets(item.first, mask, entry.epoch,
-                    ost.reqId, ost.requesterNode, ost.reqType, ost.writeIntent))
-                ost.controlUnsentMask |= mask;
-        }
-        // Resource waiting is not a failed protocol attempt. Start the
-        // response watchdog only after all owed sends have left admission.
-        ost.createTick = curTick();
-    }
-}
-
-void
 UBCCController::cleanupExpiredRecalls()
 {
     std::vector<uint64_t> expired;
     for (const auto &kv : _outstandingReqs) {
-        if (!kv.second.recallUnsent && isExpiredRecall(kv.second))
+        if (isExpiredRecall(kv.second))
             expired.push_back(kv.first);
     }
     for (uint64_t linePa : expired)
@@ -4949,7 +4884,7 @@ UBCCController::cleanupExpiredInvalidations()
             (ost.opType == OpType::INVALIDATE ||
              ost.opType == OpType::NAIVE_EVICT_INVALIDATE ||
              ost.opType == OpType::UPGRADE_PENDING);
-        if (invalidating && !ost.controlUnsentMask && now >= ost.createTick + _recallTimeout)
+        if (invalidating && now >= ost.createTick + _recallTimeout)
             expired.push_back(kv.first);
     }
 
@@ -5553,7 +5488,7 @@ UBCCController::replayPendingRequesters(uint64_t linePa)
             OutstandingRequest tempOst;
             tempOst.linePa = linePa;
             tempOst.baseEpoch = rebaseEpoch;
-            tempOst.reservedEpoch = reserveReadEpoch(entry, pr.reqType, false);
+            tempOst.reservedEpoch = allocateReservedEpoch(entry);
             tempOst.reqId = pr.reqId;
             tempOst.opType = OpType::GRANT_HANDSHAKE;
             tempOst.stage = OpStage::WAITING_CLEAR;
@@ -5732,11 +5667,6 @@ UBCCController::fanoutInvalidateTargets(uint64_t linePa, uint64_t targetMask,
         framework::LogInfo("UBCC","[UBCC-FANOUT] home={} pa=0x{:x} target={} epoch={} reqId={}",
                _nodeId, linePa, target, committedEpoch, reqId);
 
-        if (!_outbound->controlCreditAvailable(msg)) {
-            if (auto *pending = findOutstanding(linePa))
-                pending->controlUnsentMask |= uint64_t(1) << target;
-            continue;
-        }
         if (!_outbound->sendInvalidateReq(msg)) {
             warn("UBCC node_id={}: invalidate fanout failed target={}",
                  _nodeId, target);
@@ -5935,8 +5865,7 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     push.b.readResp.recallOwnerNode = -1;
     push.b.readResp.authEpoch = grantOst.baseEpoch;
     push.b.readResp.grantEpoch = grantOst.reservedEpoch;
-    push.b.readResp.committedEpoch = grantOst.dataEpoch;
-    push.h.targetNode = grantOst.dataOwner >= 0 ? grantOst.dataOwner : 0xffff;
+    push.b.readResp.committedEpoch = 0;
     push.b.readResp.pendingInvMask = 0;
 
     // Push grants only carry transaction-owned data. The router supplies
@@ -5944,11 +5873,6 @@ UBCCController::buildGrantResponse(const OutstandingRequest &grantOst,
     if (grantOst.dataValid) {
         std::memcpy(push.b.readResp.grantData, grantOst.dataBuf, 64);
     } else {
-        std::memset(push.b.readResp.grantData, 0, 64);
-    }
-    if (grantOst.directDataSent) {
-        push.h.flags &= ~static_cast<uint32_t>(CFLAG_HAS_DATA);
-        push.h.flags |= static_cast<uint32_t>(CFLAG_DIRECT_GRANT);
         std::memset(push.b.readResp.grantData, 0, 64);
     }
     // ── Phase C4 trace point 6: push grant payload word ──

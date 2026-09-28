@@ -100,7 +100,6 @@ class UBCCOutboundIf
   public:
     virtual ~UBCCOutboundIf() = default;
     virtual bool sendRecallReq(const CoherenceMessage &msg) = 0;
-    virtual bool controlCreditAvailable(const CoherenceMessage &) const { return true; }
     virtual bool sendInvalidateReq(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeAckNotify(const CoherenceMessage &msg) = 0;
     virtual bool sendUpgradeResp(const CoherenceMessage &msg) = 0;
@@ -187,11 +186,6 @@ enum class OpStage {
 
 // §7.2: OutstandingRequest with full v4 fields for all four op types.
 struct OutstandingRequest {
-    int dataOwner = -1;
-    bool directDataSent = false;
-    uint64_t dataEpoch = 0;
-    uint64_t controlUnsentMask = 0;
-    bool recallUnsent = false;
     uint64_t linePa;           // Associated cache line address (home PA view)
     uint64_t baseEpoch;        // Requester-observed committed epoch (validation baseline)
     uint64_t reservedEpoch;    // Epoch to be committed on Clear or UpgradeDone
@@ -492,7 +486,7 @@ class UBCCController
      */
     bool processOuterUpgradeDone(
         uint64_t line_pa, int requesterNode,
-        uint64_t epoch, uint64_t reqId, uint64_t *committedEpoch = nullptr);
+        uint64_t epoch, uint64_t reqId);
 
     // ---- v4: Clear / ClearAck (§3.5) ----
     /**
@@ -533,7 +527,7 @@ class UBCCController
                                bool dataReceived, uint64_t responseEpoch,
                                uint64_t reqId = 0,
                                const DataBlock *dataBlk = nullptr,
-                                bool ackReceived = true, bool directDataSent = false);
+                               bool ackReceived = true);
 
     /**
      * Check if a line is currently busy (recall or other op in progress).
@@ -588,8 +582,7 @@ class UBCCController
                                               uint64_t epochVal,
                                               int sourceSocket,
                                               uint64_t reqId,
-                                              const uint8_t *data,
-                                              uint64_t *mergedRecallReqId = nullptr);
+                                              const uint8_t *data);
 
     /**
      * Notify UBCC that dirty data for a home PA has been written to DRAM
@@ -611,19 +604,7 @@ class UBCCController
      * @return               True if evict accepted (epoch matched)
      */
     bool processEvict(uint64_t line_pa, int evictingNode,
-                      uint64_t epochVal, uint64_t reqId = 0, int sourceSocket = 0);
-    struct EvictReceipt {
-        uint64_t reqId = 0, linePa = 0, epoch = 0;
-    };
-    // Conditional releases are serial per source adapter. A monotonic
-    // high-water fence rejects any older attempt after receipt replacement.
-    std::array<EvictReceipt, 64 * 4> _evictReceipts{};
-    struct AuthorityCommitOutput {
-        bool live = false;
-        CoherenceMessage message;
-    };
-    std::array<AuthorityCommitOutput, 64> _authorityCommitOutputs{};
-    void drainAuthorityCommits();
+                      uint64_t epochVal);
 
     /**
      * Check whether a response epoch is valid for the current line epoch.
@@ -910,6 +891,14 @@ class UBCCController
     uint64_t _naiveForcedInvalidations = 0;
     uint64_t _naiveForcedWritebacks = 0;
     uint64_t _naiveDirtyVictims = 0;
+    // UBCC invalidate-first hardening: a clean capacity eviction may be
+    // aborted by a conflicting demand read (see processOuterRequest). Its
+    // already-fanned-out InvalidateReq can still produce an orphan
+    // InvalidateAck. Give each NAIVE_EVICT_INVALIDATE a unique Home-local
+    // reqId (monotonic, never equal to an epoch) so such a stale ack can
+    // never be confused with a later eviction of the same PA.
+    uint64_t _nextNaiveEvictReqId = 1;
+    uint64_t allocateNaiveEvictReqId();
 
 public:
     void setBatchRsEnabled(bool v) { _batchRsEnabled = v; _batchRsOverridden = true; }
@@ -986,7 +975,7 @@ public:
     int _asyncWbInterval = 10000;
     int _asyncWbCounter = 0;
     static constexpr size_t kMaxAsyncWbSnapshots = 128;
-    std::map<uint64_t, DirEntry> _asyncWbSnapshots; // complete persisted metadata
+    std::map<uint64_t, uint64_t> _asyncWbSnapshots; // pa → snapshot epoch
     uint64_t _asyncWbCount = 0;
 
     // ---- M8: Invalidation counters ----
@@ -1073,8 +1062,6 @@ public:
      * Allocate a new reserved epoch (increments committed epoch + 1).
      */
     uint64_t allocateReservedEpoch(DirEntry &entry);
-    uint64_t reserveReadEpoch(DirEntry &entry, UBCC_OuterReqType type,
-                             bool writeIntent);
 
     /**
      * Commit intended directory result from OutstandingRequest to DirEntry.
@@ -1116,7 +1103,6 @@ public:
     bool isExpiredRecall(const OutstandingRequest &ost) const;
     bool cleanupExpiredRecallIfNeeded(uint64_t linePa, bool replayWaiters);
     void cleanupExpiredRecalls();
-    void retryCreditBlockedControls();
     void cleanupExpiredInvalidations();
 
     /**
@@ -1199,6 +1185,12 @@ public:
     ResidentEvictResult evictOneVictimNaive(
         uint64_t victimPa, const DirEntry &victim);
     void replayResidentWaitersForCapacity(uint64_t triggerPa);
+    // UBCC demand suspend/redrive (invalidate-first): when an eviction removes
+    // a resident line, any foreign requesters queued behind it must NOT be
+    // dropped. Move them (original tuple, bounded) onto the capacity wait
+    // queue so they are re-admitted through normal resident admission once
+    // capacity is released.
+    void preservePendingRequestersForCapacity(uint64_t linePa);
     bool fanoutUpgradeTargets(uint64_t linePa, uint64_t targetMask,
                               uint64_t committedEpoch, uint64_t reqId,
                               int requesterNode);

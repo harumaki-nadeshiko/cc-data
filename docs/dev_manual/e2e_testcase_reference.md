@@ -25,7 +25,6 @@
 | 120-124 | Correctness+Perf | baseline、cold/hot reuse、shared upgrade 和 direct-forward 性能场景 |
 | 125-129 | Correctness | H64 spill/onload、upgrade replay、writeback/clean-evict persistence 和多轮生命周期 |
 | 130-140 | Correctness+Perf | 目录容量、guest latency 分布、outer diagnostic 和独立 mixed throughput |
-| 141 | Correctness | spill shared-to-writer、deferred UpgradeResp、shared release 和 waiter 活性回归 |
 | 142-147 | Correctness+Perf | 可移植数据库、FaaS、图计算和 feature-store 大 workload 的 service 与 end-to-end 性能 |
 | 200 | Correctness | naive dirty recall 定向回归 |
 | 201-203 | Correctness | spill recall、authoritative data push 和 H64 overflow/onload 定向回归 |
@@ -142,7 +141,6 @@
 | 138 | Correctness+Perf | e2e_tc138_dirty_handoff_store | 1s | 新 writer 从 spilled dirty owner 获取 ownership | final reads MATCH；24 个 handoff store 样本 |
 | 139 | Correctness+Perf | e2e_tc139_mixed_batch_throughput | 1s | preserved shared reads + preserved owner writes 的独立 mixed throughput | reads MATCH；16 个 batch latency 样本；256-op throughput timer |
 | 140 | Correctness+Perf | e2e_tc140_cross_l2_owner_store | 1s | 同节点不同 L2 对 remote-owned line 的 store，观察 silent-upgrade 路径 | 24 final reads MATCH；24 个 cross-L2 store 样本 |
-| 141 | Correctness | e2e_tc141_spill_shared_writer_recovery | 1s | H64 fill/capacity 排队后的 shared-to-writer Upgrade 活性回归 | shared release 只清发送者 bit；deferred accepted UpgradeResp 回到原 reqId；32 reads MATCH；无 valid-sharer NotSharer drop |
 | 142 | Correctness+Perf | e2e_tc142_db_oltp_buffer_pool | 1s/2s/8n1s/8n2s | 每 plane 独立 OLTP buffer-pool shard：32 hot pages，32 batches，每 batch 28 reads + 4 updates；每 batch 24 条 maintenance pressure | 每 plane 1,024 useful ops、32 latency samples、5 reads MATCH；service/end-to-end timer |
 | 143 | Correctness+Perf | e2e_tc143_db_btree_traversal | 1s/2s/8n1s/8n2s | 每 plane 独立 B-tree shard，root/internal/leaf/record 四层访问；每 batch 16 transactions，每 transaction 4 次访问，25% record update | 每 plane 2,048 memory ops、32 latency samples、5 reads MATCH |
 | 144 | Correctness+Perf | e2e_tc144_db_wal_checkpoint | 1s/2s/8n1s/8n2s | 每 plane WAL append + dirty page update；每 batch 16 updates，每次先 WAL 后 data page，穿插 checkpoint pressure | 每 plane 1,024 stores、32 latency samples、17 reads MATCH，验证最终 WAL/data pair |

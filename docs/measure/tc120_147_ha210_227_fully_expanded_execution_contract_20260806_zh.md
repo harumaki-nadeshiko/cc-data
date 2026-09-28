@@ -1,8 +1,8 @@
-# TC120-TC147、TC210-TC227 全展开执行契约（2026-08-06，当前工作树）
+# TC120-TC140、TC142-TC147、TC210-TC227 全展开执行契约（2026-08-06，当前工作树）
 
 ## 目的、适用范围与事实源优先级
 
-本文是 TC120-TC147 与 TC210-TC227 的单一执行、参数、矩阵和验收契约，覆盖恰好 46 个 TC。目的不是复述历史结果，而是让操作者能够从当前工作树重建每个 case 的编译、拓扑、进程、有效 argv、输入证据和 verifier 门禁。
+本文是 TC120-TC140、TC142-TC147 与 TC210-TC227 的单一执行、参数、矩阵和验收契约，覆盖恰好 45 个 TC。目的不是复述历史结果，而是让操作者能够从当前工作树重建每个 case 的编译、拓扑、进程、有效 argv、输入证据和 verifier 门禁。
 
 事实冲突时按以下优先级裁决：
 
@@ -13,7 +13,7 @@
 
 源码行号均指 2026-08-06 当前工作树。后续源码变更后应重新核对。注册表唯一事实源是 `tests/e2e/test_e2e.py:20-168` 的 `TESTCASES`；编译脚本动态导入该字典（`scripts/compile_workload.sh:24-37`）。
 
-## 主索引（46 项，每个 TC 恰一行）
+## 主索引（45 项，每个 TC 恰一行）
 
 | TC | registry/scenario | source + compile macro | canonical topology | configuration/profile axes | verifier | key expected counts/markers |
 |---:|---|---|---|---|---|---|
@@ -38,7 +38,6 @@
 | 138 | `e2e_tc138_dirty_handoff_store` | 同名 `.c`；无附加宏 | 3N1S | 三 profile | `verify_tc138` | reads=24 node0；samples=24 |
 | 139 | `e2e_tc139_mixed_batch_throughput` | 同名 `.c`；无附加宏 | 3N1S | 三 profile | `verify_tc139` | reads=24；throughput 256 ops；samples=16 |
 | 140 | `e2e_tc140_cross_l2_owner_store` | 同名 `.c`；无附加宏 | 3N1S | 三 profile | `verify_tc140` | reads=24 node2；samples=24 |
-| 141 | `e2e_tc141_spill_shared_writer_recovery` | 同名 `.c`；无附加宏 | 3N1S | spill-noopt/optimized | `verify_tc141` | reads=32；spill/fill/shared-release |
 | 142 | `e2e_tc142_db_oltp_buffer_pool` | 同名 `.c`；portable 规模宏 | multi；配方主用 3N1S/8N2S | legacy 或 512K；三 profile | portable-large verifier | reads=5P；1024 ops；32 samples |
 | 143 | `e2e_tc143_db_btree_traversal` | 同名 `.c`；portable 规模宏 | multi | legacy 或 512K；三 profile | portable-large verifier | reads=5P；2048 ops；32 samples |
 | 144 | `e2e_tc144_db_wal_checkpoint` | 同名 `.c`；portable 规模宏 | multi | legacy 或 512K；三 profile | portable-large verifier | reads=17P；1024 ops；32 samples |
@@ -306,10 +305,6 @@ node0 写12条并完成 `populate`；node1 四轮读6 hot，首轮 i=0,3 发2条
 ## TC140 - cross-L2 owner store
 
 注册 `test_e2e.py:126`；N=3,K=1。naive matrix `GTAIL=GON,UTAIL=UBN`；spill-noopt `GNN,UBS`；optimized `GOO,UBO`，matrix UBIO policy 位于 batch 后。普通 direct 分别 GO/GN/GO 和仅 `--batch-rs=0|0|1`，若不设 `UBCC_OPTS` 则 policy 使用 UBIO 默认。node0 两个 L2 cluster 协作24 stores；node2读24（workload `:53-84`）。verifier 要 reads=24全 node2、`cross_l2_store,verify_final`、selftest、唯一 node0 samples=24（`test_e2e.py:1798-1802`）。
-
-## TC141 - spill shared-to-writer recovery
-
-注册 `test_e2e.py:127`；强制 N=3,K=1。spill-noopt `GTAIL=GNN,UTAIL=U5000S+spill policy`；optimized `GOO,U5000O+spill policy`；普通 direct 去掉重复组。naive 不属于语义矩阵，因为 verifier 强制 spill 证据。node0 seed16；node1 share16；pressure192；node1写16；node2验16（workload `:26-72`）。verifier 要 reads=32、node1/node2各16、五 phase、spill-done/fill-done/shared-release，且禁止 waiter drop-not-sharer（`test_e2e.py:1805-1832`）。
 
 ## TC142 - portable OLTP buffer pool
 

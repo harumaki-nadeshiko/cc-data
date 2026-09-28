@@ -38,32 +38,22 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
 
 ## 三项提取口径
 
-- Metric1：TC131/8N1S 正式合同使用三个显式角色：`naive`（512KiB naive，只提供容量分母）、
+- Metric1：TC131/8N1S 正式合同改为每轮三个显式角色：`naive`（512KiB naive，只提供容量分母）、
   `spill`（512KiB spill-noopt，提供容量分子和真实 Outer 延迟）、`ideal`（spill-noopt、实验性超大
   ResidentDir，无容量 eviction/offload，提供 Outer 反事实基线）。`metric1_role`别名包括
   `baseline -> naive`、`spill-512k/actual -> spill`、`ideal-dir/infinite -> ideal`。省略时 profile=naive
   自动为 naive；Home UBIO `PROCESS-MANIFEST experimental_oversized_resident_dir=1`自动为 ideal；其余
   其余spill-noopt自动为spill；optimized自动为support extension，并产生`METRIC1_ROLE_AUTO_DETECTED`。
-  为兼容旧 run-list/远端调用，Metric1 的`profile=ideal|ideal-dir|infinite`会被显式归一为
-  `profile=spill-noopt + metric1_role=ideal`，并产生`LEGACY_METRIC1_PROFILE_NORMALIZED`。该兼容只修正
-  字段词汇，不绕过 oversized ResidentDir、capacity、fill、exact-live 或 Outer sample 标准门禁。
   正式容量比为`spill effective_unique / naive effective_unique`；正式延迟附加为
   `mean(all completed EP-PERF kind=outer in spill) - mean(all completed EP-PERF kind=outer in ideal)`，
-  naive 只提供容量分母，绝不参与 Metric1 Outer delta。任何`spill-naive`、`optimized-naive`或 guest timer
-  delta 都是旧描述口径，不得作为统一 Metric1 指标。
-  Standard/Formal/All 的 Metric1 主矩阵统一只显示`effective_unique(lines)`、completed Outer mean(ns)、
-  capacity ratio 和`spill-ideal`Outer delta；旧 guest timer 即使存在也不会作为 Metric1 主值进入 matrix。
-  `cycles = ns * 2GHz`。所有有效样本先按 role 池化：容量对每个 role 的 run 值等权求均值后作
-  spill/naive 比值；Outer 合并 spill/ideal 的全部 completed Outer source sample 后求均值差。
-  pooled ratio>=1.5 且 delta cycles<50 才 PASS。
-  simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，其中每个文件行号
-  表示独立完成事件，文本完全相同也保留。canonical stderr不存在时才确定性回退全部日志，并去除
-  stdout/stderr中完全相同的镜像复制行；保留 source files、samples、mean、p50/p95/p99/max。
+  `cycles = ns * 2GHz`。每轮同时满足 ratio>=1.5 且 delta cycles<50 才 PASS，全部轮次都须 PASS。
+  跨轮报告 ratio/delta 的等权 mean、stdev、CV，不按 Outer sample 数给轮次加权。
+  simulator 日志递归读取`.log/.gz`；优先仅用`gem5_tc*_node*/stderr.log(.gz)`，不存在时才确定性回退
+  全部日志。canonical stderr 中的相同行按独立完成事件保留；回退布局需要由归档侧避免重复镜像。
+  输出保留 source files、samples、mean、p50/p95/p99/max。
   spill/ideal 标准角色至少须有一条 completed Outer。
   旧 node1/node2 `post_pressure_catalog_reuse` GUEST-TIMER 已弃用为描述字段，不参与完整性或 PASS。
   完整时继续输出旧 guest 值；缺失或部分存在仍 ADDED，产生`METRIC1_GUEST_TIMER_MISSING`，描述字段为 null。
-  GUEST-TIMER 字段顺序不影响解析；warning 会列出已发现 simout 数、marker 总数、可见 phase 和最多三条
-  malformed marker，便于区分“文件未发现”“phase 不匹配”和“字段不完整”。
   容量只从Home UBIO目录提取，默认`n0/s0`，兼容`ubio_tc131_n0_s0`与`ubio_n0_s0`；
   非默认Home可在run中填写`home_node/home_socket`。Home 发现依次使用标准目录名、任意布局中的
   `[PROCESS-MANIFEST]`身份、容量 marker 回退；单一回退或多个相同来源产生 WARNING，来源值冲突才拒绝。
@@ -72,8 +62,7 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
   spill-noopt、policy=spill、oversized=1、resident capacity>=`requirements.metric1.ideal_min_capacity`
   （默认102656）、found fills=0、H64 exact-live=0。spill 要求 spill-noopt/policy=spill/oversized=0；
   naive 要求 naive/policy=naive/oversized=0。门禁失败只进入 extension，正式角色槽保持缺失，绝不静默使用。
-  `requirements.metric1`支持`min_samples`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
-  旧`repetitions`只兼容换算为最低样本数，不按名字配对。
+  `requirements.metric1`支持`repetitions`、默认`roles=[naive,spill,ideal]`及`ideal_min_capacity`。
   旧 manifest 没有 ideal 时可正常解析（timer 缺失也不会拒绝），但标准 Metric1 为 INCOMPLETE。
   下游`scripts/generate_metric123_report.py`必须通过`--metric1-json`读取本提取器的`report.json`或
   `run_metric1_outer_ideal_matrix.py`的`summary.json`。旧Metric1/2 JSON中的`guest_delta_*`只保留历史
@@ -85,7 +74,7 @@ optional 两类证据都不存在时允许；任一证据存在后仍执行精�
 
 ### Metric1 裸进程 argv 合同
 
-正式矩阵固定为`TC131 / 8N1S / O3 / 每角色至少3个独立样本`。外部launcher负责把每个物理运行
+正式矩阵固定为`TC131 / 8N1S / O3 / 3 repetitions x 3 roles`。外部launcher负责把每个物理运行
 登记到raw manifest的`tc=131`和对应`metric1_role`；gem5与UBIO进程argv中的`--tc=131`均可省略。
 Port/IPC/PDES参数不属于Metric1提取合同。
 
@@ -142,17 +131,16 @@ gem5或UBIO：`PORTABLE_PRESSURE_LINES=98208`、`PORTABLE_TARGET_FOOTPRINT_LINES
   `metrics.latency_phases`，产生`METRIC2_MULTIPLE_PHASES`并按 phase 输出描述矩阵。显式`phase`聚合所有
   同名记录；频率必须一致，mean 按 samples 加权，保留 nodes、records、total samples。正式 run 的额外
   phase 只作 extension 描述和 WARNING，不改变冻结正式值。
-  每个 TC/profile 的有效 run 先等权池化 profile mean，再计算 optimized 降幅；适用 TC 之间等权，
-  aggregate reduction 必须达到10%。不按 repetition 配对，也不要求 repetition 名字或 applicable 集合对齐。
+  每个 repetition 的 applicable case 等权均值都必须达到 10%，且 applicable case 集合跨 repetition 稳定。
   少于完整 TC135-140/217 集合时仍输出已提取值，但 Metric2 总状态为 INCOMPLETE。
 - Metric3：直接解析 TC228-235 的 GUEST-TIMER/PERF-LATENCY；这些 TC 即使 topology 非 2n1s 也可
   解析为 extension。未知 TC 必须提供`metric_specs`，每项含`kind=timer|latency`、`phase`和
   `reduction=aggregate|max`，否则报`PARSER_SPEC_REQUIRED`。默认是 independent：每个 run 以
-  最终 run ID/tc/topology/arm/metric spec names 为独立样本身份，不要求 pair/order，不构造配对或 ABBA；
+  `repetition/tc/topology/arm/metric spec names`为独立身份，不要求 pair/order，不构造配对或 ABBA；
   每个 TC/metric/arm 对全部 independent run 计算 mean、stdev、count，delta 为两个 arm mean 之差。
-  `requirements.metric3`支持`mode=independent`（默认）、`min_samples`、`testcases`和默认双 arm 的`arms`。
-  旧`repetitions/min_repetitions`只兼容换算为最低样本数。arm 数量不平衡只产生 WARNING；只要每个
-  TC/arm 都达到最低样本数即可。完整正式结果仍要求 TC228-235 和双 arm。
+  `requirements.metric3`支持`mode=independent`（默认）、`repetitions`或正整数`min_repetitions`、
+  `testcases`和默认双 arm 的`arms`。显式 repetitions 要求每个 TC/arm/repetition 恰有一个有效 run；
+  arm 数量不平衡时仍输出描述比较，但正式状态为 INCOMPLETE。完整正式 PASS 仍要求 TC228-235 和双 arm。
 
   `arm`可省略；工具递归读取 simulator 日志中的`EPBACKEND-PROFILE ha_endpoint_profile=ubcc|ha-vi`、
   UBIO `PROCESS-MANIFEST home_controller=ubcc|ha-vi`或`UBIO-HA-MANIFEST controller=ha-vi`。证据一致时
@@ -165,11 +153,8 @@ gem5或UBIO：`PORTABLE_PRESSURE_LINES=98208`、`PORTABLE_TARGET_FOOTPRINT_LINES
   无论模式如何，描述视图都提供`metric3_arm_comparisons`；只有实际带 pair/order 的 run 才进入
   `metric3_pairs`。PERF-LATENCY 多节点聚合按 samples 对 mean 加权。
 
-Metric3 定义`delta = HA-VI - OurCC`，正值报告`OURCC_FASTER`，负值报告`HA_VI_FASTER`，零值报告
-`TIE`。所有方向都是真实统计结果，不做筛选，也不以`delta > 0`作为状态或退出码门槛。`COMPLETE`
-只表示证据、arm 和矩阵完整，不表示所有场景均强于 HA-VI。旧 qualification 中的
-`thresholds.delta_ticks_strict_min`仅为输入兼容字段，不再执行。重复只作描述性汇总；工具不计算
-t-test、置信区间或 p-value。
+Metric3 定义`delta = HA-VI - OurCC`，严格`delta > 0`才是可执行参考模型范围 PASS。该状态
+不是物理甲方硅片测量声明。重复只作描述性汇总；工具不计算 t-test、置信区间或 p-value。
 
 ## 执行
 
@@ -180,6 +165,49 @@ python3 scripts/extract_metric123_from_logs.py \
   --manifest /path/to/metric123-manifest.json \
   --output-dir /path/to/output
 ```
+
+输出目录中的文件按职责分层：
+
+```text
+report.json                  正式合同聚合及显式分离的描述视图
+resolved_runs.json           每个物理 run 的标准化证据
+metric_matrix_standard.tsv   正式计分矩阵
+metric_matrix_all.tsv        正式与扩展 run 的描述矩阵
+publication_metrics.json     路径无关的发布数值与图表输入
+```
+
+这些输出并非同一统计量的不同格式。`report.json`只在冻结合同坐标上聚合，`resolved_runs.json`
+保留逐运行值，`metric_matrix_all.tsv`还包含 extension；下游文章和图片应只读取
+`publication_metrics.json`，不得从多个输出中选择同名但定义不同的字段拼接。
+
+公司机器上有两种复刻方式：
+
+1. 提供等价原始日志和 manifest，先生成 `publication_metrics.json`，再生成图表；
+2. 直接提供已审核的等价 `publication_metrics.json`，只执行图表生成。
+
+提取器可在成功后直接生成图表：
+
+```bash
+python3 scripts/extract_metric123_from_logs.py \
+  --manifest /path/to/metric123-manifest.json \
+  --output-dir /path/to/output \
+  --publication-supplement /path/to/supporting-chart-data.json \
+  --render-figures \
+  --figure-output-dir /path/to/output/figures
+```
+
+也可以只从 canonical publication JSON 复刻图表：
+
+```bash
+python3 scripts/generate_delivery_figures.py \
+  --charts-only \
+  --publication-json /path/to/publication_metrics.json \
+  --out-dir /path/to/output/figures
+```
+
+数值、柱形顺序、hatch 和图表内容由 canonical JSON 决定。要获得与交付件一致的字体度量和
+逐像素输出，仍应使用同一文档 Docker 镜像和同一字体资产；仅保证“等价数据”而不固定
+matplotlib、Pillow、libpng和字体版本时，可复刻相同图表语义与数值，但不保证 PNG 字节哈希相同。
 
 项目中的测试必须按 Docker-only 规则运行：
 
@@ -199,43 +227,29 @@ run 字典或与 manifest run schema 同名的关键字参数，并在返回前�
 from scripts.extract_metric123_from_logs import Metric123RawLogMatrix
 
 matrix = Metric123RawLogMatrix(
-    requirements=None,              # 自动推断冻结坐标，按参数池化样本
+    requirements=None,              # 从所有 add 尝试推断覆盖需求
     correctness_policy="strict",
     base_dir="/archive/runs",
 )
 status = matrix.add(
-    id="tc135-sample-a", metric=2, tc=135,
+    id="tc135-r1-naive", metric=2, tc=135, repetition="r1",
     topology="3n1s", profile="naive",
     simulator_log_dir="tc135/r1/naive/simulator",
     simout_dir="tc135/r1/naive/simout",
 )
 assert status["status"] in ("ADDED", "REJECTED")
 
-# Metric1 三角色。spill 与 ideal 的 profile 都是 spill-noopt，
-# 必须通过 metric1_role 区分实验职责。
-matrix.add(
-    id="tc131-naive-a", metric=1, tc=131, topology="8n1s",
-    profile="naive", metric1_role="naive",
-    simulator_log_dir="tc131/naive/simulator",
-    simout_dir="tc131/naive/simout",
-)
-matrix.add(
-    id="tc131-spill-a", metric=1, tc=131, topology="8n1s",
-    profile="spill-noopt", metric1_role="spill",
-    simulator_log_dir="tc131/spill/simulator",
-    simout_dir="tc131/spill/simout",
-)
-matrix.add(
-    id="tc131-ideal-a", metric=1, tc=131, topology="8n1s",
-    profile="spill-noopt", metric1_role="ideal",
-    simulator_log_dir="tc131/ideal/simulator",
-    simout_dir="tc131/ideal/simout",
+# Metric1 每轮三个角色；spill 与 ideal 虽同为 spill-noopt，role 使二者 slot 可共存。
+status = matrix.add(
+    id="tc131-r1-ideal", metric=1, tc=131, repetition="r1",
+    topology="8n1s", profile="spill-noopt", metric1_role="ideal",
+    simulator_log_dir="tc131/r1/ideal/simulator",
+    simout_dir="tc131/r1/ideal/simout",
 )
 
-# Metric3 independent run：无需预分配 repetition；省略时使用最终 run ID
-# 作为内部样本身份。arm 也可由 simulator 日志自动识别。
+# Metric3 independent run：无需 pair/order，arm 也可由 simulator 日志自动识别。
 status = matrix.add(
-    metric=3, tc=228,
+    id="tc228-r1-auto", metric=3, tc=228, repetition="r1",
     topology="2n1s",
     simulator_log_dir="tc228/r1/simulator",
     simout_dir="tc228/r1/simout",
@@ -246,41 +260,7 @@ result = matrix.finalize("/tmp/metric123-report")
 report = result["report"]
 ```
 
-TC142-TC147 portable Metric1 qualification 可直接加载仓库固定配置，不需要 planner 日志目录：
-
-```python
-import json
-
-requirements = json.loads(open(
-    "configs/metric1_portable_qualification_sets.json",
-    encoding="utf-8",
-).read())
-
-matrix = Metric123RawLogMatrix(
-    requirements=requirements,
-    correctness_policy="strict",
-    base_dir="/archive/runs",
-)
-```
-
-没有配置 qualification 时，`views.formal`与`views.standard`完全相同。只测 TC131 时二者必须逐字段一致；
-若不一致，说明使用了旧版本报告。配置 qualification 后，Formal 表示 Standard 加额外资格坐标，不能把不同
-TC/topology 的 run-level descriptive mean 与 Standard TC131 直接比较，应查看`report.qualifications`及
-`report_detail_by_tc_topology_zh.md`。
-
-大型 Matrix 可显式启用多进程 CPU 并行：
-
-```python
-merged = merge(matrix_list, workers=8)
-result = merged.finalize("/tmp/metric123-report", workers=8)
-```
-
-`workers=1`是默认串行路径。`workers>1`使用 Linux fork 进程池：merge 并行计算 snapshot fingerprint，
-finalize/aggregate 并行计算 formal/all/extension 描述视图、source inventory 和各 qualification；ID 分配、
-首次去重、issue 顺序、标准 Metric1/2/3 公式和最终退出码仍由父进程按固定顺序提交。因此串并行结果逐字段
-一致。小矩阵可能因进程启动开销变慢，建议仅在大量 retained snapshots 或 qualification 较多时启用。
-
-省略`requirements`时，只要 metric/TC/profile/role/arm 等实验身份字段
+省略`requirements`时，只要 metric/repetition/TC/profile 或 Metric3 repetition/TC/arm 等身份字段
 可解析，即使该次 add 因日志或 correctness 无效而`REJECTED`，其身份仍进入预期覆盖，避免
 坏日志从缺失矩阵中消失。显式传入 requirements 时继续使用 manifest 的原有 schema。
 `id`可省略，工具按 add 顺序稳定生成`run-000001`。重复请求 ID 自动改为`id-2/id-3`并产生
@@ -290,73 +270,9 @@ finalize/aggregate 并行计算 formal/all/extension 描述视图、source inven
 finalize 后继续 add，下一次 finalize 自动包含新尝试。未提供 output_dir 时不写文件，返回
 含`report`、`resolved_runs`、`matrix`、`matrices`、`per_run_metrics`、`issues`和`exit_code`的字典。
 `matrix`兼容别名始终指正式 standard matrix；`matrices`同时提供`standard/all/extension`，报告中的
-`views.all`和`views.extension`含按 metric/TC/topology/profile(或 role/arm)的描述统计与可形成的比较。
+`views.all`和`views.extension`含按 metric/TC/topology/repetition/profile(或 arm)的描述统计与可形成的比较。
 extension 不改变正式状态。每个成功 run 含`contract_class`、`standard_contract`和结构化
 `contract_warnings`。
-
-Metric1/2/3 都不要求调用方预分配 repetition 序号。run 同时省略`id`和`repetition`时，Matrix 先分配
-`run-000001`，再将其作为内部样本身份，并标记`repetition_source=auto-run-id`。不同 worker 都可从
-`run-000001`开始；批量`merge()`发生 ID 冲突改名时会同步更新自动样本身份，因此不需要跨 worker 的
-共享计数器。显式传入的 repetition 只保留作审计，不参与分组、配对、缺槽或加权。
-
-三个指标均按真实实验参数池化：Metric1 按 role 聚合，Metric2 按 TC/profile 聚合，Metric3 independent
-按 TC/topology/arm/metric 聚合。推荐使用`min_samples=N`声明每个 role/profile/arm 的最低样本数；旧
-`repetitions=[...]`仅兼容解释为`min_samples=len(repetitions)`，名字本身不再形成笛卡尔矩阵。Metric3 的
-旧`min_repetitions`也是`min_samples`的兼容别名。Metric3 paired 模式仍按 pair/tc/order 配双 arm，
-不受 repetition 变化影响。
-
-Portable Metric1 qualification 的当前坐标是 TC142-TC147，不含 TC141。TC141 是 shared-to-writer recovery
-正确性资格用例，不会自动形成 Metric1 capacity ratio/Outer delta。若将 TC141 作为 Metric1 run 导入，它只会
-进入`Extension descriptive`；只有 workload 和日志同时提供 naive/spill/ideal 三角色、Home capacity marker 和
-spill/ideal completed Outer，详细报告才可能计算描述值，否则会明确显示缺 role 或缺 Outer 的 N/A 原因。
-
-## 显式资格合同（opt-in）
-
-冻结 standard 合同、`report.metric1/2/3`、`views.standard`和未配置时的退出码/数值完全不变。
-额外正式坐标只能由顶层`requirements.qualification_sets`注册；run 自身填写 TC、phase、topology
-等字段不能把自己提升为正式资格点。每个 set 有全局唯一`id`和`metric`：
-
-- Metric1：`coordinates=[{tc,topology,home_node,home_socket}]`、`min_samples`、可选
-  `ideal_min_capacity`和`thresholds`。仍使用`naive/spill/ideal`、现有容量/Outer公式与角色门禁；
-  每个 coordinate 独立聚合，重复名相同也不会碰撞。threshold 默认仍为 ratio `>=1.5`、
-  Outer delta `*2GHz <50 cycles`。
-- Metric2：`coordinates=[{tc,topology,phase,expected_node,expected_samples}]`、`min_samples`；
-  默认 profiles 为三 profile，baseline/result 默认`naive/optimized`，适用门槛500ns、降幅门槛10%。
-  注册的 phase/node/samples 是精确合同；未注册自动发现 phase 仍只是 extension。
-  多 plane workload 可改用`kind=timer|latency`、`reduction=aggregate|max`、`expected_nodes=[...]`
-  和`expected_count`。timer aggregate 使用`sum(counter_ticks)/sum(operations)`；latency aggregate 按
-  samples 加权；节点集合、总 count 和频率都必须精确匹配。若 qualification 与冻结 TC135-140/217
-  合同相同，run 仍先按冻结定义解析并同时命中 qualification，不会从 standard 视图消失。
-- Metric3：只复用 builtin TC228-235 parser、primary和aggregate权重。set 声明
-  `mode=paired|independent`、`topologies`、`testcases`、`arms`，并按模式给出`pairs`或
-  `min_samples`。完整性、均值和配对始终按 topology 分开，绝不跨 topology 补槽或混合。
-  TC232 的冻结 2N1S 主值仍为`2/3 read + 1/3 write`；额外 topology qualification 按工作负载
-  实际操作数计算，P 个 active plane 时使用`read=P/(P+1)`、`write=1/(P+1)`，代表场景组中的
-  TC232 分量也使用同一拓扑相关权重。paired set 对同一 TC/metric 的多个 pair 先求 delta 均值，
-  再计算 testcase primary 和 tier aggregate；qualification mode 不改写 run 的 standard logical slot。
-  `arms`固定要求恰好包含`ourcc`和`ha-vi`。
-
-解析后的 run 新增`formal_contract`和`qualified_contracts`；为兼容既有消费者，
-`contract_class`仍只有`standard|extension`。成功资格化的非 standard run 保留
-`contract_class=extension`，但进入`views.formal`并从`views.extension`排除；standard run 也可同时
-命中资格 set。报告新增`report.qualifications`，输出新增`metric_matrix_formal.tsv`。
-
-资格缺失/失败默认不改变 standard 的`overall_status/exit_code`。只有显式使用可重复 CLI 参数才组合退出状态：
-
-```bash
-python3 scripts/extract_metric123_from_logs.py --manifest manifest.json \
-  --require-qualification m1-tc132 --require-qualification m3-3n-paired
-```
-
-被要求的 ID 未注册或资格证据无效返回2，缺槽返回3，完整但门槛失败返回1。矩阵合并时，同 ID
-定义必须完全一致，否则拒绝合并。pickle state 已升级为v2；仍接受旧v1，并只从 snapshot 中的
-requirements重建资格 registry，不读取任何原始日志。
-
-报告中的`source_inventory`明确分离三种计数：`logical_runs`是成功解析且未发生 slot 冲突的逻辑
-运行数，`unique_files`是证据文件去重数，`source_references`是 timer、latency、Outer、capacity 等
-marker/source 行引用数。一个 run 可产生数万条 Outer source reference，因此不得把 sources 数当成
-run 数。`NONSTANDARD_CONTRACT`现在包含`failed_gates`，会直接列出 topology、phase、node、samples
-或 Metric1 角色门禁中的不匹配项。
 
 Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubio_tcN_nN_sS`目录、日志内
 `PROCESS-MANIFEST`身份、最后是唯一或数值一致的容量 marker 来源。回退会产生
@@ -370,30 +286,9 @@ Metric1 的 Home UBIO 不再要求固定目录名。发现顺序为：标准`ubi
 扩展点解析失败会保留`contract_class=extension`错误供审计，但不会把已完整通过的 standard
 正式视图降为 INVALID；标准数据自身错误仍按原规则判 INVALID。
 
-大量矩阵应使用批量`merge()`纯内存合并：
-
-```python
-from scripts.extract_metric123_from_logs import merge
-
-merged = merge(matrix_list)       # 也接受 generator/iterator
-result = merged.finalize()
-```
-
-`merge()`按输入顺序单次扫描所有 retained snapshot，每条 snapshot 只做一次 fingerprint 和深拷贝；避免
-`m1 + m2 + ... + mN`反复扫描累计结果造成的二次复杂度。空输入抛`ValueError`，单元素输入返回完全隔离的
-snapshot clone。合并后的 Matrix 仍可继续`add()`、`finalize()`和 pickle。
-
-二元`left + right`保留并内部复用`merge((left, right))`。requirements 做确定性并集，scalar 字段按输入
-顺序由后项覆盖，correctness policy 取`strict > required > optional`中更严格者；ID 冲突自动改名，逻辑
-slot 冲突仍无效。最终 qualification registry 会在内存 snapshot 上重新匹配`qualified_contracts`，因此
-registry 与 run 分布在不同 Matrix 时也能正确进入`views.formal`。被拒绝 attempt 的 ID reservation 会保留；
-较宽松 policy 下接受但 correctness 非 PASS 的 snapshot 不能进入较严格合并结果。合并不修改操作数，也不
-访问源路径，因此原始目录已删除后仍可`merged.finalize()`；重复的相同 run snapshot 会去重。
-
-矩阵可直接使用 Python `pickle` 序列化。pickle 保存的是版本化内存 snapshot，不保存打开的文件、迭代器
-或派生 slot 索引；反序列化会重建 slot 索引，不重新读取任何 raw log。协议0至当前
-`pickle.HIGHEST_PROTOCOL`均支持 round-trip；跨 Python 版本长期保存时应由调用方选择兼容的 pickle protocol。
-pickle 只应用于可信输入，不应加载来源不明的 pickle 文件。
+两个矩阵可用`merged = left + right`纯内存合并。requirements 做确定性并集，correctness policy 取
+`strict > required > optional`中更严格者；ID 冲突自动改名，逻辑 slot 冲突仍无效。合并不修改操作数，
+也不会访问源路径，因此原始目录已删除后仍可`merged.finalize()`；`m + m`会去重完全相同的 run snapshot。
 
 ## 正式结果还原验证
 
@@ -424,15 +319,7 @@ Metric 3 p150 representative    2.8785156250000004 ticks
 
 ```text
 output/report.json           完整机器可读报告
-output/publication_metrics.json 路径无关、带 definition_id 的文章与图表发布数据
 output/report.md             中文摘要和人读矩阵
-output/report_brief_zh.md    交付简阅摘要：状态、关键值、缺失点和主要原因
-output/report_detail_by_tc_topology_zh.md 按 scope/topology/TC 展开的详细结果
-output/metric_detail_by_tc_topology.json 详细结果的机器可读形式
-output/metric_summary_bar_chart.svg 零依赖矢量柱状图，始终生成
-output/metric_summary_bar_chart.png 安装 Matplotlib 后生成的高分辨率柱状图
-output/metric_detail_by_tc_topology.svg 按拓扑/TC 展开的零依赖详细柱状图
-output/metric_detail_by_tc_topology.png 安装 Matplotlib 后生成的详细 PNG
 output/metric_matrix.tsv     run/pair/TC/aggregate 多层矩阵
 output/metric_matrix_standard.tsv  正式冻结合同矩阵；与 metric_matrix.tsv 相同
 output/metric_matrix_all.tsv       全部成功解析的数据点与描述结果
@@ -443,92 +330,6 @@ output/per-run_metrics.tsv   每个 run 的扁平摘要
 output/evidence/metric3/     合成的标准 arm evidence tree
 ```
 
-这些输出按职责分层，并不是同一个统计量的不同文件格式：
-
-- `report.json`包含冻结 Standard 聚合、qualification 结果和显式分离的描述视图；
-- `resolved_runs.json`保留逐物理 run 的绝对路径与证据来源，不是发布聚合；
-- `metric_matrix_formal.tsv`包含 Standard 及已配置资格结果，`metric_matrix_all.tsv`还包含描述性扩展；
-- `publication_metrics.json`是下游文章与正式性能图唯一应读取的路径无关数值层。
-
-因此不同输出中的同名字段可能处于逐 run、pooled Standard、formal qualification 或 extension
-层级，数值不要求彼此相同；发布工具不得再从多个层级中选择字段拼接。
-
-若公司机器提供等价原始日志，提取后可直接生成正式性能图：
-
-```bash
-python3 scripts/extract_metric123_from_logs.py \
-  --manifest /path/to/metric123-manifest.json \
-  --output-dir /path/to/output \
-  --publication-supplement /path/to/supporting-chart-data.json \
-  --render-figures \
-  --figure-output-dir /path/to/output/figures
-```
-
-`--workers`和`--require-qualification`可与上述参数同时使用。`--publication-supplement`只合并
-`charts`支撑数据，不能覆盖 Metric1/2/3 canonical值或定义版本。若已有审核后的等价
-`publication_metrics.json`，也可只生成图：
-
-```bash
-python3 scripts/generate_delivery_figures.py \
-  --charts-only \
-  --publication-json /path/to/publication_metrics.json \
-  --out-dir /path/to/output/figures
-```
-
-相同JSON、代码、Matplotlib和字体环境可复刻相同数值、柱序与图表。不同字体或渲染库版本下，
-图表语义相同，但PNG字节哈希不保证一致。
-
-PNG 柱状图所需的 Linux aarch64 / CPython 3.11 离线 wheel 位于：
-
-```text
-tools/wheels/aarch64-cp311/
-```
-
-安装命令、固定版本和 SHA256 校验见该目录的`README_zh.md`。未安装 Matplotlib 时 extractor 仍正常工作，
-并始终输出内容等价的 SVG 图。Metric3 图以0为轴同时显示正负 delta，不隐藏 HA-VI 更快的场景。
-
-简报中的 Metric1 数值优先表示冻结 Standard TC131/8N1S；Metric3 Core/Representative 优先表示冻结
-TC228-TC235 Standard aggregate。因此额外 TC/topology 即使单点已解析或 qualification 已 PASS，总览仍可能
-显示 Standard N/A。此时应查看`report_detail_by_tc_topology_zh.md`：它按`Standard`、
-`Formal qualification`、`Extension descriptive`区分 scope，并逐 topology/TC 显示实际数值与 N/A 原因。
-Metric1明细同时显示`Parsed samples`和`Formal samples`：前者是实际成功解析的naive/spill/ideal
-run数量，后者是三类role共同命中同一个Standard或qualification后的数量。`parsed=1/1/1、formal=0/0/0`
-表示数据已解析但没有共同正式合同，不表示三个role日志缺失。
-
-图表方向：Metric1 capacity ratio 越大越好，门槛`>=1.5`；Metric1 Outer delta 定义为`spill-ideal`，
-越小越好，门槛`<50 cycles`，负值表示 spill mean 低于 IdealDir mean，不是负延迟；Metric2 reduction
-定义为`(naive-optimized)/naive`，越大越好，负值表示 optimized 更慢；Metric3 delta 定义为
-`HA-VI-OurCC`，正值表示 OurCC 更快、负值表示 HA-VI 更快，不以正负作为统一 PASS 门槛。
-
-`report.md`是首选的人读诊断入口，包含三个中文章节：
-
-- `逐测试诊断`：逐 run 列出 Standard、Formal qualification 或 Extension，并展开冻结合同未通过的
-  `failed_gates`、命中的 qualification ID 和其他告警。看到`contract_class=extension`时，应先看这里判断
-  它是已资格化的 formal extension，还是 topology/TC/phase/node/samples/profile/role 等门禁不匹配。
-- `未接纳的测试`：逐条列出`add()`返回 REJECTED 的 run、slot、错误码和具体证据错误；包括日志缺失、
-  correctness 失败、schema 无效及 duplicate slot。
-- `未满足的矩阵要求`：展开 Metric1/2/3 的`missing_slots`、Metric3 不完整 pair，以及每个未 PASS
-  qualification 的缺失槽位、失败结果和 registry 错误。
-
-机器程序仍应读取`report.json`、`resolved_runs.json`和`issues.tsv`。其中 extension 原因也以
-`resolved_runs[*].contract_warnings[*].failed_gates`结构化保存，不需要从 message 文本反向解析。
-
-冻结 standard 与 qualification/extension 的完整性域严格分离。例如 TC142 不在冻结 Metric2 registry，
-所以 run 会提示`TC142 is not in the standard Metric2 registry`；但它不会因此进入标准 Metric2
-`missing_slots`。只有显式注册 TC142 qualification 后，它的缺槽才出现在对应
-`report.qualifications[*].missing_slots`中。旧 pickle 若曾把 TC142 等 extension TC 污染到 inferred standard
-requirements，会自动清理并产生`LEGACY_METRIC2_INFERENCE_REPAIRED`。
-
-Metric3 最低样本数缺槽在 JSON 中使用具名对象，不再输出难以理解的位置数组：
-
-```json
-{"kind":"minimum_samples","tc":228,"arm":"ha-vi","observed_samples":0,"required_min_samples":1}
-```
-
-其含义是 TC228 的 HA-VI arm 当前有0个有效样本，合同最低要求1个；中文 Markdown 显示为
-`TC228 / arm=ha-vi：实际样本 0，最低要求 1`。Metric1/2/3 pooled coverage 同样使用具名的
-role/profile/arm、observed_samples 和 required_min_samples 字段。
-
 退出码：`0`完整且通过，`1`完整但指标失败，`2`manifest/日志/重复证据无效，`3`需求矩阵、
-independent 样本/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
+independent repetition/arm 覆盖或 paired pair 不完整。independent 不配对；paired 缺失 arm 也不会
 与其他 pair 的 arm 组合。

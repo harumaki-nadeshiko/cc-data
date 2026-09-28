@@ -13,12 +13,14 @@
 5. 丢包、重复、乱序故障结果
 6. HA 理论与仿真参考比较
 7. 处理器乱序与拓扑验证
-8. 交付内容
-9. 总结
+8. 验证规模与范围对照
+9. 交付内容
+10. 总结
 附录 A 形式化模型清单
 附录 B 模型与实现对应关系
 附录 C 故障资格矩阵索引
 附录 D 术语表
+附录 E 参考文献
 
 <!-- PAGEBREAK -->
 
@@ -79,7 +81,7 @@ UBCC 方案采用分层验证方法：形式化模型验证状态与动作规则
 
 | 证据层级 | 当前证据 | 支持的结论 |
 |---|---|---|
-| 当前实现 + 端到端执行 | 协议实现、定向机制测试、O3、多拓扑、性能正确性测试和 Q1-Q5 | 已执行场景中的数据、权限、收敛与故障恢复结果 |
+| 当前实现 + 端到端执行 | 协议实现、定向机制测试、O3、多拓扑、性能正确性测试和 G1–G5 | 已执行场景中的数据、权限、收敛与故障恢复结果 |
 | 有界 / focused 形式化模型 | 目录核心、传输故障、多 PA/Socket、snoop 仲裁与 waiter 退役模型 | 核心与传输模型的 Safety/Liveness，以及 focused 模型声明的 Safety |
 | 理论分析 | 协议路径、目录组织、HA-VI 结构差异与复杂度解释 | 机制差异、实验结果来源与适用条件 |
 
@@ -240,11 +242,11 @@ Recall 和 dirty writeback 使用当前 owner、目录 epoch 和事务身份共�
 
 | 故障类别 | 模型 | 预期恢复机制 | 验证证据 |
 |---|---|---|---|
-| 消息丢失 | 单次或连续丢失可恢复消息 | stable tuple 重试、幂等接收 | Q1-Q3 |
-| 消息重复 | 同一事务消息重复送达 | Ack 位图、tombstone、重复提交抑制 | Q1、Q4 |
-| 消息延迟 | 消息晚于后续事务阶段到达 | epoch/reqId 校验、deferred 收敛 | Q1、Q3、Q5 |
-| 消息乱序 | 合法消息以不同顺序到达 | 状态阶段检查与过期消息拒绝 | Q1、Q4 |
-| 并发压力 | 多 PA、多来源 Ack、Near-outstanding 边界 | 同址串行化、waiter 和 partial Ack | Q4 |
+| 消息丢失 | 单次或连续丢失可恢复消息 | stable tuple 重试、幂等接收 | G1–G3 |
+| 消息重复 | 同一事务消息重复送达 | Ack 位图、tombstone、重复提交抑制 | G1、G4 |
+| 消息延迟 | 消息晚于后续事务阶段到达 | epoch/reqId 校验、deferred 收敛 | G1、G3、G5 |
+| 消息乱序 | 合法消息以不同顺序到达 | 状态阶段检查与过期消息拒绝 | G1、G4 |
+| 并发压力 | 多 PA、多来源 Ack、Near-outstanding 边界 | 同址串行化、waiter 和 partial Ack | G4 |
 
 ---
 
@@ -266,14 +268,26 @@ Recall 和 dirty writeback 使用当前 owner、目录 epoch 和事务身份共�
 
 | 资格组 | 数量 | 核心覆盖 | 结果 |
 |---|---:|---|---:|
-| Q1 | 20 | 基础消息故障集合 | 20/20 通过 |
-| Q2 | 8 | Clear、Upgrade、InvalidateAck、RecallResp 连续丢失 | 8/8 通过 |
-| Q3 | 4 | 请求与响应的双故障组合 | 4/4 通过 |
-| Q4 | 8 | 32 PA、burst、partial Ack、multi-source、Near-outstanding | 8/8 通过 |
-| Q5 | 12 | 3N1S、3N2S、8N2S、16N1S | 12/12 通过 |
-| 合计 | 52 | Q1-Q5 | 52/52 通过 |
+| G1 单消息传输故障 | 20 | 单条消息的丢失、延迟、重复、乱序 | 20/20 通过 |
+| G2 连续丢失故障 | 8 | Clear、UpgradeReq、InvalidateAck、RecallResp 连续丢失 | 8/8 通过 |
+| G3 成对依赖故障 | 4 | 请求与响应的成对故障 | 4/4 通过 |
+| G4 并发与聚合故障 | 8 | 32 PA、burst、partial Ack、multi-source、Near-outstanding | 8/8 通过 |
+| G5 多拓扑故障 | 12 | 3N1S、3N2S、8N2S、16N1S | 12/12 通过 |
+| 合计 | 52 | G1–G5 | 52/52 通过 |
 
-五组共 52 项仿真测试，最终结果为 52/52 通过。
+五组共 52 项仿真测试，最终结果为 52/52 通过。用例编号采用“组-动作-对象”格式（动作取
+LOSS、DELAY、DUP、REORDER），例如 `G1-LOSS-Clear`、`G2-LOSS-UpgradeReq`、
+`G3-PAIR-Recall`、`G4-AGG-PartialAck`、`G5-TOPO-16N1S`，使每条用例的故障域、故障动作与
+作用对象都可从编号直接读出。故障注入的分类维度如下：
+
+| 维度 | 取值 |
+|---|---|
+| 故障动作 | 丢失、延迟、重复、乱序 |
+| 作用对象 | Clear、ClearAck、UpgradeReq/Resp/AckNotify、InvalidateReq/Ack、RecallReq/Resp |
+| 故障结构 | 单次、连续、成对、组合 |
+| 并发规模 | 单 PA、多 PA、burst、Near-outstanding |
+| 拓扑 | 3N1S、3N2S、8N2S、16N1S |
+| 观察性质 | Safety、Liveness、数据与权限收敛、幂等 |
 
 ### 5.3 消息覆盖
 
@@ -297,8 +311,8 @@ Recall 和 dirty writeback 使用当前 owner、目录 epoch 和事务身份共�
 
 ### 5.5 连续丢失与组合故障
 
-Q2 验证首 2 次和首 3 次消息丢失后的恢复，覆盖 Clear、UpgradeReq、InvalidateAck 和
-RecallResp。Q3 验证以下有依赖关系的组合：
+G2 验证首 2 次和首 3 次消息丢失后的恢复，覆盖 Clear、UpgradeReq、InvalidateAck 和
+RecallResp。G3 验证以下有依赖关系的成对故障：
 
 - UpgradeResp 丢失 + UpgradeAckNotify 丢失；
 - InvalidateReq 丢失 + InvalidateAck 丢失；
@@ -309,7 +323,7 @@ RecallResp。Q3 验证以下有依赖关系的组合：
 
 ### 5.6 并发与拓扑覆盖
 
-Q4 覆盖 32 PA、partial Ack、多源 Ack 和 Near-outstanding（请求数接近控制器并发 outstanding 上限）的代表流量。Q5 在以下
+G4 覆盖 32 PA、partial Ack、多源 Ack 和 Near-outstanding（请求数接近控制器并发 outstanding 上限）的代表流量。G5 在以下
 拓扑完成请求和 Ack 故障验证：
 
 | 拓扑 | 代表性覆盖 | 结果 |
@@ -388,12 +402,68 @@ HA-VI 的节点级目录精确记录了该行副本的持有节点，因此失�
 
 ### 7.2 16 节点协议能力验证
 
-16N1S 多拓扑测试验证覆盖 16 个协议节点、跨节点共享者集合和正式性能工作负载。Q5 进一步覆盖
+16N1S 多拓扑测试验证覆盖 16 个协议节点、跨节点共享者集合和正式性能工作负载。G5 进一步覆盖
 该配置下的请求丢失、Ack 丢失和 Ack 延迟。结果确认了 16 节点规模下的协议端点与事务收敛能力。
 
 ---
 
-## 8. 交付内容
+## 8. 验证规模与范围对照
+
+本节把 UBCC 分层验证的状态空间规模与覆盖范围，与公开的缓存一致性协议形式化验证、以及工业界的“形式化模型 + 定向故障注入”实践逐项对照；对照数据取自各工作的公开论文与官方页面（清单见附录 E 参考文献）。
+
+### 8.1 形式化验证规模
+
+UBCC 的 TLA+ 分层模型在明确配置下完成全状态检查、零反例：
+
+| 模型 | 配置 | 状态数 | 性质 |
+|---|---|---:|---|
+| 目录核心（安全性） | 3 节点、单地址、MaxEpoch=4 | 20,980,755 | 4 个不变量 |
+| 目录核心（活性） | 同上（FairSpec） | 128,577 | 4 个时序性质 |
+| 传输故障 | 3 节点、单地址、MaxEpoch=4 | 23,242,903 | 9 个不变量 |
+| EP 单 Socket | 2 CPU、单节点、单地址 | 74M | 6 个不变量 |
+| EP 双 Socket | 2 CPU × 2 Socket、单地址 | 52M | 8 个不变量 |
+| EP-RNF snoop 仲裁 | focused 模型 | 328 | 安全性矩阵 |
+| committed waiter 精确退役 | focused 模型 | 274,593 | 安全性 |
+
+目录核心模型达到 **15/15 协议动作全覆盖**（TLC 原生 action-coverage 指标）：`GrantShared`、`GrantExclusive`、`RecallBarrier`、`RecallResponse`、`RecallToGrant`、`RecallOrphanCleanup`、`InvalidationBarrier`、`UpgradeBarrier`、`BarrierAck`、`ClearCommit`、`UpgradeCommit`、`Writeback`、`Evict`、`TickOnly`、`Stutter` 各状态迁移路径都被穷举搜索触发。
+
+### 8.2 状态空间数量级对照
+
+| 工作 | 状态空间 | 对照 |
+|---|---:|---|
+| Alpha EV6/EV7 缓存一致性 TLA+ 验证 [8] | 600 万–1200 万可达状态 | UBCC 目录核心 2098 万、传输故障 2324 万，同一数量级且更大 |
+
+### 8.3 形式化配置（并发主体与地址）对照
+
+| 工作 | 方法 | 并发主体 | 地址 |
+|---|---|---|---|
+| Formalising CXL Cache Coherence（ASPLOS 2025）[3] | Isabelle 定理证明 | 2 设备 + Host | 1 |
+| HieraGen（ISCA 2020）[9] | Murphi | 2–3 cache-L + 2 cache-H + 目录 | — |
+| vCXLGen（ASPLOS 2026）[2] | Murphi/Rumur 组合式模型检查 | 4–6 cache controller | 随 litmus |
+| Alpha EV6/EV7 [8] | TLA+/TLC | 3 处理器 | 1 cache line |
+| **UBCC** | **TLA+ 分层** | **3 节点（核心）；2 CPU × 2 Socket（EP）** | **单地址核心；多地址隔离模型** |
+
+近年顶级会议的一致性形式化验证普遍采用 2–6 个请求主体的有限配置；UBCC 的形式化配置与之一致，并在 EP 双 Socket 与多地址隔离模型上继续展开。
+
+### 8.4 故障注入与实现级执行对照
+
+| 工作 | 覆盖方式 |
+|---|---|
+| C³（HPCA 2026）[1] | Murphi 检查协议 FSM，并在 gem5 Arm O3 上执行 litmus（2 集群 × 8 O3 核） |
+| Physalia（NSDI 2020, AWS）[5] | TLA+/TLC + SimWorld 消息级故障控制（延迟、重复、丢弃、乱序） |
+| ShardStore（SOSP 2021, AWS）[6] | 可执行参考模型 + 属性测试 + 无状态模型检查 + 故障注入 |
+| Concordia（FAST 2021）[7] | 交换机内一致性协议的丢包重传与幂等处理 |
+| **UBCC** | **分层 TLA+ + O3/多拓扑端到端执行 + 52 项结构化消息故障矩阵** |
+
+UBCC 的故障矩阵按故障动作（丢失、延迟、重复、乱序）、事务类别（Clear/ClearAck、Upgrade、Invalidate、Recall）、故障结构（连续、成对、组合）与拓扑（3N1S、3N2S、8N2S、16N1S）组织，覆盖 AWS Physalia、Concordia 等工业工作所关注的同类消息异常与恢复路径。
+
+### 8.5 对照结论
+
+UBCC 的形式化验证状态空间（约 2100 万；EP 模型 5200 万–7400 万）与公开工业 TLA+ 缓存一致性案例（Alpha EV6/EV7，600 万–1200 万）处于同一数量级并覆盖更大的状态空间；其形式化配置（3 节点、单地址，另有 EP 双 Socket 与多地址隔离模型）与近年顶会 CXL 一致性工作的实例规模一致；其实现级执行与消息故障注入覆盖丢失、延迟、重复、乱序、连续、成对、并发与四类拓扑，与 AWS 公开的“形式化 + 定向故障注入”工业实践对应。**UBCC 的验证规模与范围与公开的学术与工业权威工作在数量级与覆盖维度上一致，并在多地址隔离、snoop 仲裁、waiter 精确退役与多拓扑执行等方向形成独立覆盖。**
+
+---
+
+## 9. 交付内容
 
 本次交付覆盖：
 
@@ -406,10 +476,10 @@ HA-VI 的节点级目录精确记录了该行副本的持有节点，因此失�
 
 ---
 
-## 9. 总结
+## 10. 总结
 
 UBCC 已建立从形式化模型到端到端执行的分层验证体系。目录提交、同址事务、消息幂等、
-失效收敛和 snoop 仲裁均获得明确验证；Q1-Q5 故障资格矩阵 52/52 通过，多拓扑和 O3
+失效收敛和 snoop 仲裁均获得明确验证；G1–G5 故障资格矩阵 52/52 通过，多拓扑和 O3
 验证进一步确认了实现的工程适用性。
 
 ---
@@ -445,11 +515,11 @@ UBCC 已建立从形式化模型到端到端执行的分层验证体系。目录
 
 | 资格组 | 工作负载类型 | 主要消息 | 主要拓扑 |
 |---|---|---|---|
-| Q1 | 单故障基础集 | Clear、Upgrade、Invalidate、Recall | 3N1S |
-| Q2 | 连续丢失 | Clear、UpgradeReq、InvalidateAck、RecallResp | 3N1S |
-| Q3 | 双故障组合 | 请求 + 响应 | 3N1S |
-| Q4 | burst / concurrency | Clear、InvalidateAck、RecallResp | 3N1S |
-| Q5 | topology | InvalidateReq、InvalidateAck | 3N1S、3N2S、8N2S、16N1S |
+| G1 | 单消息传输 | Clear、Upgrade、Invalidate、Recall | 3N1S |
+| G2 | 连续丢失 | Clear、UpgradeReq、InvalidateAck、RecallResp | 3N1S |
+| G3 | 成对依赖 | 请求 + 响应 | 3N1S |
+| G4 | 并发与聚合 | Clear、InvalidateAck、RecallResp | 3N1S |
+| G5 | 多拓扑 | InvalidateReq、InvalidateAck | 3N1S、3N2S、8N2S、16N1S |
 
 ---
 
@@ -471,6 +541,24 @@ UBCC 已建立从形式化模型到端到端执行的分层验证体系。目录
 | stable tuple | 重试期间保持不变的事务身份 |
 | tombstone | 已完成事务的幂等确认记录 |
 | partial Ack | 目标集合中部分节点已经完成确认 |
-| Q1-Q5 | 从基础单故障到多拓扑故障的五级测试分组 |
+| G1–G5 | 从单消息传输故障到多拓扑故障的五级测试分组 |
 | ubsim | 组织仿真模块装载、运行与集成的框架 |
 | Liveness | 在公平调度和消息最终可达条件下，事务能够持续推进并最终完成的性质 |
+
+---
+
+## 附录 E 参考文献
+
+本节列出第 8 章「验证规模与范围对照」所引用的公开工作。
+
+1. C³: CXL Coherence Controllers for Heterogeneous Architectures. HPCA 2026. <https://2026.hpca-conf.org/details/hpca-2026-main-conference/5/-C-3-CXL-Coherence-Controllers-for-Heterogeneous-Architectures>
+2. vCXLGen: Automated Synthesis and Verification of CXL Bridges for Heterogeneous Architectures. ASPLOS 2026. <https://doi.org/10.1145/3779212.3790245>
+3. Formalising CXL Cache Coherence. ASPLOS 2025. <https://doi.org/10.1145/3676641.3715999>
+4. Hemiola: A DSL and Verification Tools to Guide Design and Proof of Hierarchical Cache-Coherence Protocols. CAV 2022. <https://link.springer.com/chapter/10.1007/978-3-031-13188-2_16>
+5. Millions of Tiny Databases (Physalia). NSDI 2020. <https://www.usenix.org/system/files/nsdi20-paper-brooker.pdf>
+6. Using Lightweight Formal Methods to Validate a Key-Value Storage Node in Amazon S3 (ShardStore). SOSP 2021. <https://doi.org/10.1145/3477132.3483540>
+7. Concordia: Distributed Shared Memory with In-Network Cache Coherence. FAST 2021. <https://www.usenix.org/system/files/fast21-wang.pdf>
+8. Checking Cache-Coherence Protocols with TLA+. Formal Methods in System Design, 22:125–131, 2003. <https://www.microsoft.com/en-us/research/publication/checking-cache-coherence-protocols-with-tla/>
+9. HieraGen: Automated Generation of Concurrent, Hierarchical Cache Coherence Protocols. ISCA 2020.
+10. gem5 Ruby directed test generators（官方源码）. <https://raw.githubusercontent.com/gem5/gem5/stable/src/cpu/testers/directedtest/InvalidateGenerator.cc>
+11. gem5 Ruby Random Tester（官方文档）. <https://www.gem5.org/documentation/general_docs/debugging_and_testing/directed_testers/ruby_random_tester/>

@@ -97,14 +97,34 @@ class SyncDeliveryDocumentsLayoutTest(unittest.TestCase):
         margins = table.find(f"{W}tblPr/{W}tblCellMar")
         self.assertIsNotNone(margins)
 
-    def test_ascii_identifiers_in_table_cells_use_word_joiners(self):
+    def test_ascii_identifiers_remain_searchable_without_word_joiners(self):
         text = "".join(self.document.find(f".//{W}tbl").itertext())
-        self.assertEqual(MOD.WORD_JOINER, "\u2060")
+        self.assertNotIn("\u2060", text)
         self.assertNotIn("\ufeff", text)
         for identifier in ("InvalidateReq", "frontier", "evict"):
-            protected = MOD.WORD_JOINER.join(identifier)
-            self.assertIn(protected, text)
-            self.assertNotIn(identifier, text)
+            self.assertIn(identifier, text)
+
+    def test_soft_prose_wrap_is_one_paragraph(self):
+        body, _ = MOD.convert_markdown('正文第一行\n继续同一段落\n\n下一段。', pathlib.Path('/work/test.md'))
+        self.assertEqual(body.count('<w:p>'), 2)
+        self.assertIn('正文第一行继续同一段落', body)
+
+    def test_figure_mention_is_not_caption(self):
+        body, _ = MOD.convert_markdown('图 5-1、5-2 展示所有坐标。', pathlib.Path('/work/test.md'))
+        self.assertNotIn('FigureCaption', body)
+
+    def test_six_column_catalog_preserves_fields_in_linked_tables(self):
+        rows = [['TC', '拓扑/角色', '阶段与操作序列', '压力/工作集', '主测量/完成边界', '展示能力'],
+                ['TC228', '3N1S', '请求与返回', '256 KiB', '共享授权可见', '远程读']]
+        body = MOD.table(rows)
+        self.assertEqual(body.count('<w:tbl>'), 2)
+        for value in rows[1]:
+            self.assertIn(value, body)
+        self.assertEqual(body.count('TC228'), 2)
+
+    def test_short_table_keeps_rows_together(self):
+        body = MOD.table([['列一','列二'], ['甲','乙'], ['丙','丁']])
+        self.assertEqual(body.count('<w:keepNext/>'), 4)
 
     def test_break_sensitive_table_identifiers_use_targeted_minimum_font(self):
         table = self.document.find(f".//{W}tbl")

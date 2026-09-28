@@ -86,7 +86,7 @@ db_wal_service / db_wal_end_to_end / db_wal_batch_32ops
 | `[RESIDENT-SPILL-START]`、`[RESIDENT-SPILL-DONE]` | spill 生命周期 |
 | `[RESIDENT-FILL-ISSUED]`、`[RESIDENT-FILL-DONE]` | backstore onload 生命周期 |
 | `[RESIDENT-WAITER-ENQ]`、`[RESIDENT-WAITER-REPLAY-UPGRADE-QUEUED]` | fill/capacity waiter 语义 |
-| `[RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER]` | TC141 negative regression evidence |
+| `[RESIDENT-WAITER-UPGRADE-DROP-NOT-SHARER]` | Upgrade waiter rejected because the requester is not a sharer |
 | `[UBCC-UPGRADE-COMMIT]`、`[UBCC-OUTER-REQ]` | Upgrade replay 次数与类型 |
 | `[UBCC-WB-REQ]`、`[WB-DATA-PERSIST]` | writeback data persistence |
 | `[UBCC-SHARED-RELEASE]` | shared release 只移除释放者 sharer bit |
